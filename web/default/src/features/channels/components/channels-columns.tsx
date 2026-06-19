@@ -181,19 +181,23 @@ function formatMonitorAvailability(
 function ChannelMonitorBadge({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const monitorInfo = channel.monitor_info
-
-  if (monitorInfo?.enabled !== true) return null
+  const enabled = monitorInfo?.enabled === true
+  const latestStatus = monitorInfo?.latest_status
+  const latestStatusLabel = latestStatus ? t(latestStatus) : t('No data')
+  const availabilityLabel = formatMonitorAvailability(
+    monitorInfo?.seven_day_availability,
+    t('No data')
+  )
+  const enabledLabel = enabled ? t('Enabled') : t('Disabled')
+  const label = `${t('Monitor')}: ${enabledLabel} / ${latestStatusLabel} / ${availabilityLabel}`
 
   return (
     <StatusBadge
-      label={`${t('Monitor')} ${formatMonitorAvailability(
-        monitorInfo.seven_day_availability,
-        t('No data')
-      )}`}
-      variant={getMonitorBadgeVariant(monitorInfo.latest_status)}
+      label={label}
+      variant={enabled ? getMonitorBadgeVariant(latestStatus) : 'neutral'}
       size='sm'
       copyable={false}
-      className='shrink-0'
+      className='max-w-[16rem] shrink-0'
     />
   )
 }

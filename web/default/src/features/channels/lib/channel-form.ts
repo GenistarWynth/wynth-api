@@ -209,7 +209,7 @@ export const channelFormSchema = z
     upstream_model_update_ignored_models: z.string().optional(),
     // Channel monitoring settings (stored in settings JSON)
     channel_monitor_enabled: z.boolean().optional(),
-    channel_monitor_interval_minutes: z.number().int().min(1).optional(),
+    channel_monitor_interval_minutes: z.number().optional(),
   })
   .superRefine((data, ctx) => {
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
@@ -237,6 +237,17 @@ export const channelFormSchema = z
           ctx,
           'base_url',
           'Base URL is required when an advanced route uses an upstream path'
+        )
+      }
+    }
+
+    if (data.channel_monitor_enabled) {
+      const interval = data.channel_monitor_interval_minutes
+      if (!Number.isInteger(interval) || interval === undefined || interval < 1) {
+        addRequiredIssue(
+          ctx,
+          'channel_monitor_interval_minutes',
+          'Monitoring interval must be at least 1 minute'
         )
       }
     }

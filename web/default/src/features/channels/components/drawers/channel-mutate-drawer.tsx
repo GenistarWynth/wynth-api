@@ -109,6 +109,7 @@ import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { safeNumberFieldProps } from '@/features/system-settings/utils/numeric-field'
 import {
   fetchModels,
   getAllModels,
@@ -3384,11 +3385,14 @@ export function ChannelMutateDrawer({
                                     checked={field.value}
                                     onCheckedChange={(checked) => {
                                       field.onChange(checked)
+                                      const interval = form.getValues(
+                                        'channel_monitor_interval_minutes'
+                                      )
                                       if (
                                         checked &&
-                                        !form.getValues(
-                                          'channel_monitor_interval_minutes'
-                                        )
+                                        (!Number.isInteger(interval) ||
+                                          interval === undefined ||
+                                          interval < 1)
                                       ) {
                                         form.setValue(
                                           'channel_monitor_interval_minutes',
@@ -3406,46 +3410,50 @@ export function ChannelMutateDrawer({
                           <FormField
                             control={form.control}
                             name='channel_monitor_interval_minutes'
-                            render={({ field }) => (
-                              <FormItem className='flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
-                                <div className='flex min-w-0 flex-col gap-0.5'>
-                                  <FormLabel>
-                                    {t('Monitoring interval')}
-                                  </FormLabel>
-                                  <FormDescription>
-                                    {t(
-                                      'Interval in minutes for automatic probes.'
-                                    )}
-                                  </FormDescription>
-                                </div>
-                                <FormControl>
-                                  <Input
-                                    type='number'
-                                    min={1}
-                                    step={1}
-                                    className='w-full sm:w-28'
-                                    disabled={!channelMonitorEnabled}
-                                    value={field.value ?? 10}
-                                    onChange={(event) =>
-                                      field.onChange(
-                                        Number(event.target.value)
-                                      )
-                                    }
-                                    onBlur={() =>
-                                      field.onChange(
-                                        Math.max(
-                                          1,
-                                          Math.trunc(
-                                            Number(field.value || 10)
-                                          )
+                            render={({ field }) => {
+                              const numberFieldProps =
+                                safeNumberFieldProps(field)
+
+                              return (
+                                <FormItem className='flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+                                  <div className='flex min-w-0 flex-col gap-0.5'>
+                                    <FormLabel>
+                                      {t('Monitoring interval')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Interval in minutes for automatic probes.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Input
+                                      type='number'
+                                      min={1}
+                                      step={1}
+                                      className='w-full sm:w-28'
+                                      disabled={!channelMonitorEnabled}
+                                      {...numberFieldProps}
+                                      onBlur={() => {
+                                        numberFieldProps.onBlur()
+                                        const interval = form.getValues(
+                                          'channel_monitor_interval_minutes'
                                         )
-                                      )
-                                    }
-                                  />
-                                </FormControl>
-                                <FormMessage />
-                              </FormItem>
-                            )}
+                                        if (
+                                          channelMonitorEnabled &&
+                                          (!Number.isInteger(interval) ||
+                                            interval === undefined ||
+                                            interval < 1)
+                                        ) {
+                                          field.onChange(1)
+                                        }
+                                      }}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )
+                            }}
                           />
 
                           <div className='text-muted-foreground grid gap-2 px-4 py-3 text-xs sm:grid-cols-2'>
