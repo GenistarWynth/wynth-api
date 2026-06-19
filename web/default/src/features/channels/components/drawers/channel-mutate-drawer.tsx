@@ -28,6 +28,7 @@ import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
   ArrowRight,
   HelpCircle,
   Loader2,
@@ -100,6 +101,10 @@ import {
 } from '@/components/drawer-layout'
 import { JsonEditor } from '@/components/json-editor'
 import { MultiSelect } from '@/components/multi-select'
+import {
+  StatusBadge,
+  type StatusBadgeProps,
+} from '@/components/status-badge'
 import {
   SecureVerificationDialog,
   useSecureVerification,
@@ -180,6 +185,10 @@ type ModelMappingGuardrail = {
   exposedTargetModels: string[]
 }
 
+type MonitorLatestStatus = NonNullable<
+  Channel['monitor_info']
+>['latest_status']
+
 // Helper functions
 const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
   invalidJson: false,
@@ -221,6 +230,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.claude_beta_query ||
+    values.channel_monitor_enabled ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
     values.upstream_model_update_ignored_models?.trim()
@@ -246,6 +256,24 @@ function formatUnixTime(timestamp: unknown): string {
   const seconds = Number(timestamp)
   if (!Number.isFinite(seconds) || seconds <= 0) return '-'
   return new Date(seconds * 1000).toLocaleString()
+}
+
+function getMonitorStatusVariant(
+  status: MonitorLatestStatus
+): StatusBadgeProps['variant'] {
+  if (status === 'success') return 'success'
+  if (status === 'failed' || status === 'error') return 'danger'
+  return 'warning'
+}
+
+function formatMonitorAvailability(
+  availability: number | null | undefined,
+  noDataLabel: string
+): string {
+  if (typeof availability !== 'number' || !Number.isFinite(availability)) {
+    return noDataLabel
+  }
+  return `${Math.round(availability * 100)}%`
 }
 
 function CardHeading({ title, icon }: { title: string; icon?: ReactNode }) {
@@ -380,6 +408,7 @@ export function ChannelMutateDrawer({
   const upstreamModelUpdateCheckEnabled = form.watch(
     'upstream_model_update_check_enabled'
   )
+  const channelMonitorEnabled = form.watch('channel_monitor_enabled')
   const currentSettings = form.watch('settings')
   const currentAdvancedCustom = form.watch('advanced_custom')
   const {
@@ -595,6 +624,14 @@ export function ChannelMutateDrawer({
   const upstreamDetectedModelsOmittedCount =
     upstreamUpdateMeta.detectedModels.length -
     upstreamDetectedModelsPreview.length
+  const monitorInfo = channelData?.data?.monitor_info ?? currentRow?.monitor_info
+  const monitorStatusLabel = monitorInfo?.latest_status
+    ? t(monitorInfo.latest_status)
+    : t('Not monitored yet')
+  const monitorAvailabilityLabel = formatMonitorAvailability(
+    monitorInfo?.seven_day_availability,
+    t('No data')
+  )
 
   // Load channel data into form when editing
   useEffect(() => {
@@ -3320,6 +3357,131 @@ export function ChannelMutateDrawer({
                           </FormItem>
                         )}
                       />
+
+                      <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
+                        <SubHeading
+                          title={t('Channel Monitoring')}
+                          icon={<Activity className='h-3.5 w-3.5' />}
+                        />
+                        <div className='divide-border divide-y border-y'>
+                          <FormField
+                            control={form.control}
+                            name='channel_monitor_enabled'
+                            render={({ field }) => (
+                              <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
+                                <div className='flex min-w-0 flex-col gap-0.5'>
+                                  <FormLabel>
+                                    {t('Enable channel monitoring')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Probe this channel on its own schedule and record availability.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <FormControl>
+                                  <Switch
+                                    checked={field.value}
+                                    onCheckedChange={(checked) => {
+                                      field.onChange(checked)
+                                      if (
+                                        checked &&
+                                        !form.getValues(
+                                          'channel_monitor_interval_minutes'
+                                        )
+                                      ) {
+                                        form.setValue(
+                                          'channel_monitor_interval_minutes',
+                                          10,
+                                          { shouldDirty: true }
+                                        )
+                                      }
+                                    }}
+                                  />
+                                </FormControl>
+                              </FormItem>
+                            )}
+                          />
+
+                          <FormField
+                            control={form.control}
+                            name='channel_monitor_interval_minutes'
+                            render={({ field }) => (
+                              <FormItem className='flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+                                <div className='flex min-w-0 flex-col gap-0.5'>
+                                  <FormLabel>
+                                    {t('Monitoring interval')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Interval in minutes for automatic probes.'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <FormControl>
+                                  <Input
+                                    type='number'
+                                    min={1}
+                                    step={1}
+                                    className='w-full sm:w-28'
+                                    disabled={!channelMonitorEnabled}
+                                    value={field.value ?? 10}
+                                    onChange={(event) =>
+                                      field.onChange(
+                                        Number(event.target.value)
+                                      )
+                                    }
+                                    onBlur={() =>
+                                      field.onChange(
+                                        Math.max(
+                                          1,
+                                          Math.trunc(
+                                            Number(field.value || 10)
+                                          )
+                                        )
+                                      )
+                                    }
+                                  />
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          <div className='text-muted-foreground grid gap-2 px-4 py-3 text-xs sm:grid-cols-2'>
+                            <div className='flex min-w-0 items-center justify-between gap-2'>
+                              <span className='text-foreground font-medium'>
+                                {t('Latest monitor status')}
+                              </span>
+                              <StatusBadge
+                                label={monitorStatusLabel}
+                                variant={getMonitorStatusVariant(
+                                  monitorInfo?.latest_status
+                                )}
+                                size='sm'
+                                copyable={false}
+                                className='max-w-[9rem]'
+                              />
+                            </div>
+                            <div className='flex min-w-0 items-center justify-between gap-2'>
+                              <span className='text-foreground font-medium'>
+                                {t('7-day availability')}
+                              </span>
+                              <StatusBadge
+                                label={monitorAvailabilityLabel}
+                                variant={
+                                  monitorInfo?.seven_day_availability == null
+                                    ? 'warning'
+                                    : 'neutral'
+                                }
+                                size='sm'
+                                copyable={false}
+                                className='max-w-[6rem]'
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
                       {MODEL_FETCHABLE_TYPES.has(currentType) && (
                         <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
