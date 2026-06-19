@@ -127,9 +127,14 @@ func TestFilterDueChannelMonitorCandidatesKeepsInvalidSettingsReadOnly(t *testin
 func TestChannelMonitorStatusFromResult(t *testing.T) {
 	upstreamErr := types.NewError(errors.New("upstream failed"), types.ErrorCodeChannelInvalidKey)
 
+	assert.Equal(t, model.ChannelMonitorStatusError, channelMonitorStatusFromResult(testResult{
+		localErr:    errors.New("local setup failed"),
+		newAPIError: types.NewError(errors.New("gen relay info failed"), types.ErrorCodeGenRelayInfoFailed),
+	}))
 	assert.Equal(t, model.ChannelMonitorStatusFailed, channelMonitorStatusFromResult(testResult{
-		localErr:    errors.New("wrapped upstream failed"),
-		newAPIError: upstreamErr,
+		localErr:          errors.New("wrapped upstream failed"),
+		newAPIError:       upstreamErr,
+		upstreamAttempted: true,
 	}))
 	assert.Equal(t, model.ChannelMonitorStatusError, channelMonitorStatusFromResult(testResult{
 		localErr: errors.New("probe setup failed"),

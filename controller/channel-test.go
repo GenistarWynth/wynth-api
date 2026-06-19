@@ -37,10 +37,11 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
-	testedModel string
+	context           *gin.Context
+	localErr          error
+	newAPIError       *types.NewAPIError
+	testedModel       string
+	upstreamAttempted bool
 }
 
 type channelTestOptions struct {
@@ -454,9 +455,10 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+			context:           c,
+			localErr:          err,
+			newAPIError:       types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	var httpResp *http.Response
@@ -475,42 +477,47 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 				err,
 			))
 			return testResult{
-				context:     c,
-				localErr:    err,
-				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				context:           c,
+				localErr:          err,
+				newAPIError:       types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				upstreamAttempted: true,
 			}
 		}
 	}
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
 	if respErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    respErr,
-			newAPIError: respErr,
+			context:           c,
+			localErr:          respErr,
+			newAPIError:       respErr,
+			upstreamAttempted: true,
 		}
 	}
 	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    usageErr,
-			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			context:           c,
+			localErr:          usageErr,
+			newAPIError:       types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	httpResult := w.Result()
 	respBody, err := readTestResponseBody(httpResult.Body, isStream)
 	if err != nil {
 		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			context:           c,
+			localErr:          err,
+			newAPIError:       types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    bodyErr,
-			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			context:           c,
+			localErr:          bodyErr,
+			newAPIError:       types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
@@ -535,9 +542,10 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:           c,
+		localErr:          nil,
+		newAPIError:       nil,
+		upstreamAttempted: true,
 	}
 }
 
@@ -719,7 +727,7 @@ func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int
 }
 
 func channelMonitorStatusFromResult(result testResult) string {
-	if result.newAPIError != nil {
+	if result.newAPIError != nil && result.upstreamAttempted {
 		return model.ChannelMonitorStatusFailed
 	}
 	if result.localErr != nil {
