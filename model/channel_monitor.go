@@ -1,14 +1,12 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
-	"gorm.io/gorm"
 )
 
 const (
@@ -95,20 +93,24 @@ func RecordChannelMonitorLog(log ChannelMonitorLog) error {
 
 func GetLatestChannelMonitorLogs(channelIDs []int) (map[int]ChannelMonitorLog, error) {
 	latest := make(map[int]ChannelMonitorLog, len(channelIDs))
-	for _, channelID := range channelIDs {
-		var log ChannelMonitorLog
-		err := DB.Where("channel_id = ?", channelID).
-			Order("checked_at DESC").
-			Order("id DESC").
-			First(&log).Error
-		if err == nil {
-			latest[channelID] = log
-			continue
-		}
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			continue
-		}
+	if len(channelIDs) == 0 {
+		return latest, nil
+	}
+
+	var logs []ChannelMonitorLog
+	if err := DB.Where("channel_id IN ?", channelIDs).
+		Order("channel_id ASC").
+		Order("checked_at DESC").
+		Order("id DESC").
+		Find(&logs).Error; err != nil {
 		return nil, err
+	}
+
+	for _, log := range logs {
+		if _, ok := latest[log.ChannelID]; ok {
+			continue
+		}
+		latest[log.ChannelID] = log
 	}
 	return latest, nil
 }

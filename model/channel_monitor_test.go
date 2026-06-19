@@ -93,6 +93,36 @@ func TestRecordChannelMonitorLogAndLatest(t *testing.T) {
 	assert.Equal(t, ChannelMonitorStatusFailed, latest[2].Status)
 }
 
+func TestGetLatestChannelMonitorLogsTieBreaksAndFiltersRequestedChannels(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	logs := []ChannelMonitorLog{
+		{ID: 10, ChannelID: 1, Status: ChannelMonitorStatusSuccess, Message: "same time lower id", CheckedAt: 500},
+		{ID: 11, ChannelID: 1, Status: ChannelMonitorStatusFailed, Message: "same time higher id", CheckedAt: 500},
+		{ID: 12, ChannelID: 1, Status: ChannelMonitorStatusError, Message: "older", CheckedAt: 400},
+		{ID: 20, ChannelID: 2, Status: ChannelMonitorStatusDegraded, Message: "requested second channel", CheckedAt: 600},
+		{ID: 30, ChannelID: 99, Status: ChannelMonitorStatusSuccess, Message: "unrelated newest", CheckedAt: 900},
+	}
+	for _, log := range logs {
+		require.NoError(t, RecordChannelMonitorLog(log))
+	}
+
+	latest, err := GetLatestChannelMonitorLogs([]int{1, 2, 3})
+	require.NoError(t, err)
+	require.Len(t, latest, 2)
+
+	require.Contains(t, latest, 1)
+	assert.Equal(t, 11, latest[1].ID)
+	assert.Equal(t, ChannelMonitorStatusFailed, latest[1].Status)
+	assert.Equal(t, "same time higher id", latest[1].Message)
+
+	require.Contains(t, latest, 2)
+	assert.Equal(t, 20, latest[2].ID)
+	assert.Equal(t, ChannelMonitorStatusDegraded, latest[2].Status)
+	assert.NotContains(t, latest, 3)
+	assert.NotContains(t, latest, 99)
+}
+
 func TestGetChannelMonitorStatsUsesRollingWindow(t *testing.T) {
 	setupChannelMonitorTestDB(t)
 
