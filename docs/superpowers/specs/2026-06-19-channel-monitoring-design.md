@@ -38,9 +38,9 @@ A monitored channel is eligible for an automatic probe when:
 2. `channel_monitor_enabled` is true;
 3. the channel's configured interval has elapsed since its last automatic monitor check.
 
-When an automatic monitor check runs, the system records a history row for the channel and updates a small latest-status snapshot used by the channel list and edit UI.
+When an automatic monitor check runs, the system records a history row for the channel. The latest monitor status shown in the UI is derived from the newest history row, not stored back into the channel settings payload.
 
-The scheduler should be an internal background runner. It should not expose a global monitoring on/off product control. The runner can wake at a short fixed cadence, such as once per minute, and only process channels whose own monitor interval is due.
+The scheduler should be an internal background runner. It should not expose a global monitoring on/off product control. The runner can wake at a short fixed cadence, such as once per minute, and only process channels whose own monitor interval is due. In multi-node deployments, it must preserve the existing master-node-only behavior so multiple server instances do not probe the same channel and write duplicate history.
 
 ## Scope
 
@@ -50,7 +50,7 @@ In scope:
 - Per-channel monitoring interval.
 - Automatic monitor scheduler based on per-channel due time.
 - Channel-bound monitor history for up to 7 days.
-- Latest monitor status fields for UI display.
+- Latest monitor status display derived from monitor history.
 - Availability statistics over the retained history window.
 - Existing auto-disable and auto-enable behavior for automatic checks on monitored channels.
 - Frontend changes in the channel create/edit drawer and channel list/detail surfaces.
@@ -76,17 +76,13 @@ Add fields with stable JSON keys:
 ```text
 channel_monitor_enabled
 channel_monitor_interval_minutes
-channel_monitor_last_checked_at
-channel_monitor_last_status
-channel_monitor_last_latency_ms
-channel_monitor_last_message
 ```
 
 `channel_monitor_enabled` defaults to false.
 
 `channel_monitor_interval_minutes` defaults to 10 when monitoring is enabled but no value is set. The UI should present sensible choices and the backend should clamp invalid values to a safe minimum of 1 minute.
 
-The latest fields are display snapshots. The monitor history table remains the source of truth for availability calculations.
+Only low-frequency user configuration belongs in `ChannelOtherSettings`. High-frequency monitor results must not be stored there because updating the JSON payload requires saving channel settings and can race with user edits. Latest monitor state, latency, message, and last checked time are derived from monitor history.
 
 ## Monitor History
 
@@ -103,10 +99,11 @@ latency_ms
 message
 checked_at
 created_at
-updated_at
 ```
 
 `channel_id` references the local `channels.id` record.
+
+The Go model should use a clear name such as `ChannelMonitorLog`, and the table must be registered in the central GORM migration list. The table is append-only: existing rows should not be updated after insertion. `checked_at` is the probe time used for due checks, retention, and availability windows; `created_at` is only the database insertion time.
 
 `status` should use a small controlled set:
 
@@ -128,15 +125,17 @@ All schema work must remain compatible with SQLite, MySQL, and PostgreSQL throug
 
 ## Retention
 
-Keep monitor history for 7 days.
+Keep monitor history for the latest rolling 7 x 24 hours.
 
-The retention job can run from the same monitor background task and delete rows older than 7 days. The first implementation should not add 15-day or 30-day rollups.
+The retention job can run from the same monitor background task and delete rows with `checked_at < now - 7 days`. The first implementation should not add 15-day or 30-day rollups.
+
+Retention deletion should be batched, following the existing log-cleanup style used elsewhere in the project, so large deployments do not create long delete transactions. The `checked_at` index must support this cleanup path.
 
 If future traffic volume makes raw 7-day history too large, a daily rollup table can be added later. It is not required for the first implementation because the requested product window is short.
 
 ## Availability Calculation
 
-Availability is calculated from retained monitor history:
+Availability is calculated from monitor history inside the latest rolling 7 x 24 hour window:
 
 ```text
 availability = success_count / total_count
@@ -147,7 +146,7 @@ For the first implementation:
 - `success` counts as available.
 - `failed`, `degraded`, and `error` count as unavailable.
 - Channels with no monitor history should display no availability percentage rather than `0%`.
-- Statistics should be available for the retained 7-day window.
+- Statistics should use rows where `checked_at >= now - 7 days`.
 
 The backend should expose enough data for the frontend to display:
 
@@ -165,12 +164,25 @@ The automatic monitor runner should:
 1. wake on an internal fixed cadence;
 2. load channels with monitoring enabled;
 3. skip manually disabled channels;
-4. skip channels whose interval has not elapsed;
-5. run the existing single-channel test flow;
-6. record monitor history;
-7. update the latest monitor snapshot in channel settings;
-8. apply the existing automatic disable or enable decision only for this monitored automatic check;
-9. delete expired history rows older than 7 days.
+4. find the latest monitor history row for each candidate channel;
+5. treat channels with no history as due immediately;
+6. skip channels whose interval has not elapsed since their latest automatic monitor history row;
+7. run the monitor probe;
+8. record monitor history;
+9. apply the existing automatic disable or enable decision only for this monitored automatic check;
+10. delete expired history rows with `checked_at < now - 7 days`.
+
+The scheduler replaces the current global-interval automatic monitoring loop. The current "test every enabled channel" behavior should not be reused for automatic monitoring, though it can remain available for manual all-channel testing if the product keeps that action.
+
+The monitor runner should keep the existing master-node guard so only one server instance runs automatic probes in clustered deployments.
+
+## Monitor Probe And Billing Logs
+
+Automatic monitor probes must not create normal user billing or consumption logs.
+
+The existing channel test path can be reused only after its probe logic is separated from side effects such as normal `RecordConsumeLog` calls. If the implementation keeps an audit trail for monitor probes, that audit trail should be the monitor history table, not normal consumption records.
+
+This does not mean the upstream provider is free: a monitor probe may still consume upstream quota. It means Wynth API should not mix automatic monitor traffic into user usage reports, billing settlement, or normal request analytics.
 
 The existing manual test endpoints should continue to test any channel regardless of the monitor setting. Manual tests should not have to write monitor history unless explicitly designed later as "record this manual result"; the first implementation should keep automatic monitor history separate and predictable.
 
@@ -180,6 +192,12 @@ Existing automatic disable and recovery policy should continue to apply to autom
 
 Channels with monitoring disabled should not be auto-disabled or auto-enabled by the monitoring runner because they are not probed automatically.
 
+When monitor-triggered auto-disable or auto-recovery changes `Channel.Status`, that change is global for the channel and affects all real request routing that would use that channel. It is not a monitor-only soft signal.
+
+Monitor-triggered status changes should continue to respect the existing automatic-disable master policy and the channel's auto-ban policy. That policy is separate from monitoring enablement: monitoring can still collect history when automatic status mutation is disabled, but it should not change `Channel.Status` in that case.
+
+Auto-disabled channels that still have monitoring enabled may remain eligible for monitor probes so recovery can be detected. Manually disabled channels should remain skipped.
+
 Manual channel tests can still show current reachability but should not silently opt a channel into monitoring or change its configured monitor interval.
 
 ## Frontend Design
@@ -188,10 +206,10 @@ Add monitoring controls to the channel create/edit drawer:
 
 - enable monitoring toggle;
 - interval input or select, visible when monitoring is enabled;
-- latest monitor status;
-- latest monitor time;
-- latest latency;
-- 7-day availability.
+- latest monitor status derived from the newest history row;
+- latest monitor time derived from the newest history row;
+- latest latency derived from the newest history row;
+- rolling 7-day availability.
 
 Remove or hide the global automatic monitoring setting from the system settings UI because the product control moves to each channel.
 
@@ -232,7 +250,7 @@ Invalid monitor intervals should be normalized by the backend:
 
 Add the new history table through GORM auto migration.
 
-The `ChannelOtherSettings` additions do not require a database column migration because they are stored in the existing channel settings payload.
+The `ChannelOtherSettings` additions do not require a database column migration because they only store low-frequency monitor configuration in the existing channel settings payload. Latest monitor state is not stored in `ChannelOtherSettings`.
 
 Existing deployments should behave conservatively after upgrade:
 
@@ -251,11 +269,14 @@ Backend tests should cover real behavior:
 3. manually disabled channels are skipped even if monitoring is enabled;
 4. invalid intervals are normalized;
 5. automatic monitor results write history rows;
-6. latest monitor snapshot fields are updated after an automatic check;
+6. latest monitor display data is derived from the newest history row;
 7. 7-day availability excludes history older than the retention window;
 8. channels with no history return no availability percentage;
 9. retention deletes rows older than 7 days;
 10. manual test behavior remains independent from monitor enablement.
+11. automatic monitor probes do not write normal consumption logs or affect billing statistics.
+12. monitor history writes do not save or overwrite unrelated channel fields.
+13. clustered deployments preserve master-node-only automatic monitoring behavior.
 
 Frontend tests or focused manual verification should cover:
 
