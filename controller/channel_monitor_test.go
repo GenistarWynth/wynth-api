@@ -69,6 +69,127 @@ func monitorChannel(t *testing.T, id int, status int, settings dto.ChannelOtherS
 	}
 }
 
+func TestGetChannelIncludesMonitorInfo(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+
+	channel := &model.Channel{
+		Id:     31,
+		Type:   constant.ChannelTypeOpenAI,
+		Name:   "monitored-channel",
+		Key:    "secret-key",
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-4o-mini",
+		Group:  "default",
+		OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+			ChannelMonitorEnabled:         true,
+			ChannelMonitorIntervalMinutes: 3,
+		}),
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	checkedAt := common.GetTimestamp() - 60
+	require.NoError(t, model.RecordChannelMonitorLog(model.ChannelMonitorLog{
+		ChannelID: channel.Id,
+		Status:    model.ChannelMonitorStatusSuccess,
+		LatencyMS: 120,
+		Message:   "ok",
+		CheckedAt: checkedAt - 60,
+	}))
+	require.NoError(t, model.RecordChannelMonitorLog(model.ChannelMonitorLog{
+		ChannelID: channel.Id,
+		Status:    model.ChannelMonitorStatusFailed,
+		LatencyMS: 450,
+		Message:   "upstream rejected test request",
+		CheckedAt: checkedAt,
+	}))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "31"}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/31", nil)
+
+	GetChannel(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool          `json:"success"`
+		Data    model.Channel `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	assert.Empty(t, response.Data.Key)
+	require.NotNil(t, response.Data.MonitorInfo)
+	assert.True(t, response.Data.MonitorInfo.Enabled)
+	assert.Equal(t, 3, response.Data.MonitorInfo.IntervalMinutes)
+	assert.Equal(t, model.ChannelMonitorStatusFailed, response.Data.MonitorInfo.LatestStatus)
+	assert.Equal(t, checkedAt, response.Data.MonitorInfo.LatestCheckedAt)
+	assert.Equal(t, int64(450), response.Data.MonitorInfo.LatestLatencyMS)
+	assert.Equal(t, "upstream rejected test request", response.Data.MonitorInfo.LatestMessage)
+	assert.Equal(t, int64(2), response.Data.MonitorInfo.SevenDayChecks)
+	assert.Equal(t, int64(1), response.Data.MonitorInfo.SevenDaySuccesses)
+	require.NotNil(t, response.Data.MonitorInfo.SevenDayAvailability)
+	assert.InDelta(t, 0.5, *response.Data.MonitorInfo.SevenDayAvailability, 0.0001)
+	assert.Equal(t, int64(285), response.Data.MonitorInfo.AverageLatencyMS)
+}
+
+func TestGetAllChannelsIncludesMonitorInfo(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+
+	channel := &model.Channel{
+		Id:     41,
+		Type:   constant.ChannelTypeOpenAI,
+		Name:   "listed-monitored-channel",
+		Key:    "secret-key",
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-4o-mini",
+		Group:  "default",
+		OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+			ChannelMonitorEnabled:         true,
+			ChannelMonitorIntervalMinutes: 5,
+		}),
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	checkedAt := common.GetTimestamp() - 30
+	require.NoError(t, model.RecordChannelMonitorLog(model.ChannelMonitorLog{
+		ChannelID: channel.Id,
+		Status:    model.ChannelMonitorStatusSuccess,
+		LatencyMS: 123,
+		Message:   "ok",
+		CheckedAt: checkedAt,
+	}))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/?p=1&page_size=10&sort_by=id&sort_order=asc", nil)
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []model.Channel `json:"items"`
+			Total int64           `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Items, 1)
+	assert.Equal(t, int64(1), response.Data.Total)
+	assert.Empty(t, response.Data.Items[0].Key)
+	require.NotNil(t, response.Data.Items[0].MonitorInfo)
+	assert.True(t, response.Data.Items[0].MonitorInfo.Enabled)
+	assert.Equal(t, 5, response.Data.Items[0].MonitorInfo.IntervalMinutes)
+	assert.Equal(t, model.ChannelMonitorStatusSuccess, response.Data.Items[0].MonitorInfo.LatestStatus)
+	assert.Equal(t, checkedAt, response.Data.Items[0].MonitorInfo.LatestCheckedAt)
+	assert.Equal(t, int64(123), response.Data.Items[0].MonitorInfo.LatestLatencyMS)
+	assert.Equal(t, int64(1), response.Data.Items[0].MonitorInfo.SevenDayChecks)
+	assert.Equal(t, int64(1), response.Data.Items[0].MonitorInfo.SevenDaySuccesses)
+}
+
 func TestFilterDueChannelMonitorCandidates(t *testing.T) {
 	now := int64(10_000)
 	channels := []*model.Channel{

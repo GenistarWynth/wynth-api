@@ -69,6 +69,12 @@ func clearChannelInfo(channel *model.Channel) {
 	}
 }
 
+func attachChannelMonitorInfo(channels []*model.Channel) {
+	if err := model.AttachChannelMonitorInfo(channels, common.GetTimestamp()); err != nil {
+		common.SysError("failed to attach channel monitor info: " + err.Error())
+	}
+}
+
 func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
 	if statusFilter == common.ChannelStatusEnabled {
 		return query.Where("status = ?", common.ChannelStatusEnabled)
@@ -160,6 +166,7 @@ func GetAllChannels(c *gin.Context) {
 	for _, datum := range channelData {
 		clearChannelInfo(datum)
 	}
+	attachChannelMonitorInfo(channelData)
 
 	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1)
 	var results []struct {
@@ -366,6 +373,7 @@ func SearchChannels(c *gin.Context) {
 	for _, datum := range pagedData {
 		clearChannelInfo(datum)
 	}
+	attachChannelMonitorInfo(pagedData)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -392,6 +400,7 @@ func GetChannel(c *gin.Context) {
 	}
 	if channel != nil {
 		clearChannelInfo(channel)
+		attachChannelMonitorInfo([]*model.Channel{channel})
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
