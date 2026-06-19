@@ -107,7 +107,6 @@ func SyncChannelCache(frequency int) {
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string, attemptedChannelIDs ...map[int]struct{}) (*Channel, error) {
 	attempted := firstAttemptedChannelIDs(attemptedChannelIDs...)
-	hasAttempted := len(attempted) > 0
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
 		// TODO: pass attempted to GetChannel when the DB selector supports strict fallback.
@@ -119,17 +118,13 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	// First, try to find channels with the exact model name.
 	channels := filterChannelsByRequestPath(group2model2channels[group][model], requestPath)
-	if hasAttempted {
-		channels = filterAttemptedChannels(channels, attempted)
-	}
+	channels = filterAttemptedChannels(channels, attempted)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPath(group2model2channels[group][normalizedModel], requestPath)
-		if hasAttempted {
-			channels = filterAttemptedChannels(channels, attempted)
-		}
+		channels = filterAttemptedChannels(channels, attempted)
 	}
 
 	if len(channels) == 0 {
@@ -145,30 +140,16 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 
 	var targetPriority int64
 	hasTargetPriority := false
-	uniquePriorities := make(map[int]bool)
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
 			priority := channel.GetPriority()
-			uniquePriorities[int(priority)] = true
-			if hasAttempted && (!hasTargetPriority || priority > targetPriority) {
+			if !hasTargetPriority || priority > targetPriority {
 				targetPriority = channel.GetPriority()
 				hasTargetPriority = true
 			}
 		} else {
 			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
-	}
-	if !hasAttempted {
-		var sortedUniquePriorities []int
-		for priority := range uniquePriorities {
-			sortedUniquePriorities = append(sortedUniquePriorities, priority)
-		}
-		sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
-
-		if retry >= len(uniquePriorities) {
-			retry = len(uniquePriorities) - 1
-		}
-		targetPriority = int64(sortedUniquePriorities[retry])
 	}
 
 	// get the priority for the given retry number
