@@ -97,11 +97,17 @@ func GetLatestChannelMonitorLogs(channelIDs []int) (map[int]ChannelMonitorLog, e
 		return latest, nil
 	}
 
+	latestCheckedAt := DB.Model(&ChannelMonitorLog{}).
+		Select("channel_id, MAX(checked_at) AS checked_at").
+		Where("channel_id IN ?", channelIDs).
+		Group("channel_id")
+
 	var logs []ChannelMonitorLog
-	if err := DB.Where("channel_id IN ?", channelIDs).
-		Order("channel_id ASC").
-		Order("checked_at DESC").
-		Order("id DESC").
+	if err := DB.Model(&ChannelMonitorLog{}).
+		Joins("JOIN (?) AS latest ON channel_monitor_logs.channel_id = latest.channel_id AND channel_monitor_logs.checked_at = latest.checked_at", latestCheckedAt).
+		Where("channel_monitor_logs.channel_id IN ?", channelIDs).
+		Order("channel_monitor_logs.channel_id ASC").
+		Order("channel_monitor_logs.id DESC").
 		Find(&logs).Error; err != nil {
 		return nil, err
 	}

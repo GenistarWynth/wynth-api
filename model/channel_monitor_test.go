@@ -103,6 +103,15 @@ func TestGetLatestChannelMonitorLogsTieBreaksAndFiltersRequestedChannels(t *test
 		{ID: 20, ChannelID: 2, Status: ChannelMonitorStatusDegraded, Message: "requested second channel", CheckedAt: 600},
 		{ID: 30, ChannelID: 99, Status: ChannelMonitorStatusSuccess, Message: "unrelated newest", CheckedAt: 900},
 	}
+	for id := 100; id < 125; id++ {
+		logs = append(logs, ChannelMonitorLog{
+			ID:        id,
+			ChannelID: 1,
+			Status:    ChannelMonitorStatusSuccess,
+			Message:   "older high id",
+			CheckedAt: 300 + int64(id-100),
+		})
+	}
 	for _, log := range logs {
 		require.NoError(t, RecordChannelMonitorLog(log))
 	}
