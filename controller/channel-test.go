@@ -854,10 +854,10 @@ func applyChannelMonitorStatusMutation(channel *model.Channel, result testResult
 
 	shouldBanChannel := false
 	newAPIError := result.newAPIError
-	if newAPIError != nil {
+	if newAPIError != nil && result.upstreamAttempted {
 		shouldBanChannel = service.ShouldDisableChannel(newAPIError)
 	}
-	if common.AutomaticDisableChannelEnabled && !shouldBanChannel && milliseconds > disableThreshold {
+	if common.AutomaticDisableChannelEnabled && result.upstreamAttempted && !shouldBanChannel && milliseconds > disableThreshold {
 		err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
 		newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
 		shouldBanChannel = true
@@ -868,7 +868,7 @@ func applyChannelMonitorStatusMutation(channel *model.Channel, result testResult
 			common.SysError(fmt.Sprintf("channel monitor skipped auto-disable for channel #%d: missing monitor test context", channel.Id))
 			return
 		}
-		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError.ErrorWithStatusCode())
 	}
 
 	if !isChannelEnabled && channelMonitorStatusFromResult(result) == model.ChannelMonitorStatusSuccess && service.ShouldEnableChannel(newAPIError, channel.Status) {

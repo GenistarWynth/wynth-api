@@ -37,7 +37,7 @@ func setupControllerChannelMonitorTestDB(t *testing.T) *gorm.DB {
 		common.RedisEnabled = oldRedisEnabled
 	})
 
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.ChannelMonitorLog{}, &model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelMonitorLog{}, &model.User{}, &model.Log{}))
 	require.NoError(t, db.Create(&model.User{
 		Id:       1,
 		Username: "root",
@@ -67,6 +67,19 @@ func monitorChannel(t *testing.T, id int, status int, settings dto.ChannelOtherS
 		Status:        status,
 		OtherSettings: monitorSettingsJSON(t, settings),
 	}
+}
+
+func channelMonitorTestContext(channel *model.Channel) *gin.Context {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("id", 1)
+	if channel != nil {
+		ctx.Set("channel_id", channel.Id)
+		ctx.Set("channel_name", channel.Name)
+		ctx.Set("channel_type", channel.Type)
+	}
+	ctx.Set("original_model", "gpt-4o-mini")
+	return ctx
 }
 
 func TestGetChannelIncludesMonitorInfo(t *testing.T) {
@@ -348,6 +361,178 @@ func TestApplyChannelMonitorStatusMutationDoesNotRecoverAfterLocalError(t *testi
 	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
 }
 
+func TestApplyChannelMonitorStatusMutationIgnoresLocalChannelErrors(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+	channel := &model.Channel{
+		Id:      13,
+		Type:    constant.ChannelTypeOpenAI,
+		Name:    "enabled-local-channel-error",
+		Key:     "test-key",
+		Status:  common.ChannelStatusEnabled,
+		AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	oldAutomaticDisable := common.AutomaticDisableChannelEnabled
+	oldErrorLogEnabled := constant.ErrorLogEnabled
+	common.AutomaticDisableChannelEnabled = true
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		common.AutomaticDisableChannelEnabled = oldAutomaticDisable
+		constant.ErrorLogEnabled = oldErrorLogEnabled
+	})
+
+	applyChannelMonitorStatusMutation(channel, testResult{
+		context:     channelMonitorTestContext(channel),
+		localErr:    errors.New("param override failed"),
+		newAPIError: types.NewError(errors.New("param override failed"), types.ErrorCodeChannelParamOverrideInvalid),
+	}, 100)
+
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+
+	var errorLogCount int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&errorLogCount).Error)
+	assert.Zero(t, errorLogCount)
+}
+
+func TestApplyChannelMonitorStatusMutationIgnoresLocalTimeout(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+	channel := &model.Channel{
+		Id:      15,
+		Type:    constant.ChannelTypeOpenAI,
+		Name:    "enabled-local-timeout",
+		Key:     "test-key",
+		Status:  common.ChannelStatusEnabled,
+		AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	oldAutomaticDisable := common.AutomaticDisableChannelEnabled
+	oldDisableThreshold := common.ChannelDisableThreshold
+	oldErrorLogEnabled := constant.ErrorLogEnabled
+	common.AutomaticDisableChannelEnabled = true
+	common.ChannelDisableThreshold = 1
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		common.AutomaticDisableChannelEnabled = oldAutomaticDisable
+		common.ChannelDisableThreshold = oldDisableThreshold
+		constant.ErrorLogEnabled = oldErrorLogEnabled
+	})
+
+	applyChannelMonitorStatusMutation(channel, testResult{
+		context:     channelMonitorTestContext(channel),
+		localErr:    errors.New("local setup stalled"),
+		newAPIError: types.NewError(errors.New("local setup stalled"), types.ErrorCodeGenRelayInfoFailed),
+	}, 2_000)
+
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+
+	var errorLogCount int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&errorLogCount).Error)
+	assert.Zero(t, errorLogCount)
+}
+
+func TestApplyChannelMonitorStatusMutationDisablesWithoutErrorLog(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+	channel := &model.Channel{
+		Id:      14,
+		Type:    constant.ChannelTypeOpenAI,
+		Name:    "enabled-upstream-channel-error",
+		Key:     "test-key",
+		Status:  common.ChannelStatusEnabled,
+		AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	oldAutomaticDisable := common.AutomaticDisableChannelEnabled
+	oldErrorLogEnabled := constant.ErrorLogEnabled
+	common.AutomaticDisableChannelEnabled = true
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		common.AutomaticDisableChannelEnabled = oldAutomaticDisable
+		constant.ErrorLogEnabled = oldErrorLogEnabled
+	})
+
+	loggableErr := types.NewError(errors.New("upstream invalid key"), types.ErrorCodeChannelInvalidKey)
+	processChannelError(
+		channelMonitorTestContext(channel),
+		*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", false),
+		loggableErr,
+	)
+	var errorLogCount int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&errorLogCount).Error)
+	require.Equal(t, int64(1), errorLogCount)
+
+	applyChannelMonitorStatusMutation(channel, testResult{
+		context:           channelMonitorTestContext(channel),
+		localErr:          errors.New("upstream invalid key"),
+		newAPIError:       types.NewError(errors.New("upstream invalid key"), types.ErrorCodeChannelInvalidKey),
+		upstreamAttempted: true,
+	}, 100)
+
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+
+	require.NoError(t, db.Model(&model.Log{}).Count(&errorLogCount).Error)
+	assert.Equal(t, int64(1), errorLogCount)
+}
+
+func TestApplyChannelMonitorStatusMutationTimeoutDisablesWithoutErrorLog(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+	channel := &model.Channel{
+		Id:      16,
+		Type:    constant.ChannelTypeOpenAI,
+		Name:    "enabled-upstream-timeout",
+		Key:     "test-key",
+		Status:  common.ChannelStatusEnabled,
+		AutoBan: common.GetPointer(1),
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	oldAutomaticDisable := common.AutomaticDisableChannelEnabled
+	oldDisableThreshold := common.ChannelDisableThreshold
+	oldErrorLogEnabled := constant.ErrorLogEnabled
+	common.AutomaticDisableChannelEnabled = true
+	common.ChannelDisableThreshold = 1
+	constant.ErrorLogEnabled = true
+	t.Cleanup(func() {
+		common.AutomaticDisableChannelEnabled = oldAutomaticDisable
+		common.ChannelDisableThreshold = oldDisableThreshold
+		constant.ErrorLogEnabled = oldErrorLogEnabled
+	})
+
+	loggableErr := types.NewError(errors.New("upstream invalid key"), types.ErrorCodeChannelInvalidKey)
+	processChannelError(
+		channelMonitorTestContext(channel),
+		*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", false),
+		loggableErr,
+	)
+	var errorLogCount int64
+	require.NoError(t, db.Model(&model.Log{}).Count(&errorLogCount).Error)
+	require.Equal(t, int64(1), errorLogCount)
+
+	applyChannelMonitorStatusMutation(channel, testResult{
+		context:           channelMonitorTestContext(channel),
+		upstreamAttempted: true,
+	}, 2_000)
+
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+
+	require.NoError(t, db.Model(&model.Log{}).Count(&errorLogCount).Error)
+	assert.Equal(t, int64(1), errorLogCount)
+}
+
 func TestApplyChannelMonitorStatusMutationNilContextDoesNotPanic(t *testing.T) {
 	setupControllerChannelMonitorTestDB(t)
 	channel := &model.Channel{
@@ -376,8 +561,9 @@ func TestApplyChannelMonitorStatusMutationNilContextDoesNotPanic(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		applyChannelMonitorStatusMutation(channel, testResult{
-			localErr:    errors.New("upstream failed"),
-			newAPIError: types.NewError(errors.New("upstream failed"), types.ErrorCodeChannelInvalidKey),
+			localErr:          errors.New("upstream failed"),
+			newAPIError:       types.NewError(errors.New("upstream failed"), types.ErrorCodeChannelInvalidKey),
+			upstreamAttempted: true,
 		}, 100)
 	})
 
