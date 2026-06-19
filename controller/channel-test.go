@@ -702,7 +702,7 @@ func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int
 		if channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
 		}
-		settings := model.NormalizeChannelMonitorSettings(channel.GetOtherSettings())
+		settings := model.NormalizeChannelMonitorSettings(model.GetChannelMonitorSettingsReadOnly(channel))
 		if !settings.ChannelMonitorEnabled {
 			continue
 		}
@@ -719,11 +719,11 @@ func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int
 }
 
 func channelMonitorStatusFromResult(result testResult) string {
-	if result.localErr != nil {
-		return model.ChannelMonitorStatusError
-	}
 	if result.newAPIError != nil {
 		return model.ChannelMonitorStatusFailed
+	}
+	if result.localErr != nil {
+		return model.ChannelMonitorStatusError
 	}
 	return model.ChannelMonitorStatusSuccess
 }

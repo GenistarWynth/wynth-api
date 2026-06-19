@@ -103,6 +103,40 @@ func TestFilterDueChannelMonitorCandidates(t *testing.T) {
 	assert.Equal(t, 5, candidates[1].Id)
 }
 
+func TestFilterDueChannelMonitorCandidatesKeepsInvalidSettingsReadOnly(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	channel := &model.Channel{
+		Id:            6,
+		Type:          constant.ChannelTypeOpenAI,
+		Name:          "invalid-settings",
+		Status:        common.ChannelStatusEnabled,
+		Key:           "test-key",
+		OtherSettings: "{bad-json",
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	candidates := filterDueChannelMonitorCandidates([]*model.Channel{channel}, nil, 10_000)
+
+	assert.Empty(t, candidates)
+	assert.Equal(t, "{bad-json", channel.OtherSettings)
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, "{bad-json", reloaded.OtherSettings)
+}
+
+func TestChannelMonitorStatusFromResult(t *testing.T) {
+	upstreamErr := types.NewError(errors.New("upstream failed"), types.ErrorCodeChannelInvalidKey)
+
+	assert.Equal(t, model.ChannelMonitorStatusFailed, channelMonitorStatusFromResult(testResult{
+		localErr:    errors.New("wrapped upstream failed"),
+		newAPIError: upstreamErr,
+	}))
+	assert.Equal(t, model.ChannelMonitorStatusError, channelMonitorStatusFromResult(testResult{
+		localErr: errors.New("probe setup failed"),
+	}))
+	assert.Equal(t, model.ChannelMonitorStatusSuccess, channelMonitorStatusFromResult(testResult{}))
+}
+
 func TestRecordChannelTestConsumeLogSkipsMonitorProbes(t *testing.T) {
 	db := setupControllerChannelMonitorTestDB(t)
 	gin.SetMode(gin.TestMode)

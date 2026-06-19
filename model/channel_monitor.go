@@ -186,7 +186,7 @@ func DeleteOldChannelMonitorLogs(cutoff int64, batchSize int) (int64, error) {
 	}
 }
 
-func getChannelMonitorSettingsReadOnly(channel *Channel) dto.ChannelOtherSettings {
+func GetChannelMonitorSettingsReadOnly(channel *Channel) dto.ChannelOtherSettings {
 	if channel == nil || strings.TrimSpace(channel.OtherSettings) == "" {
 		return dto.ChannelOtherSettings{}
 	}
@@ -220,7 +220,7 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 		if channel == nil {
 			continue
 		}
-		settings := NormalizeChannelMonitorSettings(getChannelMonitorSettingsReadOnly(channel))
+		settings := NormalizeChannelMonitorSettings(GetChannelMonitorSettingsReadOnly(channel))
 		info := &ChannelMonitorInfo{
 			Enabled:         settings.ChannelMonitorEnabled,
 			IntervalMinutes: settings.ChannelMonitorIntervalMinutes,
