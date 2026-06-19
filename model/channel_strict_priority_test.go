@@ -73,6 +73,20 @@ func TestGetRandomSatisfiedChannelStrictPriorityKeepsHighestRemainingTier(t *tes
 	assert.Equal(t, 2, channel.Id)
 }
 
+func TestGetRandomSatisfiedChannelNoAttemptedSetPreservesLegacyRetryTier(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, true)
+	insertStrictPriorityCandidate(t, 1, "default", "gpt-test", 100, 100)
+	insertStrictPriorityCandidate(t, 2, "default", "gpt-test", 50, 100)
+	InitChannelCache()
+
+	channel, err := GetRandomSatisfiedChannel("default", "gpt-test", 1, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}
+
 func TestGetRandomSatisfiedChannelStrictPriorityFallsBackAfterTierExhaustion(t *testing.T) {
 	clearStrictPriorityTables(t)
 	withMemoryCacheForStrictPriority(t, true)
