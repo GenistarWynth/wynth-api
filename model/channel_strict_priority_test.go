@@ -171,3 +171,16 @@ func TestGetChannelDatabasePathReturnsNilWhenAllCandidatesAttempted(t *testing.T
 	require.NoError(t, err)
 	assert.Nil(t, channel)
 }
+
+func TestGetRandomSatisfiedChannelDatabasePathFiltersAttemptedChannels(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, false)
+	setupStrictPriorityCandidates(t)
+	rand.Seed(1)
+
+	channel, err := GetRandomSatisfiedChannel("default", "gpt-strict", 1, "", map[int]struct{}{1: {}})
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}

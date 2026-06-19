@@ -109,8 +109,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	attempted := firstAttemptedChannelIDs(attemptedChannelIDs...)
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		// TODO: pass attempted to GetChannel when the DB selector supports strict fallback.
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannel(group, model, retry, requestPath, attempted)
 	}
 
 	channelSyncLock.RLock()
