@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +54,41 @@ func insertStrictPriorityCandidate(t *testing.T, id int, group, modelName string
 	}).Error)
 }
 
+func insertStrictPriorityAdvancedCustomCandidate(t *testing.T, id int, group, modelName string, priority int64, weight uint, incomingPath string) {
+	t.Helper()
+	channel := &Channel{
+		Id:       id,
+		Type:     constant.ChannelTypeAdvancedCustom,
+		Key:      fmt.Sprintf("key-%d", id),
+		Status:   common.ChannelStatusEnabled,
+		Name:     fmt.Sprintf("channel-%d", id),
+		Group:    group,
+		Models:   modelName,
+		Priority: &priority,
+		Weight:   &weight,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		AdvancedCustom: &dto.AdvancedCustomConfig{
+			Routes: []dto.AdvancedCustomRoute{
+				{
+					IncomingPath: incomingPath,
+					UpstreamPath: "https://example.com/v1/chat/completions",
+					Converter:    dto.AdvancedCustomConverterNone,
+				},
+			},
+		},
+	})
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, DB.Create(&Ability{
+		Group:     group,
+		Model:     modelName,
+		ChannelId: id,
+		Enabled:   true,
+		Priority:  &priority,
+		Weight:    weight,
+	}).Error)
+}
+
 func setupStrictPriorityCandidates(t *testing.T) {
 	t.Helper()
 	insertStrictPriorityCandidate(t, 1, "default", "gpt-strict", 100, 100)
@@ -67,6 +103,49 @@ func TestGetRandomSatisfiedChannelStrictPriorityKeepsHighestRemainingTier(t *tes
 	setupStrictPriorityCandidates(t)
 
 	channel, err := GetRandomSatisfiedChannel("default", "gpt-strict", 1, "", map[int]struct{}{1: {}})
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}
+
+func TestGetRandomSatisfiedChannelNormalizedFallbackFiltersAttemptedChannels(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, true)
+	insertStrictPriorityCandidate(t, 1, "default", "gpt-4o-gizmo-*", 100, 100)
+	insertStrictPriorityCandidate(t, 2, "default", "gpt-4o-gizmo-*", 100, 100)
+	InitChannelCache()
+
+	channel, err := GetRandomSatisfiedChannel("default", "gpt-4o-gizmo-test", 1, "", map[int]struct{}{1: {}})
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}
+
+func TestGetRandomSatisfiedChannelPathFilterCombinesWithAttemptedChannels(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, true)
+	insertStrictPriorityAdvancedCustomCandidate(t, 1, "default", "gpt-strict", 100, 100, "/v1/chat/completions")
+	insertStrictPriorityAdvancedCustomCandidate(t, 2, "default", "gpt-strict", 100, 100, "/v1/chat/completions")
+	insertStrictPriorityAdvancedCustomCandidate(t, 3, "default", "gpt-strict", 100, 100, "/v1/responses")
+	InitChannelCache()
+
+	channel, err := GetRandomSatisfiedChannel("default", "gpt-strict", 1, "/v1/chat/completions", map[int]struct{}{1: {}})
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}
+
+func TestGetChannelDatabasePathFilterCombinesWithAttemptedChannels(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, false)
+	insertStrictPriorityAdvancedCustomCandidate(t, 1, "default", "gpt-strict", 100, 100, "/v1/chat/completions")
+	insertStrictPriorityAdvancedCustomCandidate(t, 2, "default", "gpt-strict", 100, 100, "/v1/chat/completions")
+	insertStrictPriorityAdvancedCustomCandidate(t, 3, "default", "gpt-strict", 100, 100, "/v1/responses")
+
+	channel, err := GetChannel("default", "gpt-strict", 1, "/v1/chat/completions", map[int]struct{}{1: {}})
 
 	require.NoError(t, err)
 	require.NotNil(t, channel)
