@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 
@@ -185,6 +186,19 @@ func DeleteOldChannelMonitorLogs(cutoff int64, batchSize int) (int64, error) {
 	}
 }
 
+func getChannelMonitorSettingsReadOnly(channel *Channel) dto.ChannelOtherSettings {
+	if channel == nil || strings.TrimSpace(channel.OtherSettings) == "" {
+		return dto.ChannelOtherSettings{}
+	}
+
+	var settings dto.ChannelOtherSettings
+	if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil {
+		common.SysLog(fmt.Sprintf("failed to unmarshal channel monitor settings: channel_id=%d, error=%v", channel.Id, err))
+		return dto.ChannelOtherSettings{}
+	}
+	return settings
+}
+
 func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 	channelIDs := make([]int, 0, len(channels))
 	for _, channel := range channels {
@@ -206,7 +220,7 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 		if channel == nil {
 			continue
 		}
-		settings := NormalizeChannelMonitorSettings(channel.GetOtherSettings())
+		settings := NormalizeChannelMonitorSettings(getChannelMonitorSettingsReadOnly(channel))
 		info := &ChannelMonitorInfo{
 			Enabled:         settings.ChannelMonitorEnabled,
 			IntervalMinutes: settings.ChannelMonitorIntervalMinutes,

@@ -212,4 +212,22 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 	assert.False(t, channels[2].MonitorInfo.Enabled)
 	assert.Equal(t, 0, channels[2].MonitorInfo.IntervalMinutes)
 	assert.Nil(t, channels[2].MonitorInfo.SevenDayAvailability)
+
+	invalidSettingsChannel := &Channel{
+		Type:          1,
+		Key:           "test-key",
+		Name:          "invalid-settings",
+		OtherSettings: "{bad-json",
+	}
+	require.NoError(t, DB.Create(invalidSettingsChannel).Error)
+
+	require.NoError(t, AttachChannelMonitorInfo([]*Channel{invalidSettingsChannel}, now))
+
+	assert.Equal(t, "{bad-json", invalidSettingsChannel.OtherSettings)
+	require.NotNil(t, invalidSettingsChannel.MonitorInfo)
+	assert.False(t, invalidSettingsChannel.MonitorInfo.Enabled)
+
+	var reloaded Channel
+	require.NoError(t, DB.First(&reloaded, invalidSettingsChannel.Id).Error)
+	assert.Equal(t, "{bad-json", reloaded.OtherSettings)
 }
