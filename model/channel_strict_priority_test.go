@@ -148,3 +148,26 @@ func TestGetRandomSatisfiedChannelZeroWeightSamePriorityTierRemainsSelectable(t 
 	require.NotNil(t, channel)
 	assert.Contains(t, []int{1, 2}, channel.Id)
 }
+
+func TestGetChannelDatabasePathKeepsSamePriorityBeforeLowerTier(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, false)
+	setupStrictPriorityCandidates(t)
+
+	channel, err := GetChannel("default", "gpt-strict", 1, "", map[int]struct{}{1: {}})
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 2, channel.Id)
+}
+
+func TestGetChannelDatabasePathReturnsNilWhenAllCandidatesAttempted(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, false)
+	setupStrictPriorityCandidates(t)
+
+	channel, err := GetChannel("default", "gpt-strict", 3, "", map[int]struct{}{1: {}, 2: {}, 3: {}})
+
+	require.NoError(t, err)
+	assert.Nil(t, channel)
+}
