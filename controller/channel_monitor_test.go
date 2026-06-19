@@ -203,6 +203,30 @@ func TestApplyChannelMonitorStatusMutationHonorsEnableGate(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
 }
 
+func TestApplyChannelMonitorStatusMutationDoesNotRecoverAfterLocalError(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	channel := &model.Channel{
+		Id:     12,
+		Type:   constant.ChannelTypeOpenAI,
+		Name:   "auto-disabled-local-error",
+		Key:    "test-key",
+		Status: common.ChannelStatusAutoDisabled,
+	}
+	require.NoError(t, db.Create(channel).Error)
+
+	oldAutomaticEnable := common.AutomaticEnableChannelEnabled
+	common.AutomaticEnableChannelEnabled = true
+	t.Cleanup(func() {
+		common.AutomaticEnableChannelEnabled = oldAutomaticEnable
+	})
+
+	applyChannelMonitorStatusMutation(channel, testResult{localErr: errors.New("local setup failed")}, 100)
+
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, reloaded.Status)
+}
+
 func TestApplyChannelMonitorStatusMutationNilContextDoesNotPanic(t *testing.T) {
 	setupControllerChannelMonitorTestDB(t)
 	channel := &model.Channel{

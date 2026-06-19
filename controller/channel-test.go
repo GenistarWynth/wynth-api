@@ -871,7 +871,7 @@ func applyChannelMonitorStatusMutation(channel *model.Channel, result testResult
 		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 	}
 
-	if !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
+	if !isChannelEnabled && channelMonitorStatusFromResult(result) == model.ChannelMonitorStatusSuccess && service.ShouldEnableChannel(newAPIError, channel.Status) {
 		usingKey := ""
 		if result.context != nil {
 			usingKey = common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
