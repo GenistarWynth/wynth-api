@@ -2004,6 +2004,8 @@ func TestRunDueUpstreamSourceAutoSyncSyncsOnlyDueMappings(t *testing.T) {
 			UpstreamPlatform:        "openai",
 			DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
 			EffectiveRateMultiplier: &rate,
+			SyncStatus:              model.UpstreamMappingSyncStatusSynced,
+			LastError:               "previous sync result",
 			LastSyncedAt:            1650,
 		},
 	}).Error)
@@ -2032,6 +2034,11 @@ func TestRunDueUpstreamSourceAutoSyncSyncsOnlyDueMappings(t *testing.T) {
 	assert.Equal(t, 1, results[0].Skipped)
 	require.Len(t, createCalls, 1)
 	assert.Equal(t, "10", createCalls[0].GroupID)
+	var freshMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&freshMapping).Error)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, freshMapping.SyncStatus)
+	assert.Equal(t, "previous sync result", freshMapping.LastError)
+	assert.Equal(t, int64(1650), freshMapping.LastSyncedAt)
 }
 
 func createAutoSyncTestSource(t *testing.T, name string, status string, syncConfig map[string]any, lastSyncTime int64, currentToken string, syncStartedAt int64) model.UpstreamSource {

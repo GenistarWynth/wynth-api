@@ -210,7 +210,7 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 	}
 	if eligibleCount == 0 {
 		for i := range mappings {
-			mappingResult := skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now)
+			mappingResult := skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now, shouldPersistSkippedUpstreamSourceMapping(mode, resolutions[i]))
 			result.Results = append(result.Results, mappingResult)
 			result.Skipped++
 		}
@@ -262,7 +262,7 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 		var mappingResult dto.UpstreamSourceMappingSyncResult
 		var changedChannel *model.Channel
 		if !resolutions[i].SyncEligible {
-			mappingResult = skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now)
+			mappingResult = skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now, shouldPersistSkippedUpstreamSourceMapping(mode, resolutions[i]))
 		} else {
 			mappingResult, changedChannel = s.syncUpstreamSourceMapping(ctx, &source, &mappings[i], config, resolutions[i], adapter, now)
 		}
@@ -312,7 +312,7 @@ func resolveUpstreamSourceRuleForManualSync(config upstreamSourceSyncConfig, map
 	eligibilityMapping := *mapping
 	eligibilityMapping.SyncEnabled = true
 	ruleResolution := resolveUpstreamSourceRule(config, &eligibilityMapping)
-	if !ruleResolution.SyncEligible && ruleResolution.Reason != upstreamSourceMatchReasonManualDisabled {
+	if !ruleResolution.SyncEligible {
 		return ruleResolution
 	}
 	return resolution
@@ -351,7 +351,11 @@ func upstreamSourceGeneratedBaseURL(source *model.UpstreamSource) string {
 	return strings.TrimSpace(source.BaseURL)
 }
 
-func skippedUpstreamSourceMappingResult(mapping *model.UpstreamSourceChannelMapping, resolution upstreamSourceRuleResolution, now int64) dto.UpstreamSourceMappingSyncResult {
+func shouldPersistSkippedUpstreamSourceMapping(mode upstreamSourceSyncMode, resolution upstreamSourceRuleResolution) bool {
+	return mode != upstreamSourceSyncModeAuto || resolution.Reason != upstreamSourceMatchReasonAutoSyncNotDue
+}
+
+func skippedUpstreamSourceMappingResult(mapping *model.UpstreamSourceChannelMapping, resolution upstreamSourceRuleResolution, now int64, persist bool) dto.UpstreamSourceMappingSyncResult {
 	errText := SanitizeUpstreamSourceError(errors.New(resolution.Reason))
 	result := dto.UpstreamSourceMappingSyncResult{
 		Status: model.UpstreamMappingSyncStatusSkipped,
@@ -363,7 +367,9 @@ func skippedUpstreamSourceMappingResult(mapping *model.UpstreamSourceChannelMapp
 	result.MappingID = mapping.Id
 	result.UpstreamGroupID = mapping.UpstreamGroupID
 	result.LocalChannelID = mapping.LocalChannelID
-	_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusSkipped, errText, now)
+	if persist {
+		_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusSkipped, errText, now)
+	}
 	return result
 }
 
@@ -972,10 +978,6 @@ func updateUpstreamSourceSyncStatus(sourceID int, status string, errText string,
 			"last_sync_error":  errText,
 			"updated_time":     now,
 		}).Error
-}
-
-func buildDiscoveryResult(sourceID int, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
-	return buildDiscoveryResultTx(model.DB, sourceID, "", discovered, staleCount, invalidCount)
 }
 
 func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, rawConfig string, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
