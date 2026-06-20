@@ -229,14 +229,14 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 // AutoSyncModels stays pointer-based here so absent keys can preserve the
 // historical default while explicit false remains distinguishable.
 type upstreamSourceSyncConfig struct {
-	LocalGroup             string `json:"local_group"`
-	ChannelType            int    `json:"channel_type"`
-	DefaultPriority        int64  `json:"default_priority"`
-	DefaultWeight          uint   `json:"default_weight"`
-	EnableMonitor          bool   `json:"enable_monitor"`
-	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
-	AutoSyncModels         *bool  `json:"auto_sync_models"`
-	AllowPrivateIP         bool   `json:"allow_private_ip"`
+	LocalGroup             string              `json:"local_group"`
+	ChannelType            int                 `json:"channel_type"`
+	DefaultPriority        int64               `json:"default_priority"`
+	DefaultWeight          uint                `json:"default_weight"`
+	EnableMonitor          bool                `json:"enable_monitor"`
+	MonitorIntervalMinutes int                 `json:"monitor_interval_minutes"`
+	AutoSyncModels         *bool               `json:"auto_sync_models"`
+	AllowPrivateIP         common.FlexibleBool `json:"allow_private_ip"`
 }
 
 func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {

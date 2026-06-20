@@ -27,14 +27,14 @@ type upstreamSourceAuthConfig struct {
 // Defaults are seeded before unmarshaling so an absent auto_sync_models key
 // preserves the service default of true while explicit false still persists.
 type upstreamSourceControllerSyncConfig struct {
-	LocalGroup             string `json:"local_group"`
-	ChannelType            int    `json:"channel_type"`
-	DefaultPriority        int64  `json:"default_priority"`
-	DefaultWeight          uint   `json:"default_weight"`
-	EnableMonitor          bool   `json:"enable_monitor"`
-	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
-	AutoSyncModels         bool   `json:"auto_sync_models"`
-	AllowPrivateIP         bool   `json:"allow_private_ip"`
+	LocalGroup             string              `json:"local_group"`
+	ChannelType            int                 `json:"channel_type"`
+	DefaultPriority        int64               `json:"default_priority"`
+	DefaultWeight          uint                `json:"default_weight"`
+	EnableMonitor          bool                `json:"enable_monitor"`
+	MonitorIntervalMinutes int                 `json:"monitor_interval_minutes"`
+	AutoSyncModels         bool                `json:"auto_sync_models"`
+	AllowPrivateIP         common.FlexibleBool `json:"allow_private_ip"`
 }
 
 func ListUpstreamSources(c *gin.Context) {
@@ -283,7 +283,7 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 		EnableMonitor:          req.EnableMonitor,
 		MonitorIntervalMinutes: req.MonitorIntervalMinutes,
 		AutoSyncModels:         req.AutoSyncModels,
-		AllowPrivateIP:         req.AllowPrivateIP,
+		AllowPrivateIP:         common.FlexibleBool(req.AllowPrivateIP),
 	})
 	if err != nil {
 		return model.UpstreamSource{}, err
@@ -313,7 +313,7 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 		EnableMonitor:          req.EnableMonitor,
 		MonitorIntervalMinutes: req.MonitorIntervalMinutes,
 		AutoSyncModels:         req.AutoSyncModels,
-		AllowPrivateIP:         req.AllowPrivateIP,
+		AllowPrivateIP:         common.FlexibleBool(req.AllowPrivateIP),
 	})
 	if err != nil {
 		return nil, err
@@ -392,7 +392,7 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		EnableMonitor:          sync.EnableMonitor,
 		MonitorIntervalMinutes: sync.MonitorIntervalMinutes,
 		AutoSyncModels:         sync.AutoSyncModels,
-		AllowPrivateIP:         sync.AllowPrivateIP,
+		AllowPrivateIP:         bool(sync.AllowPrivateIP),
 		MaskedEmail:            common.MaskEmail(auth.Email),
 		HasCredentials:         upstreamSourceHasCredentials(auth),
 		LastDiscoveryTime:      source.LastDiscoveryTime,

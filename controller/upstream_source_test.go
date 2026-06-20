@@ -189,6 +189,19 @@ func TestUpstreamSourceAPIListRedactsStoredErrors(t *testing.T) {
 	assert.Contains(t, raw, "[redacted]")
 }
 
+func TestUpstreamSourceAPIListAcceptsNumericPrivateIPFlag(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("sync_config", `{"allow_private_ip":1}`).Error)
+
+	response := upstreamSourceAPIRequest[[]dto.UpstreamSourceResponse](t, router, http.MethodGet, "/api/upstream_sources", nil, true)
+
+	require.True(t, response.Success, response.Message)
+	require.Len(t, response.Data, 1)
+	assert.True(t, response.Data[0].AllowPrivateIP)
+}
+
 func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
