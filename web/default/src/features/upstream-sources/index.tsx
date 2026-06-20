@@ -118,6 +118,10 @@ import {
   upstreamSourcesQueryKeys,
 } from './api'
 import {
+  hasMappingSelectionChanges,
+  resolveSelectedMappingIDs,
+} from './selection'
+import {
   UPSTREAM_SOURCE_TYPE_SUB2API,
   type ApiResponse,
   type UpstreamDiscoveryStatus,
@@ -1072,17 +1076,16 @@ function MappingsSheet(props: {
   const mappings = mappingsQuery.data ?? EMPTY_UPSTREAM_SOURCE_MAPPINGS
   const selectedMappingIDs = useMemo(
     () =>
-      mappings
-        .filter(
-          (mapping) =>
-            mappingSelectionOverrides[mapping.id] ?? mapping.sync_enabled
-        )
-        .map((mapping) => mapping.id),
+      resolveSelectedMappingIDs(mappings, mappingSelectionOverrides),
     [mappingSelectionOverrides, mappings]
   )
   const selectedMappingIDSet = useMemo(
     () => new Set(selectedMappingIDs),
     [selectedMappingIDs]
+  )
+  const hasUnsavedSelectionChanges = useMemo(
+    () => hasMappingSelectionChanges(mappings, mappingSelectionOverrides),
+    [mappingSelectionOverrides, mappings]
   )
 
   const saveMutation = useMutation({
@@ -1114,7 +1117,24 @@ function MappingsSheet(props: {
     }))
   }
 
+  const handleSync = async () => {
+    if (!props.source) {
+      return
+    }
+    if (hasUnsavedSelectionChanges) {
+      const result = await saveMutation
+        .mutateAsync(selectedMappingIDs)
+        .catch(() => undefined)
+      if (!result?.success) {
+        return
+      }
+    }
+    props.onSync(props.source)
+  }
+
   const selectedCount = selectedMappingIDs.length
+  const isSavingSelection = saveMutation.isPending
+  const isSyncButtonBusy = props.syncing || isSavingSelection
 
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
@@ -1146,10 +1166,10 @@ function MappingsSheet(props: {
                 <Button
                   type='button'
                   variant='outline'
-                  disabled={props.syncing}
-                  onClick={() => props.source && props.onSync(props.source)}
+                  disabled={isSyncButtonBusy}
+                  onClick={handleSync}
                 >
-                  {props.syncing ? (
+                  {isSyncButtonBusy ? (
                     <Loader2
                       data-icon='inline-start'
                       className='animate-spin'
@@ -1228,10 +1248,10 @@ function MappingsSheet(props: {
           </SheetClose>
           <Button
             type='button'
-            disabled={saveMutation.isPending}
+            disabled={isSavingSelection}
             onClick={() => saveMutation.mutate(selectedMappingIDs)}
           >
-            {saveMutation.isPending ? (
+            {isSavingSelection ? (
               <Loader2 data-icon='inline-start' className='animate-spin' />
             ) : (
               <Save data-icon='inline-start' />
