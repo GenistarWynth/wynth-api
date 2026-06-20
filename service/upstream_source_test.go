@@ -170,12 +170,13 @@ func TestDiscoverUpstreamSourceUpsertsMappings(t *testing.T) {
 	require.Len(t, result.Mappings, 2)
 	assert.Equal(t, "10", result.Mappings[0].UpstreamGroupID)
 	assert.Equal(t, "cheap", result.Mappings[0].UpstreamGroupName)
-	assert.False(t, result.Mappings[0].SyncEnabled)
+	assert.True(t, result.Mappings[0].SyncEnabled)
 
 	var mappings []model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.Order("upstream_group_id").Find(&mappings).Error)
 	require.Len(t, mappings, 2)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, mappings[0].DiscoveryStatus)
+	assert.True(t, mappings[0].SyncEnabled)
 	assert.Equal(t, int64(12345), mappings[0].LastDiscoveredAt)
 	require.NotNil(t, mappings[0].EffectiveRateMultiplier)
 	assert.Equal(t, rateA, *mappings[0].EffectiveRateMultiplier)
@@ -285,6 +286,36 @@ func TestDiscoverUpstreamSourcePreservesSyncOwnedMappingFields(t *testing.T) {
 	assert.Equal(t, int64(111), reloaded.LastSyncedAt)
 	assert.Equal(t, "renamed", reloaded.UpstreamGroupName)
 	assert.Equal(t, int64(222), reloaded.LastDiscoveredAt)
+}
+
+func TestDiscoverUpstreamSourceDoesNotReenableDeselectedMapping(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 0.75
+	existing := model.UpstreamSourceChannelMapping{
+		SourceID:        source.Id,
+		SyncEnabled:     false,
+		UpstreamGroupID: "10",
+		DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&existing).Error)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{
+				{ID: "10", Name: "renamed", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+			}}, nil
+		},
+		Now: func() int64 { return 223 },
+	}
+
+	_, err := service.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	var reloaded model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").First(&reloaded).Error)
+	assert.False(t, reloaded.SyncEnabled)
+	assert.Equal(t, "renamed", reloaded.UpstreamGroupName)
+	assert.Equal(t, int64(223), reloaded.LastDiscoveredAt)
 }
 
 func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {

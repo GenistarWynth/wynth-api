@@ -671,6 +671,7 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 		}
 		mappingByID[groupID] = model.UpstreamSourceChannelMapping{
 			SourceID:                sourceID,
+			SyncEnabled:             discoveryStatus == model.UpstreamMappingDiscoveryStatusActive,
 			UpstreamGroupID:         groupID,
 			UpstreamGroupName:       strings.TrimSpace(group.Name),
 			UpstreamPlatform:        strings.TrimSpace(group.Platform),

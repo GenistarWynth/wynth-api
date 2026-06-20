@@ -159,6 +159,7 @@ func UpsertDiscoveredMappingsTx(tx *gorm.DB, sourceID int, mappings []UpstreamSo
 		}
 		discovered = append(discovered, UpstreamSourceChannelMapping{
 			SourceID:                sourceID,
+			SyncEnabled:             mapping.SyncEnabled,
 			UpstreamGroupID:         groupID,
 			UpstreamGroupName:       mapping.UpstreamGroupName,
 			UpstreamPlatform:        mapping.UpstreamPlatform,
