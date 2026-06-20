@@ -544,6 +544,9 @@ func isGeneratedChannelOwnedByMapping(channel *model.Channel, source *model.Upst
 func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) (UpstreamKey, error) {
 	name := upstreamSourceKeyName(source, mapping)
 	if strings.TrimSpace(mapping.UpstreamKeyID) == "" {
+		if key, found := findReusableUpstreamSourceKey(ctx, adapter, source, mapping, name); found {
+			return key, nil
+		}
 		return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
 	}
 	key, err := adapter.UpdateKey(ctx, source, mapping.UpstreamKeyID, mapping.UpstreamGroupID, name)
@@ -554,6 +557,29 @@ func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceA
 		return UpstreamKey{}, err
 	}
 	return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
+}
+
+func findReusableUpstreamSourceKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, name string) (UpstreamKey, bool) {
+	keys, err := adapter.ListKeys(ctx, source, mapping.UpstreamGroupID)
+	if err != nil {
+		return UpstreamKey{}, false
+	}
+	for _, key := range keys {
+		if strings.TrimSpace(key.ID) == "" {
+			continue
+		}
+		if strings.TrimSpace(key.Name) != name {
+			continue
+		}
+		if key.GroupID != "" && strings.TrimSpace(key.GroupID) != strings.TrimSpace(mapping.UpstreamGroupID) {
+			continue
+		}
+		if key.GroupID == "" {
+			key.GroupID = mapping.UpstreamGroupID
+		}
+		return key, true
+	}
+	return UpstreamKey{}, false
 }
 
 func recoverUpstreamSourceKeyForChannelCreate(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, updatedKey UpstreamKey) (UpstreamKey, error) {
@@ -577,7 +603,10 @@ func recoverUpstreamSourceKeyForChannelCreate(ctx context.Context, adapter Upstr
 			}
 		}
 	}
-	return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, upstreamSourceKeyName(source, mapping))
+	if keyID == "" {
+		return UpstreamKey{}, errors.New("existing upstream key value is unavailable")
+	}
+	return UpstreamKey{}, fmt.Errorf("existing upstream key value is unavailable for key %s", keyID)
 }
 
 func isUpstreamKeyNotFoundError(err error) bool {

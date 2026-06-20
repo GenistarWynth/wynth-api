@@ -2,9 +2,13 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   buildLocalGroupRuleTemplate,
+  createLocalGroupRuleUserTemplate,
+  hasLocalGroupRuleMatcher,
   normalizeKeywordList,
   normalizeModelList,
+  parseLocalGroupRuleUserTemplates,
   normalizeSyncRules,
+  serializeLocalGroupRuleUserTemplates,
 } from './rules'
 
 describe('upstream source rule normalization', () => {
@@ -52,6 +56,33 @@ describe('upstream source rule normalization', () => {
     ])
   })
 
+  test('detects rules that can be matched and saved as templates', () => {
+    assert.equal(
+      hasLocalGroupRuleMatcher({
+        platforms: [],
+        name_contains: [],
+        description_contains: [],
+      }),
+      false
+    )
+    assert.equal(
+      hasLocalGroupRuleMatcher({
+        platforms: ['OpenAI'],
+        name_contains: [],
+        description_contains: [],
+      }),
+      true
+    )
+    assert.equal(
+      hasLocalGroupRuleMatcher({
+        platforms: [],
+        name_contains: [' pro '],
+        description_contains: [],
+      }),
+      true
+    )
+  })
+
   test('builds local group rule templates with inherited scheduling defaults', () => {
     assert.deepEqual(
       buildLocalGroupRuleTemplate('openai-pro', {
@@ -75,5 +106,98 @@ describe('upstream source rule normalization', () => {
         fixed_models: ['gpt-5', 'gpt-4o'],
       }
     )
+  })
+
+  test('serializes user templates with normalized rule snapshots', () => {
+    const template = createLocalGroupRuleUserTemplate(
+      ' Cheap GPT ',
+      {
+        name: ' Cheap GPT ',
+        local_group: ' OpenAI ',
+        platforms: ['OpenAI', 'openai'],
+        name_contains: [' GPT ', 'gpt'],
+        description_contains: [],
+        exclude_keywords: [' pro '],
+        monitor: { enabled: true, interval_minutes: 10 },
+        auto_sync: { enabled: true, interval_minutes: 0 },
+        model_strategy: 'fixed',
+        fixed_models: [' gpt-4o ', 'gpt-5', 'gpt-4o'],
+      },
+      1234
+    )
+
+    assert.deepEqual(template, {
+      id: 'cheap-gpt',
+      name: 'Cheap GPT',
+      created_at: 1234,
+      rule: {
+        name: 'Cheap GPT',
+        local_group: 'OpenAI',
+        platforms: ['openai'],
+        name_contains: ['gpt'],
+        description_contains: [],
+        exclude_keywords: ['pro'],
+        monitor: { enabled: true, interval_minutes: 10 },
+        auto_sync: { enabled: true, interval_minutes: 0 },
+        model_strategy: 'fixed',
+        fixed_models: ['gpt-4o', 'gpt-5'],
+      },
+    })
+
+    assert.deepEqual(
+      parseLocalGroupRuleUserTemplates(
+        serializeLocalGroupRuleUserTemplates([template])
+      ),
+      [template]
+    )
+  })
+
+  test('skips invalid user templates from storage', () => {
+    assert.deepEqual(
+      parseLocalGroupRuleUserTemplates(
+        JSON.stringify([
+          {
+            id: 'valid',
+            name: 'Valid',
+            created_at: 10,
+            rule: {
+              name: 'Valid',
+              local_group: 'OpenAI',
+              platforms: ['openai'],
+              name_contains: [],
+              description_contains: [],
+              exclude_keywords: [],
+              model_strategy: 'all_upstream',
+              fixed_models: [],
+            },
+          },
+          {
+            id: '',
+            name: '',
+            created_at: 'bad',
+            rule: null,
+          },
+        ])
+      ),
+      [
+        {
+          id: 'valid',
+          name: 'Valid',
+          created_at: 10,
+          rule: {
+            name: 'Valid',
+            local_group: 'OpenAI',
+            platforms: ['openai'],
+            name_contains: [],
+            description_contains: [],
+            exclude_keywords: [],
+            model_strategy: 'all_upstream',
+            fixed_models: [],
+          },
+        },
+      ]
+    )
+
+    assert.deepEqual(parseLocalGroupRuleUserTemplates('{bad json'), [])
   })
 })

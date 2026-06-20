@@ -21,6 +21,13 @@ type LocalGroupRuleTemplateDefaults = {
   fixedModels?: string[]
 }
 
+export type LocalGroupRuleUserTemplate = {
+  id: string
+  name: string
+  created_at: number
+  rule: UpstreamSourceLocalGroupRule
+}
+
 export function normalizeKeywordList(value: string | string[]): string[] {
   const raw = Array.isArray(value) ? value.join(',') : value
   const seen = new Set<string>()
@@ -51,6 +58,36 @@ export function normalizeModelList(values: string[]): string[] {
 
 export function formatKeywordList(values: string[]) {
   return values.join(', ')
+}
+
+export function hasLocalGroupRuleMatcher(
+  rule: Pick<
+    UpstreamSourceLocalGroupRule,
+    'platforms' | 'name_contains' | 'description_contains'
+  >
+) {
+  return (
+    normalizeKeywordList(rule.platforms ?? []).length > 0 ||
+    normalizeKeywordList(rule.name_contains ?? []).length > 0 ||
+    normalizeKeywordList(rule.description_contains ?? []).length > 0
+  )
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item))
+    : typeof value === 'string'
+      ? [value]
+      : []
+}
+
+function normalizeTemplateID(value: string, createdAt: number) {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return normalized || `template-${createdAt}`
 }
 
 export function normalizeModelStrategy(
@@ -120,6 +157,99 @@ export function buildLocalGroupRuleTemplate(
   }
 }
 
+function normalizeTemplateRule(
+  rule: Partial<UpstreamSourceLocalGroupRule>
+): UpstreamSourceLocalGroupRule {
+  const modelStrategy = normalizeModelStrategy(rule.model_strategy)
+  return {
+    name: String(rule.name ?? '').trim(),
+    local_group: String(rule.local_group ?? '').trim(),
+    platforms: normalizeKeywordList(toStringArray(rule.platforms)),
+    name_contains: normalizeKeywordList(toStringArray(rule.name_contains)),
+    description_contains: normalizeKeywordList(
+      toStringArray(rule.description_contains)
+    ),
+    exclude_keywords: normalizeKeywordList(toStringArray(rule.exclude_keywords)),
+    ...(rule.monitor ? { monitor: rule.monitor } : {}),
+    ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
+    model_strategy: modelStrategy,
+    fixed_models:
+      modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+        ? normalizeModelList(toStringArray(rule.fixed_models))
+        : [],
+  }
+}
+
+export function createLocalGroupRuleUserTemplate(
+  name: string,
+  rule: UpstreamSourceLocalGroupRule,
+  createdAt = Date.now()
+): LocalGroupRuleUserTemplate {
+  const trimmedName = name.trim() || rule.name.trim() || `Template ${createdAt}`
+  return {
+    id: normalizeTemplateID(trimmedName, createdAt),
+    name: trimmedName,
+    created_at: createdAt,
+    rule: normalizeTemplateRule({ ...rule, name: rule.name || trimmedName }),
+  }
+}
+
+export function serializeLocalGroupRuleUserTemplates(
+  templates: LocalGroupRuleUserTemplate[]
+) {
+  return JSON.stringify(templates)
+}
+
+function parseUserTemplate(value: unknown): LocalGroupRuleUserTemplate | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const item = value as Partial<LocalGroupRuleUserTemplate>
+  if (
+    typeof item.id !== 'string' ||
+    item.id.trim() === '' ||
+    typeof item.name !== 'string' ||
+    item.name.trim() === '' ||
+    typeof item.created_at !== 'number' ||
+    !Number.isFinite(item.created_at) ||
+    !item.rule ||
+    typeof item.rule !== 'object'
+  ) {
+    return null
+  }
+  const rule = normalizeTemplateRule(
+    item.rule as Partial<UpstreamSourceLocalGroupRule>
+  )
+  if (!hasLocalGroupRuleMatcher(rule)) {
+    return null
+  }
+  return {
+    id: item.id.trim(),
+    name: item.name.trim(),
+    created_at: item.created_at,
+    rule,
+  }
+}
+
+export function parseLocalGroupRuleUserTemplates(
+  raw: string | null | undefined
+): LocalGroupRuleUserTemplate[] {
+  if (!raw) {
+    return []
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    return parsed
+      .map(parseUserTemplate)
+      .filter((item): item is LocalGroupRuleUserTemplate => item !== null)
+  } catch {
+    return []
+  }
+}
+
 export function normalizeSyncRules(
   rules: UpstreamSourceLocalGroupRule[]
 ): UpstreamSourceLocalGroupRule[] {
@@ -150,10 +280,5 @@ export function normalizeSyncRules(
         fixed_models: fixedModels,
       }
     })
-    .filter(
-      (rule) =>
-        rule.platforms.length > 0 ||
-        rule.name_contains.length > 0 ||
-        rule.description_contains.length > 0
-    )
+    .filter(hasLocalGroupRuleMatcher)
 }

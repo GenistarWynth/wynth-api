@@ -1330,6 +1330,47 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	assert.Equal(t, "sk-updated-10", channel.Key)
 }
 
+func TestSyncUpstreamSourceReusesNamedUpstreamKeyBeforeCreating(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	listCalls := make([]string, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				listKeys: []UpstreamKey{
+					{ID: "other-key", Key: "sk-other", Name: "other", GroupID: "10"},
+					{ID: "key-10", Key: "sk-existing-10", Name: "Wynth API / source-a / primary", GroupID: "10"},
+				},
+				createCalls: &createCalls,
+				listCalls:   &listCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1006 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, result.Created)
+	assert.Empty(t, createCalls)
+	assert.Equal(t, []string{"10"}, listCalls)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.Equal(t, "key-10", reloadedMapping.UpstreamKeyID)
+	require.NotZero(t, reloadedMapping.LocalChannelID)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, reloadedMapping.LocalChannelID).Error)
+	assert.Equal(t, "sk-existing-10", channel.Key)
+}
+
 func TestSyncUpstreamSourceRecoversExistingKeyFromListWhenNoLocalChannel(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, nil)
@@ -1376,7 +1417,7 @@ func TestSyncUpstreamSourceRecoversExistingKeyFromListWhenNoLocalChannel(t *test
 	assert.Equal(t, "sk-listed-10", channel.Key)
 }
 
-func TestSyncUpstreamSourceReplacesExistingKeyWhenListCannotRecover(t *testing.T) {
+func TestSyncUpstreamSourceDoesNotReplaceExistingKeyWhenListCannotRecover(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, nil)
 	rate := 1.0
@@ -1392,7 +1433,6 @@ func TestSyncUpstreamSourceReplacesExistingKeyWhenListCannotRecover(t *testing.T
 				updateKey:          UpstreamKey{ID: "key-10"},
 				keepEmptyUpdateKey: true,
 				listKeys:           []UpstreamKey{{ID: "other-key", Key: "sk-other", GroupID: "10"}},
-				createKeys:         []UpstreamKey{{ID: "key-replacement", Key: "sk-replacement-10"}},
 				createCalls:        &createCalls,
 				listCalls:          &listCalls,
 			}, nil
@@ -1407,18 +1447,16 @@ func TestSyncUpstreamSourceReplacesExistingKeyWhenListCannotRecover(t *testing.T
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
-	assert.Equal(t, 1, result.Created)
-	require.Len(t, createCalls, 1)
-	assert.Equal(t, fakeUpstreamSourceCreateKeyCall{GroupID: "10", Name: "Wynth API / source-a / primary"}, createCalls[0])
+	assert.Equal(t, model.UpstreamSyncStatusFailed, result.Status)
+	assert.Contains(t, result.Error, "existing upstream key value is unavailable")
+	assert.Empty(t, createCalls)
 	assert.Equal(t, []string{"10"}, listCalls)
 	var reloadedMapping model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
-	assert.Equal(t, "key-replacement", reloadedMapping.UpstreamKeyID)
-	require.NotZero(t, reloadedMapping.LocalChannelID)
-	var channel model.Channel
-	require.NoError(t, model.DB.First(&channel, reloadedMapping.LocalChannelID).Error)
-	assert.Equal(t, "sk-replacement-10", channel.Key)
+	assert.Equal(t, "key-10", reloadedMapping.UpstreamKeyID)
+	assert.Zero(t, reloadedMapping.LocalChannelID)
+	assert.Equal(t, model.UpstreamMappingSyncStatusFailed, reloadedMapping.SyncStatus)
+	assert.Contains(t, reloadedMapping.LastError, "existing upstream key value is unavailable")
 }
 
 func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {

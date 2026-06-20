@@ -55,6 +55,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
@@ -105,6 +106,7 @@ import {
 } from '@/components/drawer-layout'
 import { SectionPageLayout } from '@/components/layout'
 import { LongText } from '@/components/long-text'
+import { MultiSelect } from '@/components/multi-select'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import {
@@ -125,8 +127,13 @@ import {
 } from './selection'
 import {
   buildLocalGroupRuleTemplate,
+  createLocalGroupRuleUserTemplate,
   formatKeywordList,
+  hasLocalGroupRuleMatcher,
+  parseLocalGroupRuleUserTemplates,
+  serializeLocalGroupRuleUserTemplates,
   type LocalGroupRuleTemplateKey,
+  type LocalGroupRuleUserTemplate,
   normalizeKeywordList,
   normalizeModelList,
   normalizeModelStrategy,
@@ -171,6 +178,8 @@ const LOCAL_GROUP_RULE_TEMPLATE_SETS: {
     keys: ['openai', 'openai-pro', 'anthropic', 'anthropic-pro'],
   },
 ]
+const USER_RULE_TEMPLATES_STORAGE_KEY =
+  'wynth.upstreamSource.localGroupRuleTemplates'
 
 type SourceSheetMode = 'create' | 'update'
 
@@ -829,72 +838,25 @@ function CheckboxList(props: {
   )
 }
 
-function ModelCheckboxList(props: {
+function FixedModelSelect(props: {
   values: string[]
-  options: string[]
+  options: { value: string; label: string }[]
   onChange: (values: string[]) => void
 }) {
   const { t } = useTranslation()
-  const [query, setQuery] = useState('')
-  const selected = new Set(props.values)
-  const selectedOrder = new Map(
-    props.values.map((model, index) => [model, index + 1])
-  )
-  const filtered = props.options.filter((model) =>
-    model.toLowerCase().includes(query.trim().toLowerCase())
-  )
-  const toggle = (model: string, checked: boolean) => {
-    props.onChange(
-      checked
-        ? Array.from(new Set([...props.values, model]))
-        : props.values.filter((item) => item !== model)
-    )
-  }
   return (
     <div className='grid gap-2'>
-      {props.values.length > 0 && (
-        <div className='border-border bg-muted/30 flex flex-wrap gap-1 rounded-md border p-2'>
-          <span className='text-muted-foreground mr-1 text-xs'>
-            {t('Selected order')}
-          </span>
-          {props.values.map((model, index) => (
-            <span
-              key={model}
-              className='bg-background text-foreground inline-flex max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-xs'
-            >
-              <span className='text-muted-foreground'>#{index + 1}</span>
-              <span className='truncate'>{model}</span>
-            </span>
-          ))}
-        </div>
-      )}
-      <Input
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        placeholder={t('Search models')}
+      <MultiSelect
+        options={props.options}
+        selected={props.values}
+        onChange={props.onChange}
+        placeholder={t('Select models or add custom ones')}
+        allowCreate
+        createLabel='Add custom model "{{value}}"'
+        emptyText={t('No models found')}
+        maxVisibleChips={8}
+        copyChipOnClick
       />
-      <div className='border-border max-h-48 overflow-y-auto rounded-md border p-2'>
-        {filtered.length === 0 ? (
-          <div className='text-muted-foreground py-4 text-center text-sm'>
-            {t('No models found')}
-          </div>
-        ) : (
-          filtered.map((model) => (
-            <label key={model} className='flex items-center gap-2 py-1 text-sm'>
-              <Checkbox
-                checked={selected.has(model)}
-                onCheckedChange={(checked) => toggle(model, Boolean(checked))}
-              />
-              {selectedOrder.has(model) && (
-                <span className='text-muted-foreground w-7 shrink-0 text-xs'>
-                  #{selectedOrder.get(model)}
-                </span>
-              )}
-              <span className='truncate'>{model}</span>
-            </label>
-          ))
-        )}
-      </div>
     </div>
   )
 }
@@ -911,6 +873,9 @@ function SourceFormSheet(props: {
   const [form, setForm] = useState<UpstreamSourceFormValues>(
     defaultSourceFormValues(props.source)
   )
+  const [userRuleTemplates, setUserRuleTemplates] = useState<
+    LocalGroupRuleUserTemplate[]
+  >([])
   const isUpdate = props.mode === 'update'
   const groupsQuery = useQuery({
     queryKey: ['user-groups'],
@@ -934,6 +899,33 @@ function SourceFormSheet(props: {
     () => modelsQuery.data?.data ?? [],
     [modelsQuery.data]
   )
+  const modelSelectOptions = useMemo(
+    () => modelOptions.map((model) => ({ value: model, label: model })),
+    [modelOptions]
+  )
+
+  useEffect(() => {
+    if (!props.open || typeof window === 'undefined') {
+      return
+    }
+    setUserRuleTemplates(
+      parseLocalGroupRuleUserTemplates(
+        window.localStorage.getItem(USER_RULE_TEMPLATES_STORAGE_KEY)
+      )
+    )
+  }, [props.open])
+
+  const persistUserRuleTemplates = (
+    templates: LocalGroupRuleUserTemplate[]
+  ) => {
+    setUserRuleTemplates(templates)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        USER_RULE_TEMPLATES_STORAGE_KEY,
+        serializeLocalGroupRuleUserTemplates(templates)
+      )
+    }
+  }
 
   const setField = <K extends keyof UpstreamSourceFormValues>(
     key: K,
@@ -1009,6 +1001,39 @@ function SourceFormSheet(props: {
         ],
       }
     })
+  }
+
+  const addUserLocalGroupRuleTemplate = (
+    template: LocalGroupRuleUserTemplate
+  ) => {
+    setForm((previous) => ({
+      ...previous,
+      local_group_rules: [
+        ...previous.local_group_rules,
+        normalizeRuleForForm(template.rule),
+      ],
+    }))
+  }
+
+  const saveLocalGroupRuleAsTemplate = (
+    index: number,
+    rule: UpstreamSourceLocalGroupRule
+  ) => {
+    if (!hasLocalGroupRuleMatcher(rule)) {
+      toast.error(t('Rule template needs at least one platform or keyword'))
+      return
+    }
+    const fallbackName = t('Rule {{index}}', { index: index + 1 })
+    const template = createLocalGroupRuleUserTemplate(
+      rule.name.trim() || fallbackName,
+      rule
+    )
+    const next = [
+      template,
+      ...userRuleTemplates.filter((item) => item.id !== template.id),
+    ]
+    persistUserRuleTemplates(next)
+    toast.success(t('Rule template saved'))
   }
 
   const removeLocalGroupRule = (index: number) => {
@@ -1295,9 +1320,9 @@ function SourceFormSheet(props: {
             </FieldBlock>
             {form.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
               <FieldBlock label={t('Fixed Models')}>
-                <ModelCheckboxList
+                <FixedModelSelect
                   values={form.fixed_models}
-                  options={modelOptions}
+                  options={modelSelectOptions}
                   onChange={(values) => setField('fixed_models', values)}
                 />
               </FieldBlock>
@@ -1356,7 +1381,8 @@ function SourceFormSheet(props: {
                     <Settings2 data-icon='inline-start' />
                     {t('Rule templates')}
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align='end' className='w-52'>
+                  <DropdownMenuContent align='end' className='w-60'>
+                    <DropdownMenuLabel>{t('Built-in templates')}</DropdownMenuLabel>
                     {LOCAL_GROUP_RULE_TEMPLATE_SETS.map((templateSet) => (
                       <DropdownMenuItem
                         key={templateSet.label}
@@ -1367,6 +1393,22 @@ function SourceFormSheet(props: {
                         {t(templateSet.label)}
                       </DropdownMenuItem>
                     ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel>{t('Saved templates')}</DropdownMenuLabel>
+                    {userRuleTemplates.length === 0 ? (
+                      <DropdownMenuItem disabled>
+                        {t('No saved templates')}
+                      </DropdownMenuItem>
+                    ) : (
+                      userRuleTemplates.map((template) => (
+                        <DropdownMenuItem
+                          key={template.id}
+                          onClick={() => addUserLocalGroupRuleTemplate(template)}
+                        >
+                          <span className='truncate'>{template.name}</span>
+                        </DropdownMenuItem>
+                      ))
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <Button
@@ -1398,15 +1440,26 @@ function SourceFormSheet(props: {
                           index: index + 1,
                         })}
                     </span>
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='icon'
-                      onClick={() => removeLocalGroupRule(index)}
-                    >
-                      <Trash2 />
-                      <span className='sr-only'>{t('Remove rule')}</span>
-                    </Button>
+                    <div className='flex shrink-0 items-center gap-1'>
+                      <Button
+                        type='button'
+                        variant='outline'
+                        size='sm'
+                        onClick={() => saveLocalGroupRuleAsTemplate(index, rule)}
+                      >
+                        <Save data-icon='inline-start' />
+                        {t('Save as template')}
+                      </Button>
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='icon'
+                        onClick={() => removeLocalGroupRule(index)}
+                      >
+                        <Trash2 />
+                        <span className='sr-only'>{t('Remove rule')}</span>
+                      </Button>
+                    </div>
                   </div>
                   <div className='grid gap-3 sm:grid-cols-2'>
                     <FieldBlock
@@ -1644,9 +1697,9 @@ function SourceFormSheet(props: {
                   {rule.model_strategy ===
                     UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
                     <FieldBlock label={t('Fixed Models')}>
-                      <ModelCheckboxList
+                      <FixedModelSelect
                         values={rule.fixed_models}
-                        options={modelOptions}
+                        options={modelSelectOptions}
                         onChange={(values) =>
                           setLocalGroupRule(index, {
                             ...rule,
