@@ -160,7 +160,8 @@ func TestSub2APIAdapterCreateKeyReturnsIDAndFullKey(t *testing.T) {
 		require.Equal(t, http.MethodPost, r.Method)
 		var payload map[string]any
 		require.NoError(t, common.DecodeJson(r.Body, &payload))
-		assert.Equal(t, "10", fmt.Sprint(payload["group_id"]))
+		assert.IsType(t, float64(0), payload["group_id"])
+		assert.Equal(t, float64(10), payload["group_id"])
 		assert.Equal(t, "generated channel", payload["name"])
 		writeSub2APITestJSON(t, w, map[string]any{
 			"code":    0,
@@ -248,7 +249,8 @@ func TestSub2APIAdapterUpdateKeySendsPutAndNormalizesResponse(t *testing.T) {
 		require.Equal(t, "Bearer existing-token", r.Header.Get("Authorization"))
 		var payload map[string]any
 		require.NoError(t, common.DecodeJson(r.Body, &payload))
-		assert.Equal(t, "20", fmt.Sprint(payload["group_id"]))
+		assert.IsType(t, float64(0), payload["group_id"])
+		assert.Equal(t, float64(20), payload["group_id"])
 		assert.Equal(t, "updated channel", payload["name"])
 		writeSub2APITestJSON(t, w, map[string]any{
 			"code":    0,
@@ -384,8 +386,35 @@ func TestSub2APIAdapterRejectsBlockedURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "request reject")
 }
 
+func TestSub2APIAdapterClientValidatesRedirects(t *testing.T) {
+	withSub2APIFetchSetting(t, false)
+
+	delegated := false
+	transport := &http.Transport{}
+	baseClient := &http.Client{
+		Transport: transport,
+		Timeout:   123 * time.Millisecond,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			delegated = true
+			return nil
+		},
+	}
+	wrapped := sub2APIHTTPClient(&Sub2APIAdapter{Client: baseClient})
+	require.NotNil(t, wrapped.CheckRedirect)
+	assert.Same(t, transport, wrapped.Transport)
+	assert.Equal(t, baseClient.Timeout, wrapped.Timeout)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/private", nil)
+	err := wrapped.CheckRedirect(req, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+	assert.False(t, delegated)
+}
+
 func TestSub2APIAdapterSanitizesAndCapsErrors(t *testing.T) {
-	err := fmt.Errorf(`GET https://example.com/path?access_token=query-access&refresh_token=query-refresh&api_key=query-key&password=query-password&token=query-token failed Authorization: Bearer bearer-secret Cookie: session-secret X-API-Key: header-key password=body-password refresh_token=body-refresh api_key=body-key {"access_token":"json-access","refresh_token":"json-refresh","api_key":"json-key","password":"json-password","token":"json-token"} %s`, strings.Repeat("x", 2000))
+	rawKey := "sk-" + strings.Repeat("a", 32)
+	err := fmt.Errorf(`GET https://example.com/path?access_token=query-access&refresh_token=query-refresh&api_key=query-key&password=query-password&token=query-token failed Authorization: Bearer bearer-secret Cookie: session-secret X-API-Key: header-key password=body-password refresh_token=body-refresh api_key=body-key {"access_token":"json-access","refresh_token":"json-refresh","api_key":"json-key","password":"json-password","token":"json-token"} generated key %s %s`, rawKey, strings.Repeat("x", 2000))
 
 	sanitized := SanitizeUpstreamSourceError(err)
 
@@ -406,6 +435,7 @@ func TestSub2APIAdapterSanitizesAndCapsErrors(t *testing.T) {
 	assert.NotContains(t, sanitized, "json-key")
 	assert.NotContains(t, sanitized, "json-password")
 	assert.NotContains(t, sanitized, "json-token")
+	assert.NotContains(t, sanitized, rawKey)
 }
 
 func writeSub2APITestJSON(t *testing.T, w http.ResponseWriter, payload any) {

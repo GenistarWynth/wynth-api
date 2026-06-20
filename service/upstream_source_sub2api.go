@@ -114,8 +114,12 @@ func (a Sub2APIAdapter) CreateKey(ctx context.Context, source *model.UpstreamSou
 	if err != nil {
 		return UpstreamKey{}, err
 	}
+	groupIDValue, err := parseSub2APIGroupIDPayload(groupID)
+	if err != nil {
+		return UpstreamKey{}, err
+	}
 	payload := map[string]any{
-		"group_id": groupID,
+		"group_id": groupIDValue,
 		"name":     name,
 	}
 	key, err := sub2APIRequest[sub2APIKey](ctx, &a, source, http.MethodPost, "/keys", nil, payload, token)
@@ -130,8 +134,12 @@ func (a Sub2APIAdapter) UpdateKey(ctx context.Context, source *model.UpstreamSou
 	if err != nil {
 		return UpstreamKey{}, err
 	}
+	groupIDValue, err := parseSub2APIGroupIDPayload(groupID)
+	if err != nil {
+		return UpstreamKey{}, err
+	}
 	payload := map[string]any{
-		"group_id": groupID,
+		"group_id": groupIDValue,
 		"name":     name,
 	}
 	key, err := sub2APIRequest[sub2APIKey](ctx, &a, source, http.MethodPut, "/keys/"+url.PathEscape(keyID), nil, payload, token)
@@ -344,13 +352,33 @@ func validateUpstreamSourceURL(requestURL string) error {
 }
 
 func sub2APIHTTPClient(adapter *Sub2APIAdapter) *http.Client {
+	var client *http.Client
 	if adapter != nil && adapter.Client != nil {
-		return adapter.Client
+		client = adapter.Client
+	} else if defaultClient := GetHttpClient(); defaultClient != nil {
+		client = defaultClient
+	} else {
+		client = http.DefaultClient
 	}
-	if client := GetHttpClient(); client != nil {
-		return client
+	return sub2APIClientWithRedirectValidation(client)
+}
+
+func sub2APIClientWithRedirectValidation(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
 	}
-	return http.DefaultClient
+	wrapped := *client
+	existingCheckRedirect := client.CheckRedirect
+	wrapped.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := checkRedirect(req, via); err != nil {
+			return err
+		}
+		if existingCheckRedirect != nil {
+			return existingCheckRedirect(req, via)
+		}
+		return nil
+	}
+	return &wrapped
 }
 
 func normalizeSub2APIKey(key sub2APIKey) UpstreamKey {
@@ -369,8 +397,21 @@ func formatNullableIntID(value *int64) string {
 	return strconv.FormatInt(*value, 10)
 }
 
+func parseSub2APIGroupIDPayload(groupID string) (*int64, error) {
+	trimmed := strings.TrimSpace(groupID)
+	if trimmed == "" {
+		return nil, errors.New("sub2api group ID is required")
+	}
+	parsed, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid sub2api group ID %q: %w", groupID, err)
+	}
+	return &parsed, nil
+}
+
 var upstreamSourceSensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)("(?:(?:access|refresh)_token|api[_-]?key|password|token)"\s*:\s*")[^"]*(")`),
+	regexp.MustCompile(`\bsk-[A-Za-z0-9][A-Za-z0-9_-]{16,}\b`),
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)bearer\s+[^,\s;&]+`),
 	regexp.MustCompile(`(?i)bearer\s+[^,\s;&]+`),
 	regexp.MustCompile(`(?i)(cookie\s*[:=]\s*)[^,\s;&]+`),
