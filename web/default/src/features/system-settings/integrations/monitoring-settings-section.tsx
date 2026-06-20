@@ -44,7 +44,6 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
-import { safeNumberFieldProps } from '../utils/numeric-field'
 
 const numericString = z.string().refine((value) => {
   const trimmed = value.trim()
@@ -257,49 +256,8 @@ export function MonitoringSettingsSection({
             isSaving={updateOption.isPending}
             saveLabel='Save monitoring rules'
           />
-          <div className='grid gap-6 md:grid-cols-2'>
-            <FormField
-              control={form.control}
-              name='monitor_setting.auto_test_channel_enabled'
-              render={({ field }) => (
-                <SettingsSwitchItem>
-                  <SettingsSwitchContent>
-                    <FormLabel>{t('Scheduled channel tests')}</FormLabel>
-                    <FormDescription>
-                      {t('Automatically probe all channels in the background')}
-                    </FormDescription>
-                  </SettingsSwitchContent>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </SettingsSwitchItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='monitor_setting.auto_test_channel_minutes'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Test interval (minutes)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={1}
-                      step={1}
-                      {...safeNumberFieldProps(field)}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('How frequently the system tests all channels')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+          <div className='border-border bg-muted/30 text-muted-foreground rounded-md border px-4 py-3 text-sm'>
+            {t('Automatic channel probes are configured on each channel.')}
           </div>
 
           <div className='grid gap-6 md:grid-cols-2'>

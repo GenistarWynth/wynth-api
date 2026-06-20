@@ -34,6 +34,21 @@ export const channelInfoSchema = z.object({
 
 export type ChannelInfo = z.infer<typeof channelInfoSchema>
 
+export const channelMonitorInfoSchema = z.object({
+  enabled: z.boolean().default(false),
+  interval_minutes: z.number().default(10),
+  latest_status: z.enum(['success', 'failed', 'degraded', 'error']).optional(),
+  latest_checked_at: z.number().optional(),
+  latest_latency_ms: z.number().optional(),
+  latest_message: z.string().optional(),
+  seven_day_checks: z.number().default(0),
+  seven_day_successes: z.number().default(0),
+  seven_day_availability: z.number().nullable().optional(),
+  average_latency_ms: z.number().optional(),
+})
+
+export type ChannelMonitorInfo = z.infer<typeof channelMonitorInfoSchema>
+
 export const channelSchema = z.object({
   id: z.number(),
   type: z.number(),
@@ -70,6 +85,7 @@ export const channelSchema = z.object({
     multi_key_polling_index: 0,
     multi_key_mode: 'random',
   }),
+  monitor_info: channelMonitorInfoSchema.nullish(),
   settings: z.string().default('{}'), // other_settings JSON
 })
 
@@ -105,6 +121,8 @@ export interface ChannelOtherSettings {
   upstream_model_update_ignored_models?: string[]
   upstream_model_update_last_check_time?: number
   upstream_model_update_last_detected_models?: string[]
+  channel_monitor_enabled?: boolean
+  channel_monitor_interval_minutes?: number
   advanced_custom?: AdvancedCustomConfig
 }
 
@@ -351,6 +369,8 @@ export interface ChannelFormData {
   multi_key_mode?: 'single' | 'batch' | 'multi_to_single'
   multi_key_type?: 'random' | 'polling'
   batch_add_set_key_prefix_2_name?: boolean
+  channel_monitor_enabled?: boolean
+  channel_monitor_interval_minutes?: number
 }
 
 // ============================================================================

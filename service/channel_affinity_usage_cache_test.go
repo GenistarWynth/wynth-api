@@ -1,8 +1,8 @@
 package service
 
 import (
-	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -11,25 +11,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func buildChannelAffinityStatsContextForTest(t *testing.T) (*gin.Context, string, string, string) {
+func buildChannelAffinityStatsContextForTest(t *testing.T) *gin.Context {
 	t.Helper()
-	ruleName := t.Name()
-	usingGroup := "default"
-	keyFP := "fp:" + t.Name()
+
+	safeName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)
 	setChannelAffinityContext(ctx, channelAffinityMeta{
-		CacheKey:       fmt.Sprintf("test:%s:%s:%s", ruleName, usingGroup, keyFP),
+		CacheKey:       "test:" + safeName,
 		TTLSeconds:     600,
-		RuleName:       ruleName,
-		UsingGroup:     usingGroup,
-		KeyFingerprint: keyFP,
+		RuleName:       "rule_" + safeName,
+		UsingGroup:     "default",
+		KeyFingerprint: "fp_" + safeName,
 	})
-	return ctx, ruleName, usingGroup, keyFP
+
+	t.Cleanup(func() {
+		statsCtx, ok := GetChannelAffinityStatsContext(ctx)
+		if !ok {
+			return
+		}
+		entryKey := channelAffinityUsageCacheEntryKey(statsCtx.RuleName, statsCtx.UsingGroup, statsCtx.KeyFingerprint)
+		if entryKey == "" {
+			return
+		}
+		_, err := getChannelAffinityUsageCacheStatsCache().DeleteMany([]string{entryKey})
+		require.NoError(t, err)
+	})
+
+	return ctx
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) {
-	ctx, ruleName, usingGroup, keyFP := buildChannelAffinityStatsContextForTest(t)
+	ctx := buildChannelAffinityStatsContextForTest(t)
+	statsCtx, ok := GetChannelAffinityStatsContext(ctx)
+	require.True(t, ok)
 
 	usage := &dto.Usage{
 		PromptTokens:     100,
@@ -41,7 +56,7 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 	}
 
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, types.RelayFormatClaude)
-	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+	stats := GetChannelAffinityUsageCacheStats(statsCtx.RuleName, statsCtx.UsingGroup, statsCtx.KeyFingerprint)
 
 	require.EqualValues(t, 1, stats.Total)
 	require.EqualValues(t, 1, stats.Hit)
@@ -53,7 +68,9 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_ClaudeMode(t *testing.T) 
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
-	ctx, ruleName, usingGroup, keyFP := buildChannelAffinityStatsContextForTest(t)
+	ctx := buildChannelAffinityStatsContextForTest(t)
+	statsCtx, ok := GetChannelAffinityStatsContext(ctx)
+	require.True(t, ok)
 
 	openAIUsage := &dto.Usage{
 		PromptTokens: 100,
@@ -70,7 +87,7 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
 
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, openAIUsage, types.RelayFormatOpenAI)
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, claudeUsage, types.RelayFormatClaude)
-	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+	stats := GetChannelAffinityUsageCacheStats(statsCtx.RuleName, statsCtx.UsingGroup, statsCtx.KeyFingerprint)
 
 	require.EqualValues(t, 2, stats.Total)
 	require.EqualValues(t, 2, stats.Hit)
@@ -80,7 +97,9 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_MixedMode(t *testing.T) {
 }
 
 func TestObserveChannelAffinityUsageCacheByRelayFormat_UnsupportedModeKeepsEmpty(t *testing.T) {
-	ctx, ruleName, usingGroup, keyFP := buildChannelAffinityStatsContextForTest(t)
+	ctx := buildChannelAffinityStatsContextForTest(t)
+	statsCtx, ok := GetChannelAffinityStatsContext(ctx)
+	require.True(t, ok)
 
 	usage := &dto.Usage{
 		PromptTokens: 100,
@@ -90,7 +109,7 @@ func TestObserveChannelAffinityUsageCacheByRelayFormat_UnsupportedModeKeepsEmpty
 	}
 
 	ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, types.RelayFormatGemini)
-	stats := GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFP)
+	stats := GetChannelAffinityUsageCacheStats(statsCtx.RuleName, statsCtx.UsingGroup, statsCtx.KeyFingerprint)
 
 	require.EqualValues(t, 1, stats.Total)
 	require.EqualValues(t, 1, stats.Hit)

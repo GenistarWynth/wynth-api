@@ -26,7 +26,6 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -38,9 +37,21 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context           *gin.Context
+	localErr          error
+	newAPIError       *types.NewAPIError
+	testedModel       string
+	upstreamAttempted bool
+}
+
+type channelTestOptions struct {
+	recordConsumeLog bool
+}
+
+func defaultChannelTestOptions() channelTestOptions {
+	return channelTestOptions{
+		recordConsumeLog: true,
+	}
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -75,6 +86,10 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 }
 
 func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithOptions(channel, testUserID, testModel, endpointType, isStream, defaultChannelTestOptions())
+}
+
+func testChannelWithOptions(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, options channelTestOptions) (result testResult) {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -108,6 +123,11 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 			}
 		}
 	}
+	defer func() {
+		if result.testedModel == "" {
+			result.testedModel = testModel
+		}
+	}()
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
 
@@ -435,9 +455,10 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+			context:           c,
+			localErr:          err,
+			newAPIError:       types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	var httpResp *http.Response
@@ -456,42 +477,47 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 				err,
 			))
 			return testResult{
-				context:     c,
-				localErr:    err,
-				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				context:           c,
+				localErr:          err,
+				newAPIError:       types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				upstreamAttempted: true,
 			}
 		}
 	}
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
 	if respErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    respErr,
-			newAPIError: respErr,
+			context:           c,
+			localErr:          respErr,
+			newAPIError:       respErr,
+			upstreamAttempted: true,
 		}
 	}
 	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    usageErr,
-			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			context:           c,
+			localErr:          usageErr,
+			newAPIError:       types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
-	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, isStream)
+	httpResult := w.Result()
+	respBody, err := readTestResponseBody(httpResult.Body, isStream)
 	if err != nil {
 		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			context:           c,
+			localErr:          err,
+			newAPIError:       types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
 		return testResult{
-			context:     c,
-			localErr:    bodyErr,
-			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			context:           c,
+			localErr:          bodyErr,
+			newAPIError:       types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamAttempted: true,
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
@@ -501,7 +527,7 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	milliseconds := tok.Sub(tik).Milliseconds()
 	consumedTime := float64(milliseconds) / 1000.0
 	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
-	model.RecordConsumeLog(c, testUserID, model.RecordConsumeLogParams{
+	recordChannelTestConsumeLog(options, c, testUserID, model.RecordConsumeLogParams{
 		ChannelId:        channel.Id,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
@@ -516,10 +542,18 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:           c,
+		localErr:          nil,
+		newAPIError:       nil,
+		upstreamAttempted: true,
 	}
+}
+
+func recordChannelTestConsumeLog(options channelTestOptions, c *gin.Context, testUserID int, params model.RecordConsumeLogParams) {
+	if !options.recordConsumeLog {
+		return
+	}
+	model.RecordConsumeLog(c, testUserID, params)
 }
 
 func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Request) error {
@@ -665,6 +699,185 @@ func validateTestResponseBody(respBody []byte, isStream bool) error {
 
 func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	return channel != nil && channel.Type == constant.ChannelTypeCodex
+}
+
+func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int]model.ChannelMonitorLog, now int64) []*model.Channel {
+	candidates := make([]*model.Channel, 0, len(channels))
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		if channel.Status == common.ChannelStatusManuallyDisabled {
+			continue
+		}
+		settings := model.NormalizeChannelMonitorSettings(model.GetChannelMonitorSettingsReadOnly(channel))
+		if !settings.ChannelMonitorEnabled {
+			continue
+		}
+		log, ok := latest[channel.Id]
+		if !ok {
+			candidates = append(candidates, channel)
+			continue
+		}
+		if now-log.CheckedAt >= int64(settings.ChannelMonitorIntervalMinutes)*60 {
+			candidates = append(candidates, channel)
+		}
+	}
+	return candidates
+}
+
+func channelMonitorStatusFromResult(result testResult) string {
+	if result.newAPIError != nil && result.upstreamAttempted {
+		return model.ChannelMonitorStatusFailed
+	}
+	if result.localErr != nil {
+		return model.ChannelMonitorStatusError
+	}
+	return model.ChannelMonitorStatusSuccess
+}
+
+func channelMonitorMessageFromResult(result testResult) string {
+	if result.localErr != nil {
+		return result.localErr.Error()
+	}
+	if result.newAPIError != nil {
+		return result.newAPIError.Error()
+	}
+	return ""
+}
+
+var channelMonitorBatchLock sync.Mutex
+var channelMonitorBatchRunning bool
+
+func runDueChannelMonitorBatch() error {
+	testUserID, err := resolveChannelTestUserID(nil)
+	if err != nil {
+		return err
+	}
+
+	channelMonitorBatchLock.Lock()
+	if channelMonitorBatchRunning {
+		channelMonitorBatchLock.Unlock()
+		return errors.New("channel monitor batch is already running")
+	}
+	channelMonitorBatchRunning = true
+	channelMonitorBatchLock.Unlock()
+
+	channels, err := model.GetAllChannels(0, 0, true, false)
+	if err != nil {
+		channelMonitorBatchLock.Lock()
+		channelMonitorBatchRunning = false
+		channelMonitorBatchLock.Unlock()
+		return err
+	}
+
+	channelIDs := make([]int, 0, len(channels))
+	for _, channel := range channels {
+		if channel != nil {
+			channelIDs = append(channelIDs, channel.Id)
+		}
+	}
+	latest, err := model.GetLatestChannelMonitorLogs(channelIDs)
+	if err != nil {
+		channelMonitorBatchLock.Lock()
+		channelMonitorBatchRunning = false
+		channelMonitorBatchLock.Unlock()
+		return err
+	}
+
+	now := common.GetTimestamp()
+	candidates := filterDueChannelMonitorCandidates(channels, latest, now)
+	if len(candidates) == 0 {
+		if _, cleanupErr := model.DeleteOldChannelMonitorLogs(now-model.ChannelMonitorRetentionSeconds, 1000); cleanupErr != nil {
+			common.SysError("failed to delete old channel monitor logs: " + cleanupErr.Error())
+		}
+		channelMonitorBatchLock.Lock()
+		channelMonitorBatchRunning = false
+		channelMonitorBatchLock.Unlock()
+		return nil
+	}
+
+	gopool.Go(func() {
+		defer func() {
+			channelMonitorBatchLock.Lock()
+			channelMonitorBatchRunning = false
+			channelMonitorBatchLock.Unlock()
+		}()
+
+		for _, channel := range candidates {
+			runChannelMonitorProbe(channel, testUserID)
+			time.Sleep(common.RequestInterval)
+		}
+		if _, cleanupErr := model.DeleteOldChannelMonitorLogs(common.GetTimestamp()-model.ChannelMonitorRetentionSeconds, 1000); cleanupErr != nil {
+			common.SysError("failed to delete old channel monitor logs: " + cleanupErr.Error())
+		}
+	})
+	return nil
+}
+
+func runChannelMonitorProbe(channel *model.Channel, testUserID int) {
+	if channel == nil {
+		return
+	}
+
+	tik := time.Now()
+	result := testChannelWithOptions(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), channelTestOptions{
+		recordConsumeLog: false,
+	})
+	milliseconds := time.Since(tik).Milliseconds()
+
+	if err := model.RecordChannelMonitorLog(model.ChannelMonitorLog{
+		ChannelID: channel.Id,
+		Model:     result.testedModel,
+		Status:    channelMonitorStatusFromResult(result),
+		LatencyMS: milliseconds,
+		Message:   channelMonitorMessageFromResult(result),
+		CheckedAt: common.GetTimestamp(),
+	}); err != nil {
+		common.SysError(fmt.Sprintf("failed to record channel monitor log: channel_id=%d, error=%v", channel.Id, err))
+	}
+
+	applyChannelMonitorStatusMutation(channel, result, milliseconds)
+	channel.UpdateResponseTime(milliseconds)
+}
+
+func applyChannelMonitorStatusMutation(channel *model.Channel, result testResult, milliseconds int64) {
+	if channel == nil {
+		return
+	}
+
+	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
+	disableThreshold := int64(common.ChannelDisableThreshold * 1000)
+	if disableThreshold == 0 {
+		disableThreshold = 10000000
+	}
+
+	shouldBanChannel := false
+	newAPIError := result.newAPIError
+	if newAPIError != nil && result.upstreamAttempted {
+		shouldBanChannel = service.ShouldDisableChannel(newAPIError)
+	}
+	if common.AutomaticDisableChannelEnabled && result.upstreamAttempted && !shouldBanChannel && milliseconds > disableThreshold {
+		err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
+		newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
+		shouldBanChannel = true
+	}
+
+	if isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
+		if result.context == nil {
+			common.SysError(fmt.Sprintf("channel monitor skipped auto-disable for channel #%d: missing monitor test context", channel.Id))
+			return
+		}
+		service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError.ErrorWithStatusCode())
+	}
+
+	if !isChannelEnabled && channelMonitorStatusFromResult(result) == model.ChannelMonitorStatusSuccess && service.ShouldEnableChannel(newAPIError, channel.Status) {
+		usingKey := ""
+		if result.context != nil {
+			usingKey = common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+		}
+		service.EnableChannel(channel.Id, usingKey, channel.Name)
+	}
 }
 
 func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
@@ -989,21 +1202,11 @@ func AutomaticallyTestChannels() {
 		return
 	}
 	autoTestChannelsOnce.Do(func() {
-		for {
-			if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
-				time.Sleep(1 * time.Minute)
-				continue
-			}
-			for {
-				frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
-				time.Sleep(time.Duration(int(math.Round(frequency))) * time.Minute)
-				common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
-				common.SysLog("automatically testing all channels")
-				_ = testAllChannels(false)
-				common.SysLog("automatically channel test finished")
-				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
-					break
-				}
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := runDueChannelMonitorBatch(); err != nil {
+				common.SysError("channel monitor batch skipped: " + err.Error())
 			}
 		}
 	})

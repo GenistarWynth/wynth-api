@@ -207,6 +207,9 @@ export const channelFormSchema = z
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
     upstream_model_update_ignored_models: z.string().optional(),
+    // Channel monitoring settings (stored in settings JSON)
+    channel_monitor_enabled: z.boolean().optional(),
+    channel_monitor_interval_minutes: z.number().optional(),
   })
   .superRefine((data, ctx) => {
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
@@ -234,6 +237,17 @@ export const channelFormSchema = z
           ctx,
           'base_url',
           'Base URL is required when an advanced route uses an upstream path'
+        )
+      }
+    }
+
+    if (data.channel_monitor_enabled) {
+      const interval = data.channel_monitor_interval_minutes
+      if (!Number.isInteger(interval) || interval === undefined || interval < 1) {
+        addRequiredIssue(
+          ctx,
+          'channel_monitor_interval_minutes',
+          'Monitoring interval must be at least 1 minute'
         )
       }
     }
@@ -345,6 +359,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
+  channel_monitor_enabled: false,
+  channel_monitor_interval_minutes: 10,
   advanced_custom: '',
 }
 
@@ -400,6 +416,8 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
+  let channelMonitorEnabled = false
+  let channelMonitorIntervalMinutes = 10
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -425,6 +443,11 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      channelMonitorEnabled = parsed.channel_monitor_enabled === true
+      channelMonitorIntervalMinutes = normalizeMonitorInterval(
+        parsed.channel_monitor_interval_minutes,
+        10
+      )
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -477,6 +500,8 @@ export function transformChannelToFormDefaults(
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
+    channel_monitor_enabled: channelMonitorEnabled,
+    channel_monitor_interval_minutes: channelMonitorIntervalMinutes,
     advanced_custom: advancedCustom,
   }
 }
@@ -494,6 +519,12 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     system_prompt_override: formData.system_prompt_override || false,
   }
   return JSON.stringify(settingObj)
+}
+
+function normalizeMonitorInterval(value: unknown, fallback = 10): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return fallback
+  return Math.max(1, Math.trunc(numeric))
 }
 
 /**
@@ -611,6 +642,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     }
   } else if ('advanced_custom' in settingsObj) {
     delete settingsObj.advanced_custom
+  }
+
+  settingsObj.channel_monitor_enabled =
+    formData.channel_monitor_enabled === true
+  if (settingsObj.channel_monitor_enabled) {
+    settingsObj.channel_monitor_interval_minutes = normalizeMonitorInterval(
+      formData.channel_monitor_interval_minutes,
+      10
+    )
+  } else if ('channel_monitor_interval_minutes' in settingsObj) {
+    delete settingsObj.channel_monitor_interval_minutes
   }
 
   return JSON.stringify(settingsObj)

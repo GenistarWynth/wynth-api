@@ -48,7 +48,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { ProviderBadge } from '@/components/provider-badge'
-import { StatusBadge } from '@/components/status-badge'
+import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { TruncatedText } from '@/components/truncated-text'
 import { getCodexUsage } from '../api'
@@ -81,6 +81,10 @@ import {
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
+
+type MonitorLatestStatus = NonNullable<
+  Channel['monitor_info']
+>['latest_status']
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
   source?: string
@@ -153,6 +157,48 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
         />
       )}
     </div>
+  )
+}
+
+function getMonitorBadgeVariant(
+  status: MonitorLatestStatus
+): StatusBadgeProps['variant'] {
+  if (status === 'success') return 'success'
+  if (status === 'failed' || status === 'error') return 'danger'
+  return 'warning'
+}
+
+function formatMonitorAvailability(
+  availability: number | null | undefined,
+  noDataLabel: string
+): string {
+  if (typeof availability !== 'number' || !Number.isFinite(availability)) {
+    return noDataLabel
+  }
+  return `${Math.round(availability * 100)}%`
+}
+
+function ChannelMonitorBadge({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const monitorInfo = channel.monitor_info
+  const enabled = monitorInfo?.enabled === true
+  const latestStatus = monitorInfo?.latest_status
+  const latestStatusLabel = latestStatus ? t(latestStatus) : t('No data')
+  const availabilityLabel = formatMonitorAvailability(
+    monitorInfo?.seven_day_availability,
+    t('No data')
+  )
+  const enabledLabel = enabled ? t('Enabled') : t('Disabled')
+  const label = `${t('Monitor')}: ${enabledLabel} / ${latestStatusLabel} / ${availabilityLabel}`
+
+  return (
+    <StatusBadge
+      label={label}
+      variant={enabled ? getMonitorBadgeVariant(latestStatus) : 'neutral'}
+      size='sm'
+      copyable={false}
+      className='max-w-[16rem] shrink-0'
+    />
   )
 }
 
@@ -557,6 +603,7 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
                   </TooltipProvider>
                 )}
                 <UpstreamUpdateTags channel={channel} />
+                <ChannelMonitorBadge channel={channel} />
               </div>
               {channel.remark && (
                 <TooltipProvider delay={200}>
