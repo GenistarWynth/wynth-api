@@ -217,6 +217,20 @@ Default endpoints, relative to the configured admin API base:
 - `POST /keys`
 - `PUT /keys/:id`
 
+sub2api wraps successful API responses as:
+
+```text
+{
+  "code": 0,
+  "message": "success",
+  "data": ...
+}
+```
+
+The adapter must unwrap this envelope and treat non-zero `code` values as upstream API errors. Paginated endpoints, including `GET /keys`, return pagination data under `data.items`.
+
+`POST /auth/login` can return either bearer tokens or a 2FA challenge. The first implementation does not support completing sub2api 2FA; if login returns `requires_2fa`, mark the source discovery/sync as failed with a sanitized "2FA required" error.
+
 The adapter should normalize responses into source-agnostic structs:
 
 ```text
@@ -236,6 +250,12 @@ UpstreamKey {
   GroupID string
 }
 ```
+
+sub2api `id` and `group_id` fields are numeric or null in JSON. Normalize them to strings at the adapter boundary so the rest of Wynth API does not depend on sub2api's numeric ids.
+
+`GET /groups/rates` returns a map from group id to user-specific multiplier. It does not return group records.
+
+`POST /keys` returns the full generated key and key id. `PUT /keys/:id` updates key metadata such as name, group, status, quota, and rate limits; it should not be treated as a way to rotate the key string.
 
 Effective multiplier resolution:
 
