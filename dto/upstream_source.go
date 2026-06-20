@@ -15,6 +15,8 @@ type UpstreamSourceCreateRequest struct {
 	EnableMonitor           bool                           `json:"enable_monitor"`
 	MonitorIntervalMinutes  int                            `json:"monitor_interval_minutes"`
 	AutoSyncModels          bool                           `json:"auto_sync_models"`
+	ModelStrategy           string                         `json:"model_strategy"`
+	FixedModels             []string                       `json:"fixed_models"`
 	AllowPrivateIP          bool                           `json:"allow_private_ip"`
 	AutoSyncEnabled         bool                           `json:"auto_sync_enabled"`
 	AutoSyncIntervalMinutes int                            `json:"auto_sync_interval_minutes"`
@@ -35,6 +37,8 @@ type UpstreamSourceUpdateRequest struct {
 	EnableMonitor           bool                           `json:"enable_monitor"`
 	MonitorIntervalMinutes  int                            `json:"monitor_interval_minutes"`
 	AutoSyncModels          bool                           `json:"auto_sync_models"`
+	ModelStrategy           string                         `json:"model_strategy"`
+	FixedModels             []string                       `json:"fixed_models"`
 	AllowPrivateIP          bool                           `json:"allow_private_ip"`
 	AutoSyncEnabled         bool                           `json:"auto_sync_enabled"`
 	AutoSyncIntervalMinutes int                            `json:"auto_sync_interval_minutes"`
@@ -62,6 +66,8 @@ type UpstreamSourceResponse struct {
 	EnableMonitor           bool                           `json:"enable_monitor"`
 	MonitorIntervalMinutes  int                            `json:"monitor_interval_minutes"`
 	AutoSyncModels          bool                           `json:"auto_sync_models"`
+	ModelStrategy           string                         `json:"model_strategy"`
+	FixedModels             []string                       `json:"fixed_models"`
 	AllowPrivateIP          bool                           `json:"allow_private_ip"`
 	AutoSyncEnabled         bool                           `json:"auto_sync_enabled"`
 	AutoSyncIntervalMinutes int                            `json:"auto_sync_interval_minutes"`
@@ -80,31 +86,57 @@ type UpstreamSourceResponse struct {
 }
 
 type UpstreamSourceLocalGroupRule struct {
-	Name                string   `json:"name"`
-	LocalGroup          string   `json:"local_group"`
-	NameContains        []string `json:"name_contains"`
-	DescriptionContains []string `json:"description_contains"`
+	Name                string                      `json:"name"`
+	LocalGroup          string                      `json:"local_group"`
+	Platforms           []string                    `json:"platforms"`
+	NameContains        []string                    `json:"name_contains"`
+	DescriptionContains []string                    `json:"description_contains"`
+	ExcludeKeywords     []string                    `json:"exclude_keywords"`
+	Monitor             *UpstreamSourceRuleMonitor  `json:"monitor,omitempty"`
+	AutoSync            *UpstreamSourceRuleAutoSync `json:"auto_sync,omitempty"`
+	ModelStrategy       string                      `json:"model_strategy"`
+	FixedModels         []string                    `json:"fixed_models"`
+}
+
+type UpstreamSourceRuleMonitor struct {
+	Enabled         *bool `json:"enabled,omitempty"`
+	IntervalMinutes int   `json:"interval_minutes,omitempty"`
+}
+
+type UpstreamSourceRuleAutoSync struct {
+	Enabled         *bool `json:"enabled,omitempty"`
+	IntervalMinutes int   `json:"interval_minutes,omitempty"`
 }
 
 type UpstreamSourceMappingResponse struct {
-	Id                       int      `json:"id"`
-	SourceID                 int      `json:"source_id"`
-	SyncEnabled              bool     `json:"sync_enabled"`
-	UpstreamGroupID          string   `json:"upstream_group_id"`
-	UpstreamGroupName        string   `json:"upstream_group_name"`
-	UpstreamGroupDescription string   `json:"upstream_group_description"`
-	UpstreamPlatform         string   `json:"upstream_platform"`
-	DiscoveryStatus          string   `json:"discovery_status"`
-	UpstreamStatus           string   `json:"upstream_status"`
-	UpstreamRateMultiplier   *float64 `json:"upstream_rate_multiplier"`
-	EffectiveRateMultiplier  *float64 `json:"effective_rate_multiplier"`
-	UpstreamKeyID            string   `json:"upstream_key_id"`
-	HasUpstreamKey           bool     `json:"has_upstream_key"`
-	LocalChannelID           int      `json:"local_channel_id"`
-	SyncStatus               string   `json:"sync_status"`
-	LastError                string   `json:"last_error"`
-	LastDiscoveredAt         int64    `json:"last_discovered_at"`
-	LastSyncedAt             int64    `json:"last_synced_at"`
+	Id                              int      `json:"id"`
+	SourceID                        int      `json:"source_id"`
+	SyncEnabled                     bool     `json:"sync_enabled"`
+	UpstreamGroupID                 string   `json:"upstream_group_id"`
+	UpstreamGroupName               string   `json:"upstream_group_name"`
+	UpstreamGroupDescription        string   `json:"upstream_group_description"`
+	UpstreamPlatform                string   `json:"upstream_platform"`
+	DiscoveryStatus                 string   `json:"discovery_status"`
+	UpstreamStatus                  string   `json:"upstream_status"`
+	UpstreamRateMultiplier          *float64 `json:"upstream_rate_multiplier"`
+	EffectiveRateMultiplier         *float64 `json:"effective_rate_multiplier"`
+	UpstreamKeyID                   string   `json:"upstream_key_id"`
+	HasUpstreamKey                  bool     `json:"has_upstream_key"`
+	LocalChannelID                  int      `json:"local_channel_id"`
+	SyncStatus                      string   `json:"sync_status"`
+	LastError                       string   `json:"last_error"`
+	LastDiscoveredAt                int64    `json:"last_discovered_at"`
+	LastSyncedAt                    int64    `json:"last_synced_at"`
+	SyncEligible                    bool     `json:"sync_eligible"`
+	MatchedRuleName                 string   `json:"matched_rule_name"`
+	MatchReason                     string   `json:"match_reason"`
+	ResolvedLocalGroup              string   `json:"resolved_local_group"`
+	ResolvedMonitorEnabled          bool     `json:"resolved_monitor_enabled"`
+	ResolvedMonitorIntervalMinutes  int      `json:"resolved_monitor_interval_minutes"`
+	ResolvedAutoSyncEnabled         bool     `json:"resolved_auto_sync_enabled"`
+	ResolvedAutoSyncIntervalMinutes int      `json:"resolved_auto_sync_interval_minutes"`
+	ResolvedModelStrategy           string   `json:"resolved_model_strategy"`
+	ResolvedFixedModels             []string `json:"resolved_fixed_models"`
 }
 
 type UpstreamSourceMappingUpdateRequest struct {

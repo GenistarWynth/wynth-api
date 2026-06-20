@@ -23,6 +23,11 @@ type upstreamSourceAuthConfig struct {
 	ExpiresAt    int64  `json:"expires_at,omitempty"`
 }
 
+const (
+	upstreamSourceControllerModelStrategyAllUpstream = "all_upstream"
+	upstreamSourceControllerModelStrategyFixed       = "fixed"
+)
+
 // Keep this JSON shape in lockstep with service.upstreamSourceSyncConfig.
 // Defaults are seeded before unmarshaling so an absent auto_sync_models key
 // preserves the service default of true while explicit false still persists.
@@ -34,6 +39,8 @@ type upstreamSourceControllerSyncConfig struct {
 	EnableMonitor           bool                               `json:"enable_monitor"`
 	MonitorIntervalMinutes  int                                `json:"monitor_interval_minutes"`
 	AutoSyncModels          bool                               `json:"auto_sync_models"`
+	ModelStrategy           string                             `json:"model_strategy"`
+	FixedModels             []string                           `json:"fixed_models"`
 	AllowPrivateIP          common.FlexibleBool                `json:"allow_private_ip"`
 	AutoSyncEnabled         bool                               `json:"auto_sync_enabled"`
 	AutoSyncIntervalMinutes int                                `json:"auto_sync_interval_minutes"`
@@ -287,6 +294,8 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 		EnableMonitor:           req.EnableMonitor,
 		MonitorIntervalMinutes:  req.MonitorIntervalMinutes,
 		AutoSyncModels:          req.AutoSyncModels,
+		ModelStrategy:           req.ModelStrategy,
+		FixedModels:             req.FixedModels,
 		AllowPrivateIP:          common.FlexibleBool(req.AllowPrivateIP),
 		AutoSyncEnabled:         req.AutoSyncEnabled,
 		AutoSyncIntervalMinutes: req.AutoSyncIntervalMinutes,
@@ -321,6 +330,8 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 		EnableMonitor:           req.EnableMonitor,
 		MonitorIntervalMinutes:  req.MonitorIntervalMinutes,
 		AutoSyncModels:          req.AutoSyncModels,
+		ModelStrategy:           req.ModelStrategy,
+		FixedModels:             req.FixedModels,
 		AllowPrivateIP:          common.FlexibleBool(req.AllowPrivateIP),
 		AutoSyncEnabled:         req.AutoSyncEnabled,
 		AutoSyncIntervalMinutes: req.AutoSyncIntervalMinutes,
@@ -404,6 +415,8 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		EnableMonitor:           sync.EnableMonitor,
 		MonitorIntervalMinutes:  sync.MonitorIntervalMinutes,
 		AutoSyncModels:          sync.AutoSyncModels,
+		ModelStrategy:           sync.ModelStrategy,
+		FixedModels:             sync.FixedModels,
 		AllowPrivateIP:          bool(sync.AllowPrivateIP),
 		AutoSyncEnabled:         sync.AutoSyncEnabled,
 		AutoSyncIntervalMinutes: sync.AutoSyncIntervalMinutes,
@@ -447,6 +460,9 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	} else {
 		config.DefaultLocalGroup = strings.TrimSpace(config.DefaultLocalGroup)
 	}
+	if config.MonitorIntervalMinutes > 0 && config.MonitorIntervalMinutes < 5 {
+		config.MonitorIntervalMinutes = 5
+	}
 	if config.AutoSyncEnabled {
 		if config.AutoSyncIntervalMinutes < 5 {
 			config.AutoSyncIntervalMinutes = 5
@@ -454,6 +470,8 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	} else {
 		config.AutoSyncIntervalMinutes = 0
 	}
+	config.ModelStrategy = normalizeUpstreamSourceControllerModelStrategy(config.ModelStrategy, config.AutoSyncModels)
+	config.FixedModels = normalizeUpstreamSourceControllerFixedModels(config.FixedModels)
 	config.LocalGroupRules = service.NormalizeUpstreamSourceLocalGroupRulesForConfig(config.LocalGroupRules)
 	return config
 }
@@ -463,8 +481,42 @@ func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncCon
 		LocalGroup:        "default",
 		ChannelType:       constant.ChannelTypeOpenAI,
 		AutoSyncModels:    true,
+		ModelStrategy:     upstreamSourceControllerModelStrategyAllUpstream,
 		DefaultLocalGroup: "default",
 	}
+}
+
+func normalizeUpstreamSourceControllerModelStrategy(modelStrategy string, autoSyncModels bool) string {
+	switch strings.TrimSpace(modelStrategy) {
+	case upstreamSourceControllerModelStrategyAllUpstream:
+		return upstreamSourceControllerModelStrategyAllUpstream
+	case upstreamSourceControllerModelStrategyFixed:
+		return upstreamSourceControllerModelStrategyFixed
+	case "":
+		if !autoSyncModels {
+			return upstreamSourceControllerModelStrategyFixed
+		}
+		return upstreamSourceControllerModelStrategyAllUpstream
+	default:
+		return upstreamSourceControllerModelStrategyAllUpstream
+	}
+}
+
+func normalizeUpstreamSourceControllerFixedModels(models []string) []string {
+	normalized := make([]string, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, modelName := range models {
+		trimmed := strings.TrimSpace(modelName)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		normalized = append(normalized, trimmed)
+	}
+	return normalized
 }
 
 func sanitizeUpstreamSourceResponseError(text string) string {

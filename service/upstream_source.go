@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 
@@ -230,108 +229,6 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 		finalStatus = model.UpstreamSyncStatusSucceeded
 	}
 	return result, nil
-}
-
-// Keep this JSON shape in lockstep with controller.upstreamSourceControllerSyncConfig.
-// AutoSyncModels stays pointer-based here so absent keys can preserve the
-// historical default while explicit false remains distinguishable.
-type upstreamSourceSyncConfig struct {
-	LocalGroup              string                             `json:"local_group"`
-	ChannelType             int                                `json:"channel_type"`
-	DefaultPriority         int64                              `json:"default_priority"`
-	DefaultWeight           uint                               `json:"default_weight"`
-	EnableMonitor           bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes  int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels          *bool                              `json:"auto_sync_models"`
-	AllowPrivateIP          common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled         bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes int                                `json:"auto_sync_interval_minutes"`
-	DefaultLocalGroup       string                             `json:"default_local_group"`
-	LocalGroupRules         []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
-}
-
-func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {
-	config := upstreamSourceSyncConfig{
-		LocalGroup:      "default",
-		ChannelType:     constant.ChannelTypeOpenAI,
-		AutoSyncModels:  common.GetPointer(true),
-		DefaultPriority: 0,
-		DefaultWeight:   0,
-	}
-	if strings.TrimSpace(raw) == "" {
-		return config, nil
-	}
-	if err := common.Unmarshal([]byte(raw), &config); err != nil {
-		return config, err
-	}
-	if strings.TrimSpace(config.LocalGroup) == "" {
-		config.LocalGroup = "default"
-	} else {
-		config.LocalGroup = strings.TrimSpace(config.LocalGroup)
-	}
-	if config.ChannelType == 0 {
-		config.ChannelType = constant.ChannelTypeOpenAI
-	}
-	if config.AutoSyncModels == nil {
-		config.AutoSyncModels = common.GetPointer(true)
-	}
-	if strings.TrimSpace(config.DefaultLocalGroup) == "" {
-		config.DefaultLocalGroup = config.LocalGroup
-	} else {
-		config.DefaultLocalGroup = strings.TrimSpace(config.DefaultLocalGroup)
-	}
-	if config.AutoSyncEnabled {
-		if config.AutoSyncIntervalMinutes < 5 {
-			config.AutoSyncIntervalMinutes = 5
-		}
-	} else {
-		config.AutoSyncIntervalMinutes = 0
-	}
-	config.LocalGroupRules = normalizeUpstreamSourceLocalGroupRules(config.LocalGroupRules)
-	return config, nil
-}
-
-func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroupRule) []dto.UpstreamSourceLocalGroupRule {
-	normalized := make([]dto.UpstreamSourceLocalGroupRule, 0, len(rules))
-	for _, rule := range rules {
-		localGroup := strings.TrimSpace(rule.LocalGroup)
-		if localGroup == "" {
-			continue
-		}
-		nameContains := normalizeUpstreamSourceRuleKeywords(rule.NameContains)
-		descriptionContains := normalizeUpstreamSourceRuleKeywords(rule.DescriptionContains)
-		if len(nameContains) == 0 && len(descriptionContains) == 0 {
-			continue
-		}
-		normalized = append(normalized, dto.UpstreamSourceLocalGroupRule{
-			Name:                strings.TrimSpace(rule.Name),
-			LocalGroup:          localGroup,
-			NameContains:        nameContains,
-			DescriptionContains: descriptionContains,
-		})
-	}
-	return normalized
-}
-
-func NormalizeUpstreamSourceLocalGroupRulesForConfig(rules []dto.UpstreamSourceLocalGroupRule) []dto.UpstreamSourceLocalGroupRule {
-	return normalizeUpstreamSourceLocalGroupRules(rules)
-}
-
-func normalizeUpstreamSourceRuleKeywords(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		keyword := strings.ToLower(strings.TrimSpace(value))
-		if keyword == "" {
-			continue
-		}
-		if _, ok := seen[keyword]; ok {
-			continue
-		}
-		seen[keyword] = struct{}{}
-		normalized = append(normalized, keyword)
-	}
-	return normalized
 }
 
 func validateUpstreamSourceSyncConfig(source *model.UpstreamSource) error {
