@@ -1460,3 +1460,108 @@ func TestSyncUpstreamSourceStoresSanitizedCappedMappingError(t *testing.T) {
 	assert.NotContains(t, reloadedSource.LastSyncError, "bearer-secret")
 	assert.NotContains(t, reloadedSource.LastSyncError, rawKey)
 }
+
+func TestListDueUpstreamSourcesForAutoSyncFiltersByScheduleAndStatus(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	due := createAutoSyncTestSource(t, "due", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+	}, 1000, "", 0)
+	createAutoSyncTestSource(t, "disabled", model.UpstreamSourceStatusDisabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+	}, 1000, "", 0)
+	createAutoSyncTestSource(t, "not-due", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+	}, 2900, "", 0)
+	staleRunning := createAutoSyncTestSource(t, "stale-running", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+	}, 1000, "held-token", -1000)
+	createAutoSyncTestSource(t, "fresh-running", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+	}, 1000, "fresh-token", 2990)
+	createAutoSyncTestSource(t, "manual", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          false,
+		"auto_sync_interval_minutes": 30,
+	}, 1000, "", 0)
+
+	sources, err := ListDueUpstreamSourcesForAutoSync(3000)
+
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.Equal(t, []int{due.Id, staleRunning.Id}, []int{sources[0].Id, sources[1].Id})
+}
+
+func TestRunDueUpstreamSourceAutoSyncDiscoversThenSyncsDueSources(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createAutoSyncTestSource(t, "due", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+		"default_local_group":        "regular",
+	}, 1000, "", 0)
+	createAutoSyncTestSource(t, "not-due", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+	}, 2900, "", 0)
+	rate := 0.5
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				groups: []UpstreamGroup{
+					{ID: "10", Name: "GPT Basic", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+				},
+				createCalls: &createCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 3000 },
+	}
+
+	results := service.RunDueUpstreamSourceAutoSync(context.Background(), 3000)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, source.Id, results[0].SourceID)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, results[0].Status)
+	assert.Equal(t, 1, results[0].Created)
+	require.Len(t, createCalls, 1)
+	assert.Equal(t, "10", createCalls[0].GroupID)
+	var mappings []model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Order("source_id").Find(&mappings).Error)
+	require.Len(t, mappings, 1)
+	assert.Equal(t, source.Id, mappings[0].SourceID)
+	assert.True(t, mappings[0].SyncEnabled)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Equal(t, "due / 0.500x", channel.Name)
+	assert.Equal(t, "regular", channel.Group)
+	var reloadedSource model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloadedSource, source.Id).Error)
+	assert.Equal(t, int64(3000), reloadedSource.LastDiscoveryTime)
+	assert.Equal(t, int64(3000), reloadedSource.LastSyncTime)
+}
+
+func createAutoSyncTestSource(t *testing.T, name string, status string, syncConfig map[string]any, lastSyncTime int64, currentToken string, syncStartedAt int64) model.UpstreamSource {
+	t.Helper()
+
+	data, err := common.Marshal(syncConfig)
+	require.NoError(t, err)
+	source := model.UpstreamSource{
+		Name:             name,
+		Type:             model.UpstreamSourceTypeSub2API,
+		Status:           status,
+		BaseURL:          "https://admin.example.com",
+		RelayBaseURL:     "https://relay.example.com",
+		SyncConfig:       string(data),
+		LastSyncTime:     lastSyncTime,
+		CurrentSyncToken: currentToken,
+		SyncStartedAt:    syncStartedAt,
+	}
+	require.NoError(t, model.DB.Create(&source).Error)
+	return source
+}
