@@ -325,12 +325,10 @@ func upstreamSourceRuleMatches(rule dto.UpstreamSourceLocalGroupRule, platform s
 		return false, true
 	}
 
-	includeKeywords := make([]string, 0, len(rule.NameContains)+len(rule.DescriptionContains))
-	includeKeywords = append(includeKeywords, rule.NameContains...)
-	includeKeywords = append(includeKeywords, rule.DescriptionContains...)
-	includeMatched := upstreamSourceRuleKeywordsMatchAnyText([]string{name, description}, includeKeywords)
+	includeMatched := upstreamSourceKeywordsMatch(name, rule.NameContains) ||
+		upstreamSourceKeywordsMatch(description, rule.DescriptionContains)
 	if len(rule.Platforms) > 0 {
-		return len(includeKeywords) == 0 || includeMatched, false
+		return (len(rule.NameContains) == 0 && len(rule.DescriptionContains) == 0) || includeMatched, false
 	}
 	return includeMatched, false
 }

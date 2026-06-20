@@ -121,6 +121,58 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, resolution.FixedModels)
 }
 
+func TestResolveUpstreamSourceRuleKeepsKeywordFieldsSpecific(t *testing.T) {
+	tests := []struct {
+		name        string
+		rule        map[string]any
+		groupName   string
+		description string
+	}{
+		{
+			name: "name keyword does not match description",
+			rule: map[string]any{
+				"name":          "name-only",
+				"local_group":   "paid",
+				"name_contains": []string{"pro"},
+			},
+			groupName:   "GPT",
+			description: "pro only",
+		},
+		{
+			name: "description keyword does not match name",
+			rule: map[string]any{
+				"name":                 "description-only",
+				"local_group":          "paid",
+				"description_contains": []string{"pro"},
+			},
+			groupName:   "GPT Pro",
+			description: "basic only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+				"default_local_group": "fallback",
+				"local_group_rules":   []map[string]any{tt.rule},
+			})
+			mapping := &model.UpstreamSourceChannelMapping{
+				SyncEnabled:              true,
+				UpstreamGroupName:        tt.groupName,
+				UpstreamGroupDescription: tt.description,
+				DiscoveryStatus:          model.UpstreamMappingDiscoveryStatusActive,
+			}
+
+			resolution := resolveUpstreamSourceRule(config, mapping)
+
+			assert.False(t, resolution.Matched)
+			assert.False(t, resolution.SyncEligible)
+			assert.Equal(t, upstreamSourceMatchReasonNoMatchingRule, resolution.Reason)
+			assert.Equal(t, "fallback", resolution.LocalGroup)
+		})
+	}
+}
+
 func TestResolveUpstreamSourceRuleRejectsExcludeKeywords(t *testing.T) {
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
 		"default_local_group": "fallback",
