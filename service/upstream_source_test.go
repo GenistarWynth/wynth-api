@@ -670,6 +670,34 @@ func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	assert.Equal(t, int64(4), abilityCount)
 }
 
+func TestSyncUpstreamSourceRequiresSelectedMappings(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	adapterFactoryCalled := false
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			adapterFactoryCalled = true
+			return fakeUpstreamSourceAdapter{}, nil
+		},
+		Now: func() int64 { return 1001 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusFailed, result.Status)
+	assert.Contains(t, result.Error, "select")
+	assert.False(t, adapterFactoryCalled)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Empty(t, reloaded.CurrentSyncToken)
+	assert.Equal(t, model.UpstreamSyncStatusFailed, reloaded.LastSyncStatus)
+	assert.Contains(t, reloaded.LastSyncError, "select")
+	assert.Equal(t, int64(1001), reloaded.LastSyncTime)
+}
+
 func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, nil)

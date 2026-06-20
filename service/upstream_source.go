@@ -147,6 +147,24 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 		return result, err
 	}
 
+	var mappings []model.UpstreamSourceChannelMapping
+	if err := model.DB.Where("source_id = ? AND sync_enabled = ?", sourceID, true).Order("id").Find(&mappings).Error; err != nil {
+		result.Status = model.UpstreamSyncStatusFailed
+		result.Error = SanitizeUpstreamSourceError(err)
+		finalStatus = model.UpstreamSyncStatusFailed
+		finalError = result.Error
+		return result, err
+	}
+	if len(mappings) == 0 {
+		err := errors.New("no upstream groups selected for sync; discover and select at least one group before syncing")
+		sanitized := SanitizeUpstreamSourceError(err)
+		result.Status = model.UpstreamSyncStatusFailed
+		result.Error = sanitized
+		finalStatus = model.UpstreamSyncStatusFailed
+		finalError = sanitized
+		return result, err
+	}
+
 	adapter, err := s.adapterFactory()(source.Type)
 	if err != nil {
 		sanitized := SanitizeUpstreamSourceError(err)
@@ -163,15 +181,6 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 		result.Error = sanitized
 		finalStatus = model.UpstreamSyncStatusFailed
 		finalError = sanitized
-		return result, err
-	}
-
-	var mappings []model.UpstreamSourceChannelMapping
-	if err := model.DB.Where("source_id = ? AND sync_enabled = ?", sourceID, true).Order("id").Find(&mappings).Error; err != nil {
-		result.Status = model.UpstreamSyncStatusFailed
-		result.Error = SanitizeUpstreamSourceError(err)
-		finalStatus = model.UpstreamSyncStatusFailed
-		finalError = result.Error
 		return result, err
 	}
 

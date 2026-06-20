@@ -1488,8 +1488,10 @@ export function UpstreamSources() {
     onDiscover: (source) => discoverMutation.mutate(source),
     onSync: (source) => syncMutation.mutate(source),
     onDelete: setDeleteSource,
-    discoveringID: discoverMutation.variables?.id,
-    syncingID: syncMutation.variables?.id,
+    discoveringID: discoverMutation.isPending
+      ? discoverMutation.variables?.id
+      : undefined,
+    syncingID: syncMutation.isPending ? syncMutation.variables?.id : undefined,
   })
 
   const sources = sourcesQuery.data ?? []
