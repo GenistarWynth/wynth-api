@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -220,6 +221,55 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 	assert.Equal(t, model.UpstreamMappingSyncStatusFailed, staleFromInvalid.SyncStatus)
 }
 
+func TestDiscoverUpstreamSourceRollsBackMappingsWhenStatusUpdateFails(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 1.0
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
+		SourceID:         source.Id,
+		SyncEnabled:      true,
+		UpstreamGroupID:  "20",
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusActive,
+		LastDiscoveredAt: 111,
+	}).Error)
+	callbackName := fmt.Sprintf("fail_upstream_source_update_%s", t.Name())
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "UpstreamSource" {
+			tx.AddError(errors.New("forced source update failure"))
+		}
+	}))
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{
+				{ID: "10", Name: "new", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+			}}, nil
+		},
+		Now: func() int64 { return 333 },
+	}
+
+	_, err := service.Discover(context.Background(), source.Id)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forced source update failure")
+
+	var mappingCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("source_id = ?", source.Id).Count(&mappingCount).Error)
+	assert.Equal(t, int64(1), mappingCount)
+
+	var existing model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&existing).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, existing.DiscoveryStatus)
+	assert.Equal(t, int64(111), existing.LastDiscoveredAt)
+
+	var created model.UpstreamSourceChannelMapping
+	assert.Error(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").First(&created).Error)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.NotEqual(t, model.UpstreamDiscoveryStatusSucceeded, reloaded.LastDiscoveryStatus)
+	assert.Zero(t, reloaded.LastDiscoveryTime)
+}
+
 func TestDiscoverUpstreamSourceFailureDoesNotMutateChannels(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)
@@ -265,6 +315,30 @@ func TestDiscoverUpstreamSourceFailureDoesNotMutateChannels(t *testing.T) {
 	assert.Equal(t, model.UpstreamDiscoveryStatusFailed, reloaded.LastDiscoveryStatus)
 	assert.Equal(t, int64(444), reloaded.LastDiscoveryTime)
 	assert.Contains(t, reloaded.LastDiscoveryError, "upstream failed")
+}
+
+func TestDiscoverUpstreamSourceNilAdapterFactoryFailsWithoutPanic(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return nil, nil
+		},
+		Now: func() int64 { return 777 },
+	}
+
+	result, err := service.Discover(context.Background(), source.Id)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, source.Id, result.SourceID)
+	assert.Contains(t, result.Error, "adapter")
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, model.UpstreamDiscoveryStatusFailed, reloaded.LastDiscoveryStatus)
+	assert.Equal(t, int64(777), reloaded.LastDiscoveryTime)
+	assert.Contains(t, reloaded.LastDiscoveryError, "adapter")
 }
 
 func TestDiscoverUpstreamSourceUnknownMultiplierIsInvalidForSync(t *testing.T) {

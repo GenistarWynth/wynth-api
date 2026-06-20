@@ -134,6 +134,13 @@ func (mapping *UpstreamSourceChannelMapping) BeforeUpdate(tx *gorm.DB) error {
 }
 
 func UpsertDiscoveredMappings(sourceID int, mappings []UpstreamSourceChannelMapping, now int64) error {
+	return UpsertDiscoveredMappingsTx(DB, sourceID, mappings, now)
+}
+
+func UpsertDiscoveredMappingsTx(tx *gorm.DB, sourceID int, mappings []UpstreamSourceChannelMapping, now int64) error {
+	if tx == nil {
+		return errors.New("database transaction is required")
+	}
 	if sourceID == 0 {
 		return errors.New("source ID is required")
 	}
@@ -166,7 +173,7 @@ func UpsertDiscoveredMappings(sourceID int, mappings []UpstreamSourceChannelMapp
 		})
 	}
 
-	return DB.Clauses(clause.OnConflict{
+	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "source_id"},
 			{Name: "upstream_group_id"},

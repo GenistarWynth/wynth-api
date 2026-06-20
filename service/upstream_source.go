@@ -11,6 +11,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+
+	"gorm.io/gorm"
 )
 
 type UpstreamSourceService struct {
@@ -37,6 +39,10 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	if err != nil {
 		return s.recordDiscoveryFailure(source.Id, now, err), err
 	}
+	if adapter == nil {
+		err := errors.New("upstream source adapter is unavailable")
+		return s.recordDiscoveryFailure(source.Id, now, err), err
+	}
 
 	groups, err := adapter.DiscoverGroups(ctx, &source)
 	if err != nil {
@@ -44,19 +50,26 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	}
 
 	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now)
-	if err := model.UpsertDiscoveredMappings(source.Id, mappings, now); err != nil {
-		return nil, err
-	}
-	staleCount, err := markMissingDiscoveredMappingsStale(source.Id, discoveredIDs, now)
-	if err != nil {
-		return nil, err
-	}
-	if err := updateUpstreamSourceDiscoveryStatus(source.Id, model.UpstreamDiscoveryStatusSucceeded, "", now); err != nil {
-		return nil, err
-	}
+	var result dto.UpstreamSourceDiscoveryResult
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.UpsertDiscoveredMappingsTx(tx, source.Id, mappings, now); err != nil {
+			return err
+		}
+		staleCount, err := markMissingDiscoveredMappingsStaleTx(tx, source.Id, discoveredIDs, now)
+		if err != nil {
+			return err
+		}
+		if err := updateUpstreamSourceDiscoveryStatusTx(tx, source.Id, model.UpstreamDiscoveryStatusSucceeded, "", now); err != nil {
+			return err
+		}
 
-	result, err := buildDiscoveryResult(source.Id, len(groups), staleCount, invalidCount)
-	if err != nil {
+		built, err := buildDiscoveryResultTx(tx, source.Id, len(groups), staleCount, invalidCount)
+		if err != nil {
+			return err
+		}
+		result = built
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -156,7 +169,11 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 }
 
 func markMissingDiscoveredMappingsStale(sourceID int, discoveredIDs []string, now int64) (int, error) {
-	query := model.DB.Model(&model.UpstreamSourceChannelMapping{}).
+	return markMissingDiscoveredMappingsStaleTx(model.DB, sourceID, discoveredIDs, now)
+}
+
+func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredIDs []string, now int64) (int, error) {
+	query := tx.Model(&model.UpstreamSourceChannelMapping{}).
 		Where("source_id = ?", sourceID)
 	if len(discoveredIDs) > 0 {
 		query = query.Where("upstream_group_id NOT IN ?", discoveredIDs)
@@ -173,7 +190,11 @@ func markMissingDiscoveredMappingsStale(sourceID int, discoveredIDs []string, no
 }
 
 func updateUpstreamSourceDiscoveryStatus(sourceID int, status string, errText string, now int64) error {
-	return model.DB.Model(&model.UpstreamSource{}).
+	return updateUpstreamSourceDiscoveryStatusTx(model.DB, sourceID, status, errText, now)
+}
+
+func updateUpstreamSourceDiscoveryStatusTx(tx *gorm.DB, sourceID int, status string, errText string, now int64) error {
+	return tx.Model(&model.UpstreamSource{}).
 		Where("id = ?", sourceID).
 		Updates(map[string]interface{}{
 			"last_discovery_time":   now,
@@ -193,8 +214,12 @@ func (s *UpstreamSourceService) recordDiscoveryFailure(sourceID int, now int64, 
 }
 
 func buildDiscoveryResult(sourceID int, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
+	return buildDiscoveryResultTx(model.DB, sourceID, discovered, staleCount, invalidCount)
+}
+
+func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
 	var mappings []model.UpstreamSourceChannelMapping
-	if err := model.DB.Where("source_id = ?", sourceID).Order("upstream_group_id").Find(&mappings).Error; err != nil {
+	if err := tx.Where("source_id = ?", sourceID).Order("upstream_group_id").Find(&mappings).Error; err != nil {
 		return dto.UpstreamSourceDiscoveryResult{}, err
 	}
 
