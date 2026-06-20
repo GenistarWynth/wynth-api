@@ -46,9 +46,11 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatTimestamp } from '@/lib/format'
+import { getUserGroups, getUserModels } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Combobox } from '@/components/ui/combobox'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -122,6 +124,15 @@ import {
   resolveSelectedMappingIDs,
 } from './selection'
 import {
+  formatKeywordList,
+  normalizeKeywordList,
+  normalizeModelList,
+  normalizeModelStrategy,
+  normalizeSyncRules,
+  UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
+  UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED,
+} from './rules'
+import {
   UPSTREAM_SOURCE_TYPE_SUB2API,
   type ApiResponse,
   type UpstreamDiscoveryStatus,
@@ -143,6 +154,10 @@ const CHANNEL_TYPE_OPENAI = 1
 const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
 const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 30
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
+const UPSTREAM_SOURCE_PLATFORM_OPTIONS = [
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+]
 
 type SourceSheetMode = 'create' | 'update'
 
@@ -162,46 +177,30 @@ function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
   return {
     name: '',
     local_group: '',
+    platforms: [],
     name_contains: [],
     description_contains: [],
+    exclude_keywords: [],
+    model_strategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
+    fixed_models: [],
   }
 }
 
-function parseKeywordList(value: string): string[] {
-  const seen = new Set<string>()
-  return value
-    .split(/[\n,，]+/)
-    .map((item) => item.trim().toLowerCase())
-    .filter((item) => {
-      if (!item || seen.has(item)) {
-        return false
-      }
-      seen.add(item)
-      return true
-    })
-}
-
-function formatKeywordList(values: string[]) {
-  return values.join(', ')
-}
-
-function normalizeLocalGroupRules(
-  rules: UpstreamSourceLocalGroupRule[]
-): UpstreamSourceLocalGroupRule[] {
-  return rules
-    .map((rule) => ({
-      name: rule.name.trim(),
-      local_group: rule.local_group.trim(),
-      name_contains: parseKeywordList(formatKeywordList(rule.name_contains)),
-      description_contains: parseKeywordList(
-        formatKeywordList(rule.description_contains)
-      ),
-    }))
-    .filter(
-      (rule) =>
-        rule.local_group &&
-        (rule.name_contains.length > 0 || rule.description_contains.length > 0)
-    )
+function normalizeRuleForForm(
+  rule: Partial<UpstreamSourceLocalGroupRule>
+): UpstreamSourceLocalGroupRule {
+  return {
+    ...emptyLocalGroupRule(),
+    ...rule,
+    platforms: normalizeKeywordList(rule.platforms ?? []),
+    name_contains: normalizeKeywordList(rule.name_contains ?? []),
+    description_contains: normalizeKeywordList(
+      rule.description_contains ?? []
+    ),
+    exclude_keywords: normalizeKeywordList(rule.exclude_keywords ?? []),
+    model_strategy: normalizeModelStrategy(rule.model_strategy),
+    fixed_models: normalizeModelList(rule.fixed_models ?? []),
+  }
 }
 
 function defaultSourceFormValues(
@@ -222,7 +221,9 @@ function defaultSourceFormValues(
     local_group: source?.local_group || 'default',
     default_local_group:
       source?.default_local_group || source?.local_group || 'default',
-    local_group_rules: source?.local_group_rules ?? [],
+    local_group_rules: (source?.local_group_rules ?? []).map(
+      normalizeRuleForForm
+    ),
     channel_type: source?.channel_type || CHANNEL_TYPE_OPENAI,
     default_priority: source?.default_priority ?? 0,
     default_weight: source?.default_weight ?? 0,
@@ -230,6 +231,9 @@ function defaultSourceFormValues(
     monitor_interval_minutes:
       source?.monitor_interval_minutes || DEFAULT_MONITOR_INTERVAL_MINUTES,
     auto_sync_models: source?.auto_sync_models ?? true,
+    model_strategy:
+      source?.model_strategy ?? UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
+    fixed_models: source?.fixed_models ?? [],
     allow_private_ip: source?.allow_private_ip ?? false,
     auto_sync_enabled: source?.auto_sync_enabled ?? false,
     auto_sync_interval_minutes:
@@ -252,13 +256,19 @@ function buildCreatePayload(
     password: values.password,
     local_group: defaultLocalGroup,
     default_local_group: defaultLocalGroup,
-    local_group_rules: normalizeLocalGroupRules(values.local_group_rules),
+    local_group_rules: normalizeSyncRules(values.local_group_rules),
     channel_type: values.channel_type,
     default_priority: values.default_priority,
     default_weight: Math.max(0, values.default_weight),
     enable_monitor: values.enable_monitor,
     monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
-    auto_sync_models: values.auto_sync_models,
+    auto_sync_models:
+      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
+    model_strategy: values.model_strategy,
+    fixed_models:
+      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+        ? normalizeModelList(values.fixed_models)
+        : [],
     allow_private_ip: values.allow_private_ip,
     auto_sync_enabled: values.auto_sync_enabled,
     auto_sync_interval_minutes: values.auto_sync_enabled
@@ -281,13 +291,19 @@ function buildUpdatePayload(
     relay_base_url: values.relay_base_url.trim(),
     local_group: defaultLocalGroup,
     default_local_group: defaultLocalGroup,
-    local_group_rules: normalizeLocalGroupRules(values.local_group_rules),
+    local_group_rules: normalizeSyncRules(values.local_group_rules),
     channel_type: values.channel_type,
     default_priority: values.default_priority,
     default_weight: Math.max(0, values.default_weight),
     enable_monitor: values.enable_monitor,
     monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
-    auto_sync_models: values.auto_sync_models,
+    auto_sync_models:
+      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
+    model_strategy: values.model_strategy,
+    fixed_models:
+      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+        ? normalizeModelList(values.fixed_models)
+        : [],
     allow_private_ip: values.allow_private_ip,
     auto_sync_enabled: values.auto_sync_enabled,
     auto_sync_interval_minutes: values.auto_sync_enabled
@@ -751,6 +767,83 @@ function SwitchRow(props: {
   )
 }
 
+function CheckboxList(props: {
+  values: string[]
+  options: { value: string; label: string }[]
+  onChange: (values: string[]) => void
+}) {
+  const selected = new Set(props.values)
+  const toggle = (value: string, checked: boolean) => {
+    props.onChange(
+      checked
+        ? Array.from(new Set([...props.values, value]))
+        : props.values.filter((item) => item !== value)
+    )
+  }
+  return (
+    <div className='border-border grid gap-2 rounded-md border p-2'>
+      {props.options.map((option) => (
+        <label
+          key={option.value}
+          className='flex min-h-8 items-center gap-2 text-sm'
+        >
+          <Checkbox
+            checked={selected.has(option.value)}
+            onCheckedChange={(checked) => toggle(option.value, Boolean(checked))}
+          />
+          <span>{option.label}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function ModelCheckboxList(props: {
+  values: string[]
+  options: string[]
+  onChange: (values: string[]) => void
+}) {
+  const { t } = useTranslation()
+  const [query, setQuery] = useState('')
+  const selected = new Set(props.values)
+  const filtered = props.options.filter((model) =>
+    model.toLowerCase().includes(query.trim().toLowerCase())
+  )
+  const toggle = (model: string, checked: boolean) => {
+    props.onChange(
+      checked
+        ? Array.from(new Set([...props.values, model]))
+        : props.values.filter((item) => item !== model)
+    )
+  }
+  return (
+    <div className='grid gap-2'>
+      <Input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder={t('Search models')}
+      />
+      <div className='border-border max-h-48 overflow-y-auto rounded-md border p-2'>
+        {filtered.length === 0 ? (
+          <div className='text-muted-foreground py-4 text-center text-sm'>
+            {t('No models found')}
+          </div>
+        ) : (
+          filtered.map((model) => (
+            <label key={model} className='flex items-center gap-2 py-1 text-sm'>
+              <Checkbox
+                checked={selected.has(model)}
+                onCheckedChange={(checked) => toggle(model, Boolean(checked))}
+              />
+              <span className='truncate'>{model}</span>
+            </label>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 function SourceFormSheet(props: {
   open: boolean
   mode: SourceSheetMode
@@ -764,6 +857,28 @@ function SourceFormSheet(props: {
     defaultSourceFormValues(props.source)
   )
   const isUpdate = props.mode === 'update'
+  const groupsQuery = useQuery({
+    queryKey: ['user-groups'],
+    queryFn: getUserGroups,
+    enabled: props.open,
+  })
+  const modelsQuery = useQuery({
+    queryKey: ['user-models'],
+    queryFn: getUserModels,
+    enabled: props.open,
+  })
+  const groupOptions = useMemo(
+    () =>
+      Object.entries(groupsQuery.data?.data ?? {}).map(([value, info]) => ({
+        value,
+        label: info.desc && info.desc !== value ? `${value} (${info.desc})` : value,
+      })),
+    [groupsQuery.data]
+  )
+  const modelOptions = useMemo(
+    () => modelsQuery.data?.data ?? [],
+    [modelsQuery.data]
+  )
 
   const setField = <K extends keyof UpstreamSourceFormValues>(
     key: K,
@@ -957,12 +1072,15 @@ function SourceFormSheet(props: {
                 label={t('Default Local Group')}
                 htmlFor='source-default-local-group'
               >
-                <Input
+                <Combobox
                   id='source-default-local-group'
+                  options={groupOptions}
                   value={form.default_local_group}
-                  onChange={(event) =>
-                    setField('default_local_group', event.target.value)
+                  onValueChange={(value) =>
+                    value && setField('default_local_group', value)
                   }
+                  placeholder={t('Select local group')}
+                  emptyText={t('No local group found')}
                 />
               </FieldBlock>
               <FieldBlock
@@ -1043,13 +1161,40 @@ function SourceFormSheet(props: {
                 }
               />
             </FieldBlock>
-            <SwitchRow
-              label={t('Auto Sync Models')}
-              checked={form.auto_sync_models}
-              onCheckedChange={(checked) =>
-                setField('auto_sync_models', checked)
-              }
-            />
+            <FieldBlock
+              label={t('Default Model Strategy')}
+              htmlFor='source-model-strategy'
+            >
+              <Select
+                value={form.model_strategy}
+                onValueChange={(value) =>
+                  setField('model_strategy', normalizeModelStrategy(value))
+                }
+              >
+                <SelectTrigger id='source-model-strategy'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    <SelectItem value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}>
+                      {t('All upstream models')}
+                    </SelectItem>
+                    <SelectItem value={UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED}>
+                      {t('Fixed models')}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </FieldBlock>
+            {form.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
+              <FieldBlock label={t('Fixed Models')}>
+                <ModelCheckboxList
+                  values={form.fixed_models}
+                  options={modelOptions}
+                  onChange={(values) => setField('fixed_models', values)}
+                />
+              </FieldBlock>
+            )}
             <SwitchRow
               label={t('Allow Private IP / Fake IP')}
               checked={form.allow_private_ip}
@@ -1093,7 +1238,7 @@ function SourceFormSheet(props: {
 
           <SideDrawerSection>
             <div className='flex items-center justify-between gap-3'>
-              <SideDrawerSectionHeader title={t('Local Group Rules')} />
+              <SideDrawerSectionHeader title={t('Sync Rules')} />
               <Button
                 type='button'
                 variant='outline'
@@ -1106,7 +1251,7 @@ function SourceFormSheet(props: {
             </div>
             {form.local_group_rules.length === 0 && (
               <p className='text-muted-foreground text-sm'>
-                {t('No local group rules')}
+                {t('No sync rules')}
               </p>
             )}
             <div className='space-y-3'>
@@ -1152,18 +1297,38 @@ function SourceFormSheet(props: {
                       label={t('Target Local Group')}
                       htmlFor={`source-rule-local-group-${index}`}
                     >
-                      <Input
+                      <Combobox
                         id={`source-rule-local-group-${index}`}
+                        options={groupOptions}
                         value={rule.local_group}
-                        onChange={(event) =>
+                        onValueChange={(value) =>
                           setLocalGroupRule(index, {
                             ...rule,
-                            local_group: event.target.value,
+                            local_group: value ?? '',
                           })
                         }
+                        placeholder={t('Select local group')}
+                        emptyText={t('No local group found')}
                       />
                     </FieldBlock>
                   </div>
+                  <FieldBlock label={t('Platforms')}>
+                    <CheckboxList
+                      values={rule.platforms}
+                      options={UPSTREAM_SOURCE_PLATFORM_OPTIONS.map(
+                        (option) => ({
+                          value: option.value,
+                          label: t(option.label),
+                        })
+                      )}
+                      onChange={(values) =>
+                        setLocalGroupRule(index, {
+                          ...rule,
+                          platforms: values,
+                        })
+                      }
+                    />
+                  </FieldBlock>
                   <div className='grid gap-3 sm:grid-cols-2'>
                     <FieldBlock
                       label={t('Name Keywords')}
@@ -1175,7 +1340,9 @@ function SourceFormSheet(props: {
                         onChange={(event) =>
                           setLocalGroupRule(index, {
                             ...rule,
-                            name_contains: parseKeywordList(event.target.value),
+                            name_contains: normalizeKeywordList(
+                              event.target.value
+                            ),
                           })
                         }
                       />
@@ -1190,7 +1357,7 @@ function SourceFormSheet(props: {
                         onChange={(event) =>
                           setLocalGroupRule(index, {
                             ...rule,
-                            description_contains: parseKeywordList(
+                            description_contains: normalizeKeywordList(
                               event.target.value
                             ),
                           })
@@ -1198,6 +1365,162 @@ function SourceFormSheet(props: {
                       />
                     </FieldBlock>
                   </div>
+                  <FieldBlock
+                    label={t('Exclude Keywords')}
+                    htmlFor={`source-rule-exclude-keywords-${index}`}
+                  >
+                    <Input
+                      id={`source-rule-exclude-keywords-${index}`}
+                      value={formatKeywordList(rule.exclude_keywords)}
+                      onChange={(event) =>
+                        setLocalGroupRule(index, {
+                          ...rule,
+                          exclude_keywords: normalizeKeywordList(
+                            event.target.value
+                          ),
+                        })
+                      }
+                    />
+                  </FieldBlock>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <div className='grid gap-3'>
+                      <SwitchRow
+                        label={t('Rule Monitor')}
+                        checked={rule.monitor?.enabled ?? form.enable_monitor}
+                        onCheckedChange={(checked) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            monitor: {
+                              enabled: checked,
+                              interval_minutes:
+                                rule.monitor?.interval_minutes ||
+                                form.monitor_interval_minutes,
+                            },
+                          })
+                        }
+                      />
+                      <FieldBlock
+                        label={t('Monitor Interval Minutes')}
+                        htmlFor={`source-rule-monitor-interval-${index}`}
+                      >
+                        <Input
+                          id={`source-rule-monitor-interval-${index}`}
+                          type='number'
+                          min={5}
+                          value={
+                            rule.monitor?.interval_minutes ||
+                            form.monitor_interval_minutes
+                          }
+                          onChange={(event) =>
+                            setLocalGroupRule(index, {
+                              ...rule,
+                              monitor: {
+                                enabled:
+                                  rule.monitor?.enabled ??
+                                  form.enable_monitor,
+                                interval_minutes: parseIntegerInput(
+                                  event.target.value,
+                                  form.monitor_interval_minutes
+                                ),
+                              },
+                            })
+                          }
+                        />
+                      </FieldBlock>
+                    </div>
+                    <div className='grid gap-3'>
+                      <SwitchRow
+                        label={t('Rule Auto Sync')}
+                        checked={
+                          rule.auto_sync?.enabled ?? form.auto_sync_enabled
+                        }
+                        onCheckedChange={(checked) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            auto_sync: {
+                              enabled: checked,
+                              interval_minutes:
+                                rule.auto_sync?.interval_minutes ||
+                                form.auto_sync_interval_minutes,
+                            },
+                          })
+                        }
+                      />
+                      <FieldBlock
+                        label={t('Auto Sync Interval Minutes')}
+                        htmlFor={`source-rule-auto-sync-interval-${index}`}
+                      >
+                        <Input
+                          id={`source-rule-auto-sync-interval-${index}`}
+                          type='number'
+                          min={5}
+                          value={
+                            rule.auto_sync?.interval_minutes ||
+                            form.auto_sync_interval_minutes
+                          }
+                          onChange={(event) =>
+                            setLocalGroupRule(index, {
+                              ...rule,
+                              auto_sync: {
+                                enabled:
+                                  rule.auto_sync?.enabled ??
+                                  form.auto_sync_enabled,
+                                interval_minutes: parseIntegerInput(
+                                  event.target.value,
+                                  form.auto_sync_interval_minutes
+                                ),
+                              },
+                            })
+                          }
+                        />
+                      </FieldBlock>
+                    </div>
+                  </div>
+                  <FieldBlock
+                    label={t('Model Strategy')}
+                    htmlFor={`source-rule-model-strategy-${index}`}
+                  >
+                    <Select
+                      value={rule.model_strategy}
+                      onValueChange={(value) =>
+                        setLocalGroupRule(index, {
+                          ...rule,
+                          model_strategy: normalizeModelStrategy(value),
+                        })
+                      }
+                    >
+                      <SelectTrigger id={`source-rule-model-strategy-${index}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}>
+                            {t('All upstream models')}
+                          </SelectItem>
+                          <SelectItem
+                            value={UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED}
+                          >
+                            {t('Fixed models')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </FieldBlock>
+                  {rule.model_strategy ===
+                    UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
+                    <FieldBlock label={t('Fixed Models')}>
+                      <ModelCheckboxList
+                        values={rule.fixed_models}
+                        options={modelOptions}
+                        onChange={(values) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            fixed_models: values,
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                  )}
                 </div>
               ))}
             </div>
@@ -1438,7 +1761,7 @@ function MappingsSheet(props: {
         <div className={sideDrawerFormClassName('gap-3')}>
           <div className='flex items-center justify-between gap-3'>
             <span className='text-muted-foreground text-sm'>
-              {t('{{count}} selected', { count: selectedCount })}
+              {t('{{count}} sync gates enabled', { count: selectedCount })}
             </span>
             {mappingsQuery.isFetching && (
               <span className='text-muted-foreground flex items-center gap-1 text-xs'>
@@ -1524,6 +1847,13 @@ function MappingRow(props: {
   const { t } = useTranslation()
   const mapping = props.mapping
   const groupName = mapping.upstream_group_name || mapping.upstream_group_id
+  const matchLabel = mapping.sync_eligible
+    ? mapping.matched_rule_name || t('Matched')
+    : t(mapping.match_reason || 'Not matched')
+  const modelStrategyLabel =
+    mapping.resolved_model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+      ? t('Fixed models')
+      : t('All upstream models')
   const rowMuted =
     mapping.discovery_status === 'invalid' ||
     mapping.discovery_status === 'stale' ||
@@ -1548,6 +1878,17 @@ function MappingRow(props: {
           )}
           <span className='text-muted-foreground text-xs'>
             {mapping.upstream_group_id}
+          </span>
+          <StatusBadge
+            label={matchLabel}
+            variant={mapping.sync_eligible ? 'success' : 'neutral'}
+            copyable={false}
+          />
+          <span className='text-muted-foreground text-xs'>
+            {t('Local group')}: {mapping.resolved_local_group || '-'}
+          </span>
+          <span className='text-muted-foreground text-xs'>
+            {t('Model strategy')}: {modelStrategyLabel}
           </span>
         </div>
       </TableCell>

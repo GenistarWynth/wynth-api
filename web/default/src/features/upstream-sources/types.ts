@@ -45,6 +45,18 @@ export type UpstreamMappingSyncStatus =
   | 'skipped'
   | 'needs_attention'
 
+export type UpstreamSourceModelStrategy = 'all_upstream' | 'fixed'
+
+export type UpstreamSourceRuleMonitor = {
+  enabled?: boolean
+  interval_minutes?: number
+}
+
+export type UpstreamSourceRuleAutoSync = {
+  enabled?: boolean
+  interval_minutes?: number
+}
+
 export type UpstreamSource = {
   id: number
   name: string
@@ -64,6 +76,8 @@ export type UpstreamSource = {
   auto_sync_enabled: boolean
   auto_sync_interval_minutes: number
   default_local_group: string
+  model_strategy: UpstreamSourceModelStrategy
+  fixed_models: string[]
   local_group_rules: UpstreamSourceLocalGroupRule[]
   masked_email: string
   has_credentials: boolean
@@ -80,8 +94,14 @@ export type UpstreamSource = {
 export type UpstreamSourceLocalGroupRule = {
   name: string
   local_group: string
+  platforms: string[]
   name_contains: string[]
   description_contains: string[]
+  exclude_keywords: string[]
+  monitor?: UpstreamSourceRuleMonitor
+  auto_sync?: UpstreamSourceRuleAutoSync
+  model_strategy: UpstreamSourceModelStrategy
+  fixed_models: string[]
 }
 
 export type UpstreamSourceMapping = {
@@ -100,6 +120,16 @@ export type UpstreamSourceMapping = {
   has_upstream_key: boolean
   local_channel_id: number
   sync_status: UpstreamMappingSyncStatus | ''
+  sync_eligible: boolean
+  matched_rule_name: string
+  match_reason: string
+  resolved_local_group: string
+  resolved_monitor_enabled: boolean
+  resolved_monitor_interval_minutes: number
+  resolved_auto_sync_enabled: boolean
+  resolved_auto_sync_interval_minutes: number
+  resolved_model_strategy: UpstreamSourceModelStrategy
+  resolved_fixed_models: string[]
   last_error: string
   last_discovered_at: number
   last_synced_at: number
@@ -125,6 +155,8 @@ export type UpstreamSourceFormValues = {
   auto_sync_enabled: boolean
   auto_sync_interval_minutes: number
   default_local_group: string
+  model_strategy: UpstreamSourceModelStrategy
+  fixed_models: string[]
   local_group_rules: UpstreamSourceLocalGroupRule[]
 }
 
