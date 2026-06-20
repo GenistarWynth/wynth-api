@@ -323,18 +323,21 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	if mapping.LocalChannelID != 0 {
 		channel, err := loadChannelByID(mapping.LocalChannelID)
 		if err != nil {
-			status := model.UpstreamMappingSyncStatusFailed
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				status = model.UpstreamMappingSyncStatusNeedsAttention
-				err = fmt.Errorf("local channel %d is missing", mapping.LocalChannelID)
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				errText := SanitizeUpstreamSourceError(err)
+				_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+				result.Status = model.UpstreamMappingSyncStatusFailed
+				result.Error = errText
+				return result, nil
 			}
-			errText := SanitizeUpstreamSourceError(err)
-			_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, status, errText, now)
-			result.Status = status
-			result.Error = errText
-			return result, nil
+			mapping.LocalChannelID = 0
+			result.LocalChannelID = 0
+		} else if isGeneratedChannelOwnedByMapping(channel, source, mapping) {
+			existingChannel = channel
+		} else {
+			mapping.LocalChannelID = 0
+			result.LocalChannelID = 0
 		}
-		existingChannel = channel
 	}
 
 	key, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
@@ -382,7 +385,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	channel := buildGeneratedChannel(source, mapping, config, rawKey)
 	if existingChannel != nil {
 		channel.Id = existingChannel.Id
-		mergeGeneratedChannelOtherSettings(channel, existingChannel, config)
+		mergeGeneratedChannelOtherSettings(channel, existingChannel, config, source, mapping)
 	}
 
 	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(config), channel, config)
@@ -449,6 +452,24 @@ func loadChannelByID(channelID int) (*model.Channel, error) {
 		return nil, err
 	}
 	return &channel, nil
+}
+
+func isGeneratedChannelOwnedByMapping(channel *model.Channel, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) bool {
+	if channel == nil || source == nil || mapping == nil {
+		return false
+	}
+	settings := channel.GetOtherSettings()
+	if settings.GeneratedByUpstreamSourceID != 0 || settings.GeneratedByUpstreamMappingID != 0 {
+		return settings.GeneratedByUpstreamSourceID == source.Id &&
+			settings.GeneratedByUpstreamMappingID == mapping.Id
+	}
+	expectedTag := strings.TrimSpace(source.Name)
+	actualTag := ""
+	if channel.Tag != nil {
+		actualTag = strings.TrimSpace(*channel.Tag)
+	}
+	return strings.TrimSpace(channel.Name) == upstreamSourceGeneratedChannelName(source, mapping) &&
+		actualTag == expectedTag
 }
 
 func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) (UpstreamKey, error) {
@@ -529,17 +550,25 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
 		ChannelMonitorEnabled:         config.EnableMonitor,
 		ChannelMonitorIntervalMinutes: config.MonitorIntervalMinutes,
+		GeneratedByUpstreamSourceID:   source.Id,
+		GeneratedByUpstreamMappingID:  mapping.Id,
 	})
 	return channel
 }
 
-func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel *model.Channel, config upstreamSourceSyncConfig) {
+func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel *model.Channel, config upstreamSourceSyncConfig, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) {
 	if channel == nil || existingChannel == nil {
 		return
 	}
 	settings := existingChannel.GetOtherSettings()
 	settings.ChannelMonitorEnabled = config.EnableMonitor
 	settings.ChannelMonitorIntervalMinutes = config.MonitorIntervalMinutes
+	if source != nil {
+		settings.GeneratedByUpstreamSourceID = source.Id
+	}
+	if mapping != nil {
+		settings.GeneratedByUpstreamMappingID = mapping.Id
+	}
 	channel.SetOtherSettings(settings)
 }
 

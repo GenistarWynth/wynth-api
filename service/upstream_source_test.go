@@ -984,6 +984,11 @@ func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {
 	require.NoError(t, model.DB.Create(&channel).Error)
 	rate := 1.0
 	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	settings := channel.GetOtherSettings()
+	settings.GeneratedByUpstreamSourceID = source.Id
+	settings.GeneratedByUpstreamMappingID = mapping.Id
+	channel.SetOtherSettings(settings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
 	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
 		"upstream_key_id":  "key-10",
 		"local_channel_id": channel.Id,
@@ -1054,6 +1059,11 @@ func TestSyncUpstreamSourceWritesOwnedZeroValues(t *testing.T) {
 	require.NoError(t, model.DB.Create(&channel).Error)
 	rate := 1.0
 	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
 	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
 		"upstream_key_id":  "key-10",
 		"local_channel_id": channel.Id,
@@ -1079,7 +1089,7 @@ func TestSyncUpstreamSourceWritesOwnedZeroValues(t *testing.T) {
 	assert.Equal(t, uint(0), *reloaded.Weight)
 }
 
-func TestSyncUpstreamSourceMissingLocalChannelNeedsAttention(t *testing.T) {
+func TestSyncUpstreamSourceRecreatesMissingLocalChannel(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, nil)
 	rate := 1.0
@@ -1104,21 +1114,80 @@ func TestSyncUpstreamSourceMissingLocalChannelNeedsAttention(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, model.UpstreamSyncStatusFailed, result.Status)
-	assert.Equal(t, 1, result.Failed)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, result.Created)
+	assert.Equal(t, 0, result.Failed)
 	require.Len(t, result.Results, 1)
-	assert.Equal(t, model.UpstreamMappingSyncStatusNeedsAttention, result.Results[0].Status)
-	assert.Contains(t, result.Results[0].Error, "local channel")
+	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, result.Results[0].Status)
 	assert.Empty(t, createCalls)
-	assert.Empty(t, updateCalls)
+	require.Len(t, updateCalls, 1)
+	assert.Equal(t, fakeUpstreamSourceUpdateKeyCall{KeyID: "key-10", GroupID: "10", Name: "Wynth API / source-a / primary"}, updateCalls[0])
 	var channelCount int64
 	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&channelCount).Error)
-	assert.Equal(t, int64(0), channelCount)
+	assert.Equal(t, int64(1), channelCount)
 	var reloaded model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloaded, mapping.Id).Error)
-	assert.Equal(t, model.UpstreamMappingSyncStatusNeedsAttention, reloaded.SyncStatus)
-	assert.Contains(t, reloaded.LastError, "local channel")
+	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, reloaded.SyncStatus)
+	assert.Empty(t, reloaded.LastError)
+	assert.NotEqual(t, 999, reloaded.LocalChannelID)
+	assert.NotZero(t, reloaded.LocalChannelID)
 	assert.Equal(t, int64(1004), reloaded.LastSyncedAt)
+}
+
+func TestSyncUpstreamSourceDoesNotOverwriteChannelOwnedByDifferentMapping(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	firstMapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	secondMapping := createSyncTestMapping(t, source.Id, "20", "backup", &rate)
+	baseURL := "https://relay.example.com"
+	priority := int64(0)
+	weight := uint(0)
+	channel := model.Channel{
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-old-primary",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "source-a / primary",
+		BaseURL:  &baseURL,
+		Models:   "old-model",
+		Group:    "default",
+		Priority: &priority,
+		Weight:   &weight,
+		Tag:      common.GetPointer("source-a"),
+	}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id IN ?", []int{firstMapping.Id, secondMapping.Id}).Updates(map[string]any{
+		"upstream_key_id":  "key-shared",
+		"local_channel_id": channel.Id,
+	}).Error)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1011 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, result.Created)
+	assert.Equal(t, 1, result.Updated)
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
+	require.Len(t, channels, 2)
+	assert.Equal(t, "source-a / primary", channels[0].Name)
+	assert.Equal(t, "source-a / backup", channels[1].Name)
+	var reloadedFirst, reloadedSecond model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedFirst, firstMapping.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedSecond, secondMapping.Id).Error)
+	assert.Equal(t, channel.Id, reloadedFirst.LocalChannelID)
+	assert.NotEqual(t, channel.Id, reloadedSecond.LocalChannelID)
+	assert.NotZero(t, reloadedSecond.LocalChannelID)
 }
 
 func TestSyncUpstreamSourceDoesNotEnableChannelWithoutModels(t *testing.T) {
