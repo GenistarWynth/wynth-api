@@ -787,8 +787,15 @@ func upstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMapping) d
 		HasUpstreamKey:          mapping.UpstreamKeyID != "",
 		LocalChannelID:          mapping.LocalChannelID,
 		SyncStatus:              mapping.SyncStatus,
-		LastError:               mapping.LastError,
+		LastError:               sanitizeUpstreamSourceStoredError(mapping.LastError),
 		LastDiscoveredAt:        mapping.LastDiscoveredAt,
 		LastSyncedAt:            mapping.LastSyncedAt,
 	}
+}
+
+func sanitizeUpstreamSourceStoredError(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return SanitizeUpstreamSourceError(errors.New(text))
 }
