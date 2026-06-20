@@ -15,7 +15,10 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
-const upstreamSourceAutoSyncTickInterval = time.Minute
+const (
+	upstreamSourceAutoSyncTickInterval  = time.Minute
+	upstreamSourceAutoSyncSourceTimeout = 3 * time.Minute
+)
 
 var (
 	upstreamSourceAutoSyncOnce    sync.Once
@@ -59,7 +62,10 @@ func (s *UpstreamSourceService) RunDueUpstreamSourceAutoSync(ctx context.Context
 
 	results := make([]dto.UpstreamSourceSyncResult, 0, len(due))
 	for _, source := range due {
-		if _, err := s.Discover(ctx, source.Id); err != nil {
+		sourceCtx, cancel := context.WithTimeout(ctx, upstreamSourceAutoSyncSourceTimeout)
+		discoveryResult, err := s.Discover(sourceCtx, source.Id)
+		if err != nil {
+			cancel()
 			results = append(results, dto.UpstreamSourceSyncResult{
 				SourceID: source.Id,
 				Status:   model.UpstreamSyncStatusFailed,
@@ -68,7 +74,12 @@ func (s *UpstreamSourceService) RunDueUpstreamSourceAutoSync(ctx context.Context
 			logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-sync: discover source_id=%d failed: %v", source.Id, err))
 			continue
 		}
-		result, err := s.Sync(ctx, source.Id)
+		if discoveryResult == nil {
+			cancel()
+			continue
+		}
+		result, err := s.Sync(sourceCtx, source.Id)
+		cancel()
 		if result == nil {
 			result = &dto.UpstreamSourceSyncResult{
 				SourceID: source.Id,

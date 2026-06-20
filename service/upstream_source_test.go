@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -1339,6 +1340,73 @@ func TestSyncUpstreamSourceDoesNotOverwriteChannelOwnedByDifferentMapping(t *tes
 	assert.Equal(t, channel.Id, reloadedFirst.LocalChannelID)
 	assert.NotEqual(t, channel.Id, reloadedSecond.LocalChannelID)
 	assert.NotZero(t, reloadedSecond.LocalChannelID)
+}
+
+func TestSyncUpstreamSourceDoesNotClaimShortNameChannelWithoutMetadata(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	baseURL := "https://relay.example.com"
+	priority := int64(0)
+	weight := uint(0)
+	channel := model.Channel{
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-other",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "source-a / 1.000x",
+		BaseURL:  &baseURL,
+		Models:   "old-model",
+		Group:    "default",
+		Priority: &priority,
+		Weight:   &weight,
+		Tag:      common.GetPointer("source-a"),
+	}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
+		"upstream_key_id":  "key-10",
+		"local_channel_id": channel.Id,
+	}).Error)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{updateKey: UpstreamKey{ID: "key-10", Key: "sk-new"}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1012 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.Created)
+	assert.Equal(t, 0, result.Updated)
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
+	require.Len(t, channels, 2)
+	assert.Equal(t, "sk-other", channels[0].Key)
+	assert.Equal(t, "sk-new", channels[1].Key)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.NotEqual(t, channel.Id, reloadedMapping.LocalChannelID)
+}
+
+func TestUpstreamSourceGeneratedChannelRemarkTruncatesUTF8Safely(t *testing.T) {
+	rate := 1.0
+	mapping := &model.UpstreamSourceChannelMapping{
+		UpstreamGroupID:         "10",
+		UpstreamGroupName:       strings.Repeat("中文", 200),
+		UpstreamPlatform:        "openai",
+		EffectiveRateMultiplier: &rate,
+	}
+
+	remark := upstreamSourceGeneratedChannelRemark(mapping)
+
+	require.NotNil(t, remark)
+	assert.LessOrEqual(t, len(*remark), 255)
+	assert.True(t, utf8.ValidString(*remark))
 }
 
 func TestSyncUpstreamSourceDoesNotEnableChannelWithoutModels(t *testing.T) {

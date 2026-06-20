@@ -532,9 +532,7 @@ func isGeneratedChannelOwnedByMapping(channel *model.Channel, source *model.Upst
 		actualTag = strings.TrimSpace(*channel.Tag)
 	}
 	channelName := strings.TrimSpace(channel.Name)
-	return (channelName == upstreamSourceGeneratedChannelName(source, mapping) ||
-		channelName == legacyUpstreamSourceGeneratedChannelName(source, mapping)) &&
-		actualTag == expectedTag
+	return channelName == legacyUpstreamSourceGeneratedChannelName(source, mapping) && actualTag == expectedTag
 }
 
 func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) (UpstreamKey, error) {
@@ -666,10 +664,25 @@ func upstreamSourceGeneratedChannelRemark(mapping *model.UpstreamSourceChannelMa
 		parts = append(parts, "Rate: "+formatUpstreamSourceRateMultiplier(*mapping.EffectiveRateMultiplier))
 	}
 	remark := strings.Join(parts, "; ")
-	if len(remark) > 255 {
-		remark = remark[:255]
-	}
+	remark = truncateUpstreamSourceString(remark, 255)
 	return common.GetPointer(remark)
+}
+
+func truncateUpstreamSourceString(value string, maxBytes int) string {
+	if maxBytes <= 0 || len(value) <= maxBytes {
+		return value
+	}
+	truncated := make([]rune, 0, len(value))
+	byteCount := 0
+	for _, r := range value {
+		runeSize := len(string(r))
+		if byteCount+runeSize > maxBytes {
+			break
+		}
+		truncated = append(truncated, r)
+		byteCount += runeSize
+	}
+	return string(truncated)
 }
 
 func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, rawKey string) *model.Channel {
@@ -895,6 +908,7 @@ func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredI
 	if err := tx.Select("id", "name").First(&source, sourceID).Error; err != nil {
 		return 0, err
 	}
+	disableChannelIDs := make([]int, 0, len(staleMappings))
 	for _, mapping := range staleMappings {
 		if mapping.LocalChannelID == 0 {
 			continue
@@ -909,7 +923,10 @@ func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredI
 		if !isGeneratedChannelOwnedByMapping(&channel, &source, &mapping) {
 			continue
 		}
-		if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("status", common.ChannelStatusManuallyDisabled).Error; err != nil {
+		disableChannelIDs = append(disableChannelIDs, channel.Id)
+	}
+	if len(disableChannelIDs) > 0 {
+		if err := tx.Model(&model.Channel{}).Where("id IN ?", disableChannelIDs).Update("status", common.ChannelStatusManuallyDisabled).Error; err != nil {
 			return 0, err
 		}
 	}
