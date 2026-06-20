@@ -57,3 +57,29 @@ func TestChannelUpdateAbilitiesSkipsEmptyModels(t *testing.T) {
 	require.NoError(t, DB.Model(&Ability{}).Where("channel_id = ?", channel.Id).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
 }
+
+func TestChannelMemoryCacheNormalizesMessyAbilityTokens(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, true)
+	priority := int64(0)
+
+	channel := &Channel{
+		Id:       103,
+		Type:     constant.ChannelTypeOpenAI,
+		Status:   common.ChannelStatusEnabled,
+		Name:     "messy-cache-channel",
+		Key:      "sk-test",
+		Models:   ",gpt-4o, gpt-4o-mini,",
+		Group:    ", default, premium ",
+		Priority: &priority,
+	}
+	require.NoError(t, DB.Create(channel).Error)
+	require.NoError(t, channel.AddAbilities(nil))
+
+	require.NotPanics(t, InitChannelCache)
+
+	cached, err := GetRandomSatisfiedChannel("default", "gpt-4o", 0, "")
+	require.NoError(t, err)
+	require.NotNil(t, cached)
+	assert.Equal(t, channel.Id, cached.Id)
+}
