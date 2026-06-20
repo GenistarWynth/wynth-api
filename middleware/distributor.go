@@ -92,7 +92,12 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+						// Administrators may target any group, even one not marked as
+						// user-selectable. Playground requests pass through UserAuth, so
+						// the role is available in the context.
+						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) &&
+							playgroundRequest.Group != usingGroup &&
+							c.GetInt("role") < common.RoleAdminUser {
 							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 							return
 						}

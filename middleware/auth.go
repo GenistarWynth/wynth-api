@@ -393,7 +393,10 @@ func TokenAuth() func(c *gin.Context) {
 		tokenGroup := token.Group
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+			// Administrators may use any configured group even when it is not marked
+			// as user-selectable. model.IsAdmin is short-circuited so the DB lookup
+			// only runs on the (rare) path where the group is not user-selectable.
+			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok && !model.IsAdmin(token.UserId) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}

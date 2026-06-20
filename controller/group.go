@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -29,13 +30,23 @@ func GetUserGroups(c *gin.Context) {
 	userId := c.GetInt("id")
 	userGroup, _ = model.GetUserGroup(userId, false)
 	userUsableGroups := service.GetUserUsableGroups(userGroup)
-	for groupName, _ := range ratio_setting.GetGroupRatioCopy() {
+	// Administrators may assign any configured group, even ones not marked as
+	// user-selectable, so expose the full group list to them (regular users only
+	// see the user-selectable set). The role is provided by UserAuth on
+	// /self/groups; the anonymous /groups route has role 0 and stays restricted.
+	isAdmin := c.GetInt("role") >= common.RoleAdminUser
+	for groupName := range ratio_setting.GetGroupRatioCopy() {
 		// UserUsableGroups contains the groups that the user can use
-		if desc, ok := userUsableGroups[groupName]; ok {
-			usableGroups[groupName] = map[string]interface{}{
-				"ratio": service.GetUserGroupRatio(userGroup, groupName),
-				"desc":  desc,
+		desc, ok := userUsableGroups[groupName]
+		if !ok {
+			if !isAdmin {
+				continue
 			}
+			desc = setting.GetUsableGroupDescription(groupName)
+		}
+		usableGroups[groupName] = map[string]interface{}{
+			"ratio": service.GetUserGroupRatio(userGroup, groupName),
+			"desc":  desc,
 		}
 	}
 	if _, ok := userUsableGroups["auto"]; ok {
