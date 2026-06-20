@@ -155,6 +155,7 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 		discoveryStatus := model.UpstreamMappingDiscoveryStatusActive
 		if group.EffectiveRateMultiplier == nil {
 			discoveryStatus = model.UpstreamMappingDiscoveryStatusInvalid
+			invalidCount++
 		}
 		mappingByID[groupID] = model.UpstreamSourceChannelMapping{
 			SourceID:                sourceID,
@@ -171,11 +172,7 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 
 	mappings := make([]model.UpstreamSourceChannelMapping, 0, len(mappingByID))
 	for _, groupID := range discoveredIDs {
-		mapping := mappingByID[groupID]
-		if mapping.DiscoveryStatus == model.UpstreamMappingDiscoveryStatusInvalid {
-			invalidCount++
-		}
-		mappings = append(mappings, mapping)
+		mappings = append(mappings, mappingByID[groupID])
 	}
 
 	return mappings, discoveredIDs, invalidCount

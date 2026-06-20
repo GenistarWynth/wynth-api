@@ -122,14 +122,14 @@ func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
 	rateA := 0.5
 	rateB := 1.5
 	groups := []UpstreamGroup{
-		{ID: " 10 ", Name: "first", Platform: "openai", Status: "enabled", RateMultiplier: &rateA, EffectiveRateMultiplier: &rateA},
+		{ID: " 10 ", Name: "first invalid", Platform: "openai", Status: "enabled", RateMultiplier: &rateA},
 		{ID: "10", Name: "last", Platform: "claude", Status: "disabled", RateMultiplier: &rateB, EffectiveRateMultiplier: &rateB},
 		{ID: "   ", Name: "blank", Platform: "openai", Status: "enabled", RateMultiplier: &rateA, EffectiveRateMultiplier: &rateA},
 	}
 	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, 12345)
 	require.Len(t, mappings, 1)
 	assert.Equal(t, []string{"10"}, discoveredIDs)
-	assert.Equal(t, 1, invalidCount)
+	assert.Equal(t, 2, invalidCount)
 	assert.Equal(t, "10", mappings[0].UpstreamGroupID)
 	assert.Equal(t, "last", mappings[0].UpstreamGroupName)
 	assert.Equal(t, "claude", mappings[0].UpstreamPlatform)
@@ -151,7 +151,7 @@ func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, result.Discovered)
 	assert.Equal(t, 1, result.Active)
-	assert.Equal(t, 1, result.Invalid)
+	assert.Equal(t, 2, result.Invalid)
 	assert.Equal(t, 1, result.Stale)
 	require.Len(t, result.Mappings, 2)
 
