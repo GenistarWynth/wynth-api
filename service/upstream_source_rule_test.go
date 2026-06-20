@@ -121,6 +121,51 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, resolution.FixedModels)
 }
 
+func TestResolveUpstreamSourceRuleKeepsFallbackOnlyRule(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"default_local_group": "fallback",
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI fallback",
+				"local_group": "",
+				"platforms":   []string{"openai"},
+			},
+		},
+	})
+	require.Len(t, config.LocalGroupRules, 1)
+	assert.Empty(t, config.LocalGroupRules[0].LocalGroup)
+	assert.Equal(t, []string{"openai"}, config.LocalGroupRules[0].Platforms)
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:      true,
+		UpstreamPlatform: "openai",
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusActive,
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.Matched)
+	assert.True(t, resolution.SyncEligible)
+	assert.Equal(t, "OpenAI fallback", resolution.RuleName)
+	assert.Equal(t, upstreamSourceMatchReasonMatched, resolution.Reason)
+	assert.Equal(t, "fallback", resolution.LocalGroup)
+}
+
+func TestResolveUpstreamSourceRuleAllowsEmptyDiscoveryStatusInLegacyMode(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"default_local_group": "fallback",
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled: true,
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.Matched)
+	assert.True(t, resolution.SyncEligible)
+	assert.Equal(t, upstreamSourceMatchReasonMatched, resolution.Reason)
+	assert.Equal(t, "fallback", resolution.LocalGroup)
+}
+
 func TestResolveUpstreamSourceRuleKeepsKeywordFieldsSpecific(t *testing.T) {
 	tests := []struct {
 		name        string

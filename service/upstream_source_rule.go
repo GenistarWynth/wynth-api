@@ -153,9 +153,6 @@ func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroup
 	normalized := make([]dto.UpstreamSourceLocalGroupRule, 0, len(rules))
 	for _, rule := range rules {
 		localGroup := strings.TrimSpace(rule.LocalGroup)
-		if localGroup == "" {
-			continue
-		}
 		platforms := normalizeUpstreamSourceRuleKeywords(rule.Platforms)
 		nameContains := normalizeUpstreamSourceRuleKeywords(rule.NameContains)
 		descriptionContains := normalizeUpstreamSourceRuleKeywords(rule.DescriptionContains)
@@ -241,7 +238,8 @@ func resolveUpstreamSourceRule(config upstreamSourceSyncConfig, mapping *model.U
 	if mapping == nil {
 		return fallback
 	}
-	if strings.TrimSpace(mapping.DiscoveryStatus) != model.UpstreamMappingDiscoveryStatusActive {
+	discoveryStatus := strings.TrimSpace(mapping.DiscoveryStatus)
+	if discoveryStatus != "" && discoveryStatus != model.UpstreamMappingDiscoveryStatusActive {
 		fallback.Reason = upstreamSourceMatchReasonInactiveDiscovery
 		return fallback
 	}
@@ -364,7 +362,9 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 	resolution.SyncEligible = true
 	resolution.RuleName = strings.TrimSpace(rule.Name)
 	resolution.Reason = upstreamSourceMatchReasonMatched
-	resolution.LocalGroup = strings.TrimSpace(rule.LocalGroup)
+	if localGroup := strings.TrimSpace(rule.LocalGroup); localGroup != "" {
+		resolution.LocalGroup = localGroup
+	}
 	if rule.Monitor != nil {
 		if rule.Monitor.Enabled != nil {
 			resolution.MonitorEnabled = *rule.Monitor.Enabled
