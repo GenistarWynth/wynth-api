@@ -193,7 +193,7 @@ func ListUpstreamSourceMappings(c *gin.Context) {
 	if !ok {
 		return
 	}
-	mappings, err := listUpstreamSourceMappings(source.Id)
+	mappings, err := listUpstreamSourceMappings(*source)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -220,7 +220,7 @@ func UpdateUpstreamSourceMappings(c *gin.Context) {
 		"name":  source.Name,
 		"count": len(req.MappingIDs),
 	})
-	mappings, err := listUpstreamSourceMappings(source.Id)
+	mappings, err := listUpstreamSourceMappings(*source)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -544,38 +544,16 @@ func upstreamSourceHasCredentials(auth upstreamSourceAuthConfig) bool {
 		strings.TrimSpace(auth.RefreshToken) != ""
 }
 
-func listUpstreamSourceMappings(sourceID int) ([]dto.UpstreamSourceMappingResponse, error) {
+func listUpstreamSourceMappings(source model.UpstreamSource) ([]dto.UpstreamSourceMappingResponse, error) {
 	var mappings []model.UpstreamSourceChannelMapping
-	if err := model.DB.Where("source_id = ?", sourceID).Order("id").Find(&mappings).Error; err != nil {
+	if err := model.DB.Where("source_id = ?", source.Id).Order("id").Find(&mappings).Error; err != nil {
 		return nil, err
 	}
 	responses := make([]dto.UpstreamSourceMappingResponse, 0, len(mappings))
 	for _, mapping := range mappings {
-		responses = append(responses, upstreamSourceMappingDTO(mapping))
+		responses = append(responses, service.BuildUpstreamSourceMappingResponse(mapping, source.SyncConfig))
 	}
 	return responses, nil
-}
-
-func upstreamSourceMappingDTO(mapping model.UpstreamSourceChannelMapping) dto.UpstreamSourceMappingResponse {
-	return dto.UpstreamSourceMappingResponse{
-		Id:                       mapping.Id,
-		SourceID:                 mapping.SourceID,
-		SyncEnabled:              mapping.SyncEnabled,
-		UpstreamGroupID:          mapping.UpstreamGroupID,
-		UpstreamGroupName:        mapping.UpstreamGroupName,
-		UpstreamGroupDescription: mapping.UpstreamGroupDescription,
-		UpstreamPlatform:         mapping.UpstreamPlatform,
-		DiscoveryStatus:          mapping.DiscoveryStatus,
-		UpstreamStatus:           mapping.UpstreamStatus,
-		UpstreamRateMultiplier:   mapping.UpstreamRateMultiplier,
-		EffectiveRateMultiplier:  mapping.EffectiveRateMultiplier,
-		HasUpstreamKey:           mapping.UpstreamKeyID != "",
-		LocalChannelID:           mapping.LocalChannelID,
-		SyncStatus:               mapping.SyncStatus,
-		LastError:                sanitizeUpstreamSourceResponseError(mapping.LastError),
-		LastDiscoveredAt:         mapping.LastDiscoveredAt,
-		LastSyncedAt:             mapping.LastSyncedAt,
-	}
 }
 
 func updateUpstreamSourceMappingSelection(sourceID int, mappingIDs []int) error {

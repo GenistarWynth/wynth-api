@@ -52,7 +52,12 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 		return s.recordDiscoveryFailure(source.Id, now, err), err
 	}
 
-	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now)
+	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
+	if err != nil {
+		return s.recordDiscoveryFailure(source.Id, now, err), err
+	}
+
+	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now, config)
 	var result dto.UpstreamSourceDiscoveryResult
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := model.UpsertDiscoveredMappingsTx(tx, source.Id, mappings, now); err != nil {
@@ -66,7 +71,7 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 			return err
 		}
 
-		built, err := buildDiscoveryResultTx(tx, source.Id, len(groups), staleCount, invalidCount)
+		built, err := buildDiscoveryResultTx(tx, source.Id, source.SyncConfig, len(groups), staleCount, invalidCount)
 		if err != nil {
 			return err
 		}
@@ -730,7 +735,7 @@ func validateAbsoluteHTTPURL(name string, value string) error {
 	return nil
 }
 
-func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64) ([]model.UpstreamSourceChannelMapping, []string, int) {
+func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64, config upstreamSourceSyncConfig) ([]model.UpstreamSourceChannelMapping, []string, int) {
 	mappingByID := make(map[string]model.UpstreamSourceChannelMapping, len(groups))
 	discoveredIDs := make([]string, 0, len(groups))
 	invalidCount := 0
@@ -749,9 +754,9 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 			discoveryStatus = model.UpstreamMappingDiscoveryStatusInvalid
 			invalidCount++
 		}
-		mappingByID[groupID] = model.UpstreamSourceChannelMapping{
+		mapping := model.UpstreamSourceChannelMapping{
 			SourceID:                 sourceID,
-			SyncEnabled:              discoveryStatus == model.UpstreamMappingDiscoveryStatusActive,
+			SyncEnabled:              true,
 			UpstreamGroupID:          groupID,
 			UpstreamGroupName:        strings.TrimSpace(group.Name),
 			UpstreamGroupDescription: strings.TrimSpace(group.Description),
@@ -762,6 +767,9 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 			EffectiveRateMultiplier:  group.EffectiveRateMultiplier,
 			LastDiscoveredAt:         now,
 		}
+		resolution := resolveUpstreamSourceRule(config, &mapping)
+		mapping.SyncEnabled = discoveryStatus == model.UpstreamMappingDiscoveryStatusActive && resolution.SyncEligible
+		mappingByID[groupID] = mapping
 	}
 
 	mappings := make([]model.UpstreamSourceChannelMapping, 0, len(mappingByID))
@@ -876,10 +884,10 @@ func updateUpstreamSourceSyncStatus(sourceID int, status string, errText string,
 }
 
 func buildDiscoveryResult(sourceID int, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
-	return buildDiscoveryResultTx(model.DB, sourceID, discovered, staleCount, invalidCount)
+	return buildDiscoveryResultTx(model.DB, sourceID, "", discovered, staleCount, invalidCount)
 }
 
-func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
+func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, rawConfig string, discovered int, staleCount int, invalidCount int) (dto.UpstreamSourceDiscoveryResult, error) {
 	var mappings []model.UpstreamSourceChannelMapping
 	if err := tx.Where("source_id = ?", sourceID).Order("upstream_group_id").Find(&mappings).Error; err != nil {
 		return dto.UpstreamSourceDiscoveryResult{}, err
@@ -896,7 +904,7 @@ func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, discovered int, staleCoun
 		if mapping.DiscoveryStatus == model.UpstreamMappingDiscoveryStatusActive {
 			result.Active++
 		}
-		result.Mappings = append(result.Mappings, upstreamSourceMappingResponse(mapping))
+		result.Mappings = append(result.Mappings, BuildUpstreamSourceMappingResponse(mapping, rawConfig))
 	}
 	sort.SliceStable(result.Mappings, func(i, j int) bool {
 		return result.Mappings[i].UpstreamGroupID < result.Mappings[j].UpstreamGroupID
@@ -904,25 +912,46 @@ func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, discovered int, staleCoun
 	return result, nil
 }
 
-func upstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMapping) dto.UpstreamSourceMappingResponse {
+func BuildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMapping, rawConfig string) dto.UpstreamSourceMappingResponse {
+	config, err := parseUpstreamSourceSyncConfig(rawConfig)
+	if err != nil {
+		config, _ = parseUpstreamSourceSyncConfig("")
+	}
+	return buildUpstreamSourceMappingResponse(mapping, config)
+}
+
+func buildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig) dto.UpstreamSourceMappingResponse {
+	eligibilityMapping := mapping
+	eligibilityMapping.SyncEnabled = true
+	resolution := resolveUpstreamSourceRule(config, &eligibilityMapping)
 	return dto.UpstreamSourceMappingResponse{
-		Id:                       mapping.Id,
-		SourceID:                 mapping.SourceID,
-		SyncEnabled:              mapping.SyncEnabled,
-		UpstreamGroupID:          mapping.UpstreamGroupID,
-		UpstreamGroupName:        mapping.UpstreamGroupName,
-		UpstreamGroupDescription: mapping.UpstreamGroupDescription,
-		UpstreamPlatform:         mapping.UpstreamPlatform,
-		DiscoveryStatus:          mapping.DiscoveryStatus,
-		UpstreamStatus:           mapping.UpstreamStatus,
-		UpstreamRateMultiplier:   mapping.UpstreamRateMultiplier,
-		EffectiveRateMultiplier:  mapping.EffectiveRateMultiplier,
-		HasUpstreamKey:           mapping.UpstreamKeyID != "",
-		LocalChannelID:           mapping.LocalChannelID,
-		SyncStatus:               mapping.SyncStatus,
-		LastError:                sanitizeUpstreamSourceStoredError(mapping.LastError),
-		LastDiscoveredAt:         mapping.LastDiscoveredAt,
-		LastSyncedAt:             mapping.LastSyncedAt,
+		Id:                              mapping.Id,
+		SourceID:                        mapping.SourceID,
+		SyncEnabled:                     mapping.SyncEnabled,
+		UpstreamGroupID:                 mapping.UpstreamGroupID,
+		UpstreamGroupName:               mapping.UpstreamGroupName,
+		UpstreamGroupDescription:        mapping.UpstreamGroupDescription,
+		UpstreamPlatform:                mapping.UpstreamPlatform,
+		DiscoveryStatus:                 mapping.DiscoveryStatus,
+		UpstreamStatus:                  mapping.UpstreamStatus,
+		UpstreamRateMultiplier:          mapping.UpstreamRateMultiplier,
+		EffectiveRateMultiplier:         mapping.EffectiveRateMultiplier,
+		HasUpstreamKey:                  mapping.UpstreamKeyID != "",
+		LocalChannelID:                  mapping.LocalChannelID,
+		SyncStatus:                      mapping.SyncStatus,
+		LastError:                       sanitizeUpstreamSourceStoredError(mapping.LastError),
+		LastDiscoveredAt:                mapping.LastDiscoveredAt,
+		LastSyncedAt:                    mapping.LastSyncedAt,
+		SyncEligible:                    resolution.SyncEligible,
+		MatchedRuleName:                 resolution.RuleName,
+		MatchReason:                     resolution.Reason,
+		ResolvedLocalGroup:              resolution.LocalGroup,
+		ResolvedMonitorEnabled:          resolution.MonitorEnabled,
+		ResolvedMonitorIntervalMinutes:  resolution.MonitorIntervalMinutes,
+		ResolvedAutoSyncEnabled:         resolution.AutoSyncEnabled,
+		ResolvedAutoSyncIntervalMinutes: resolution.AutoSyncIntervalMinutes,
+		ResolvedModelStrategy:           resolution.ModelStrategy,
+		ResolvedFixedModels:             resolution.FixedModels,
 	}
 }
 

@@ -191,6 +191,95 @@ func TestDiscoverUpstreamSourceUpsertsMappings(t *testing.T) {
 	assert.Empty(t, reloaded.LastDiscoveryError)
 }
 
+func TestDiscoverUpstreamSourceSetsSyncEnabledFromRuleEligibility(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"default_local_group": "fallback",
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI only",
+				"local_group": "openai",
+				"platforms":   []string{"openai"},
+			},
+		},
+	})
+	openAIRate := 1.0
+	anthropicRate := 1.5
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			require.Equal(t, model.UpstreamSourceTypeSub2API, sourceType)
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{
+				{ID: "openai", Name: "OpenAI", Platform: "openai", Status: "enabled", EffectiveRateMultiplier: &openAIRate},
+				{ID: "anthropic", Name: "Anthropic", Platform: "anthropic", Status: "enabled", EffectiveRateMultiplier: &anthropicRate},
+			}}, nil
+		},
+		Now: func() int64 { return 12345 },
+	}
+
+	result, err := service.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.Len(t, result.Mappings, 2)
+	mappingByID := make(map[string]dto.UpstreamSourceMappingResponse, len(result.Mappings))
+	for _, mapping := range result.Mappings {
+		mappingByID[mapping.UpstreamGroupID] = mapping
+	}
+	openAIMapping := mappingByID["openai"]
+	assert.True(t, openAIMapping.SyncEnabled)
+	assert.True(t, openAIMapping.SyncEligible)
+	assert.Equal(t, "OpenAI only", openAIMapping.MatchedRuleName)
+	assert.Equal(t, upstreamSourceMatchReasonMatched, openAIMapping.MatchReason)
+	anthropicMapping := mappingByID["anthropic"]
+	assert.False(t, anthropicMapping.SyncEnabled)
+	assert.False(t, anthropicMapping.SyncEligible)
+	assert.Empty(t, anthropicMapping.MatchedRuleName)
+	assert.Equal(t, upstreamSourceMatchReasonNoMatchingRule, anthropicMapping.MatchReason)
+
+	var persistedAnthropic model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "anthropic").First(&persistedAnthropic).Error)
+	assert.False(t, persistedAnthropic.SyncEnabled)
+}
+
+func TestDiscoverUpstreamSourceKeepsLegacyNoRuleMappingsSelected(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 1.0
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			require.Equal(t, model.UpstreamSourceTypeSub2API, sourceType)
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{
+				{ID: "openai", Name: "OpenAI", Platform: "openai", Status: "enabled", EffectiveRateMultiplier: &rate},
+			}}, nil
+		},
+		Now: func() int64 { return 12345 },
+	}
+
+	result, err := service.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.Len(t, result.Mappings, 1)
+	assert.True(t, result.Mappings[0].SyncEnabled)
+	assert.True(t, result.Mappings[0].SyncEligible)
+	assert.Equal(t, upstreamSourceMatchReasonMatched, result.Mappings[0].MatchReason)
+}
+
+func TestBuildUpstreamSourceMappingResponseFallsBackOnInvalidConfig(t *testing.T) {
+	rate := 1.0
+	mapping := model.UpstreamSourceChannelMapping{
+		SyncEnabled:             true,
+		UpstreamGroupID:         "openai",
+		UpstreamGroupName:       "OpenAI",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier: &rate,
+	}
+
+	response := BuildUpstreamSourceMappingResponse(mapping, "{")
+
+	assert.True(t, response.SyncEligible)
+	assert.Equal(t, "default", response.ResolvedLocalGroup)
+	assert.Equal(t, upstreamSourceModelStrategyAllUpstream, response.ResolvedModelStrategy)
+}
+
 func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)
@@ -201,7 +290,9 @@ func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
 		{ID: "10", Name: "last", Platform: "claude", Status: "disabled", RateMultiplier: &rateB, EffectiveRateMultiplier: &rateB},
 		{ID: "   ", Name: "blank", Platform: "openai", Status: "enabled", RateMultiplier: &rateA, EffectiveRateMultiplier: &rateA},
 	}
-	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, 12345)
+	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
+	require.NoError(t, err)
+	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, 12345, config)
 	require.Len(t, mappings, 1)
 	assert.Equal(t, []string{"10"}, discoveredIDs)
 	assert.Equal(t, 2, invalidCount)
