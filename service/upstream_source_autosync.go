@@ -38,17 +38,34 @@ func ListDueUpstreamSourcesForAutoSync(now int64) ([]model.UpstreamSource, error
 			logger.LogWarn(context.Background(), fmt.Sprintf("upstream source auto-sync: skip source_id=%d invalid sync config: %v", source.Id, err))
 			continue
 		}
-		if !config.AutoSyncEnabled || config.AutoSyncIntervalMinutes <= 0 {
+		if !upstreamSourceHasAutoSyncSchedule(config) {
 			continue
 		}
 		if source.CurrentSyncToken != "" && source.SyncStartedAt > now-upstreamSourceSyncStaleAfterSeconds {
 			continue
 		}
-		intervalSeconds := int64(config.AutoSyncIntervalMinutes) * 60
-		if source.LastSyncTime > 0 && now-source.LastSyncTime < intervalSeconds {
+
+		var mappings []model.UpstreamSourceChannelMapping
+		if err := model.DB.Where("source_id = ?", source.Id).Order("id").Find(&mappings).Error; err != nil {
+			return nil, err
+		}
+		if len(mappings) == 0 {
+			intervalMinutes := upstreamSourceCoarseAutoSyncIntervalMinutes(config)
+			if intervalMinutes <= 0 {
+				continue
+			}
+			if source.LastSyncTime > 0 && now-source.LastSyncTime < int64(intervalMinutes)*60 {
+				continue
+			}
+			due = append(due, source)
 			continue
 		}
-		due = append(due, source)
+		for i := range mappings {
+			if upstreamSourceMappingAutoSyncDue(config, &mappings[i], now) {
+				due = append(due, source)
+				break
+			}
+		}
 	}
 	return due, nil
 }
@@ -78,7 +95,7 @@ func (s *UpstreamSourceService) RunDueUpstreamSourceAutoSync(ctx context.Context
 			cancel()
 			continue
 		}
-		result, err := s.Sync(sourceCtx, source.Id)
+		result, err := s.SyncDueAuto(sourceCtx, source.Id)
 		cancel()
 		if result == nil {
 			result = &dto.UpstreamSourceSyncResult{

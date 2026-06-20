@@ -17,6 +17,13 @@ import (
 
 const upstreamSourceSyncStaleAfterSeconds int64 = 3600
 
+type upstreamSourceSyncMode string
+
+const (
+	upstreamSourceSyncModeManual upstreamSourceSyncMode = "manual"
+	upstreamSourceSyncModeAuto   upstreamSourceSyncMode = "auto"
+)
+
 type UpstreamSourceService struct {
 	AdapterFactory func(sourceType string) (UpstreamSourceAdapter, error)
 	FetchModels    func(channel *model.Channel) ([]string, error)
@@ -112,6 +119,14 @@ func (s *UpstreamSourceService) fetchModels(config upstreamSourceSyncConfig) fun
 }
 
 func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.UpstreamSourceSyncResult, error) {
+	return s.sync(ctx, sourceID, upstreamSourceSyncModeManual)
+}
+
+func (s *UpstreamSourceService) SyncDueAuto(ctx context.Context, sourceID int) (*dto.UpstreamSourceSyncResult, error) {
+	return s.sync(ctx, sourceID, upstreamSourceSyncModeAuto)
+}
+
+func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode upstreamSourceSyncMode) (*dto.UpstreamSourceSyncResult, error) {
 	if sourceID == 0 {
 		return nil, errors.New("source ID is required")
 	}
@@ -175,6 +190,10 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 			syncEnabledCount++
 		}
 		resolutions[i] = resolveUpstreamSourceRuleForManualSync(config, &mappings[i])
+		if mode == upstreamSourceSyncModeAuto && resolutions[i].SyncEligible && !upstreamSourceMappingAutoSyncDue(config, &mappings[i], now) {
+			resolutions[i].SyncEligible = false
+			resolutions[i].Reason = upstreamSourceMatchReasonAutoSyncNotDue
+		}
 		if resolutions[i].SyncEligible {
 			eligibleCount++
 		}
@@ -194,6 +213,9 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 			mappingResult := skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now)
 			result.Results = append(result.Results, mappingResult)
 			result.Skipped++
+		}
+		if mode == upstreamSourceSyncModeAuto {
+			return result, nil
 		}
 		if len(config.LocalGroupRules) > 0 {
 			err := errors.New("no upstream groups matched sync rules")
@@ -587,30 +609,6 @@ func upstreamSourceGroupDisplayName(mapping *model.UpstreamSourceChannelMapping)
 
 func formatUpstreamSourceRateMultiplier(value float64) string {
 	return fmt.Sprintf("%.3fx", value)
-}
-
-func resolveUpstreamSourceLocalGroup(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) string {
-	defaultGroup := strings.TrimSpace(config.DefaultLocalGroup)
-	if defaultGroup == "" {
-		defaultGroup = strings.TrimSpace(config.LocalGroup)
-	}
-	if defaultGroup == "" {
-		defaultGroup = "default"
-	}
-	if mapping == nil {
-		return defaultGroup
-	}
-	name := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupName))
-	description := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupDescription))
-	for _, rule := range config.LocalGroupRules {
-		if upstreamSourceKeywordsMatch(name, rule.NameContains) ||
-			upstreamSourceKeywordsMatch(description, rule.DescriptionContains) {
-			if localGroup := strings.TrimSpace(rule.LocalGroup); localGroup != "" {
-				return localGroup
-			}
-		}
-	}
-	return defaultGroup
 }
 
 func upstreamSourceKeywordsMatch(text string, keywords []string) bool {

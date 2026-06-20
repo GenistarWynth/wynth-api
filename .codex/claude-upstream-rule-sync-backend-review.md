@@ -10,5 +10,3 @@ Focus on:
 - project JSON wrapper usage.
 
 Return only findings with file/line references and severity.
-
-Do not run Claude. The main agent will run review.

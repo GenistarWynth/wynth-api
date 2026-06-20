@@ -1942,6 +1942,98 @@ func TestRunDueUpstreamSourceAutoSyncDiscoversThenSyncsDueSources(t *testing.T) 
 	assert.Equal(t, int64(3000), reloadedSource.LastSyncTime)
 }
 
+func TestListDueUpstreamSourcesForAutoSyncUsesRuleIntervals(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	autoSyncEnabled := true
+	source := createAutoSyncTestSource(t, "rule-due", model.UpstreamSourceStatusEnabled, map[string]any{
+		"auto_sync_enabled": false,
+		"local_group_rules": []dto.UpstreamSourceLocalGroupRule{{
+			Name:       "OpenAI",
+			LocalGroup: "default",
+			Platforms:  []string{"openai"},
+			AutoSync:   &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: 10},
+		}},
+	}, 0, "", 0)
+	rate := 1.0
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "10",
+		UpstreamGroupName:       "GPT",
+		UpstreamPlatform:        "openai",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier: &rate,
+		LastSyncedAt:            1000,
+	}).Error)
+
+	sources, err := ListDueUpstreamSourcesForAutoSync(1701)
+
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, source.Id, sources[0].Id)
+}
+
+func TestRunDueUpstreamSourceAutoSyncSyncsOnlyDueMappings(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	autoSyncEnabled := true
+	source := createAutoSyncTestSource(t, "rule-due", model.UpstreamSourceStatusEnabled, map[string]any{
+		"local_group_rules": []dto.UpstreamSourceLocalGroupRule{{
+			Name:       "OpenAI",
+			LocalGroup: "default",
+			Platforms:  []string{"openai"},
+			AutoSync:   &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: 10},
+		}},
+	}, 0, "", 0)
+	rate := 1.0
+	require.NoError(t, model.DB.Create(&[]model.UpstreamSourceChannelMapping{
+		{
+			SourceID:                source.Id,
+			SyncEnabled:             true,
+			UpstreamGroupID:         "10",
+			UpstreamGroupName:       "old",
+			UpstreamPlatform:        "openai",
+			DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+			EffectiveRateMultiplier: &rate,
+			LastSyncedAt:            1000,
+		},
+		{
+			SourceID:                source.Id,
+			SyncEnabled:             true,
+			UpstreamGroupID:         "20",
+			UpstreamGroupName:       "fresh",
+			UpstreamPlatform:        "openai",
+			DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+			EffectiveRateMultiplier: &rate,
+			LastSyncedAt:            1650,
+		},
+	}).Error)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				groups: []UpstreamGroup{
+					{ID: "10", Name: "old", Platform: "openai", Status: "enabled", EffectiveRateMultiplier: &rate},
+					{ID: "20", Name: "fresh", Platform: "openai", Status: "enabled", EffectiveRateMultiplier: &rate},
+				},
+				createCalls: &createCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1701 },
+	}
+
+	results := service.RunDueUpstreamSourceAutoSync(context.Background(), 1701)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, results[0].Status)
+	assert.Equal(t, 1, results[0].Created)
+	assert.Equal(t, 1, results[0].Skipped)
+	require.Len(t, createCalls, 1)
+	assert.Equal(t, "10", createCalls[0].GroupID)
+}
+
 func createAutoSyncTestSource(t *testing.T, name string, status string, syncConfig map[string]any, lastSyncTime int64, currentToken string, syncStartedAt int64) model.UpstreamSource {
 	t.Helper()
 

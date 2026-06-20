@@ -18,6 +18,7 @@ const (
 	upstreamSourceMatchReasonExcludedByKeyword = "excluded by keyword"
 	upstreamSourceMatchReasonManualDisabled    = "manual disabled"
 	upstreamSourceMatchReasonInactiveDiscovery = "inactive discovery"
+	upstreamSourceMatchReasonAutoSyncNotDue    = "auto sync interval not due"
 )
 
 // Keep this JSON shape in lockstep with controller.upstreamSourceControllerSyncConfig.
@@ -390,4 +391,72 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		}
 	}
 	return resolution
+}
+
+func upstreamSourceHasAutoSyncSchedule(config upstreamSourceSyncConfig) bool {
+	if config.AutoSyncEnabled && config.AutoSyncIntervalMinutes > 0 {
+		return true
+	}
+	for _, rule := range config.LocalGroupRules {
+		if !upstreamSourceRuleAutoSyncEnabled(config, rule) {
+			continue
+		}
+		if upstreamSourceRuleAutoSyncInterval(config, rule) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func upstreamSourceCoarseAutoSyncIntervalMinutes(config upstreamSourceSyncConfig) int {
+	interval := 0
+	if config.AutoSyncEnabled && config.AutoSyncIntervalMinutes > 0 {
+		interval = config.AutoSyncIntervalMinutes
+	}
+	for _, rule := range config.LocalGroupRules {
+		if !upstreamSourceRuleAutoSyncEnabled(config, rule) {
+			continue
+		}
+		ruleInterval := upstreamSourceRuleAutoSyncInterval(config, rule)
+		if ruleInterval <= 0 {
+			continue
+		}
+		if interval == 0 || ruleInterval < interval {
+			interval = ruleInterval
+		}
+	}
+	return interval
+}
+
+func upstreamSourceMappingAutoSyncDue(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping, now int64) bool {
+	resolution := resolveUpstreamSourceRule(config, mapping)
+	if !resolution.SyncEligible || !resolution.AutoSyncEnabled || resolution.AutoSyncIntervalMinutes <= 0 {
+		return false
+	}
+	if mapping == nil || mapping.LastSyncedAt == 0 {
+		return true
+	}
+	return now-mapping.LastSyncedAt >= int64(resolution.AutoSyncIntervalMinutes)*60
+}
+
+func upstreamSourceRuleAutoSyncEnabled(config upstreamSourceSyncConfig, rule dto.UpstreamSourceLocalGroupRule) bool {
+	enabled := config.AutoSyncEnabled
+	if rule.AutoSync != nil && rule.AutoSync.Enabled != nil {
+		enabled = *rule.AutoSync.Enabled
+	}
+	return enabled
+}
+
+func upstreamSourceRuleAutoSyncInterval(config upstreamSourceSyncConfig, rule dto.UpstreamSourceLocalGroupRule) int {
+	interval := 0
+	if config.AutoSyncEnabled {
+		interval = config.AutoSyncIntervalMinutes
+	}
+	if rule.AutoSync != nil && rule.AutoSync.IntervalMinutes > 0 {
+		interval = normalizeUpstreamSourceRuleInterval(rule.AutoSync.IntervalMinutes)
+	}
+	if !upstreamSourceRuleAutoSyncEnabled(config, rule) {
+		return 0
+	}
+	return interval
 }
