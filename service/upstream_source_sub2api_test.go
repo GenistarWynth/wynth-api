@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -178,6 +180,63 @@ func TestSub2APIAdapterCreateKeyReturnsIDAndFullKey(t *testing.T) {
 	assert.Equal(t, "sk-full-generated", key.Key)
 	assert.Equal(t, "generated channel", key.Name)
 	assert.Equal(t, "10", key.GroupID)
+}
+
+func TestSub2APIAdapterAddsDefaultRequestDeadline(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	adapter := Sub2APIAdapter{Client: &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			if !ok {
+				return nil, errors.New("request context missing deadline")
+			}
+			if time.Until(deadline) <= 0 {
+				return nil, errors.New("request context deadline already expired")
+			}
+			return sub2APITestResponse(t, map[string]any{
+				"code":    0,
+				"message": "success",
+				"data":    map[string]any{"id": 123, "key": "sk-generated", "name": "generated channel", "group_id": 10},
+			}), nil
+		}),
+	}}
+	source := newSub2APITestSource(t, "https://example.com", validTokenAuthConfig())
+
+	key, err := adapter.CreateKey(context.Background(), source, "10", "generated channel")
+
+	require.NoError(t, err)
+	assert.Equal(t, "123", key.ID)
+}
+
+func TestSub2APIAdapterPreservesCallerRequestDeadline(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	expectedDeadline := time.Now().Add(250 * time.Millisecond)
+	adapter := Sub2APIAdapter{Client: &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			if !ok {
+				return nil, errors.New("request context missing deadline")
+			}
+			if !deadline.Equal(expectedDeadline) {
+				return nil, fmt.Errorf("deadline changed: got %s want %s", deadline, expectedDeadline)
+			}
+			return sub2APITestResponse(t, map[string]any{
+				"code":    0,
+				"message": "success",
+				"data":    map[string]any{"id": 123, "key": "sk-generated", "name": "generated channel", "group_id": 10},
+			}), nil
+		}),
+	}}
+	source := newSub2APITestSource(t, "https://example.com", validTokenAuthConfig())
+	ctx, cancel := context.WithDeadline(context.Background(), expectedDeadline)
+	defer cancel()
+
+	key, err := adapter.CreateKey(ctx, source, "10", "generated channel")
+
+	require.NoError(t, err)
+	assert.Equal(t, "123", key.ID)
 }
 
 func TestSub2APIAdapterUpdateKeySendsPutAndNormalizesResponse(t *testing.T) {
@@ -356,6 +415,23 @@ func writeSub2APITestJSON(t *testing.T, w http.ResponseWriter, payload any) {
 	require.NoError(t, err)
 	_, err = w.Write(data)
 	require.NoError(t, err)
+}
+
+type roundTripFunc func(req *http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func sub2APITestResponse(t *testing.T, payload any) *http.Response {
+	t.Helper()
+	data, err := common.Marshal(payload)
+	require.NoError(t, err)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(data)),
+	}
 }
 
 func newSub2APITestSource(t *testing.T, baseURL string, authConfig map[string]any) *model.UpstreamSource {

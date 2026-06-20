@@ -21,6 +21,7 @@ import (
 var ErrUpstreamSource2FARequired = errors.New("upstream source requires 2FA")
 
 const sub2APIResponseBodyLimitBytes int64 = 1 << 20
+const defaultSub2APIRequestTimeout = 30 * time.Second
 
 type Sub2APIAdapter struct {
 	Client *http.Client
@@ -247,6 +248,13 @@ func parseSub2APIAuthConfig(source *model.UpstreamSource) (sub2APIAuthConfig, er
 func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source *model.UpstreamSource, method string, endpoint string, query url.Values, payload any, token string) (T, error) {
 	var zero T
 
+	requestCtx := ctx
+	if _, ok := requestCtx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		requestCtx, cancel = context.WithTimeout(requestCtx, defaultSub2APIRequestTimeout)
+		defer cancel()
+	}
+
 	requestURL, err := buildSub2APIURL(source, endpoint, query)
 	if err != nil {
 		return zero, err
@@ -264,7 +272,7 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 		body = bytes.NewReader(data)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, requestURL, body)
+	req, err := http.NewRequestWithContext(requestCtx, method, requestURL, body)
 	if err != nil {
 		return zero, err
 	}
