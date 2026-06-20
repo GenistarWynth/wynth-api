@@ -16,6 +16,10 @@ import (
 
 const fetchModelsResponseBodyLimitBytes int64 = 10 << 20
 
+type FetchChannelUpstreamModelIDsOptions struct {
+	AllowPrivateIP bool
+}
+
 type fetchOpenAIModelsResponse struct {
 	Data []fetchOpenAIModel `json:"data"`
 }
@@ -42,6 +46,10 @@ type fetchOllamaModel struct {
 }
 
 func FetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
+	return FetchChannelUpstreamModelIDsWithOptions(channel, FetchChannelUpstreamModelIDsOptions{})
+}
+
+func FetchChannelUpstreamModelIDsWithOptions(channel *model.Channel, options FetchChannelUpstreamModelIDsOptions) ([]string, error) {
 	if channel == nil {
 		return nil, fmt.Errorf("channel is required")
 	}
@@ -53,7 +61,7 @@ func FetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 
 	if channel.Type == constant.ChannelTypeOllama {
 		key := strings.TrimSpace(strings.Split(channel.Key, "\n")[0])
-		models, err := fetchOllamaModels(baseURL, key, channel.GetSetting().Proxy)
+		models, err := fetchOllamaModels(baseURL, key, channel.GetSetting().Proxy, options)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +77,7 @@ func FetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		if apiErr != nil {
 			return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
 		}
-		models, err := fetchGeminiModels(baseURL, strings.TrimSpace(key), channel.GetSetting().Proxy)
+		models, err := fetchGeminiModels(baseURL, strings.TrimSpace(key), channel.GetSetting().Proxy, options)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +96,7 @@ func FetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		return nil, err
 	}
 
-	body, err := fetchModelsResponseBody(http.MethodGet, url, channel.GetSetting().Proxy, headers)
+	body, err := fetchModelsResponseBody(http.MethodGet, url, channel.GetSetting().Proxy, headers, options)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +208,7 @@ func normalizeFetchedModelNames(models []string) []string {
 	return normalized
 }
 
-func fetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
+func fetchGeminiModels(baseURL, apiKey, proxyURL string, options FetchChannelUpstreamModelIDsOptions) ([]string, error) {
 	allModels := make([]string, 0)
 	nextPageToken := ""
 	maxPages := 100
@@ -213,7 +221,7 @@ func fetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
 
 		headers := http.Header{}
 		headers.Set("x-goog-api-key", apiKey)
-		body, err := fetchModelsResponseBody(http.MethodGet, url, proxyURL, headers)
+		body, err := fetchModelsResponseBody(http.MethodGet, url, proxyURL, headers, options)
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +248,7 @@ func fetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
 	return allModels, nil
 }
 
-func fetchOllamaModels(baseURL, apiKey, proxyURL string) ([]fetchOllamaModel, error) {
+func fetchOllamaModels(baseURL, apiKey, proxyURL string, options FetchChannelUpstreamModelIDsOptions) ([]fetchOllamaModel, error) {
 	url := fmt.Sprintf("%s/api/tags", strings.TrimRight(baseURL, "/"))
 
 	headers := http.Header{}
@@ -248,7 +256,7 @@ func fetchOllamaModels(baseURL, apiKey, proxyURL string) ([]fetchOllamaModel, er
 		headers.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	body, err := fetchModelsResponseBody(http.MethodGet, url, proxyURL, headers)
+	body, err := fetchModelsResponseBody(http.MethodGet, url, proxyURL, headers, options)
 	if err != nil {
 		return nil, err
 	}
@@ -260,8 +268,8 @@ func fetchOllamaModels(baseURL, apiKey, proxyURL string) ([]fetchOllamaModel, er
 	return tagsResponse.Models, nil
 }
 
-func fetchModelsResponseBody(method, requestURL, proxyURL string, headers http.Header) ([]byte, error) {
-	if err := validateFetchModelsURL(requestURL); err != nil {
+func fetchModelsResponseBody(method, requestURL, proxyURL string, headers http.Header, options FetchChannelUpstreamModelIDsOptions) ([]byte, error) {
+	if err := validateFetchModelsURL(requestURL, options); err != nil {
 		return nil, err
 	}
 
@@ -269,6 +277,7 @@ func fetchModelsResponseBody(method, requestURL, proxyURL string, headers http.H
 	if err != nil {
 		return nil, err
 	}
+	client = fetchModelsHTTPClientWithOptions(client, options)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -302,10 +311,32 @@ func fetchModelsResponseBody(method, requestURL, proxyURL string, headers http.H
 	return body, nil
 }
 
-func validateFetchModelsURL(requestURL string) error {
+func validateFetchModelsURL(requestURL string, options FetchChannelUpstreamModelIDsOptions) error {
 	fetchSetting := system_setting.GetFetchSetting()
-	if err := common.ValidateURLWithFetchSetting(requestURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
+	allowPrivateIP := fetchSetting.AllowPrivateIp || options.AllowPrivateIP
+	if err := common.ValidateURLWithFetchSetting(requestURL, fetchSetting.EnableSSRFProtection, allowPrivateIP, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		return fmt.Errorf("request reject: %v", err)
 	}
 	return nil
+}
+
+func fetchModelsHTTPClientWithOptions(client *http.Client, options FetchChannelUpstreamModelIDsOptions) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if !options.AllowPrivateIP {
+		return client
+	}
+	wrapped := *client
+	wrapped.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		urlStr := req.URL.String()
+		if err := validateFetchModelsURL(urlStr, options); err != nil {
+			return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &wrapped
 }

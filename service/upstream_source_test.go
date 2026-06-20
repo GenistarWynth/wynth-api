@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -699,6 +701,47 @@ func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	var abilityCount int64
 	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&abilityCount).Error)
 	assert.Equal(t, int64(4), abilityCount)
+}
+
+func TestSyncUpstreamSourceFetchesModelsFromAllowedPrivateRelayBaseURL(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, false)
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/models", r.URL.Path)
+		assert.Equal(t, "Bearer sk-secret-10", r.Header.Get("Authorization"))
+		writeUpstreamModelFetchTestJSON(t, w, map[string]any{
+			"data": []map[string]string{{"id": "gpt-4o"}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	source := createSyncTestSource(t, map[string]any{
+		"allow_private_ip": true,
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]any{
+		"base_url":       server.URL,
+		"relay_base_url": server.URL,
+	}).Error)
+	rate := 1.0
+	createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		Now: func() int64 { return 1010 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, requestCount)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Equal(t, "gpt-4o", channel.Models)
 }
 
 func TestSyncUpstreamSourceAcceptsNumericPrivateIPFlagFromExistingConfig(t *testing.T) {

@@ -93,11 +93,15 @@ func (s *UpstreamSourceService) adapterFactory() func(sourceType string) (Upstre
 	return DefaultUpstreamSourceAdapterFactory
 }
 
-func (s *UpstreamSourceService) fetchModels() func(channel *model.Channel) ([]string, error) {
+func (s *UpstreamSourceService) fetchModels(config upstreamSourceSyncConfig) func(channel *model.Channel) ([]string, error) {
 	if s != nil && s.FetchModels != nil {
 		return s.FetchModels
 	}
-	return FetchChannelUpstreamModelIDs
+	return func(channel *model.Channel) ([]string, error) {
+		return FetchChannelUpstreamModelIDsWithOptions(channel, FetchChannelUpstreamModelIDsOptions{
+			AllowPrivateIP: bool(config.AllowPrivateIP),
+		})
+	}
 }
 
 func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.UpstreamSourceSyncResult, error) {
@@ -381,7 +385,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		mergeGeneratedChannelOtherSettings(channel, existingChannel, config)
 	}
 
-	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(), channel, config)
+	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(config), channel, config)
 	if modelErr != nil {
 		result.Error = SanitizeUpstreamSourceError(modelErr)
 		channel.Models = ""
