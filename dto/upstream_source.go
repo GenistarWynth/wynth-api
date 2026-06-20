@@ -15,6 +15,7 @@ type UpstreamSourceCreateRequest struct {
 	EnableMonitor          bool   `json:"enable_monitor"`
 	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
 	AutoSyncModels         bool   `json:"auto_sync_models"`
+	AllowPrivateIP         bool   `json:"allow_private_ip"`
 }
 
 type UpstreamSourceUpdateRequest struct {
@@ -30,6 +31,7 @@ type UpstreamSourceUpdateRequest struct {
 	EnableMonitor          bool   `json:"enable_monitor"`
 	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
 	AutoSyncModels         bool   `json:"auto_sync_models"`
+	AllowPrivateIP         bool   `json:"allow_private_ip"`
 }
 
 type UpstreamSourceCredentialsUpdateRequest struct {
@@ -52,6 +54,7 @@ type UpstreamSourceResponse struct {
 	EnableMonitor          bool   `json:"enable_monitor"`
 	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
 	AutoSyncModels         bool   `json:"auto_sync_models"`
+	AllowPrivateIP         bool   `json:"allow_private_ip"`
 	MaskedEmail            string `json:"masked_email"`
 	HasCredentials         bool   `json:"has_credentials"`
 	LastDiscoveryTime      int64  `json:"last_discovery_time"`

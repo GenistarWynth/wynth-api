@@ -267,7 +267,7 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 	if err != nil {
 		return zero, err
 	}
-	if err := validateUpstreamSourceURL(requestURL); err != nil {
+	if err := validateUpstreamSourceURL(source, requestURL); err != nil {
 		return zero, err
 	}
 
@@ -292,7 +292,7 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := sub2APIHTTPClient(adapter).Do(req)
+	resp, err := sub2APIHTTPClient(adapter, source).Do(req)
 	if err != nil {
 		return zero, fmt.Errorf("%s %s failed: %s", method, requestURL, SanitizeUpstreamSourceError(err))
 	}
@@ -343,37 +343,49 @@ func buildSub2APIURL(source *model.UpstreamSource, endpoint string, query url.Va
 	return parsed.String(), nil
 }
 
-func validateUpstreamSourceURL(requestURL string) error {
+func validateUpstreamSourceURL(source *model.UpstreamSource, requestURL string) error {
 	fetchSetting := system_setting.GetFetchSetting()
-	if err := common.ValidateURLWithFetchSetting(requestURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
+	allowPrivateIP := fetchSetting.AllowPrivateIp
+	if source != nil {
+		if config, err := parseUpstreamSourceSyncConfig(source.SyncConfig); err == nil && config.AllowPrivateIP {
+			allowPrivateIP = true
+		}
+	}
+	if err := common.ValidateURLWithFetchSetting(requestURL, fetchSetting.EnableSSRFProtection, allowPrivateIP, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		return fmt.Errorf("request reject: %v", err)
 	}
 	return nil
 }
 
-func sub2APIHTTPClient(adapter *Sub2APIAdapter) *http.Client {
+func sub2APIHTTPClient(adapter *Sub2APIAdapter, source *model.UpstreamSource) *http.Client {
 	var client *http.Client
+	delegateExistingRedirect := false
 	if adapter != nil && adapter.Client != nil {
 		client = adapter.Client
+		delegateExistingRedirect = true
 	} else if defaultClient := GetHttpClient(); defaultClient != nil {
 		client = defaultClient
 	} else {
 		client = http.DefaultClient
 	}
-	return sub2APIClientWithRedirectValidation(client)
+	return sub2APIClientWithRedirectValidation(client, source, delegateExistingRedirect)
 }
 
-func sub2APIClientWithRedirectValidation(client *http.Client) *http.Client {
+func sub2APIClientWithRedirectValidation(client *http.Client, source *model.UpstreamSource, delegateExistingRedirect bool) *http.Client {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	wrapped := *client
 	existingCheckRedirect := client.CheckRedirect
 	wrapped.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if err := checkRedirect(req, via); err != nil {
-			return err
+		urlStr := req.URL.String()
+		if err := validateUpstreamSourceURL(source, urlStr); err != nil {
+			return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
 		}
-		if existingCheckRedirect != nil {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if delegateExistingRedirect && existingCheckRedirect != nil {
 			return existingCheckRedirect(req, via)
 		}
 		return nil

@@ -34,6 +34,7 @@ type upstreamSourceControllerSyncConfig struct {
 	EnableMonitor          bool   `json:"enable_monitor"`
 	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
 	AutoSyncModels         bool   `json:"auto_sync_models"`
+	AllowPrivateIP         bool   `json:"allow_private_ip"`
 }
 
 func ListUpstreamSources(c *gin.Context) {
@@ -282,6 +283,7 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 		EnableMonitor:          req.EnableMonitor,
 		MonitorIntervalMinutes: req.MonitorIntervalMinutes,
 		AutoSyncModels:         req.AutoSyncModels,
+		AllowPrivateIP:         req.AllowPrivateIP,
 	})
 	if err != nil {
 		return model.UpstreamSource{}, err
@@ -311,6 +313,7 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 		EnableMonitor:          req.EnableMonitor,
 		MonitorIntervalMinutes: req.MonitorIntervalMinutes,
 		AutoSyncModels:         req.AutoSyncModels,
+		AllowPrivateIP:         req.AllowPrivateIP,
 	})
 	if err != nil {
 		return nil, err
@@ -389,6 +392,7 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		EnableMonitor:          sync.EnableMonitor,
 		MonitorIntervalMinutes: sync.MonitorIntervalMinutes,
 		AutoSyncModels:         sync.AutoSyncModels,
+		AllowPrivateIP:         sync.AllowPrivateIP,
 		MaskedEmail:            common.MaskEmail(auth.Email),
 		HasCredentials:         upstreamSourceHasCredentials(auth),
 		LastDiscoveryTime:      source.LastDiscoveryTime,

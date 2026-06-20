@@ -175,6 +175,7 @@ function defaultSourceFormValues(
     monitor_interval_minutes:
       source?.monitor_interval_minutes || DEFAULT_MONITOR_INTERVAL_MINUTES,
     auto_sync_models: source?.auto_sync_models ?? true,
+    allow_private_ip: source?.allow_private_ip ?? false,
   }
 }
 
@@ -196,6 +197,7 @@ function buildCreatePayload(
     enable_monitor: values.enable_monitor,
     monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
     auto_sync_models: values.auto_sync_models,
+    allow_private_ip: values.allow_private_ip,
   }
 }
 
@@ -216,6 +218,7 @@ function buildUpdatePayload(
     enable_monitor: values.enable_monitor,
     monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
     auto_sync_models: values.auto_sync_models,
+    allow_private_ip: values.allow_private_ip,
   }
 }
 
@@ -356,6 +359,15 @@ function SourceSettingBadges(props: { source: UpstreamSource }) {
       <StatusBadge
         label={monitorLabel}
         variant={props.source.enable_monitor ? 'success' : 'neutral'}
+        copyable={false}
+      />
+      <StatusBadge
+        label={
+          props.source.allow_private_ip
+            ? t('Private IP Allowed')
+            : t('Private IP Blocked')
+        }
+        variant={props.source.allow_private_ip ? 'warning' : 'neutral'}
         copyable={false}
       />
     </div>
@@ -923,6 +935,13 @@ function SourceFormSheet(props: {
               checked={form.auto_sync_models}
               onCheckedChange={(checked) =>
                 setField('auto_sync_models', checked)
+              }
+            />
+            <SwitchRow
+              label={t('Allow Private IP / Fake IP')}
+              checked={form.allow_private_ip}
+              onCheckedChange={(checked) =>
+                setField('allow_private_ip', checked)
               }
             />
           </SideDrawerSection>

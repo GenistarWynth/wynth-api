@@ -60,6 +60,7 @@ export type UpstreamSource = {
   enable_monitor: boolean
   monitor_interval_minutes: number
   auto_sync_models: boolean
+  allow_private_ip: boolean
   masked_email: string
   has_credentials: boolean
   last_discovery_time: number
@@ -108,6 +109,7 @@ export type UpstreamSourceFormValues = {
   enable_monitor: boolean
   monitor_interval_minutes: number
   auto_sync_models: boolean
+  allow_private_ip: boolean
 }
 
 export type UpstreamSourceCreateRequest = Omit<

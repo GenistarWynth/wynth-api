@@ -245,6 +245,7 @@ func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) 
 		EnableMonitor:          true,
 		MonitorIntervalMinutes: 5,
 		AutoSyncModels:         true,
+		AllowPrivateIP:         true,
 	}
 	createResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", createRequest, true)
 	require.True(t, createResponse.Success, createResponse.Message)
@@ -258,12 +259,14 @@ func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) 
 		EnableMonitor:          false,
 		MonitorIntervalMinutes: 0,
 		AutoSyncModels:         false,
+		AllowPrivateIP:         false,
 	}
 	updateResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(createResponse.Data.Id), updateRequest, true)
 	require.True(t, updateResponse.Success, updateResponse.Message)
 	assert.False(t, updateResponse.Data.EnableMonitor)
 	assert.Equal(t, 0, updateResponse.Data.MonitorIntervalMinutes)
 	assert.False(t, updateResponse.Data.AutoSyncModels)
+	assert.False(t, updateResponse.Data.AllowPrivateIP)
 
 	getResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(createResponse.Data.Id), nil, true)
 	require.True(t, getResponse.Success, getResponse.Message)
@@ -271,6 +274,7 @@ func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) 
 	assert.Equal(t, int64(0), getResponse.Data.DefaultPriority)
 	assert.Equal(t, uint(0), getResponse.Data.DefaultWeight)
 	assert.False(t, getResponse.Data.AutoSyncModels)
+	assert.False(t, getResponse.Data.AllowPrivateIP)
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, createResponse.Data.Id).Error)
@@ -278,6 +282,7 @@ func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) 
 	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
 	assert.Equal(t, false, syncConfig["enable_monitor"])
 	assert.Equal(t, false, syncConfig["auto_sync_models"])
+	assert.Equal(t, false, syncConfig["allow_private_ip"])
 }
 
 func TestUpstreamSourceAPICredentialsUpdateClearsCachedTokens(t *testing.T) {

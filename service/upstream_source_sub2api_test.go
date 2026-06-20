@@ -386,6 +386,38 @@ func TestSub2APIAdapterRejectsBlockedURL(t *testing.T) {
 	assert.Contains(t, err.Error(), "request reject")
 }
 
+func TestSub2APIAdapterAllowsPrivateURLWhenSourceAllowsPrivateIP(t *testing.T) {
+	withSub2APIFetchSetting(t, false)
+
+	source := newSub2APITestSource(t, "http://127.0.0.1:8080", validTokenAuthConfig())
+	source.SyncConfig = `{"allow_private_ip":true}`
+	adapter := Sub2APIAdapter{Client: &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/api/v1/groups/available":
+				return sub2APITestResponse(t, map[string]any{
+					"code":    0,
+					"message": "success",
+					"data":    []map[string]any{},
+				}), nil
+			case "/api/v1/groups/rates":
+				return sub2APITestResponse(t, map[string]any{
+					"code":    0,
+					"message": "success",
+					"data":    map[string]float64{},
+				}), nil
+			default:
+				return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+			}
+		}),
+	}}
+
+	groups, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.NoError(t, err)
+	assert.Empty(t, groups)
+}
+
 func TestSub2APIAdapterClientValidatesRedirects(t *testing.T) {
 	withSub2APIFetchSetting(t, false)
 
@@ -399,7 +431,8 @@ func TestSub2APIAdapterClientValidatesRedirects(t *testing.T) {
 			return nil
 		},
 	}
-	wrapped := sub2APIHTTPClient(&Sub2APIAdapter{Client: baseClient})
+	source := newSub2APITestSource(t, "https://example.com", validTokenAuthConfig())
+	wrapped := sub2APIHTTPClient(&Sub2APIAdapter{Client: baseClient}, source)
 	require.NotNil(t, wrapped.CheckRedirect)
 	assert.Same(t, transport, wrapped.Transport)
 	assert.Equal(t, baseClient.Timeout, wrapped.Timeout)
@@ -410,6 +443,48 @@ func TestSub2APIAdapterClientValidatesRedirects(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "blocked")
 	assert.False(t, delegated)
+}
+
+func TestSub2APIAdapterClientAllowsPrivateRedirectWhenSourceAllowsPrivateIP(t *testing.T) {
+	withSub2APIFetchSetting(t, false)
+
+	delegated := false
+	baseClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			delegated = true
+			return nil
+		},
+	}
+	source := newSub2APITestSource(t, "https://example.com", validTokenAuthConfig())
+	source.SyncConfig = `{"allow_private_ip":true}`
+	wrapped := sub2APIHTTPClient(&Sub2APIAdapter{Client: baseClient}, source)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/private", nil)
+	err := wrapped.CheckRedirect(req, nil)
+
+	require.NoError(t, err)
+	assert.True(t, delegated)
+}
+
+func TestSub2APIAdapterDefaultRedirectValidationSkipsGlobalPrivateIPBlockWhenSourceAllowsPrivateIP(t *testing.T) {
+	withSub2APIFetchSetting(t, false)
+
+	globalRedirectCalled := false
+	baseClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			globalRedirectCalled = true
+			return errors.New("global private IP block")
+		},
+	}
+	source := newSub2APITestSource(t, "https://example.com", validTokenAuthConfig())
+	source.SyncConfig = `{"allow_private_ip":true}`
+	wrapped := sub2APIClientWithRedirectValidation(baseClient, source, false)
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/private", nil)
+	err := wrapped.CheckRedirect(req, nil)
+
+	require.NoError(t, err)
+	assert.False(t, globalRedirectCalled)
 }
 
 func TestSub2APIAdapterSanitizesAndCapsErrors(t *testing.T) {

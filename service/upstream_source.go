@@ -236,6 +236,7 @@ type upstreamSourceSyncConfig struct {
 	EnableMonitor          bool   `json:"enable_monitor"`
 	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
 	AutoSyncModels         *bool  `json:"auto_sync_models"`
+	AllowPrivateIP         bool   `json:"allow_private_ip"`
 }
 
 func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {
