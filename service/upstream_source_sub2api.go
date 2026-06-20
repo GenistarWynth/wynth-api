@@ -52,6 +52,7 @@ type sub2APILoginData struct {
 type sub2APIGroup struct {
 	ID             *int64   `json:"id"`
 	Name           string   `json:"name"`
+	Description    string   `json:"description"`
 	Platform       string   `json:"platform"`
 	Status         string   `json:"status"`
 	RateMultiplier *float64 `json:"rate_multiplier"`
@@ -100,6 +101,7 @@ func (a Sub2APIAdapter) DiscoverGroups(ctx context.Context, source *model.Upstre
 		result = append(result, UpstreamGroup{
 			ID:                      id,
 			Name:                    group.Name,
+			Description:             group.Description,
 			Platform:                group.Platform,
 			Status:                  group.Status,
 			RateMultiplier:          group.RateMultiplier,

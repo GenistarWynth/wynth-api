@@ -27,14 +27,18 @@ type upstreamSourceAuthConfig struct {
 // Defaults are seeded before unmarshaling so an absent auto_sync_models key
 // preserves the service default of true while explicit false still persists.
 type upstreamSourceControllerSyncConfig struct {
-	LocalGroup             string              `json:"local_group"`
-	ChannelType            int                 `json:"channel_type"`
-	DefaultPriority        int64               `json:"default_priority"`
-	DefaultWeight          uint                `json:"default_weight"`
-	EnableMonitor          bool                `json:"enable_monitor"`
-	MonitorIntervalMinutes int                 `json:"monitor_interval_minutes"`
-	AutoSyncModels         bool                `json:"auto_sync_models"`
-	AllowPrivateIP         common.FlexibleBool `json:"allow_private_ip"`
+	LocalGroup              string                             `json:"local_group"`
+	ChannelType             int                                `json:"channel_type"`
+	DefaultPriority         int64                              `json:"default_priority"`
+	DefaultWeight           uint                               `json:"default_weight"`
+	EnableMonitor           bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes  int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels          bool                               `json:"auto_sync_models"`
+	AllowPrivateIP          common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled         bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes int                                `json:"auto_sync_interval_minutes"`
+	DefaultLocalGroup       string                             `json:"default_local_group"`
+	LocalGroupRules         []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 func ListUpstreamSources(c *gin.Context) {
@@ -276,14 +280,18 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 		return model.UpstreamSource{}, err
 	}
 	syncConfig, err := marshalUpstreamSourceSyncConfig(upstreamSourceControllerSyncConfig{
-		LocalGroup:             req.LocalGroup,
-		ChannelType:            req.ChannelType,
-		DefaultPriority:        req.DefaultPriority,
-		DefaultWeight:          req.DefaultWeight,
-		EnableMonitor:          req.EnableMonitor,
-		MonitorIntervalMinutes: req.MonitorIntervalMinutes,
-		AutoSyncModels:         req.AutoSyncModels,
-		AllowPrivateIP:         common.FlexibleBool(req.AllowPrivateIP),
+		LocalGroup:              req.LocalGroup,
+		ChannelType:             req.ChannelType,
+		DefaultPriority:         req.DefaultPriority,
+		DefaultWeight:           req.DefaultWeight,
+		EnableMonitor:           req.EnableMonitor,
+		MonitorIntervalMinutes:  req.MonitorIntervalMinutes,
+		AutoSyncModels:          req.AutoSyncModels,
+		AllowPrivateIP:          common.FlexibleBool(req.AllowPrivateIP),
+		AutoSyncEnabled:         req.AutoSyncEnabled,
+		AutoSyncIntervalMinutes: req.AutoSyncIntervalMinutes,
+		DefaultLocalGroup:       req.DefaultLocalGroup,
+		LocalGroupRules:         req.LocalGroupRules,
 	})
 	if err != nil {
 		return model.UpstreamSource{}, err
@@ -306,14 +314,18 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 
 func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]interface{}, error) {
 	syncConfig, err := marshalUpstreamSourceSyncConfig(upstreamSourceControllerSyncConfig{
-		LocalGroup:             req.LocalGroup,
-		ChannelType:            req.ChannelType,
-		DefaultPriority:        req.DefaultPriority,
-		DefaultWeight:          req.DefaultWeight,
-		EnableMonitor:          req.EnableMonitor,
-		MonitorIntervalMinutes: req.MonitorIntervalMinutes,
-		AutoSyncModels:         req.AutoSyncModels,
-		AllowPrivateIP:         common.FlexibleBool(req.AllowPrivateIP),
+		LocalGroup:              req.LocalGroup,
+		ChannelType:             req.ChannelType,
+		DefaultPriority:         req.DefaultPriority,
+		DefaultWeight:           req.DefaultWeight,
+		EnableMonitor:           req.EnableMonitor,
+		MonitorIntervalMinutes:  req.MonitorIntervalMinutes,
+		AutoSyncModels:          req.AutoSyncModels,
+		AllowPrivateIP:          common.FlexibleBool(req.AllowPrivateIP),
+		AutoSyncEnabled:         req.AutoSyncEnabled,
+		AutoSyncIntervalMinutes: req.AutoSyncIntervalMinutes,
+		DefaultLocalGroup:       req.DefaultLocalGroup,
+		LocalGroupRules:         req.LocalGroupRules,
 	})
 	if err != nil {
 		return nil, err
@@ -378,31 +390,35 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 	auth := parseUpstreamSourceAuthConfig(source.AuthConfig)
 	sync := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	return dto.UpstreamSourceResponse{
-		Id:                     source.Id,
-		Name:                   source.Name,
-		Type:                   source.Type,
-		Status:                 source.Status,
-		BaseURL:                source.BaseURL,
-		AdminAPIBasePath:       source.AdminAPIBasePath,
-		RelayBaseURL:           source.RelayBaseURL,
-		LocalGroup:             sync.LocalGroup,
-		ChannelType:            sync.ChannelType,
-		DefaultPriority:        sync.DefaultPriority,
-		DefaultWeight:          sync.DefaultWeight,
-		EnableMonitor:          sync.EnableMonitor,
-		MonitorIntervalMinutes: sync.MonitorIntervalMinutes,
-		AutoSyncModels:         sync.AutoSyncModels,
-		AllowPrivateIP:         bool(sync.AllowPrivateIP),
-		MaskedEmail:            common.MaskEmail(auth.Email),
-		HasCredentials:         upstreamSourceHasCredentials(auth),
-		LastDiscoveryTime:      source.LastDiscoveryTime,
-		LastDiscoveryStatus:    source.LastDiscoveryStatus,
-		LastDiscoveryError:     sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
-		LastSyncTime:           source.LastSyncTime,
-		LastSyncStatus:         source.LastSyncStatus,
-		LastSyncError:          sanitizeUpstreamSourceResponseError(source.LastSyncError),
-		CreatedTime:            source.CreatedTime,
-		UpdatedTime:            source.UpdatedTime,
+		Id:                      source.Id,
+		Name:                    source.Name,
+		Type:                    source.Type,
+		Status:                  source.Status,
+		BaseURL:                 source.BaseURL,
+		AdminAPIBasePath:        source.AdminAPIBasePath,
+		RelayBaseURL:            source.RelayBaseURL,
+		LocalGroup:              sync.LocalGroup,
+		ChannelType:             sync.ChannelType,
+		DefaultPriority:         sync.DefaultPriority,
+		DefaultWeight:           sync.DefaultWeight,
+		EnableMonitor:           sync.EnableMonitor,
+		MonitorIntervalMinutes:  sync.MonitorIntervalMinutes,
+		AutoSyncModels:          sync.AutoSyncModels,
+		AllowPrivateIP:          bool(sync.AllowPrivateIP),
+		AutoSyncEnabled:         sync.AutoSyncEnabled,
+		AutoSyncIntervalMinutes: sync.AutoSyncIntervalMinutes,
+		DefaultLocalGroup:       sync.DefaultLocalGroup,
+		LocalGroupRules:         sync.LocalGroupRules,
+		MaskedEmail:             common.MaskEmail(auth.Email),
+		HasCredentials:          upstreamSourceHasCredentials(auth),
+		LastDiscoveryTime:       source.LastDiscoveryTime,
+		LastDiscoveryStatus:     source.LastDiscoveryStatus,
+		LastDiscoveryError:      sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
+		LastSyncTime:            source.LastSyncTime,
+		LastSyncStatus:          source.LastSyncStatus,
+		LastSyncError:           sanitizeUpstreamSourceResponseError(source.LastSyncError),
+		CreatedTime:             source.CreatedTime,
+		UpdatedTime:             source.UpdatedTime,
 	}
 }
 
@@ -426,14 +442,28 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	if config.ChannelType == 0 {
 		config.ChannelType = constant.ChannelTypeOpenAI
 	}
+	if strings.TrimSpace(config.DefaultLocalGroup) == "" {
+		config.DefaultLocalGroup = config.LocalGroup
+	} else {
+		config.DefaultLocalGroup = strings.TrimSpace(config.DefaultLocalGroup)
+	}
+	if config.AutoSyncEnabled {
+		if config.AutoSyncIntervalMinutes < 5 {
+			config.AutoSyncIntervalMinutes = 5
+		}
+	} else {
+		config.AutoSyncIntervalMinutes = 0
+	}
+	config.LocalGroupRules = service.NormalizeUpstreamSourceLocalGroupRulesForConfig(config.LocalGroupRules)
 	return config
 }
 
 func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncConfig {
 	return upstreamSourceControllerSyncConfig{
-		LocalGroup:     "default",
-		ChannelType:    constant.ChannelTypeOpenAI,
-		AutoSyncModels: true,
+		LocalGroup:        "default",
+		ChannelType:       constant.ChannelTypeOpenAI,
+		AutoSyncModels:    true,
+		DefaultLocalGroup: "default",
 	}
 }
 
@@ -476,22 +506,23 @@ func listUpstreamSourceMappings(sourceID int) ([]dto.UpstreamSourceMappingRespon
 
 func upstreamSourceMappingDTO(mapping model.UpstreamSourceChannelMapping) dto.UpstreamSourceMappingResponse {
 	return dto.UpstreamSourceMappingResponse{
-		Id:                      mapping.Id,
-		SourceID:                mapping.SourceID,
-		SyncEnabled:             mapping.SyncEnabled,
-		UpstreamGroupID:         mapping.UpstreamGroupID,
-		UpstreamGroupName:       mapping.UpstreamGroupName,
-		UpstreamPlatform:        mapping.UpstreamPlatform,
-		DiscoveryStatus:         mapping.DiscoveryStatus,
-		UpstreamStatus:          mapping.UpstreamStatus,
-		UpstreamRateMultiplier:  mapping.UpstreamRateMultiplier,
-		EffectiveRateMultiplier: mapping.EffectiveRateMultiplier,
-		HasUpstreamKey:          mapping.UpstreamKeyID != "",
-		LocalChannelID:          mapping.LocalChannelID,
-		SyncStatus:              mapping.SyncStatus,
-		LastError:               sanitizeUpstreamSourceResponseError(mapping.LastError),
-		LastDiscoveredAt:        mapping.LastDiscoveredAt,
-		LastSyncedAt:            mapping.LastSyncedAt,
+		Id:                       mapping.Id,
+		SourceID:                 mapping.SourceID,
+		SyncEnabled:              mapping.SyncEnabled,
+		UpstreamGroupID:          mapping.UpstreamGroupID,
+		UpstreamGroupName:        mapping.UpstreamGroupName,
+		UpstreamGroupDescription: mapping.UpstreamGroupDescription,
+		UpstreamPlatform:         mapping.UpstreamPlatform,
+		DiscoveryStatus:          mapping.DiscoveryStatus,
+		UpstreamStatus:           mapping.UpstreamStatus,
+		UpstreamRateMultiplier:   mapping.UpstreamRateMultiplier,
+		EffectiveRateMultiplier:  mapping.EffectiveRateMultiplier,
+		HasUpstreamKey:           mapping.UpstreamKeyID != "",
+		LocalChannelID:           mapping.LocalChannelID,
+		SyncStatus:               mapping.SyncStatus,
+		LastError:                sanitizeUpstreamSourceResponseError(mapping.LastError),
+		LastDiscoveredAt:         mapping.LastDiscoveredAt,
+		LastSyncedAt:             mapping.LastSyncedAt,
 	}
 }
 

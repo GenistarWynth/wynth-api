@@ -371,7 +371,7 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&stale).Error)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, stale.DiscoveryStatus)
 	assert.Equal(t, int64(333), stale.LastDiscoveredAt)
-	assert.True(t, stale.SyncEnabled)
+	assert.False(t, stale.SyncEnabled)
 	assert.Equal(t, "key-20", stale.UpstreamKeyID)
 	assert.Equal(t, 88, stale.LocalChannelID)
 	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, stale.SyncStatus)
@@ -380,10 +380,60 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "30").First(&staleFromInvalid).Error)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, staleFromInvalid.DiscoveryStatus)
 	assert.Equal(t, int64(333), staleFromInvalid.LastDiscoveredAt)
-	assert.True(t, staleFromInvalid.SyncEnabled)
+	assert.False(t, staleFromInvalid.SyncEnabled)
 	assert.Equal(t, "key-30", staleFromInvalid.UpstreamKeyID)
 	assert.Equal(t, 99, staleFromInvalid.LocalChannelID)
 	assert.Equal(t, model.UpstreamMappingSyncStatusFailed, staleFromInvalid.SyncStatus)
+}
+
+func TestDiscoverUpstreamSourceDisablesGeneratedChannelForMissingGroup(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 1.0
+	channel := model.Channel{
+		Name:   "source-a / 1.000x",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-local",
+		Status: common.ChannelStatusEnabled,
+		Group:  "default",
+	}
+	require.NoError(t, model.DB.Create(&channel).Error)
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "20",
+		UpstreamGroupName:       "removed",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamKeyID:           "key-20",
+		LocalChannelID:          channel.Id,
+		SyncStatus:              model.UpstreamMappingSyncStatusSynced,
+		EffectiveRateMultiplier: &rate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+	settings := channel.GetOtherSettings()
+	settings.GeneratedByUpstreamSourceID = source.Id
+	settings.GeneratedByUpstreamMappingID = mapping.Id
+	channel.SetOtherSettings(settings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{}}, nil
+		},
+		Now: func() int64 { return 334 },
+	}
+
+	result, err := service.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Stale)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, reloadedMapping.DiscoveryStatus)
+	assert.False(t, reloadedMapping.SyncEnabled)
+	assert.Equal(t, channel.Id, reloadedMapping.LocalChannelID)
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
 }
 
 func TestDiscoverUpstreamSourceRollsBackMappingsWhenStatusUpdateFails(t *testing.T) {
@@ -618,6 +668,36 @@ func createSyncTestMapping(t *testing.T, sourceID int, groupID string, groupName
 	return mapping
 }
 
+func TestParseUpstreamSourceSyncConfigSupportsAutoSyncAndLocalGroupRules(t *testing.T) {
+	raw, err := common.Marshal(map[string]any{
+		"local_group":                "legacy",
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 3,
+		"default_local_group":        "regular",
+		"local_group_rules": []map[string]any{
+			{
+				"name":                 "Pro",
+				"local_group":          "pro",
+				"name_contains":        []string{" Pro ", "PLUS"},
+				"description_contains": []string{"member"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	config, err := parseUpstreamSourceSyncConfig(string(raw))
+
+	require.NoError(t, err)
+	assert.True(t, config.AutoSyncEnabled)
+	assert.Equal(t, 5, config.AutoSyncIntervalMinutes)
+	assert.Equal(t, "regular", config.DefaultLocalGroup)
+	require.Len(t, config.LocalGroupRules, 1)
+	assert.Equal(t, "Pro", config.LocalGroupRules[0].Name)
+	assert.Equal(t, "pro", config.LocalGroupRules[0].LocalGroup)
+	assert.Equal(t, []string{"pro", "plus"}, config.LocalGroupRules[0].NameContains)
+	assert.Equal(t, []string{"member"}, config.LocalGroupRules[0].DescriptionContains)
+}
+
 func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, map[string]any{
@@ -671,7 +751,7 @@ func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	var channels []model.Channel
 	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
 	require.Len(t, channels, 2)
-	assert.Equal(t, "source-a / primary", channels[0].Name)
+	assert.Equal(t, "source-a / 1.000x", channels[0].Name)
 	assert.Equal(t, constant.ChannelTypeOpenAI, channels[0].Type)
 	require.NotNil(t, channels[0].BaseURL)
 	assert.Equal(t, "https://relay.example.com", *channels[0].BaseURL)
@@ -701,6 +781,77 @@ func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	var abilityCount int64
 	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&abilityCount).Error)
 	assert.Equal(t, int64(4), abilityCount)
+}
+
+func TestSyncUpstreamSourceUsesShortRateNameAndRemark(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 0.75
+	createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1001 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.Created)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Equal(t, "source-a / 0.750x", channel.Name)
+	require.NotNil(t, channel.Remark)
+	assert.Contains(t, *channel.Remark, "primary")
+	assert.Contains(t, *channel.Remark, "10")
+	assert.Contains(t, *channel.Remark, "0.750x")
+}
+
+func TestSyncUpstreamSourceRoutesLocalGroupByRule(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"default_local_group": "regular",
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "Pro",
+				"local_group":   "pro",
+				"name_contains": []string{"pro"},
+			},
+		},
+	})
+	rate := 1.0
+	createSyncTestMapping(t, source.Id, "10", "GPT Pro", &rate)
+	createSyncTestMapping(t, source.Id, "20", "GPT Basic", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				createKeys: []UpstreamKey{
+					{ID: "key-10", Key: "sk-secret-10"},
+					{ID: "key-20", Key: "sk-secret-20"},
+				},
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1002 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 2, result.Created)
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("key").Find(&channels).Error)
+	require.Len(t, channels, 2)
+	assert.Equal(t, "pro", channels[0].Group)
+	assert.Equal(t, "regular", channels[1].Group)
 }
 
 func TestSyncUpstreamSourceFetchesModelsFromAllowedPrivateRelayBaseURL(t *testing.T) {
@@ -1011,7 +1162,7 @@ func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {
 	assert.Equal(t, 1, result.Updated)
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
-	assert.Equal(t, "source-a / primary", reloaded.Name)
+	assert.Equal(t, "source-a / 1.000x", reloaded.Name)
 	assert.Equal(t, constant.ChannelTypeOpenAI, reloaded.Type)
 	require.NotNil(t, reloaded.BaseURL)
 	assert.Equal(t, "https://relay.example.com", *reloaded.BaseURL)
@@ -1180,8 +1331,8 @@ func TestSyncUpstreamSourceDoesNotOverwriteChannelOwnedByDifferentMapping(t *tes
 	var channels []model.Channel
 	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
 	require.Len(t, channels, 2)
-	assert.Equal(t, "source-a / primary", channels[0].Name)
-	assert.Equal(t, "source-a / backup", channels[1].Name)
+	assert.Equal(t, "source-a / 1.000x", channels[0].Name)
+	assert.Equal(t, "source-a / 1.000x", channels[1].Name)
 	var reloadedFirst, reloadedSecond model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloadedFirst, firstMapping.Id).Error)
 	require.NoError(t, model.DB.First(&reloadedSecond, secondMapping.Id).Error)

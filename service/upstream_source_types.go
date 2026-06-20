@@ -16,6 +16,7 @@ type UpstreamSourceAdapter interface {
 type UpstreamGroup struct {
 	ID                      string
 	Name                    string
+	Description             string
 	Platform                string
 	Status                  string
 	RateMultiplier          *float64

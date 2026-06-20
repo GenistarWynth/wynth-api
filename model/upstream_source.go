@@ -91,24 +91,25 @@ func (source *UpstreamSource) BeforeUpdate(tx *gorm.DB) error {
 }
 
 type UpstreamSourceChannelMapping struct {
-	Id                      int      `json:"id"`
-	SourceID                int      `json:"source_id" gorm:"not null;uniqueIndex:idx_upstream_source_group;index"`
-	SyncEnabled             bool     `json:"sync_enabled" gorm:"not null;default:false;index"`
-	UpstreamGroupID         string   `json:"upstream_group_id" gorm:"type:varchar(191);not null;uniqueIndex:idx_upstream_source_group"`
-	UpstreamGroupName       string   `json:"upstream_group_name" gorm:"type:varchar(191)"`
-	UpstreamPlatform        string   `json:"upstream_platform" gorm:"type:varchar(64)"`
-	DiscoveryStatus         string   `json:"discovery_status" gorm:"type:varchar(32);index"`
-	UpstreamStatus          string   `json:"upstream_status" gorm:"type:varchar(32)"`
-	UpstreamRateMultiplier  *float64 `json:"upstream_rate_multiplier"`
-	EffectiveRateMultiplier *float64 `json:"effective_rate_multiplier"`
-	UpstreamKeyID           string   `json:"upstream_key_id" gorm:"type:varchar(191)"`
-	LocalChannelID          int      `json:"local_channel_id" gorm:"index"`
-	SyncStatus              string   `json:"sync_status" gorm:"type:varchar(32);index"`
-	LastError               string   `json:"last_error" gorm:"type:varchar(1024)"`
-	LastDiscoveredAt        int64    `json:"last_discovered_at" gorm:"bigint"`
-	LastSyncedAt            int64    `json:"last_synced_at" gorm:"bigint"`
-	CreatedTime             int64    `json:"created_time" gorm:"bigint"`
-	UpdatedTime             int64    `json:"updated_time" gorm:"bigint"`
+	Id                       int      `json:"id"`
+	SourceID                 int      `json:"source_id" gorm:"not null;uniqueIndex:idx_upstream_source_group;index"`
+	SyncEnabled              bool     `json:"sync_enabled" gorm:"not null;default:false;index"`
+	UpstreamGroupID          string   `json:"upstream_group_id" gorm:"type:varchar(191);not null;uniqueIndex:idx_upstream_source_group"`
+	UpstreamGroupName        string   `json:"upstream_group_name" gorm:"type:varchar(191)"`
+	UpstreamGroupDescription string   `json:"upstream_group_description" gorm:"type:varchar(512)"`
+	UpstreamPlatform         string   `json:"upstream_platform" gorm:"type:varchar(64)"`
+	DiscoveryStatus          string   `json:"discovery_status" gorm:"type:varchar(32);index"`
+	UpstreamStatus           string   `json:"upstream_status" gorm:"type:varchar(32)"`
+	UpstreamRateMultiplier   *float64 `json:"upstream_rate_multiplier"`
+	EffectiveRateMultiplier  *float64 `json:"effective_rate_multiplier"`
+	UpstreamKeyID            string   `json:"upstream_key_id" gorm:"type:varchar(191)"`
+	LocalChannelID           int      `json:"local_channel_id" gorm:"index"`
+	SyncStatus               string   `json:"sync_status" gorm:"type:varchar(32);index"`
+	LastError                string   `json:"last_error" gorm:"type:varchar(1024)"`
+	LastDiscoveredAt         int64    `json:"last_discovered_at" gorm:"bigint"`
+	LastSyncedAt             int64    `json:"last_synced_at" gorm:"bigint"`
+	CreatedTime              int64    `json:"created_time" gorm:"bigint"`
+	UpdatedTime              int64    `json:"updated_time" gorm:"bigint"`
 }
 
 func (mapping *UpstreamSourceChannelMapping) BeforeCreate(tx *gorm.DB) error {
@@ -158,19 +159,20 @@ func UpsertDiscoveredMappingsTx(tx *gorm.DB, sourceID int, mappings []UpstreamSo
 			discoveryStatus = UpstreamMappingDiscoveryStatusActive
 		}
 		discovered = append(discovered, UpstreamSourceChannelMapping{
-			SourceID:                sourceID,
-			SyncEnabled:             mapping.SyncEnabled,
-			UpstreamGroupID:         groupID,
-			UpstreamGroupName:       mapping.UpstreamGroupName,
-			UpstreamPlatform:        mapping.UpstreamPlatform,
-			DiscoveryStatus:         discoveryStatus,
-			UpstreamStatus:          mapping.UpstreamStatus,
-			UpstreamRateMultiplier:  mapping.UpstreamRateMultiplier,
-			EffectiveRateMultiplier: mapping.EffectiveRateMultiplier,
-			SyncStatus:              UpstreamMappingSyncStatusNeverSynced,
-			LastDiscoveredAt:        now,
-			CreatedTime:             now,
-			UpdatedTime:             now,
+			SourceID:                 sourceID,
+			SyncEnabled:              mapping.SyncEnabled,
+			UpstreamGroupID:          groupID,
+			UpstreamGroupName:        mapping.UpstreamGroupName,
+			UpstreamGroupDescription: mapping.UpstreamGroupDescription,
+			UpstreamPlatform:         mapping.UpstreamPlatform,
+			DiscoveryStatus:          discoveryStatus,
+			UpstreamStatus:           mapping.UpstreamStatus,
+			UpstreamRateMultiplier:   mapping.UpstreamRateMultiplier,
+			EffectiveRateMultiplier:  mapping.EffectiveRateMultiplier,
+			SyncStatus:               UpstreamMappingSyncStatusNeverSynced,
+			LastDiscoveredAt:         now,
+			CreatedTime:              now,
+			UpdatedTime:              now,
 		})
 	}
 
@@ -181,6 +183,7 @@ func UpsertDiscoveredMappingsTx(tx *gorm.DB, sourceID int, mappings []UpstreamSo
 		},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"upstream_group_name",
+			"upstream_group_description",
 			"upstream_platform",
 			"discovery_status",
 			"upstream_status",

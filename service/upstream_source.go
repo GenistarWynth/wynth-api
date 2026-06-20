@@ -76,6 +76,9 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	}); err != nil {
 		return nil, err
 	}
+	if result.Stale > 0 {
+		model.InitChannelCache()
+	}
 	return &result, nil
 }
 
@@ -233,14 +236,18 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 // AutoSyncModels stays pointer-based here so absent keys can preserve the
 // historical default while explicit false remains distinguishable.
 type upstreamSourceSyncConfig struct {
-	LocalGroup             string              `json:"local_group"`
-	ChannelType            int                 `json:"channel_type"`
-	DefaultPriority        int64               `json:"default_priority"`
-	DefaultWeight          uint                `json:"default_weight"`
-	EnableMonitor          bool                `json:"enable_monitor"`
-	MonitorIntervalMinutes int                 `json:"monitor_interval_minutes"`
-	AutoSyncModels         *bool               `json:"auto_sync_models"`
-	AllowPrivateIP         common.FlexibleBool `json:"allow_private_ip"`
+	LocalGroup              string                             `json:"local_group"`
+	ChannelType             int                                `json:"channel_type"`
+	DefaultPriority         int64                              `json:"default_priority"`
+	DefaultWeight           uint                               `json:"default_weight"`
+	EnableMonitor           bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes  int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels          *bool                              `json:"auto_sync_models"`
+	AllowPrivateIP          common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled         bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes int                                `json:"auto_sync_interval_minutes"`
+	DefaultLocalGroup       string                             `json:"default_local_group"`
+	LocalGroupRules         []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {
@@ -268,7 +275,63 @@ func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error)
 	if config.AutoSyncModels == nil {
 		config.AutoSyncModels = common.GetPointer(true)
 	}
+	if strings.TrimSpace(config.DefaultLocalGroup) == "" {
+		config.DefaultLocalGroup = config.LocalGroup
+	} else {
+		config.DefaultLocalGroup = strings.TrimSpace(config.DefaultLocalGroup)
+	}
+	if config.AutoSyncEnabled {
+		if config.AutoSyncIntervalMinutes < 5 {
+			config.AutoSyncIntervalMinutes = 5
+		}
+	} else {
+		config.AutoSyncIntervalMinutes = 0
+	}
+	config.LocalGroupRules = normalizeUpstreamSourceLocalGroupRules(config.LocalGroupRules)
 	return config, nil
+}
+
+func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroupRule) []dto.UpstreamSourceLocalGroupRule {
+	normalized := make([]dto.UpstreamSourceLocalGroupRule, 0, len(rules))
+	for _, rule := range rules {
+		localGroup := strings.TrimSpace(rule.LocalGroup)
+		if localGroup == "" {
+			continue
+		}
+		nameContains := normalizeUpstreamSourceRuleKeywords(rule.NameContains)
+		descriptionContains := normalizeUpstreamSourceRuleKeywords(rule.DescriptionContains)
+		if len(nameContains) == 0 && len(descriptionContains) == 0 {
+			continue
+		}
+		normalized = append(normalized, dto.UpstreamSourceLocalGroupRule{
+			Name:                strings.TrimSpace(rule.Name),
+			LocalGroup:          localGroup,
+			NameContains:        nameContains,
+			DescriptionContains: descriptionContains,
+		})
+	}
+	return normalized
+}
+
+func NormalizeUpstreamSourceLocalGroupRulesForConfig(rules []dto.UpstreamSourceLocalGroupRule) []dto.UpstreamSourceLocalGroupRule {
+	return normalizeUpstreamSourceLocalGroupRules(rules)
+}
+
+func normalizeUpstreamSourceRuleKeywords(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		keyword := strings.ToLower(strings.TrimSpace(value))
+		if keyword == "" {
+			continue
+		}
+		if _, ok := seen[keyword]; ok {
+			continue
+		}
+		seen[keyword] = struct{}{}
+		normalized = append(normalized, keyword)
+	}
+	return normalized
 }
 
 func validateUpstreamSourceSyncConfig(source *model.UpstreamSource) error {
@@ -468,7 +531,9 @@ func isGeneratedChannelOwnedByMapping(channel *model.Channel, source *model.Upst
 	if channel.Tag != nil {
 		actualTag = strings.TrimSpace(*channel.Tag)
 	}
-	return strings.TrimSpace(channel.Name) == upstreamSourceGeneratedChannelName(source, mapping) &&
+	channelName := strings.TrimSpace(channel.Name)
+	return (channelName == upstreamSourceGeneratedChannelName(source, mapping) ||
+		channelName == legacyUpstreamSourceGeneratedChannelName(source, mapping)) &&
 		actualTag == expectedTag
 }
 
@@ -526,6 +591,14 @@ func upstreamSourceKeyName(source *model.UpstreamSource, mapping *model.Upstream
 }
 
 func upstreamSourceGeneratedChannelName(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) string {
+	sourceName := strings.TrimSpace(source.Name)
+	if mapping != nil && mapping.EffectiveRateMultiplier != nil {
+		return fmt.Sprintf("%s / %s", sourceName, formatUpstreamSourceRateMultiplier(*mapping.EffectiveRateMultiplier))
+	}
+	return fmt.Sprintf("%s / %s", sourceName, upstreamSourceGroupDisplayName(mapping))
+}
+
+func legacyUpstreamSourceGeneratedChannelName(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) string {
 	return fmt.Sprintf("%s / %s", strings.TrimSpace(source.Name), upstreamSourceGroupDisplayName(mapping))
 }
 
@@ -536,16 +609,80 @@ func upstreamSourceGroupDisplayName(mapping *model.UpstreamSourceChannelMapping)
 	return strings.TrimSpace(mapping.UpstreamGroupID)
 }
 
+func formatUpstreamSourceRateMultiplier(value float64) string {
+	return fmt.Sprintf("%.3fx", value)
+}
+
+func resolveUpstreamSourceLocalGroup(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) string {
+	defaultGroup := strings.TrimSpace(config.DefaultLocalGroup)
+	if defaultGroup == "" {
+		defaultGroup = strings.TrimSpace(config.LocalGroup)
+	}
+	if defaultGroup == "" {
+		defaultGroup = "default"
+	}
+	if mapping == nil {
+		return defaultGroup
+	}
+	name := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupName))
+	description := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupDescription))
+	for _, rule := range config.LocalGroupRules {
+		if upstreamSourceKeywordsMatch(name, rule.NameContains) ||
+			upstreamSourceKeywordsMatch(description, rule.DescriptionContains) {
+			if localGroup := strings.TrimSpace(rule.LocalGroup); localGroup != "" {
+				return localGroup
+			}
+		}
+	}
+	return defaultGroup
+}
+
+func upstreamSourceKeywordsMatch(text string, keywords []string) bool {
+	if text == "" || len(keywords) == 0 {
+		return false
+	}
+	for _, keyword := range keywords {
+		if keyword != "" && strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func upstreamSourceGeneratedChannelRemark(mapping *model.UpstreamSourceChannelMapping) *string {
+	if mapping == nil {
+		return nil
+	}
+	parts := []string{
+		"Upstream group: " + upstreamSourceGroupDisplayName(mapping),
+	}
+	if groupID := strings.TrimSpace(mapping.UpstreamGroupID); groupID != "" {
+		parts = append(parts, "ID: "+groupID)
+	}
+	if platform := strings.TrimSpace(mapping.UpstreamPlatform); platform != "" {
+		parts = append(parts, "Platform: "+platform)
+	}
+	if mapping.EffectiveRateMultiplier != nil {
+		parts = append(parts, "Rate: "+formatUpstreamSourceRateMultiplier(*mapping.EffectiveRateMultiplier))
+	}
+	remark := strings.Join(parts, "; ")
+	if len(remark) > 255 {
+		remark = remark[:255]
+	}
+	return common.GetPointer(remark)
+}
+
 func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, rawKey string) *model.Channel {
 	channel := &model.Channel{
 		Name:     upstreamSourceGeneratedChannelName(source, mapping),
 		Type:     config.ChannelType,
 		Key:      rawKey,
 		BaseURL:  common.GetPointer(upstreamSourceGeneratedBaseURL(source)),
-		Group:    config.LocalGroup,
+		Group:    resolveUpstreamSourceLocalGroup(config, mapping),
 		Priority: common.GetPointer(config.DefaultPriority),
 		Weight:   common.GetPointer(config.DefaultWeight),
 		Tag:      common.GetPointer(strings.TrimSpace(source.Name)),
+		Remark:   upstreamSourceGeneratedChannelRemark(mapping),
 	}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
 		ChannelMonitorEnabled:         config.EnableMonitor,
@@ -703,16 +840,17 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 			invalidCount++
 		}
 		mappingByID[groupID] = model.UpstreamSourceChannelMapping{
-			SourceID:                sourceID,
-			SyncEnabled:             discoveryStatus == model.UpstreamMappingDiscoveryStatusActive,
-			UpstreamGroupID:         groupID,
-			UpstreamGroupName:       strings.TrimSpace(group.Name),
-			UpstreamPlatform:        strings.TrimSpace(group.Platform),
-			DiscoveryStatus:         discoveryStatus,
-			UpstreamStatus:          strings.TrimSpace(group.Status),
-			UpstreamRateMultiplier:  group.RateMultiplier,
-			EffectiveRateMultiplier: group.EffectiveRateMultiplier,
-			LastDiscoveredAt:        now,
+			SourceID:                 sourceID,
+			SyncEnabled:              discoveryStatus == model.UpstreamMappingDiscoveryStatusActive,
+			UpstreamGroupID:          groupID,
+			UpstreamGroupName:        strings.TrimSpace(group.Name),
+			UpstreamGroupDescription: strings.TrimSpace(group.Description),
+			UpstreamPlatform:         strings.TrimSpace(group.Platform),
+			DiscoveryStatus:          discoveryStatus,
+			UpstreamStatus:           strings.TrimSpace(group.Status),
+			UpstreamRateMultiplier:   group.RateMultiplier,
+			EffectiveRateMultiplier:  group.EffectiveRateMultiplier,
+			LastDiscoveredAt:         now,
 		}
 	}
 
@@ -729,18 +867,51 @@ func markMissingDiscoveredMappingsStale(sourceID int, discoveredIDs []string, no
 }
 
 func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredIDs []string, now int64) (int, error) {
-	query := tx.Model(&model.UpstreamSourceChannelMapping{}).
-		Where("source_id = ?", sourceID)
+	query := tx.Where("source_id = ?", sourceID)
 	if len(discoveredIDs) > 0 {
 		query = query.Where("upstream_group_id NOT IN ?", discoveredIDs)
 	}
-	result := query.Updates(map[string]interface{}{
+	var staleMappings []model.UpstreamSourceChannelMapping
+	if err := query.Find(&staleMappings).Error; err != nil {
+		return 0, err
+	}
+	if len(staleMappings) == 0 {
+		return 0, nil
+	}
+	staleIDs := make([]int, 0, len(staleMappings))
+	for _, mapping := range staleMappings {
+		staleIDs = append(staleIDs, mapping.Id)
+	}
+	result := tx.Model(&model.UpstreamSourceChannelMapping{}).Where("id IN ?", staleIDs).Updates(map[string]interface{}{
 		"discovery_status":   model.UpstreamMappingDiscoveryStatusStale,
+		"sync_enabled":       false,
 		"last_discovered_at": now,
 		"updated_time":       now,
 	})
 	if result.Error != nil {
 		return 0, result.Error
+	}
+	source := model.UpstreamSource{Id: sourceID}
+	if err := tx.Select("id", "name").First(&source, sourceID).Error; err != nil {
+		return 0, err
+	}
+	for _, mapping := range staleMappings {
+		if mapping.LocalChannelID == 0 {
+			continue
+		}
+		var channel model.Channel
+		if err := tx.First(&channel, mapping.LocalChannelID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return 0, err
+		}
+		if !isGeneratedChannelOwnedByMapping(&channel, &source, &mapping) {
+			continue
+		}
+		if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("status", common.ChannelStatusManuallyDisabled).Error; err != nil {
+			return 0, err
+		}
 	}
 	return int(result.RowsAffected), nil
 }
@@ -821,22 +992,23 @@ func buildDiscoveryResultTx(tx *gorm.DB, sourceID int, discovered int, staleCoun
 
 func upstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMapping) dto.UpstreamSourceMappingResponse {
 	return dto.UpstreamSourceMappingResponse{
-		Id:                      mapping.Id,
-		SourceID:                mapping.SourceID,
-		SyncEnabled:             mapping.SyncEnabled,
-		UpstreamGroupID:         mapping.UpstreamGroupID,
-		UpstreamGroupName:       mapping.UpstreamGroupName,
-		UpstreamPlatform:        mapping.UpstreamPlatform,
-		DiscoveryStatus:         mapping.DiscoveryStatus,
-		UpstreamStatus:          mapping.UpstreamStatus,
-		UpstreamRateMultiplier:  mapping.UpstreamRateMultiplier,
-		EffectiveRateMultiplier: mapping.EffectiveRateMultiplier,
-		HasUpstreamKey:          mapping.UpstreamKeyID != "",
-		LocalChannelID:          mapping.LocalChannelID,
-		SyncStatus:              mapping.SyncStatus,
-		LastError:               sanitizeUpstreamSourceStoredError(mapping.LastError),
-		LastDiscoveredAt:        mapping.LastDiscoveredAt,
-		LastSyncedAt:            mapping.LastSyncedAt,
+		Id:                       mapping.Id,
+		SourceID:                 mapping.SourceID,
+		SyncEnabled:              mapping.SyncEnabled,
+		UpstreamGroupID:          mapping.UpstreamGroupID,
+		UpstreamGroupName:        mapping.UpstreamGroupName,
+		UpstreamGroupDescription: mapping.UpstreamGroupDescription,
+		UpstreamPlatform:         mapping.UpstreamPlatform,
+		DiscoveryStatus:          mapping.DiscoveryStatus,
+		UpstreamStatus:           mapping.UpstreamStatus,
+		UpstreamRateMultiplier:   mapping.UpstreamRateMultiplier,
+		EffectiveRateMultiplier:  mapping.EffectiveRateMultiplier,
+		HasUpstreamKey:           mapping.UpstreamKeyID != "",
+		LocalChannelID:           mapping.LocalChannelID,
+		SyncStatus:               mapping.SyncStatus,
+		LastError:                sanitizeUpstreamSourceStoredError(mapping.LastError),
+		LastDiscoveredAt:         mapping.LastDiscoveredAt,
+		LastSyncedAt:             mapping.LastSyncedAt,
 	}
 }
 

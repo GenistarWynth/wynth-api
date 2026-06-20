@@ -1,37 +1,45 @@
 package dto
 
 type UpstreamSourceCreateRequest struct {
-	Name                   string `json:"name" binding:"required"`
-	Type                   string `json:"type" binding:"required"`
-	BaseURL                string `json:"base_url" binding:"required"`
-	AdminAPIBasePath       string `json:"admin_api_base_path"`
-	RelayBaseURL           string `json:"relay_base_url"`
-	Email                  string `json:"email"`
-	Password               string `json:"password"`
-	LocalGroup             string `json:"local_group"`
-	ChannelType            int    `json:"channel_type"`
-	DefaultPriority        int64  `json:"default_priority"`
-	DefaultWeight          uint   `json:"default_weight"`
-	EnableMonitor          bool   `json:"enable_monitor"`
-	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
-	AutoSyncModels         bool   `json:"auto_sync_models"`
-	AllowPrivateIP         bool   `json:"allow_private_ip"`
+	Name                    string                         `json:"name" binding:"required"`
+	Type                    string                         `json:"type" binding:"required"`
+	BaseURL                 string                         `json:"base_url" binding:"required"`
+	AdminAPIBasePath        string                         `json:"admin_api_base_path"`
+	RelayBaseURL            string                         `json:"relay_base_url"`
+	Email                   string                         `json:"email"`
+	Password                string                         `json:"password"`
+	LocalGroup              string                         `json:"local_group"`
+	ChannelType             int                            `json:"channel_type"`
+	DefaultPriority         int64                          `json:"default_priority"`
+	DefaultWeight           uint                           `json:"default_weight"`
+	EnableMonitor           bool                           `json:"enable_monitor"`
+	MonitorIntervalMinutes  int                            `json:"monitor_interval_minutes"`
+	AutoSyncModels          bool                           `json:"auto_sync_models"`
+	AllowPrivateIP          bool                           `json:"allow_private_ip"`
+	AutoSyncEnabled         bool                           `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes int                            `json:"auto_sync_interval_minutes"`
+	DefaultLocalGroup       string                         `json:"default_local_group"`
+	LocalGroupRules         []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 type UpstreamSourceUpdateRequest struct {
-	Name                   string `json:"name"`
-	Status                 string `json:"status"`
-	BaseURL                string `json:"base_url"`
-	AdminAPIBasePath       string `json:"admin_api_base_path"`
-	RelayBaseURL           string `json:"relay_base_url"`
-	LocalGroup             string `json:"local_group"`
-	ChannelType            int    `json:"channel_type"`
-	DefaultPriority        int64  `json:"default_priority"`
-	DefaultWeight          uint   `json:"default_weight"`
-	EnableMonitor          bool   `json:"enable_monitor"`
-	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
-	AutoSyncModels         bool   `json:"auto_sync_models"`
-	AllowPrivateIP         bool   `json:"allow_private_ip"`
+	Name                    string                         `json:"name"`
+	Status                  string                         `json:"status"`
+	BaseURL                 string                         `json:"base_url"`
+	AdminAPIBasePath        string                         `json:"admin_api_base_path"`
+	RelayBaseURL            string                         `json:"relay_base_url"`
+	LocalGroup              string                         `json:"local_group"`
+	ChannelType             int                            `json:"channel_type"`
+	DefaultPriority         int64                          `json:"default_priority"`
+	DefaultWeight           uint                           `json:"default_weight"`
+	EnableMonitor           bool                           `json:"enable_monitor"`
+	MonitorIntervalMinutes  int                            `json:"monitor_interval_minutes"`
+	AutoSyncModels          bool                           `json:"auto_sync_models"`
+	AllowPrivateIP          bool                           `json:"allow_private_ip"`
+	AutoSyncEnabled         bool                           `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes int                            `json:"auto_sync_interval_minutes"`
+	DefaultLocalGroup       string                         `json:"default_local_group"`
+	LocalGroupRules         []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 type UpstreamSourceCredentialsUpdateRequest struct {
@@ -40,51 +48,63 @@ type UpstreamSourceCredentialsUpdateRequest struct {
 }
 
 type UpstreamSourceResponse struct {
-	Id                     int    `json:"id"`
-	Name                   string `json:"name"`
-	Type                   string `json:"type"`
-	Status                 string `json:"status"`
-	BaseURL                string `json:"base_url"`
-	AdminAPIBasePath       string `json:"admin_api_base_path"`
-	RelayBaseURL           string `json:"relay_base_url"`
-	LocalGroup             string `json:"local_group"`
-	ChannelType            int    `json:"channel_type"`
-	DefaultPriority        int64  `json:"default_priority"`
-	DefaultWeight          uint   `json:"default_weight"`
-	EnableMonitor          bool   `json:"enable_monitor"`
-	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
-	AutoSyncModels         bool   `json:"auto_sync_models"`
-	AllowPrivateIP         bool   `json:"allow_private_ip"`
-	MaskedEmail            string `json:"masked_email"`
-	HasCredentials         bool   `json:"has_credentials"`
-	LastDiscoveryTime      int64  `json:"last_discovery_time"`
-	LastDiscoveryStatus    string `json:"last_discovery_status"`
-	LastDiscoveryError     string `json:"last_discovery_error"`
-	LastSyncTime           int64  `json:"last_sync_time"`
-	LastSyncStatus         string `json:"last_sync_status"`
-	LastSyncError          string `json:"last_sync_error"`
-	CreatedTime            int64  `json:"created_time"`
-	UpdatedTime            int64  `json:"updated_time"`
+	Id                      int                            `json:"id"`
+	Name                    string                         `json:"name"`
+	Type                    string                         `json:"type"`
+	Status                  string                         `json:"status"`
+	BaseURL                 string                         `json:"base_url"`
+	AdminAPIBasePath        string                         `json:"admin_api_base_path"`
+	RelayBaseURL            string                         `json:"relay_base_url"`
+	LocalGroup              string                         `json:"local_group"`
+	ChannelType             int                            `json:"channel_type"`
+	DefaultPriority         int64                          `json:"default_priority"`
+	DefaultWeight           uint                           `json:"default_weight"`
+	EnableMonitor           bool                           `json:"enable_monitor"`
+	MonitorIntervalMinutes  int                            `json:"monitor_interval_minutes"`
+	AutoSyncModels          bool                           `json:"auto_sync_models"`
+	AllowPrivateIP          bool                           `json:"allow_private_ip"`
+	AutoSyncEnabled         bool                           `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes int                            `json:"auto_sync_interval_minutes"`
+	DefaultLocalGroup       string                         `json:"default_local_group"`
+	LocalGroupRules         []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	MaskedEmail             string                         `json:"masked_email"`
+	HasCredentials          bool                           `json:"has_credentials"`
+	LastDiscoveryTime       int64                          `json:"last_discovery_time"`
+	LastDiscoveryStatus     string                         `json:"last_discovery_status"`
+	LastDiscoveryError      string                         `json:"last_discovery_error"`
+	LastSyncTime            int64                          `json:"last_sync_time"`
+	LastSyncStatus          string                         `json:"last_sync_status"`
+	LastSyncError           string                         `json:"last_sync_error"`
+	CreatedTime             int64                          `json:"created_time"`
+	UpdatedTime             int64                          `json:"updated_time"`
+}
+
+type UpstreamSourceLocalGroupRule struct {
+	Name                string   `json:"name"`
+	LocalGroup          string   `json:"local_group"`
+	NameContains        []string `json:"name_contains"`
+	DescriptionContains []string `json:"description_contains"`
 }
 
 type UpstreamSourceMappingResponse struct {
-	Id                      int      `json:"id"`
-	SourceID                int      `json:"source_id"`
-	SyncEnabled             bool     `json:"sync_enabled"`
-	UpstreamGroupID         string   `json:"upstream_group_id"`
-	UpstreamGroupName       string   `json:"upstream_group_name"`
-	UpstreamPlatform        string   `json:"upstream_platform"`
-	DiscoveryStatus         string   `json:"discovery_status"`
-	UpstreamStatus          string   `json:"upstream_status"`
-	UpstreamRateMultiplier  *float64 `json:"upstream_rate_multiplier"`
-	EffectiveRateMultiplier *float64 `json:"effective_rate_multiplier"`
-	UpstreamKeyID           string   `json:"upstream_key_id"`
-	HasUpstreamKey          bool     `json:"has_upstream_key"`
-	LocalChannelID          int      `json:"local_channel_id"`
-	SyncStatus              string   `json:"sync_status"`
-	LastError               string   `json:"last_error"`
-	LastDiscoveredAt        int64    `json:"last_discovered_at"`
-	LastSyncedAt            int64    `json:"last_synced_at"`
+	Id                       int      `json:"id"`
+	SourceID                 int      `json:"source_id"`
+	SyncEnabled              bool     `json:"sync_enabled"`
+	UpstreamGroupID          string   `json:"upstream_group_id"`
+	UpstreamGroupName        string   `json:"upstream_group_name"`
+	UpstreamGroupDescription string   `json:"upstream_group_description"`
+	UpstreamPlatform         string   `json:"upstream_platform"`
+	DiscoveryStatus          string   `json:"discovery_status"`
+	UpstreamStatus           string   `json:"upstream_status"`
+	UpstreamRateMultiplier   *float64 `json:"upstream_rate_multiplier"`
+	EffectiveRateMultiplier  *float64 `json:"effective_rate_multiplier"`
+	UpstreamKeyID            string   `json:"upstream_key_id"`
+	HasUpstreamKey           bool     `json:"has_upstream_key"`
+	LocalChannelID           int      `json:"local_channel_id"`
+	SyncStatus               string   `json:"sync_status"`
+	LastError                string   `json:"last_error"`
+	LastDiscoveredAt         int64    `json:"last_discovered_at"`
+	LastSyncedAt             int64    `json:"last_synced_at"`
 }
 
 type UpstreamSourceMappingUpdateRequest struct {
