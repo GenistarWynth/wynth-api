@@ -216,6 +216,9 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 	return result, nil
 }
 
+// Keep this JSON shape in lockstep with controller.upstreamSourceControllerSyncConfig.
+// AutoSyncModels stays pointer-based here so absent keys can preserve the
+// historical default while explicit false remains distinguishable.
 type upstreamSourceSyncConfig struct {
 	LocalGroup             string `json:"local_group"`
 	ChannelType            int    `json:"channel_type"`

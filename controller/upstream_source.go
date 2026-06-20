@@ -23,6 +23,9 @@ type upstreamSourceAuthConfig struct {
 	ExpiresAt    int64  `json:"expires_at,omitempty"`
 }
 
+// Keep this JSON shape in lockstep with service.upstreamSourceSyncConfig.
+// Defaults are seeded before unmarshaling so an absent auto_sync_models key
+// preserves the service default of true while explicit false still persists.
 type upstreamSourceControllerSyncConfig struct {
 	LocalGroup             string `json:"local_group"`
 	ChannelType            int    `json:"channel_type"`

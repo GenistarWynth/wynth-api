@@ -231,6 +231,55 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	assert.Contains(t, source.SyncConfig, "default_priority")
 }
 
+func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	createRequest := dto.UpstreamSourceCreateRequest{
+		Name:                   "false-sync-source",
+		Type:                   model.UpstreamSourceTypeSub2API,
+		BaseURL:                "https://admin.example.com",
+		LocalGroup:             "paid",
+		ChannelType:            constant.ChannelTypeOpenAI,
+		DefaultPriority:        10,
+		DefaultWeight:          20,
+		EnableMonitor:          true,
+		MonitorIntervalMinutes: 5,
+		AutoSyncModels:         true,
+	}
+	createResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", createRequest, true)
+	require.True(t, createResponse.Success, createResponse.Message)
+
+	updateRequest := dto.UpstreamSourceUpdateRequest{
+		Status:                 model.UpstreamSourceStatusEnabled,
+		LocalGroup:             "default",
+		ChannelType:            constant.ChannelTypeOpenAI,
+		DefaultPriority:        0,
+		DefaultWeight:          0,
+		EnableMonitor:          false,
+		MonitorIntervalMinutes: 0,
+		AutoSyncModels:         false,
+	}
+	updateResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(createResponse.Data.Id), updateRequest, true)
+	require.True(t, updateResponse.Success, updateResponse.Message)
+	assert.False(t, updateResponse.Data.EnableMonitor)
+	assert.Equal(t, 0, updateResponse.Data.MonitorIntervalMinutes)
+	assert.False(t, updateResponse.Data.AutoSyncModels)
+
+	getResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(createResponse.Data.Id), nil, true)
+	require.True(t, getResponse.Success, getResponse.Message)
+	assert.False(t, getResponse.Data.EnableMonitor)
+	assert.Equal(t, int64(0), getResponse.Data.DefaultPriority)
+	assert.Equal(t, uint(0), getResponse.Data.DefaultWeight)
+	assert.False(t, getResponse.Data.AutoSyncModels)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, createResponse.Data.Id).Error)
+	var syncConfig map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
+	assert.Equal(t, false, syncConfig["enable_monitor"])
+	assert.Equal(t, false, syncConfig["auto_sync_models"])
+}
+
 func TestUpstreamSourceAPICredentialsUpdateClearsCachedTokens(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
