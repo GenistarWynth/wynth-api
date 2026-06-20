@@ -121,6 +121,31 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, resolution.FixedModels)
 }
 
+func TestResolveUpstreamSourceRuleTreatsClaudePlatformAsAnthropic(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"default_local_group": "fallback",
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "Anthropic paid",
+				"local_group": "paid",
+				"platforms":   []string{"anthropic"},
+			},
+		},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:      true,
+		UpstreamPlatform: "claude",
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusActive,
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.Matched)
+	assert.True(t, resolution.SyncEligible)
+	assert.Equal(t, "Anthropic paid", resolution.RuleName)
+	assert.Equal(t, "paid", resolution.LocalGroup)
+}
+
 func TestResolveUpstreamSourceRuleKeepsFallbackOnlyRule(t *testing.T) {
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
 		"default_local_group": "fallback",

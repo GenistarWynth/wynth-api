@@ -333,16 +333,24 @@ func upstreamSourceRuleMatches(rule dto.UpstreamSourceLocalGroupRule, platform s
 }
 
 func upstreamSourceRulePlatformMatches(platform string, platforms []string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(platform))
+	normalized := normalizeUpstreamSourceRulePlatform(platform)
 	if normalized == "" {
 		return false
 	}
 	for _, candidate := range platforms {
-		if normalized == strings.ToLower(strings.TrimSpace(candidate)) {
+		if normalized == normalizeUpstreamSourceRulePlatform(candidate) {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeUpstreamSourceRulePlatform(platform string) string {
+	normalized := strings.ToLower(strings.TrimSpace(platform))
+	if normalized == "claude" {
+		return "anthropic"
+	}
+	return normalized
 }
 
 func upstreamSourceRuleKeywordsMatchAnyText(texts []string, keywords []string) bool {
