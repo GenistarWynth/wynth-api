@@ -168,13 +168,24 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 		SyncStatus:      model.UpstreamMappingSyncStatusSynced,
 	}).Error)
 	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
-		SourceID:        source.Id,
-		SyncEnabled:     true,
-		UpstreamGroupID: "20",
-		DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
-		UpstreamKeyID:   "key-20",
-		LocalChannelID:  88,
-		SyncStatus:      model.UpstreamMappingSyncStatusSynced,
+		SourceID:         source.Id,
+		SyncEnabled:      true,
+		UpstreamGroupID:  "20",
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamKeyID:    "key-20",
+		LocalChannelID:   88,
+		SyncStatus:       model.UpstreamMappingSyncStatusSynced,
+		LastDiscoveredAt: 100,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
+		SourceID:         source.Id,
+		SyncEnabled:      true,
+		UpstreamGroupID:  "30",
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusInvalid,
+		UpstreamKeyID:    "key-30",
+		LocalChannelID:   99,
+		SyncStatus:       model.UpstreamMappingSyncStatusFailed,
+		LastDiscoveredAt: 200,
 	}).Error)
 	service := UpstreamSourceService{
 		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
@@ -188,15 +199,25 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 	result, err := service.Discover(context.Background(), source.Id)
 
 	require.NoError(t, err)
-	assert.Equal(t, 1, result.Stale)
+	assert.Equal(t, 2, result.Stale)
 
 	var stale model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&stale).Error)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, stale.DiscoveryStatus)
+	assert.Equal(t, int64(333), stale.LastDiscoveredAt)
 	assert.True(t, stale.SyncEnabled)
 	assert.Equal(t, "key-20", stale.UpstreamKeyID)
 	assert.Equal(t, 88, stale.LocalChannelID)
 	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, stale.SyncStatus)
+
+	var staleFromInvalid model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "30").First(&staleFromInvalid).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, staleFromInvalid.DiscoveryStatus)
+	assert.Equal(t, int64(333), staleFromInvalid.LastDiscoveredAt)
+	assert.True(t, staleFromInvalid.SyncEnabled)
+	assert.Equal(t, "key-30", staleFromInvalid.UpstreamKeyID)
+	assert.Equal(t, 99, staleFromInvalid.LocalChannelID)
+	assert.Equal(t, model.UpstreamMappingSyncStatusFailed, staleFromInvalid.SyncStatus)
 }
 
 func TestDiscoverUpstreamSourceFailureDoesNotMutateChannels(t *testing.T) {

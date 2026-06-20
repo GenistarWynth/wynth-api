@@ -157,13 +157,14 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 
 func markMissingDiscoveredMappingsStale(sourceID int, discoveredIDs []string, now int64) (int, error) {
 	query := model.DB.Model(&model.UpstreamSourceChannelMapping{}).
-		Where("source_id = ? AND discovery_status = ?", sourceID, model.UpstreamMappingDiscoveryStatusActive)
+		Where("source_id = ?", sourceID)
 	if len(discoveredIDs) > 0 {
 		query = query.Where("upstream_group_id NOT IN ?", discoveredIDs)
 	}
 	result := query.Updates(map[string]interface{}{
-		"discovery_status": model.UpstreamMappingDiscoveryStatusStale,
-		"updated_time":     now,
+		"discovery_status":   model.UpstreamMappingDiscoveryStatusStale,
+		"last_discovered_at": now,
+		"updated_time":       now,
 	})
 	if result.Error != nil {
 		return 0, result.Error
