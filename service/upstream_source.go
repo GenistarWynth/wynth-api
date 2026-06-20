@@ -338,6 +338,18 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	}
 
 	rawKey := strings.TrimSpace(key.Key)
+	if rawKey == "" && mapping.UpstreamKeyID != "" && mapping.LocalChannelID == 0 {
+		recoveredKey, err := recoverUpstreamSourceKeyForChannelCreate(ctx, adapter, source, mapping, key)
+		if err != nil {
+			errText := SanitizeUpstreamSourceError(err)
+			_ = updateUpstreamSourceMappingSync(mapping.Id, key.ID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+			result.Status = model.UpstreamMappingSyncStatusFailed
+			result.Error = errText
+			return result, nil
+		}
+		key = recoveredKey
+		rawKey = strings.TrimSpace(key.Key)
+	}
 	if rawKey == "" && existingChannel != nil {
 		rawKey = existingChannel.Key
 	}
@@ -353,6 +365,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	channel := buildGeneratedChannel(source, mapping, config, rawKey)
 	if existingChannel != nil {
 		channel.Id = existingChannel.Id
+		mergeGeneratedChannelOtherSettings(channel, existingChannel, config)
 	}
 
 	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(), channel, config)
@@ -436,6 +449,30 @@ func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceA
 	return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
 }
 
+func recoverUpstreamSourceKeyForChannelCreate(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, updatedKey UpstreamKey) (UpstreamKey, error) {
+	keyID := strings.TrimSpace(updatedKey.ID)
+	if keyID == "" {
+		keyID = strings.TrimSpace(mapping.UpstreamKeyID)
+	}
+	if keyID != "" {
+		keys, err := adapter.ListKeys(ctx, source, mapping.UpstreamGroupID)
+		if err == nil {
+			for _, listedKey := range keys {
+				if strings.TrimSpace(listedKey.ID) == keyID && strings.TrimSpace(listedKey.Key) != "" {
+					if listedKey.GroupID == "" {
+						listedKey.GroupID = mapping.UpstreamGroupID
+					}
+					if listedKey.Name == "" {
+						listedKey.Name = upstreamSourceKeyName(source, mapping)
+					}
+					return listedKey, nil
+				}
+			}
+		}
+	}
+	return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, upstreamSourceKeyName(source, mapping))
+}
+
 func isUpstreamKeyNotFoundError(err error) bool {
 	if err == nil {
 		return false
@@ -477,6 +514,16 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 		ChannelMonitorIntervalMinutes: config.MonitorIntervalMinutes,
 	})
 	return channel
+}
+
+func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel *model.Channel, config upstreamSourceSyncConfig) {
+	if channel == nil || existingChannel == nil {
+		return
+	}
+	settings := existingChannel.GetOtherSettings()
+	settings.ChannelMonitorEnabled = config.EnableMonitor
+	settings.ChannelMonitorIntervalMinutes = config.MonitorIntervalMinutes
+	channel.SetOtherSettings(settings)
 }
 
 func fetchGeneratedChannelModels(fetchModels func(channel *model.Channel) ([]string, error), channel *model.Channel, config upstreamSourceSyncConfig) ([]string, error) {

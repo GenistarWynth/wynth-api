@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/glebarez/sqlite"
@@ -18,14 +19,18 @@ import (
 )
 
 type fakeUpstreamSourceAdapter struct {
-	groups      []UpstreamGroup
-	err         error
-	createKeys  []UpstreamKey
-	createErr   error
-	updateKey   UpstreamKey
-	updateErr   error
-	createCalls *[]fakeUpstreamSourceCreateKeyCall
-	updateCalls *[]fakeUpstreamSourceUpdateKeyCall
+	groups             []UpstreamGroup
+	err                error
+	createKeys         []UpstreamKey
+	createErr          error
+	updateKey          UpstreamKey
+	updateErr          error
+	listKeys           []UpstreamKey
+	listErr            error
+	keepEmptyUpdateKey bool
+	createCalls        *[]fakeUpstreamSourceCreateKeyCall
+	updateCalls        *[]fakeUpstreamSourceUpdateKeyCall
+	listCalls          *[]string
 }
 
 type fakeUpstreamSourceCreateKeyCall struct {
@@ -88,13 +93,22 @@ func (a fakeUpstreamSourceAdapter) UpdateKey(ctx context.Context, source *model.
 	if key.Name == "" {
 		key.Name = name
 	}
-	if key.Key == "" {
+	if key.Key == "" && !a.keepEmptyUpdateKey {
 		key.Key = "sk-updated-" + groupID
 	}
 	return key, nil
 }
 
 func (a fakeUpstreamSourceAdapter) ListKeys(ctx context.Context, source *model.UpstreamSource, groupID string) ([]UpstreamKey, error) {
+	if a.listCalls != nil {
+		*a.listCalls = append(*a.listCalls, groupID)
+	}
+	if a.listErr != nil {
+		return nil, a.listErr
+	}
+	if a.listKeys != nil {
+		return a.listKeys, nil
+	}
 	return nil, errors.New("unexpected ListKeys call")
 }
 
@@ -707,12 +721,105 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	assert.Equal(t, "sk-updated-10", channel.Key)
 }
 
+func TestSyncUpstreamSourceRecoversExistingKeyFromListWhenNoLocalChannel(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
+		"upstream_key_id": "key-10",
+	}).Error)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	listCalls := make([]string, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				updateKey:          UpstreamKey{ID: "key-10"},
+				keepEmptyUpdateKey: true,
+				listKeys: []UpstreamKey{
+					{ID: "other-key", Key: "sk-other", GroupID: "10"},
+					{ID: "key-10", Key: "sk-listed-10", GroupID: "10"},
+				},
+				createCalls: &createCalls,
+				listCalls:   &listCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1007 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, result.Created)
+	assert.Empty(t, createCalls)
+	assert.Equal(t, []string{"10"}, listCalls)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.Equal(t, "key-10", reloadedMapping.UpstreamKeyID)
+	require.NotZero(t, reloadedMapping.LocalChannelID)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, reloadedMapping.LocalChannelID).Error)
+	assert.Equal(t, "sk-listed-10", channel.Key)
+}
+
+func TestSyncUpstreamSourceReplacesExistingKeyWhenListCannotRecover(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
+		"upstream_key_id": "key-10",
+	}).Error)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	listCalls := make([]string, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				updateKey:          UpstreamKey{ID: "key-10"},
+				keepEmptyUpdateKey: true,
+				listKeys:           []UpstreamKey{{ID: "other-key", Key: "sk-other", GroupID: "10"}},
+				createKeys:         []UpstreamKey{{ID: "key-replacement", Key: "sk-replacement-10"}},
+				createCalls:        &createCalls,
+				listCalls:          &listCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1008 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, result.Created)
+	require.Len(t, createCalls, 1)
+	assert.Equal(t, fakeUpstreamSourceCreateKeyCall{GroupID: "10", Name: "Wynth API / source-a / primary"}, createCalls[0])
+	assert.Equal(t, []string{"10"}, listCalls)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.Equal(t, "key-replacement", reloadedMapping.UpstreamKeyID)
+	require.NotZero(t, reloadedMapping.LocalChannelID)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, reloadedMapping.LocalChannelID).Error)
+	assert.Equal(t, "sk-replacement-10", channel.Key)
+}
+
 func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, map[string]any{
-		"local_group":      "synced",
-		"default_priority": 3,
-		"default_weight":   4,
+		"local_group":              "synced",
+		"default_priority":         3,
+		"default_weight":           4,
+		"enable_monitor":           true,
+		"monitor_interval_minutes": 25,
 	})
 	oldBaseURL := "https://old.example.com"
 	remark := "operator remark"
@@ -737,6 +844,16 @@ func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {
 		TestTime:       77,
 		ResponseTime:   88,
 	}
+	openRouterEnterprise := true
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		OpenRouterEnterprise:                  &openRouterEnterprise,
+		AllowServiceTier:                      true,
+		UpstreamModelUpdateCheckEnabled:       true,
+		UpstreamModelUpdateIgnoredModels:      []string{"keep-ignored"},
+		ChannelMonitorEnabled:                 false,
+		ChannelMonitorIntervalMinutes:         5,
+		UpstreamModelUpdateLastDetectedModels: []string{"keep-detected"},
+	})
 	require.NoError(t, model.DB.Create(&channel).Error)
 	rate := 1.0
 	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
@@ -776,6 +893,15 @@ func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {
 	assert.Equal(t, 12.5, reloaded.Balance)
 	assert.Equal(t, int64(77), reloaded.TestTime)
 	assert.Equal(t, 88, reloaded.ResponseTime)
+	reloadedSettings := reloaded.GetOtherSettings()
+	require.NotNil(t, reloadedSettings.OpenRouterEnterprise)
+	assert.True(t, *reloadedSettings.OpenRouterEnterprise)
+	assert.True(t, reloadedSettings.AllowServiceTier)
+	assert.True(t, reloadedSettings.UpstreamModelUpdateCheckEnabled)
+	assert.Equal(t, []string{"keep-ignored"}, reloadedSettings.UpstreamModelUpdateIgnoredModels)
+	assert.Equal(t, []string{"keep-detected"}, reloadedSettings.UpstreamModelUpdateLastDetectedModels)
+	assert.True(t, reloadedSettings.ChannelMonitorEnabled)
+	assert.Equal(t, 25, reloadedSettings.ChannelMonitorIntervalMinutes)
 }
 
 func TestSyncUpstreamSourceWritesOwnedZeroValues(t *testing.T) {
