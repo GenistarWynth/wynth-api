@@ -409,43 +409,48 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		}
 	}
 
-	key, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
-	if err != nil {
-		errText := SanitizeUpstreamSourceError(err)
-		_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
-		result.Status = model.UpstreamMappingSyncStatusFailed
-		result.Error = errText
-		return result, nil
+	upstreamKeyID := strings.TrimSpace(mapping.UpstreamKeyID)
+	rawKey := ""
+	if existingChannel != nil {
+		rawKey = strings.TrimSpace(existingChannel.Key)
 	}
-	if key.ID == "" {
-		err := errors.New("upstream key ID is missing")
-		errText := SanitizeUpstreamSourceError(err)
-		_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
-		result.Status = model.UpstreamMappingSyncStatusFailed
-		result.Error = errText
-		return result, nil
-	}
-
-	rawKey := strings.TrimSpace(key.Key)
-	if rawKey == "" && mapping.UpstreamKeyID != "" && mapping.LocalChannelID == 0 {
-		recoveredKey, err := recoverUpstreamSourceKeyForChannelCreate(ctx, adapter, source, mapping, key)
+	if rawKey == "" {
+		key, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
 		if err != nil {
 			errText := SanitizeUpstreamSourceError(err)
-			_ = updateUpstreamSourceMappingSync(mapping.Id, key.ID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+			_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 			result.Status = model.UpstreamMappingSyncStatusFailed
 			result.Error = errText
 			return result, nil
 		}
-		key = recoveredKey
+		if key.ID == "" {
+			err := errors.New("upstream key ID is missing")
+			errText := SanitizeUpstreamSourceError(err)
+			_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+			result.Status = model.UpstreamMappingSyncStatusFailed
+			result.Error = errText
+			return result, nil
+		}
+
+		upstreamKeyID = strings.TrimSpace(key.ID)
 		rawKey = strings.TrimSpace(key.Key)
-	}
-	if rawKey == "" && existingChannel != nil {
-		rawKey = existingChannel.Key
+		if rawKey == "" && mapping.UpstreamKeyID != "" && mapping.LocalChannelID == 0 {
+			recoveredKey, err := recoverUpstreamSourceKeyForChannelCreate(ctx, adapter, source, mapping, key)
+			if err != nil {
+				errText := SanitizeUpstreamSourceError(err)
+				_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+				result.Status = model.UpstreamMappingSyncStatusFailed
+				result.Error = errText
+				return result, nil
+			}
+			upstreamKeyID = strings.TrimSpace(recoveredKey.ID)
+			rawKey = strings.TrimSpace(recoveredKey.Key)
+		}
 	}
 	if rawKey == "" {
 		err := errors.New("upstream key value is missing")
 		errText := SanitizeUpstreamSourceError(err)
-		_ = updateUpstreamSourceMappingSync(mapping.Id, key.ID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 		result.Status = model.UpstreamMappingSyncStatusFailed
 		result.Error = errText
 		return result, nil
@@ -471,7 +476,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	savedChannel, err := saveGeneratedChannel(channel, created, now)
 	if err != nil {
 		errText := SanitizeUpstreamSourceError(err)
-		_ = updateUpstreamSourceMappingSync(mapping.Id, key.ID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 		result.Status = model.UpstreamMappingSyncStatusFailed
 		result.Error = errText
 		return result, nil
@@ -484,7 +489,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	}
 	if err != nil {
 		errText := SanitizeUpstreamSourceError(err)
-		_ = updateUpstreamSourceMappingSync(mapping.Id, key.ID, savedChannel.Id, model.UpstreamMappingSyncStatusFailed, errText, now)
+		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, savedChannel.Id, model.UpstreamMappingSyncStatusFailed, errText, now)
 		result.Status = model.UpstreamMappingSyncStatusFailed
 		result.Error = errText
 		result.LocalChannelID = savedChannel.Id
@@ -497,7 +502,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		status = model.UpstreamMappingSyncStatusFailed
 		lastError = result.Error
 	}
-	if err := updateUpstreamSourceMappingSync(mapping.Id, key.ID, savedChannel.Id, status, lastError, now); err != nil {
+	if err := updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, savedChannel.Id, status, lastError, now); err != nil {
 		errText := SanitizeUpstreamSourceError(err)
 		result.Status = model.UpstreamMappingSyncStatusFailed
 		result.Error = errText

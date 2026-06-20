@@ -1316,8 +1316,7 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	assert.Equal(t, 0, second.Created)
 	assert.Equal(t, 1, second.Updated)
 	require.Len(t, createCalls, 1)
-	require.Len(t, updateCalls, 1)
-	assert.Equal(t, fakeUpstreamSourceUpdateKeyCall{KeyID: "key-10", GroupID: "10", Name: "Wynth API / source-a / primary"}, updateCalls[0])
+	assert.Empty(t, updateCalls)
 	var channelCount int64
 	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&channelCount).Error)
 	assert.Equal(t, int64(1), channelCount)
@@ -1327,7 +1326,73 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	assert.Equal(t, "key-10", reloadedMapping.UpstreamKeyID)
 	var channel model.Channel
 	require.NoError(t, model.DB.First(&channel, firstChannelID).Error)
-	assert.Equal(t, "sk-updated-10", channel.Key)
+	assert.Equal(t, "sk-created-10", channel.Key)
+}
+
+func TestSyncUpstreamSourceKeepsExistingGeneratedChannelKeyWithoutCreatingRemoteKey(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	baseURL := "https://relay.example.com"
+	priority := int64(0)
+	weight := uint(0)
+	channel := model.Channel{
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-existing-local",
+		Status:   common.ChannelStatusEnabled,
+		Name:     "source-a / 1.000x",
+		BaseURL:  &baseURL,
+		Models:   "old-model",
+		Group:    "default",
+		Priority: &priority,
+		Weight:   &weight,
+		Tag:      common.GetPointer("source-a"),
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
+		"local_channel_id": channel.Id,
+	}).Error)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	updateCalls := make([]fakeUpstreamSourceUpdateKeyCall, 0)
+	listCalls := make([]string, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				createCalls: &createCalls,
+				updateCalls: &updateCalls,
+				listCalls:   &listCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			assert.Equal(t, "sk-existing-local", channel.Key)
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1013 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 0, result.Created)
+	assert.Equal(t, 1, result.Updated)
+	assert.Empty(t, createCalls)
+	assert.Empty(t, updateCalls)
+	assert.Empty(t, listCalls)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, "sk-existing-local", reloaded.Key)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.Empty(t, reloadedMapping.UpstreamKeyID)
+	assert.Equal(t, channel.Id, reloadedMapping.LocalChannelID)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, reloadedMapping.SyncStatus)
 }
 
 func TestSyncUpstreamSourceReusesNamedUpstreamKeyBeforeCreating(t *testing.T) {
@@ -1535,7 +1600,7 @@ func TestSyncUpstreamSourcePreservesUnownedChannelFields(t *testing.T) {
 	assert.Equal(t, constant.ChannelTypeOpenAI, reloaded.Type)
 	require.NotNil(t, reloaded.BaseURL)
 	assert.Equal(t, "https://relay.example.com", *reloaded.BaseURL)
-	assert.Equal(t, "sk-new", reloaded.Key)
+	assert.Equal(t, "sk-old", reloaded.Key)
 	assert.Equal(t, "synced", reloaded.Group)
 	assert.Equal(t, "gpt-4o", reloaded.Models)
 	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
