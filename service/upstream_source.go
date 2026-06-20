@@ -159,14 +159,28 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 	}
 
 	var mappings []model.UpstreamSourceChannelMapping
-	if err := model.DB.Where("source_id = ? AND sync_enabled = ?", sourceID, true).Order("id").Find(&mappings).Error; err != nil {
+	if err := model.DB.Where("source_id = ?", sourceID).Order("id").Find(&mappings).Error; err != nil {
 		result.Status = model.UpstreamSyncStatusFailed
 		result.Error = SanitizeUpstreamSourceError(err)
 		finalStatus = model.UpstreamSyncStatusFailed
 		finalError = result.Error
 		return result, err
 	}
-	if len(mappings) == 0 {
+
+	resolutions := make([]upstreamSourceRuleResolution, len(mappings))
+	eligibleCount := 0
+	syncEnabledCount := 0
+	for i := range mappings {
+		if mappings[i].SyncEnabled {
+			syncEnabledCount++
+		}
+		resolutions[i] = resolveUpstreamSourceRuleForManualSync(config, &mappings[i])
+		if resolutions[i].SyncEligible {
+			eligibleCount++
+		}
+	}
+
+	if len(mappings) == 0 && len(config.LocalGroupRules) == 0 {
 		err := errors.New("no upstream groups selected for sync; discover and select at least one group before syncing")
 		sanitized := SanitizeUpstreamSourceError(err)
 		result.Status = model.UpstreamSyncStatusFailed
@@ -174,6 +188,32 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 		finalStatus = model.UpstreamSyncStatusFailed
 		finalError = sanitized
 		return result, err
+	}
+	if eligibleCount == 0 {
+		for i := range mappings {
+			mappingResult := skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now)
+			result.Results = append(result.Results, mappingResult)
+			result.Skipped++
+		}
+		if len(config.LocalGroupRules) > 0 {
+			err := errors.New("no upstream groups matched sync rules")
+			sanitized := SanitizeUpstreamSourceError(err)
+			result.Status = model.UpstreamSyncStatusFailed
+			result.Error = sanitized
+			finalStatus = model.UpstreamSyncStatusFailed
+			finalError = sanitized
+			return result, err
+		}
+		if syncEnabledCount == 0 {
+			err := errors.New("no upstream groups selected for sync; discover and select at least one group before syncing")
+			sanitized := SanitizeUpstreamSourceError(err)
+			result.Status = model.UpstreamSyncStatusFailed
+			result.Error = sanitized
+			finalStatus = model.UpstreamSyncStatusFailed
+			finalError = sanitized
+			return result, err
+		}
+		return result, nil
 	}
 
 	adapter, err := s.adapterFactory()(source.Type)
@@ -197,7 +237,13 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 
 	changedChannels := make([]*model.Channel, 0, len(mappings))
 	for i := range mappings {
-		mappingResult, changedChannel := s.syncUpstreamSourceMapping(ctx, &source, &mappings[i], config, adapter, now)
+		var mappingResult dto.UpstreamSourceMappingSyncResult
+		var changedChannel *model.Channel
+		if !resolutions[i].SyncEligible {
+			mappingResult = skippedUpstreamSourceMappingResult(&mappings[i], resolutions[i], now)
+		} else {
+			mappingResult, changedChannel = s.syncUpstreamSourceMapping(ctx, &source, &mappings[i], config, resolutions[i], adapter, now)
+		}
 		result.Results = append(result.Results, mappingResult)
 		switch mappingResult.Status {
 		case model.UpstreamMappingSyncStatusSynced:
@@ -236,6 +282,20 @@ func (s *UpstreamSourceService) Sync(ctx context.Context, sourceID int) (*dto.Up
 	return result, nil
 }
 
+func resolveUpstreamSourceRuleForManualSync(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) upstreamSourceRuleResolution {
+	resolution := resolveUpstreamSourceRule(config, mapping)
+	if mapping == nil || len(config.LocalGroupRules) == 0 || mapping.SyncEnabled {
+		return resolution
+	}
+	eligibilityMapping := *mapping
+	eligibilityMapping.SyncEnabled = true
+	ruleResolution := resolveUpstreamSourceRule(config, &eligibilityMapping)
+	if !ruleResolution.SyncEligible && ruleResolution.Reason != upstreamSourceMatchReasonManualDisabled {
+		return ruleResolution
+	}
+	return resolution
+}
+
 func validateUpstreamSourceSyncConfig(source *model.UpstreamSource) error {
 	if source == nil {
 		return errors.New("upstream source is required")
@@ -269,7 +329,23 @@ func upstreamSourceGeneratedBaseURL(source *model.UpstreamSource) string {
 	return strings.TrimSpace(source.BaseURL)
 }
 
-func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, adapter UpstreamSourceAdapter, now int64) (dto.UpstreamSourceMappingSyncResult, *model.Channel) {
+func skippedUpstreamSourceMappingResult(mapping *model.UpstreamSourceChannelMapping, resolution upstreamSourceRuleResolution, now int64) dto.UpstreamSourceMappingSyncResult {
+	errText := SanitizeUpstreamSourceError(errors.New(resolution.Reason))
+	result := dto.UpstreamSourceMappingSyncResult{
+		Status: model.UpstreamMappingSyncStatusSkipped,
+		Error:  errText,
+	}
+	if mapping == nil {
+		return result
+	}
+	result.MappingID = mapping.Id
+	result.UpstreamGroupID = mapping.UpstreamGroupID
+	result.LocalChannelID = mapping.LocalChannelID
+	_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusSkipped, errText, now)
+	return result
+}
+
+func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, resolution upstreamSourceRuleResolution, adapter UpstreamSourceAdapter, now int64) (dto.UpstreamSourceMappingSyncResult, *model.Channel) {
 	result := dto.UpstreamSourceMappingSyncResult{
 		MappingID:       mapping.Id,
 		UpstreamGroupID: mapping.UpstreamGroupID,
@@ -347,13 +423,13 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		return result, nil
 	}
 
-	channel := buildGeneratedChannel(source, mapping, config, rawKey)
+	channel := buildGeneratedChannel(source, mapping, config, resolution, rawKey)
 	if existingChannel != nil {
 		channel.Id = existingChannel.Id
-		mergeGeneratedChannelOtherSettings(channel, existingChannel, config, source, mapping)
+		mergeGeneratedChannelOtherSettings(channel, existingChannel, resolution, source, mapping)
 	}
 
-	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(config), channel, config)
+	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(config), channel, resolution)
 	if modelErr != nil {
 		result.Error = SanitizeUpstreamSourceError(modelErr)
 		channel.Models = ""
@@ -587,34 +663,34 @@ func truncateUpstreamSourceString(value string, maxBytes int) string {
 	return string(truncated)
 }
 
-func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, rawKey string) *model.Channel {
+func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, resolution upstreamSourceRuleResolution, rawKey string) *model.Channel {
 	channel := &model.Channel{
 		Name:     upstreamSourceGeneratedChannelName(source, mapping),
 		Type:     config.ChannelType,
 		Key:      rawKey,
 		BaseURL:  common.GetPointer(upstreamSourceGeneratedBaseURL(source)),
-		Group:    resolveUpstreamSourceLocalGroup(config, mapping),
+		Group:    resolution.LocalGroup,
 		Priority: common.GetPointer(config.DefaultPriority),
 		Weight:   common.GetPointer(config.DefaultWeight),
 		Tag:      common.GetPointer(strings.TrimSpace(source.Name)),
 		Remark:   upstreamSourceGeneratedChannelRemark(mapping),
 	}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		ChannelMonitorEnabled:         config.EnableMonitor,
-		ChannelMonitorIntervalMinutes: config.MonitorIntervalMinutes,
+		ChannelMonitorEnabled:         resolution.MonitorEnabled,
+		ChannelMonitorIntervalMinutes: resolution.MonitorIntervalMinutes,
 		GeneratedByUpstreamSourceID:   source.Id,
 		GeneratedByUpstreamMappingID:  mapping.Id,
 	})
 	return channel
 }
 
-func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel *model.Channel, config upstreamSourceSyncConfig, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) {
+func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel *model.Channel, resolution upstreamSourceRuleResolution, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) {
 	if channel == nil || existingChannel == nil {
 		return
 	}
 	settings := existingChannel.GetOtherSettings()
-	settings.ChannelMonitorEnabled = config.EnableMonitor
-	settings.ChannelMonitorIntervalMinutes = config.MonitorIntervalMinutes
+	settings.ChannelMonitorEnabled = resolution.MonitorEnabled
+	settings.ChannelMonitorIntervalMinutes = resolution.MonitorIntervalMinutes
 	if source != nil {
 		settings.GeneratedByUpstreamSourceID = source.Id
 	}
@@ -624,10 +700,7 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 	channel.SetOtherSettings(settings)
 }
 
-func fetchGeneratedChannelModels(fetchModels func(channel *model.Channel) ([]string, error), channel *model.Channel, config upstreamSourceSyncConfig) ([]string, error) {
-	if config.AutoSyncModels == nil || !*config.AutoSyncModels {
-		return nil, errors.New("models are required before enabling generated channel")
-	}
+func fetchGeneratedChannelModels(fetchModels func(channel *model.Channel) ([]string, error), channel *model.Channel, resolution upstreamSourceRuleResolution) ([]string, error) {
 	models, err := fetchModels(channel)
 	if err != nil {
 		return nil, err
@@ -636,7 +709,27 @@ func fetchGeneratedChannelModels(fetchModels func(channel *model.Channel) ([]str
 	if len(models) == 0 {
 		return nil, errors.New("models are required before enabling generated channel")
 	}
+	if resolution.ModelStrategy == upstreamSourceModelStrategyFixed {
+		models = intersectFetchedModelsWithFixedModels(models, resolution.FixedModels)
+		if len(models) == 0 {
+			return nil, errors.New("no configured models are available upstream")
+		}
+	}
 	return models, nil
+}
+
+func intersectFetchedModelsWithFixedModels(fetchedModels []string, fixedModels []string) []string {
+	allowed := make(map[string]struct{}, len(fixedModels))
+	for _, modelName := range normalizeUpstreamSourceFixedModels(fixedModels) {
+		allowed[modelName] = struct{}{}
+	}
+	intersected := make([]string, 0, len(fetchedModels))
+	for _, modelName := range fetchedModels {
+		if _, ok := allowed[modelName]; ok {
+			intersected = append(intersected, modelName)
+		}
+	}
+	return intersected
 }
 
 func saveGeneratedChannel(channel *model.Channel, create bool) (*model.Channel, error) {

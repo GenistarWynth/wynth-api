@@ -914,6 +914,11 @@ func TestSyncUpstreamSourceRoutesLocalGroupByRule(t *testing.T) {
 				"local_group":   "pro",
 				"name_contains": []string{"pro"},
 			},
+			{
+				"name":          "Regular",
+				"local_group":   "regular",
+				"name_contains": []string{"basic"},
+			},
 		},
 	})
 	rate := 1.0
@@ -944,6 +949,238 @@ func TestSyncUpstreamSourceRoutesLocalGroupByRule(t *testing.T) {
 	require.Len(t, channels, 2)
 	assert.Equal(t, "pro", channels[0].Group)
 	assert.Equal(t, "regular", channels[1].Group)
+}
+
+func TestSyncUpstreamSourceSkipsUnmatchedRuleDrivenMappings(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI only",
+				"local_group": "openai",
+				"platforms":   []string{"openai"},
+			},
+		},
+	})
+	rate := 1.0
+	openAIMapping := createSyncTestMapping(t, source.Id, "openai", "OpenAI", &rate)
+	anthropicMapping := createSyncTestMapping(t, source.Id, "anthropic", "Anthropic", &rate)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", anthropicMapping.Id).Update("upstream_platform", "anthropic").Error)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				createKeys: []UpstreamKey{
+					{ID: "key-openai", Key: "sk-secret-openai"},
+					{ID: "key-anthropic", Key: "sk-secret-anthropic"},
+				},
+				createCalls: &createCalls,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 2001 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 1, result.Created)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	require.Len(t, result.Results, 2)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, result.Results[0].Status)
+	assert.Equal(t, openAIMapping.Id, result.Results[0].MappingID)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, result.Results[1].Status)
+	assert.Equal(t, anthropicMapping.Id, result.Results[1].MappingID)
+	assert.Equal(t, upstreamSourceMatchReasonNoMatchingRule, result.Results[1].Error)
+	require.Len(t, createCalls, 1)
+	assert.Equal(t, "openai", createCalls[0].GroupID)
+
+	var channels []model.Channel
+	require.NoError(t, model.DB.Order("id").Find(&channels).Error)
+	require.Len(t, channels, 1)
+	assert.Equal(t, "sk-secret-openai", channels[0].Key)
+
+	var reloadedAnthropic model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedAnthropic, anthropicMapping.Id).Error)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, reloadedAnthropic.SyncStatus)
+	assert.Equal(t, upstreamSourceMatchReasonNoMatchingRule, reloadedAnthropic.LastError)
+	assert.Zero(t, reloadedAnthropic.LocalChannelID)
+	assert.Empty(t, reloadedAnthropic.UpstreamKeyID)
+}
+
+func TestSyncUpstreamSourceUsesRuleLocalGroupAndMonitorOverrides(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"default_local_group":      "default",
+		"enable_monitor":           true,
+		"monitor_interval_minutes": 20,
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI Pro",
+				"local_group": "pro",
+				"platforms":   []string{"openai"},
+				"monitor": map[string]any{
+					"enabled":          false,
+					"interval_minutes": 5,
+				},
+			},
+		},
+	})
+	rate := 1.0
+	createSyncTestMapping(t, source.Id, "10", "OpenAI", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 2002 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Equal(t, "pro", channel.Group)
+	settings := channel.GetOtherSettings()
+	assert.False(t, settings.ChannelMonitorEnabled)
+	assert.Equal(t, 5, settings.ChannelMonitorIntervalMinutes)
+}
+
+func TestSyncUpstreamSourceFixedModelsIntersectsFetchedModels(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"local_group_rules": []map[string]any{
+			{
+				"name":           "OpenAI fixed",
+				"local_group":    "openai",
+				"platforms":      []string{"openai"},
+				"model_strategy": "fixed",
+				"fixed_models":   []string{"gpt-4o", "gpt-4.1", "claude-3-5-sonnet"},
+			},
+		},
+	})
+	rate := 1.0
+	createSyncTestMapping(t, source.Id, "10", "OpenAI", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o", "claude-3-5-sonnet", "unused-model"}, nil
+		},
+		Now: func() int64 { return 2003 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Equal(t, "gpt-4o,claude-3-5-sonnet", channel.Models)
+	assert.Equal(t, common.ChannelStatusEnabled, channel.Status)
+}
+
+func TestSyncUpstreamSourceFixedModelsEmptyIntersectionDisablesChannel(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"local_group_rules": []map[string]any{
+			{
+				"name":           "OpenAI fixed",
+				"local_group":    "openai",
+				"platforms":      []string{"openai"},
+				"model_strategy": "fixed",
+				"fixed_models":   []string{"gpt-4.1"},
+			},
+		},
+	})
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "OpenAI", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 2004 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusFailed, result.Status)
+	assert.Equal(t, 1, result.Failed)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, model.UpstreamMappingSyncStatusFailed, result.Results[0].Status)
+	assert.Contains(t, result.Results[0].Error, "no configured models are available upstream")
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Empty(t, channel.Models)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+	var reloaded model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloaded, mapping.Id).Error)
+	assert.Contains(t, reloaded.LastError, "no configured models are available upstream")
+}
+
+func TestSyncUpstreamSourceFailsWhenRuleDrivenSourceHasNoEligibleMappings(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI only",
+				"local_group": "openai",
+				"platforms":   []string{"openai"},
+			},
+		},
+	})
+	rate := 1.0
+	unmatched := createSyncTestMapping(t, source.Id, "anthropic", "Anthropic", &rate)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", unmatched.Id).Update("upstream_platform", "anthropic").Error)
+	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{createCalls: &createCalls}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 2005 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusFailed, result.Status)
+	assert.Equal(t, "no upstream groups matched sync rules", result.Error)
+	assert.Equal(t, 0, result.Created)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	assert.Empty(t, createCalls)
+	var channelCount int64
+	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&channelCount).Error)
+	assert.Equal(t, int64(0), channelCount)
+	var reloaded model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloaded, unmatched.Id).Error)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, reloaded.SyncStatus)
+	assert.Equal(t, upstreamSourceMatchReasonNoMatchingRule, reloaded.LastError)
+	var reloadedSource model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloadedSource, source.Id).Error)
+	assert.Equal(t, model.UpstreamSyncStatusFailed, reloadedSource.LastSyncStatus)
+	assert.Equal(t, "no upstream groups matched sync rules", reloadedSource.LastSyncError)
 }
 
 func TestSyncUpstreamSourceFetchesModelsFromAllowedPrivateRelayBaseURL(t *testing.T) {
