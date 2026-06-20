@@ -180,6 +180,37 @@ func TestSub2APIAdapterCreateKeyReturnsIDAndFullKey(t *testing.T) {
 	assert.Equal(t, "10", key.GroupID)
 }
 
+func TestSub2APIAdapterUpdateKeySendsPutAndNormalizesResponse(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/keys/123", r.URL.Path)
+		require.Equal(t, http.MethodPut, r.Method)
+		require.Equal(t, "Bearer existing-token", r.Header.Get("Authorization"))
+		var payload map[string]any
+		require.NoError(t, common.DecodeJson(r.Body, &payload))
+		assert.Equal(t, "20", fmt.Sprint(payload["group_id"]))
+		assert.Equal(t, "updated channel", payload["name"])
+		writeSub2APITestJSON(t, w, map[string]any{
+			"code":    0,
+			"message": "success",
+			"data":    map[string]any{"id": 123, "name": "updated channel", "group_id": 20},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	adapter := Sub2APIAdapter{Client: server.Client()}
+
+	key, err := adapter.UpdateKey(context.Background(), source, "123", "20", "updated channel")
+
+	require.NoError(t, err)
+	assert.Equal(t, "123", key.ID)
+	assert.Empty(t, key.Key)
+	assert.Equal(t, "updated channel", key.Name)
+	assert.Equal(t, "20", key.GroupID)
+}
+
 func TestSub2APIAdapterListKeysReadsPaginatedItems(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 
@@ -261,6 +292,27 @@ func TestSub2APIAdapterNonZeroEnvelopeCodeIsError(t *testing.T) {
 	assert.NotContains(t, err.Error(), "should-not-leak")
 }
 
+func TestSub2APIAdapterRejectsOversizedResponseBody(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/keys", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"code":0,"message":"success","data":{"id":1,"key":"sk-test","name":"` + strings.Repeat("x", 2*1024*1024) + `","group_id":10}}`))
+		require.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	adapter := Sub2APIAdapter{Client: server.Client()}
+
+	_, err := adapter.CreateKey(context.Background(), source, "10", "oversized")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "response body too large")
+}
+
 func TestSub2APIAdapterRejectsBlockedURL(t *testing.T) {
 	withSub2APIFetchSetting(t, false)
 
@@ -274,7 +326,7 @@ func TestSub2APIAdapterRejectsBlockedURL(t *testing.T) {
 }
 
 func TestSub2APIAdapterSanitizesAndCapsErrors(t *testing.T) {
-	err := fmt.Errorf("GET https://example.com/path?access_token=query-access&refresh_token=query-refresh&api_key=query-key&password=query-password&token=query-token failed Authorization: Bearer bearer-secret Cookie: session-secret X-API-Key: header-key password=body-password refresh_token=body-refresh api_key=body-key %s", strings.Repeat("x", 2000))
+	err := fmt.Errorf(`GET https://example.com/path?access_token=query-access&refresh_token=query-refresh&api_key=query-key&password=query-password&token=query-token failed Authorization: Bearer bearer-secret Cookie: session-secret X-API-Key: header-key password=body-password refresh_token=body-refresh api_key=body-key {"access_token":"json-access","refresh_token":"json-refresh","api_key":"json-key","password":"json-password","token":"json-token"} %s`, strings.Repeat("x", 2000))
 
 	sanitized := SanitizeUpstreamSourceError(err)
 
@@ -290,6 +342,11 @@ func TestSub2APIAdapterSanitizesAndCapsErrors(t *testing.T) {
 	assert.NotContains(t, sanitized, "body-password")
 	assert.NotContains(t, sanitized, "body-refresh")
 	assert.NotContains(t, sanitized, "body-key")
+	assert.NotContains(t, sanitized, "json-access")
+	assert.NotContains(t, sanitized, "json-refresh")
+	assert.NotContains(t, sanitized, "json-key")
+	assert.NotContains(t, sanitized, "json-password")
+	assert.NotContains(t, sanitized, "json-token")
 }
 
 func writeSub2APITestJSON(t *testing.T, w http.ResponseWriter, payload any) {

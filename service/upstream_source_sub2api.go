@@ -20,6 +20,8 @@ import (
 
 var ErrUpstreamSource2FARequired = errors.New("upstream source requires 2FA")
 
+const sub2APIResponseBodyLimitBytes int64 = 1 << 20
+
 type Sub2APIAdapter struct {
 	Client *http.Client
 }
@@ -281,7 +283,7 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 	defer resp.Body.Close()
 
 	var envelope sub2APIEnvelope[T]
-	if err := common.DecodeJson(resp.Body, &envelope); err != nil {
+	if err := decodeSub2APIResponseBody(resp.Body, &envelope); err != nil {
 		return zero, fmt.Errorf("decode upstream response failed: %w", err)
 	}
 	if envelope.Code != 0 {
@@ -291,6 +293,17 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 		return zero, fmt.Errorf("upstream request failed with status %d", resp.StatusCode)
 	}
 	return envelope.Data, nil
+}
+
+func decodeSub2APIResponseBody(reader io.Reader, v any) error {
+	body, err := io.ReadAll(io.LimitReader(reader, sub2APIResponseBodyLimitBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(body)) > sub2APIResponseBodyLimitBytes {
+		return fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
+	}
+	return common.Unmarshal(body, v)
 }
 
 func buildSub2APIURL(source *model.UpstreamSource, endpoint string, query url.Values) (string, error) {
@@ -349,6 +362,7 @@ func formatNullableIntID(value *int64) string {
 }
 
 var upstreamSourceSensitivePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)("(?:(?:access|refresh)_token|api[_-]?key|password|token)"\s*:\s*")[^"]*(")`),
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)bearer\s+[^,\s;&]+`),
 	regexp.MustCompile(`(?i)bearer\s+[^,\s;&]+`),
 	regexp.MustCompile(`(?i)(cookie\s*[:=]\s*)[^,\s;&]+`),
@@ -362,7 +376,7 @@ func SanitizeUpstreamSourceError(err error) string {
 	}
 	text := err.Error()
 	for _, pattern := range upstreamSourceSensitivePatterns {
-		text = pattern.ReplaceAllString(text, "${1}[redacted]")
+		text = pattern.ReplaceAllString(text, "${1}[redacted]${2}")
 	}
 	if len(text) > 1024 {
 		text = text[:1024]
