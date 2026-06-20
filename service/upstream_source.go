@@ -102,6 +102,9 @@ func validateUpstreamSourceDiscoveryConfig(source *model.UpstreamSource) error {
 	if source == nil {
 		return errors.New("upstream source is required")
 	}
+	if source.Status != model.UpstreamSourceStatusEnabled {
+		return fmt.Errorf("upstream source must be enabled for discovery")
+	}
 	if strings.TrimSpace(source.Type) == "" {
 		return errors.New("upstream source type is required")
 	}
@@ -136,7 +139,7 @@ func validateAbsoluteHTTPURL(name string, value string) error {
 }
 
 func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64) ([]model.UpstreamSourceChannelMapping, []string, int) {
-	mappings := make([]model.UpstreamSourceChannelMapping, 0, len(groups))
+	mappingByID := make(map[string]model.UpstreamSourceChannelMapping, len(groups))
 	discoveredIDs := make([]string, 0, len(groups))
 	invalidCount := 0
 
@@ -146,13 +149,14 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 			invalidCount++
 			continue
 		}
+		if _, exists := mappingByID[groupID]; !exists {
+			discoveredIDs = append(discoveredIDs, groupID)
+		}
 		discoveryStatus := model.UpstreamMappingDiscoveryStatusActive
 		if group.EffectiveRateMultiplier == nil {
 			discoveryStatus = model.UpstreamMappingDiscoveryStatusInvalid
-			invalidCount++
 		}
-		discoveredIDs = append(discoveredIDs, groupID)
-		mappings = append(mappings, model.UpstreamSourceChannelMapping{
+		mappingByID[groupID] = model.UpstreamSourceChannelMapping{
 			SourceID:                sourceID,
 			UpstreamGroupID:         groupID,
 			UpstreamGroupName:       strings.TrimSpace(group.Name),
@@ -162,7 +166,16 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64)
 			UpstreamRateMultiplier:  group.RateMultiplier,
 			EffectiveRateMultiplier: group.EffectiveRateMultiplier,
 			LastDiscoveredAt:        now,
-		})
+		}
+	}
+
+	mappings := make([]model.UpstreamSourceChannelMapping, 0, len(mappingByID))
+	for _, groupID := range discoveredIDs {
+		mapping := mappingByID[groupID]
+		if mapping.DiscoveryStatus == model.UpstreamMappingDiscoveryStatusInvalid {
+			invalidCount++
+		}
+		mappings = append(mappings, mapping)
 	}
 
 	return mappings, discoveredIDs, invalidCount

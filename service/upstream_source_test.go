@@ -116,6 +116,67 @@ func TestDiscoverUpstreamSourceUpsertsMappings(t *testing.T) {
 	assert.Empty(t, reloaded.LastDiscoveryError)
 }
 
+func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rateA := 0.5
+	rateB := 1.5
+	groups := []UpstreamGroup{
+		{ID: " 10 ", Name: "first", Platform: "openai", Status: "enabled", RateMultiplier: &rateA, EffectiveRateMultiplier: &rateA},
+		{ID: "10", Name: "last", Platform: "claude", Status: "disabled", RateMultiplier: &rateB, EffectiveRateMultiplier: &rateB},
+		{ID: "   ", Name: "blank", Platform: "openai", Status: "enabled", RateMultiplier: &rateA, EffectiveRateMultiplier: &rateA},
+	}
+	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, 12345)
+	require.Len(t, mappings, 1)
+	assert.Equal(t, []string{"10"}, discoveredIDs)
+	assert.Equal(t, 1, invalidCount)
+	assert.Equal(t, "10", mappings[0].UpstreamGroupID)
+	assert.Equal(t, "last", mappings[0].UpstreamGroupName)
+	assert.Equal(t, "claude", mappings[0].UpstreamPlatform)
+
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
+		SourceID:        source.Id,
+		UpstreamGroupID: "20",
+		DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+	}).Error)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
+		},
+		Now: func() int64 { return 12345 },
+	}
+
+	result, err := service.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Discovered)
+	assert.Equal(t, 1, result.Active)
+	assert.Equal(t, 1, result.Invalid)
+	assert.Equal(t, 1, result.Stale)
+	require.Len(t, result.Mappings, 2)
+
+	var mapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").First(&mapping).Error)
+	assert.Equal(t, "last", mapping.UpstreamGroupName)
+	assert.Equal(t, "claude", mapping.UpstreamPlatform)
+	assert.Equal(t, "disabled", mapping.UpstreamStatus)
+	require.NotNil(t, mapping.EffectiveRateMultiplier)
+	assert.Equal(t, rateB, *mapping.EffectiveRateMultiplier)
+
+	var duplicateCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").Count(&duplicateCount).Error)
+	assert.Equal(t, int64(1), duplicateCount)
+
+	var blankCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("source_id = ? AND upstream_group_id = ?", source.Id, "").Count(&blankCount).Error)
+	assert.Equal(t, int64(0), blankCount)
+
+	var stale model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&stale).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, stale.DiscoveryStatus)
+	assert.Equal(t, int64(12345), stale.LastDiscoveredAt)
+}
+
 func TestDiscoverUpstreamSourcePreservesSyncOwnedMappingFields(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)
@@ -339,6 +400,33 @@ func TestDiscoverUpstreamSourceNilAdapterFactoryFailsWithoutPanic(t *testing.T) 
 	assert.Equal(t, model.UpstreamDiscoveryStatusFailed, reloaded.LastDiscoveryStatus)
 	assert.Equal(t, int64(777), reloaded.LastDiscoveryTime)
 	assert.Contains(t, reloaded.LastDiscoveryError, "adapter")
+}
+
+func TestDiscoverUpstreamSourceDisabledSourceFailsBeforeAdapterCall(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("status", model.UpstreamSourceStatusDisabled).Error)
+	var adapterFactoryCalled bool
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			adapterFactoryCalled = true
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{{ID: "10", Name: "should not run"}}}, nil
+		},
+		Now: func() int64 { return 888 },
+	}
+
+	result, err := service.Discover(context.Background(), source.Id)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.False(t, adapterFactoryCalled)
+	assert.Contains(t, result.Error, "enabled")
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, model.UpstreamDiscoveryStatusFailed, reloaded.LastDiscoveryStatus)
+	assert.Equal(t, int64(888), reloaded.LastDiscoveryTime)
+	assert.Contains(t, reloaded.LastDiscoveryError, "enabled")
 }
 
 func TestDiscoverUpstreamSourceUnknownMultiplierIsInvalidForSync(t *testing.T) {
