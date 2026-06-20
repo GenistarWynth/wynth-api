@@ -31,22 +31,23 @@ func TestFetchChannelUpstreamModelIDsOpenAICompatible(t *testing.T) {
 	assert.Equal(t, []string{"gpt-4o", "gpt-4o-mini"}, ids)
 }
 
-func TestFetchChannelUpstreamModelIDsNormalizesBlankModels(t *testing.T) {
-	withSub2APIFetchSetting(t, true)
-
-	server := newUpstreamModelFetchTestServer(t)
-	defer server.Close()
-
+func TestBuildFetchModelsHeadersAppliesOverridesAndSkipsPassthroughRules(t *testing.T) {
+	overrideData, err := common.Marshal(map[string]any{
+		"X-Upstream-Key": "token {api_key}",
+		"re:^x-client-":  "ignored",
+	})
+	require.NoError(t, err)
 	channel := &model.Channel{
-		Type:    constant.ChannelTypeOpenAI,
-		Key:     "sk-test",
-		BaseURL: common.GetPointer(server.URL),
+		Type:           constant.ChannelTypeOpenAI,
+		HeaderOverride: common.GetPointer(string(overrideData)),
 	}
 
-	ids, err := FetchChannelUpstreamModelIDs(channel)
+	headers, err := BuildFetchModelsHeaders(channel, "sk-test")
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"gpt-4o", "gpt-4o-mini"}, ids)
+	assert.Equal(t, "Bearer sk-test", headers.Get("Authorization"))
+	assert.Equal(t, "token sk-test", headers.Get("X-Upstream-Key"))
+	assert.Empty(t, headers.Get("re:^x-client-"))
 }
 
 func newUpstreamModelFetchTestServer(t *testing.T) *httptest.Server {
