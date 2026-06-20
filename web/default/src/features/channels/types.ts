@@ -40,14 +40,49 @@ export const channelMonitorInfoSchema = z.object({
   latest_status: z.enum(['success', 'failed', 'degraded', 'error']).optional(),
   latest_checked_at: z.number().optional(),
   latest_latency_ms: z.number().optional(),
+  latest_endpoint_latency_ms: z.number().optional(),
+  latest_first_token_latency_ms: z.number().optional(),
+  latest_prompt_tokens: z.number().optional(),
+  latest_completion_tokens: z.number().optional(),
   latest_message: z.string().optional(),
   seven_day_checks: z.number().default(0),
   seven_day_successes: z.number().default(0),
   seven_day_availability: z.number().nullable().optional(),
   average_latency_ms: z.number().optional(),
+  average_endpoint_latency_ms: z.number().optional(),
+  average_first_token_latency_ms: z.number().optional(),
 })
 
 export type ChannelMonitorInfo = z.infer<typeof channelMonitorInfoSchema>
+
+export const channelMonitorRecordSchema = z.object({
+  id: z.number(),
+  channel_id: z.number(),
+  model: z.string().default(''),
+  status: z.enum(['success', 'failed', 'degraded', 'error']),
+  latency_ms: z.number().default(0),
+  endpoint_latency_ms: z.number().default(0),
+  first_token_latency_ms: z.number().default(0),
+  prompt_tokens: z.number().default(0),
+  completion_tokens: z.number().default(0),
+  message: z.string().default(''),
+  checked_at: z.number().default(0),
+  created_at: z.number().default(0),
+})
+
+export type ChannelMonitorRecord = z.infer<
+  typeof channelMonitorRecordSchema
+>
+
+export const channelMonitorDetailSchema = z.object({
+  channel_id: z.number(),
+  info: channelMonitorInfoSchema,
+  recent_records: z.array(channelMonitorRecordSchema).default([]),
+})
+
+export type ChannelMonitorDetail = z.infer<
+  typeof channelMonitorDetailSchema
+>
 
 export const channelSchema = z.object({
   id: z.number(),
@@ -185,6 +220,12 @@ export interface GetChannelResponse {
   success: boolean
   message?: string
   data?: Channel
+}
+
+export interface GetChannelMonitorDetailResponse {
+  success: boolean
+  message?: string
+  data?: ChannelMonitorDetail
 }
 
 export interface ChannelTestResponse {

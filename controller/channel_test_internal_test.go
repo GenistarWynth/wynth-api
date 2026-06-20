@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -79,4 +80,28 @@ func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, userID)
+}
+
+func TestChannelTestFirstTokenLatencyMSRequiresStreamResponse(t *testing.T) {
+	start := time.Unix(100, 0)
+	streamInfo := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(123 * time.Millisecond),
+		IsStream:          true,
+	}
+	require.Equal(t, int64(123), channelTestFirstTokenLatencyMS(streamInfo))
+
+	nonStreamInfo := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(123 * time.Millisecond),
+		IsStream:          false,
+	}
+	require.Equal(t, int64(0), channelTestFirstTokenLatencyMS(nonStreamInfo))
+
+	withoutFirstResponse := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(-time.Second),
+		IsStream:          true,
+	}
+	require.Equal(t, int64(0), channelTestFirstTokenLatencyMS(withoutFirstResponse))
 }

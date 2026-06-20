@@ -339,6 +339,10 @@ var streamSupportedChannels = map[int]bool{
 	constant.ChannelTypeAdvancedCustom: true,
 }
 
+func SupportsStreamOptions(channelType int) bool {
+	return streamSupportedChannels[channelType]
+}
+
 func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {
 	info := genBaseRelayInfo(c, nil)
 	info.RelayFormat = types.RelayFormatOpenAIRealtime

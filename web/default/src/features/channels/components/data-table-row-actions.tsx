@@ -52,12 +52,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { StatusBadge } from '@/components/status-badge'
 import { MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   channelsQueryKeys,
-  formatRelativeTime,
-  formatResponseTime,
   handleDeleteChannel,
   handleTestChannel,
   handleToggleChannelStatus,
@@ -70,105 +67,6 @@ import { useChannels } from './channels-provider'
 
 interface DataTableRowActionsProps {
   row: Row<Channel>
-}
-
-type MonitorLatestStatus = NonNullable<
-  Channel['monitor_info']
->['latest_status']
-
-function monitorStatusVariant(status: MonitorLatestStatus | undefined) {
-  if (status === 'success') return 'success'
-  if (status === 'failed' || status === 'error') return 'danger'
-  if (status === 'degraded') return 'warning'
-  return 'neutral'
-}
-
-function formatMonitorAvailability(
-  availability: number | null | undefined,
-  noDataLabel: string
-) {
-  if (typeof availability !== 'number' || !Number.isFinite(availability)) {
-    return noDataLabel
-  }
-  return `${Math.round(availability * 100)}%`
-}
-
-function ChannelMonitorMenuSummary({ channel }: { channel: Channel }) {
-  const { t } = useTranslation()
-  const monitorInfo = channel.monitor_info
-  const enabled = monitorInfo?.enabled === true
-  const latestStatus = monitorInfo?.latest_status
-  const latestCheckedAt = monitorInfo?.latest_checked_at ?? 0
-  const checks = monitorInfo?.seven_day_checks ?? 0
-  const successes = monitorInfo?.seven_day_successes ?? 0
-  const hasMonitorData = checks > 0 || latestCheckedAt > 0
-  const availabilityLabel = formatMonitorAvailability(
-    monitorInfo?.seven_day_availability,
-    t('No data')
-  )
-  const averageLatency =
-    typeof monitorInfo?.average_latency_ms === 'number'
-      ? formatResponseTime(monitorInfo.average_latency_ms, t)
-      : t('No data')
-  const latestLatency =
-    typeof monitorInfo?.latest_latency_ms === 'number'
-      ? formatResponseTime(monitorInfo.latest_latency_ms, t)
-      : t('No data')
-  const latestTime = latestCheckedAt > 0 ? formatRelativeTime(latestCheckedAt) : t('No data')
-
-  return (
-    <div className='px-2 py-2 text-xs' onClick={(event) => event.stopPropagation()}>
-      <div className='mb-2 flex items-center justify-between gap-2'>
-        <span className='flex items-center gap-1.5 font-medium'>
-          <Activity className='size-3.5' />
-          {t('Monitor')}
-        </span>
-        <StatusBadge
-          label={enabled ? t('Enabled') : t('Disabled')}
-          variant={enabled ? 'success' : 'neutral'}
-          size='sm'
-          copyable={false}
-        />
-      </div>
-      {hasMonitorData ? (
-        <div className='text-muted-foreground grid gap-1'>
-          <div className='flex justify-between gap-3'>
-            <span>{t('7-day')}</span>
-            <span className='text-foreground font-mono'>
-              {successes}/{checks} · {availabilityLabel}
-            </span>
-          </div>
-          <div className='flex justify-between gap-3'>
-            <span>{t('Average')}</span>
-            <span className='text-foreground font-mono'>{averageLatency}</span>
-          </div>
-          <div className='flex justify-between gap-3'>
-            <span>{t('Latest')}</span>
-            <span className='text-foreground flex items-center gap-1.5'>
-              <StatusBadge
-                label={latestStatus ? t(latestStatus) : t('No data')}
-                variant={monitorStatusVariant(latestStatus)}
-                size='sm'
-                copyable={false}
-              />
-              <span className='font-mono'>{latestLatency}</span>
-            </span>
-          </div>
-          <div className='flex justify-between gap-3'>
-            <span>{t('Last Checked')}</span>
-            <span className='text-foreground font-mono'>{latestTime}</span>
-          </div>
-          {monitorInfo?.latest_message && (
-            <div className='text-destructive line-clamp-2'>
-              {monitorInfo.latest_message}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className='text-muted-foreground'>{t('No monitor data')}</div>
-      )}
-    </div>
-  )
 }
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
@@ -212,6 +110,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleQueryBalance = () => {
     setCurrentRow(channel)
     setOpen('balance-query')
+  }
+
+  const handleMonitor = () => {
+    setCurrentRow(channel)
+    setOpen('channel-monitor')
   }
 
   const handleFetchModels = () => {
@@ -311,8 +214,14 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           <MoreHorizontal className='h-4 w-4' />
           <span className='sr-only'>{t('Open menu')}</span>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align='end' className='w-72'>
-          <ChannelMonitorMenuSummary channel={channel} />
+        <DropdownMenuContent align='end' className='w-56'>
+          <DropdownMenuItem onClick={handleMonitor}>
+            {t('Channel Monitor')}
+            <DropdownMenuShortcut>
+              <Activity size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+
           <DropdownMenuSeparator />
 
           {/* Edit */}

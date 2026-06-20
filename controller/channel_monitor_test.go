@@ -203,6 +203,69 @@ func TestGetAllChannelsIncludesMonitorInfo(t *testing.T) {
 	assert.Equal(t, int64(1), response.Data.Items[0].MonitorInfo.SevenDaySuccesses)
 }
 
+func TestGetChannelMonitorDetail(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	gin.SetMode(gin.TestMode)
+
+	channel := &model.Channel{
+		Id:     51,
+		Type:   constant.ChannelTypeOpenAI,
+		Name:   "detail-monitored-channel",
+		Key:    "secret-key",
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-4o-mini",
+		Group:  "default",
+		OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+			ChannelMonitorEnabled:         true,
+			ChannelMonitorIntervalMinutes: 4,
+		}),
+	}
+	require.NoError(t, db.Create(channel).Error)
+	checkedAtBase := common.GetTimestamp() - 100
+	for i := 1; i <= 4; i++ {
+		status := model.ChannelMonitorStatusSuccess
+		if i == 4 {
+			status = model.ChannelMonitorStatusDegraded
+		}
+		require.NoError(t, model.RecordChannelMonitorLog(model.ChannelMonitorLog{
+			ChannelID:           channel.Id,
+			Model:               "gpt-4o-mini",
+			Status:              status,
+			LatencyMS:           int64(100 * i),
+			EndpointLatencyMS:   int64(10 * i),
+			FirstTokenLatencyMS: int64(50 * i),
+			PromptTokens:        i,
+			CompletionTokens:    i + 10,
+			Message:             "monitor point",
+			CheckedAt:           checkedAtBase + int64(i),
+		}))
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "51"}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/51/monitor", nil)
+
+	GetChannelMonitorDetail(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool                       `json:"success"`
+		Data    model.ChannelMonitorDetail `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	assert.Equal(t, channel.Id, response.Data.ChannelID)
+	assert.Equal(t, model.ChannelMonitorStatusDegraded, response.Data.Info.LatestStatus)
+	assert.Equal(t, int64(400), response.Data.Info.LatestLatencyMS)
+	assert.Equal(t, int64(40), response.Data.Info.LatestEndpointLatencyMS)
+	assert.Equal(t, int64(200), response.Data.Info.LatestFirstTokenLatencyMS)
+	assert.Equal(t, int64(4), response.Data.Info.SevenDaySuccesses)
+	require.Len(t, response.Data.RecentRecords, 4)
+	assert.Equal(t, checkedAtBase+1, response.Data.RecentRecords[0].CheckedAt)
+	assert.Equal(t, 14, response.Data.RecentRecords[3].CompletionTokens)
+}
+
 func TestFilterDueChannelMonitorCandidates(t *testing.T) {
 	now := int64(10_000)
 	channels := []*model.Channel{
@@ -274,6 +337,13 @@ func TestChannelMonitorStatusFromResult(t *testing.T) {
 		localErr: errors.New("probe setup failed"),
 	}))
 	assert.Equal(t, model.ChannelMonitorStatusSuccess, channelMonitorStatusFromResult(testResult{}))
+}
+
+func TestShouldUseStreamForAutomaticChannelTestUsesSupportedChannels(t *testing.T) {
+	assert.True(t, shouldUseStreamForAutomaticChannelTest(&model.Channel{Type: constant.ChannelTypeOpenAI}))
+	assert.True(t, shouldUseStreamForAutomaticChannelTest(&model.Channel{Type: constant.ChannelTypeCodex}))
+	assert.False(t, shouldUseStreamForAutomaticChannelTest(&model.Channel{Type: constant.ChannelTypeMidjourney}))
+	assert.False(t, shouldUseStreamForAutomaticChannelTest(nil))
 }
 
 func TestRecordChannelTestConsumeLogSkipsMonitorProbes(t *testing.T) {
