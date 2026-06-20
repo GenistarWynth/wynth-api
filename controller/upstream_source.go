@@ -360,12 +360,7 @@ func marshalUpstreamSourceAuthConfig(email string, password string) (string, err
 }
 
 func marshalUpstreamSourceSyncConfig(config upstreamSourceControllerSyncConfig) (string, error) {
-	if strings.TrimSpace(config.LocalGroup) == "" {
-		config.LocalGroup = "default"
-	}
-	if config.ChannelType == 0 {
-		config.ChannelType = constant.ChannelTypeOpenAI
-	}
+	config = normalizeUpstreamSourceControllerSyncConfig(config)
 	data, err := common.Marshal(config)
 	if err != nil {
 		return "", err
@@ -375,24 +370,63 @@ func marshalUpstreamSourceSyncConfig(config upstreamSourceControllerSyncConfig) 
 
 func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceResponse {
 	auth := parseUpstreamSourceAuthConfig(source.AuthConfig)
+	sync := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	return dto.UpstreamSourceResponse{
-		Id:                  source.Id,
-		Name:                source.Name,
-		Type:                source.Type,
-		Status:              source.Status,
-		BaseURL:             source.BaseURL,
-		AdminAPIBasePath:    source.AdminAPIBasePath,
-		RelayBaseURL:        source.RelayBaseURL,
-		MaskedEmail:         common.MaskEmail(auth.Email),
-		HasCredentials:      upstreamSourceHasCredentials(auth),
-		LastDiscoveryTime:   source.LastDiscoveryTime,
-		LastDiscoveryStatus: source.LastDiscoveryStatus,
-		LastDiscoveryError:  sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
-		LastSyncTime:        source.LastSyncTime,
-		LastSyncStatus:      source.LastSyncStatus,
-		LastSyncError:       sanitizeUpstreamSourceResponseError(source.LastSyncError),
-		CreatedTime:         source.CreatedTime,
-		UpdatedTime:         source.UpdatedTime,
+		Id:                     source.Id,
+		Name:                   source.Name,
+		Type:                   source.Type,
+		Status:                 source.Status,
+		BaseURL:                source.BaseURL,
+		AdminAPIBasePath:       source.AdminAPIBasePath,
+		RelayBaseURL:           source.RelayBaseURL,
+		LocalGroup:             sync.LocalGroup,
+		ChannelType:            sync.ChannelType,
+		DefaultPriority:        sync.DefaultPriority,
+		DefaultWeight:          sync.DefaultWeight,
+		EnableMonitor:          sync.EnableMonitor,
+		MonitorIntervalMinutes: sync.MonitorIntervalMinutes,
+		AutoSyncModels:         sync.AutoSyncModels,
+		MaskedEmail:            common.MaskEmail(auth.Email),
+		HasCredentials:         upstreamSourceHasCredentials(auth),
+		LastDiscoveryTime:      source.LastDiscoveryTime,
+		LastDiscoveryStatus:    source.LastDiscoveryStatus,
+		LastDiscoveryError:     sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
+		LastSyncTime:           source.LastSyncTime,
+		LastSyncStatus:         source.LastSyncStatus,
+		LastSyncError:          sanitizeUpstreamSourceResponseError(source.LastSyncError),
+		CreatedTime:            source.CreatedTime,
+		UpdatedTime:            source.UpdatedTime,
+	}
+}
+
+func parseUpstreamSourceSyncConfig(raw string) upstreamSourceControllerSyncConfig {
+	config := defaultUpstreamSourceControllerSyncConfig()
+	if strings.TrimSpace(raw) == "" {
+		return config
+	}
+	if err := common.UnmarshalJsonStr(raw, &config); err != nil {
+		return defaultUpstreamSourceControllerSyncConfig()
+	}
+	return normalizeUpstreamSourceControllerSyncConfig(config)
+}
+
+func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceControllerSyncConfig) upstreamSourceControllerSyncConfig {
+	if strings.TrimSpace(config.LocalGroup) == "" {
+		config.LocalGroup = "default"
+	} else {
+		config.LocalGroup = strings.TrimSpace(config.LocalGroup)
+	}
+	if config.ChannelType == 0 {
+		config.ChannelType = constant.ChannelTypeOpenAI
+	}
+	return config
+}
+
+func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncConfig {
+	return upstreamSourceControllerSyncConfig{
+		LocalGroup:     "default",
+		ChannelType:    constant.ChannelTypeOpenAI,
+		AutoSyncModels: true,
 	}
 }
 

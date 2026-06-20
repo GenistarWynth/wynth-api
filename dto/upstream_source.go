@@ -38,23 +38,30 @@ type UpstreamSourceCredentialsUpdateRequest struct {
 }
 
 type UpstreamSourceResponse struct {
-	Id                  int    `json:"id"`
-	Name                string `json:"name"`
-	Type                string `json:"type"`
-	Status              string `json:"status"`
-	BaseURL             string `json:"base_url"`
-	AdminAPIBasePath    string `json:"admin_api_base_path"`
-	RelayBaseURL        string `json:"relay_base_url"`
-	MaskedEmail         string `json:"masked_email"`
-	HasCredentials      bool   `json:"has_credentials"`
-	LastDiscoveryTime   int64  `json:"last_discovery_time"`
-	LastDiscoveryStatus string `json:"last_discovery_status"`
-	LastDiscoveryError  string `json:"last_discovery_error"`
-	LastSyncTime        int64  `json:"last_sync_time"`
-	LastSyncStatus      string `json:"last_sync_status"`
-	LastSyncError       string `json:"last_sync_error"`
-	CreatedTime         int64  `json:"created_time"`
-	UpdatedTime         int64  `json:"updated_time"`
+	Id                     int    `json:"id"`
+	Name                   string `json:"name"`
+	Type                   string `json:"type"`
+	Status                 string `json:"status"`
+	BaseURL                string `json:"base_url"`
+	AdminAPIBasePath       string `json:"admin_api_base_path"`
+	RelayBaseURL           string `json:"relay_base_url"`
+	LocalGroup             string `json:"local_group"`
+	ChannelType            int    `json:"channel_type"`
+	DefaultPriority        int64  `json:"default_priority"`
+	DefaultWeight          uint   `json:"default_weight"`
+	EnableMonitor          bool   `json:"enable_monitor"`
+	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
+	AutoSyncModels         bool   `json:"auto_sync_models"`
+	MaskedEmail            string `json:"masked_email"`
+	HasCredentials         bool   `json:"has_credentials"`
+	LastDiscoveryTime      int64  `json:"last_discovery_time"`
+	LastDiscoveryStatus    string `json:"last_discovery_status"`
+	LastDiscoveryError     string `json:"last_discovery_error"`
+	LastSyncTime           int64  `json:"last_sync_time"`
+	LastSyncStatus         string `json:"last_sync_status"`
+	LastSyncError          string `json:"last_sync_error"`
+	CreatedTime            int64  `json:"created_time"`
+	UpdatedTime            int64  `json:"updated_time"`
 }
 
 type UpstreamSourceMappingResponse struct {

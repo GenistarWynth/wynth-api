@@ -214,6 +214,13 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	assert.Equal(t, "created-source", response.Data.Name)
 	assert.True(t, response.Data.HasCredentials)
 	assert.NotContains(t, response.Data.MaskedEmail, "wynth@example.com")
+	assert.Equal(t, "paid", response.Data.LocalGroup)
+	assert.Equal(t, constant.ChannelTypeOpenAI, response.Data.ChannelType)
+	assert.Equal(t, int64(12), response.Data.DefaultPriority)
+	assert.Equal(t, uint(34), response.Data.DefaultWeight)
+	assert.True(t, response.Data.EnableMonitor)
+	assert.Equal(t, 7, response.Data.MonitorIntervalMinutes)
+	assert.True(t, response.Data.AutoSyncModels)
 	raw := string(mustMarshalUpstreamSourceAPITest(t, response))
 	assert.NotContains(t, raw, "plain-password")
 	var source model.UpstreamSource
