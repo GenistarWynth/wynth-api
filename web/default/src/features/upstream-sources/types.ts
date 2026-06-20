@@ -61,6 +61,10 @@ export type UpstreamSource = {
   monitor_interval_minutes: number
   auto_sync_models: boolean
   allow_private_ip: boolean
+  auto_sync_enabled: boolean
+  auto_sync_interval_minutes: number
+  default_local_group: string
+  local_group_rules: UpstreamSourceLocalGroupRule[]
   masked_email: string
   has_credentials: boolean
   last_discovery_time: number
@@ -73,12 +77,20 @@ export type UpstreamSource = {
   updated_time: number
 }
 
+export type UpstreamSourceLocalGroupRule = {
+  name: string
+  local_group: string
+  name_contains: string[]
+  description_contains: string[]
+}
+
 export type UpstreamSourceMapping = {
   id: number
   source_id: number
   sync_enabled: boolean
   upstream_group_id: string
   upstream_group_name: string
+  upstream_group_description: string
   upstream_platform: string
   discovery_status: UpstreamMappingDiscoveryStatus | ''
   upstream_status: string
@@ -110,6 +122,10 @@ export type UpstreamSourceFormValues = {
   monitor_interval_minutes: number
   auto_sync_models: boolean
   allow_private_ip: boolean
+  auto_sync_enabled: boolean
+  auto_sync_interval_minutes: number
+  default_local_group: string
+  local_group_rules: UpstreamSourceLocalGroupRule[]
 }
 
 export type UpstreamSourceCreateRequest = Omit<

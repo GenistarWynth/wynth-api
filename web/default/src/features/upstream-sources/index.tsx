@@ -130,6 +130,7 @@ import {
   type UpstreamSource,
   type UpstreamSourceCreateRequest,
   type UpstreamSourceFormValues,
+  type UpstreamSourceLocalGroupRule,
   type UpstreamSourceMapping,
   type UpstreamSourceStatus,
   type UpstreamSourceSyncResult,
@@ -140,6 +141,7 @@ import {
 
 const CHANNEL_TYPE_OPENAI = 1
 const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
+const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 30
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
 
 type SourceSheetMode = 'create' | 'update'
@@ -155,6 +157,52 @@ const SOURCE_TYPE_OPTIONS = [
     value: UPSTREAM_SOURCE_TYPE_SUB2API,
   },
 ]
+
+function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
+  return {
+    name: '',
+    local_group: '',
+    name_contains: [],
+    description_contains: [],
+  }
+}
+
+function parseKeywordList(value: string): string[] {
+  const seen = new Set<string>()
+  return value
+    .split(/[\n,，]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => {
+      if (!item || seen.has(item)) {
+        return false
+      }
+      seen.add(item)
+      return true
+    })
+}
+
+function formatKeywordList(values: string[]) {
+  return values.join(', ')
+}
+
+function normalizeLocalGroupRules(
+  rules: UpstreamSourceLocalGroupRule[]
+): UpstreamSourceLocalGroupRule[] {
+  return rules
+    .map((rule) => ({
+      name: rule.name.trim(),
+      local_group: rule.local_group.trim(),
+      name_contains: parseKeywordList(formatKeywordList(rule.name_contains)),
+      description_contains: parseKeywordList(
+        formatKeywordList(rule.description_contains)
+      ),
+    }))
+    .filter(
+      (rule) =>
+        rule.local_group &&
+        (rule.name_contains.length > 0 || rule.description_contains.length > 0)
+    )
+}
 
 function defaultSourceFormValues(
   source?: UpstreamSource
@@ -172,6 +220,9 @@ function defaultSourceFormValues(
     email: '',
     password: '',
     local_group: source?.local_group || 'default',
+    default_local_group:
+      source?.default_local_group || source?.local_group || 'default',
+    local_group_rules: source?.local_group_rules ?? [],
     channel_type: source?.channel_type || CHANNEL_TYPE_OPENAI,
     default_priority: source?.default_priority ?? 0,
     default_weight: source?.default_weight ?? 0,
@@ -180,12 +231,17 @@ function defaultSourceFormValues(
       source?.monitor_interval_minutes || DEFAULT_MONITOR_INTERVAL_MINUTES,
     auto_sync_models: source?.auto_sync_models ?? true,
     allow_private_ip: source?.allow_private_ip ?? false,
+    auto_sync_enabled: source?.auto_sync_enabled ?? false,
+    auto_sync_interval_minutes:
+      source?.auto_sync_interval_minutes || DEFAULT_AUTO_SYNC_INTERVAL_MINUTES,
   }
 }
 
 function buildCreatePayload(
   values: UpstreamSourceFormValues
 ): UpstreamSourceCreateRequest {
+  const defaultLocalGroup =
+    values.default_local_group.trim() || values.local_group.trim()
   return {
     name: values.name.trim(),
     type: values.type,
@@ -194,7 +250,9 @@ function buildCreatePayload(
     relay_base_url: values.relay_base_url.trim(),
     email: values.email.trim(),
     password: values.password,
-    local_group: values.local_group.trim(),
+    local_group: defaultLocalGroup,
+    default_local_group: defaultLocalGroup,
+    local_group_rules: normalizeLocalGroupRules(values.local_group_rules),
     channel_type: values.channel_type,
     default_priority: values.default_priority,
     default_weight: Math.max(0, values.default_weight),
@@ -202,12 +260,18 @@ function buildCreatePayload(
     monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
     auto_sync_models: values.auto_sync_models,
     allow_private_ip: values.allow_private_ip,
+    auto_sync_enabled: values.auto_sync_enabled,
+    auto_sync_interval_minutes: values.auto_sync_enabled
+      ? Math.max(5, values.auto_sync_interval_minutes)
+      : 0,
   }
 }
 
 function buildUpdatePayload(
   values: UpstreamSourceFormValues
 ): UpstreamSourceUpdateRequest {
+  const defaultLocalGroup =
+    values.default_local_group.trim() || values.local_group.trim()
   return {
     name: values.name.trim(),
     type: values.type,
@@ -215,7 +279,9 @@ function buildUpdatePayload(
     base_url: values.base_url.trim(),
     admin_api_base_path: values.admin_api_base_path.trim(),
     relay_base_url: values.relay_base_url.trim(),
-    local_group: values.local_group.trim(),
+    local_group: defaultLocalGroup,
+    default_local_group: defaultLocalGroup,
+    local_group_rules: normalizeLocalGroupRules(values.local_group_rules),
     channel_type: values.channel_type,
     default_priority: values.default_priority,
     default_weight: Math.max(0, values.default_weight),
@@ -223,6 +289,10 @@ function buildUpdatePayload(
     monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
     auto_sync_models: values.auto_sync_models,
     allow_private_ip: values.allow_private_ip,
+    auto_sync_enabled: values.auto_sync_enabled,
+    auto_sync_interval_minutes: values.auto_sync_enabled
+      ? Math.max(5, values.auto_sync_interval_minutes)
+      : 0,
   }
 }
 
@@ -347,6 +417,9 @@ function SourceSettingBadges(props: { source: UpstreamSource }) {
   const monitorLabel = props.source.enable_monitor
     ? `${t('Monitor On')} / ${props.source.monitor_interval_minutes || DEFAULT_MONITOR_INTERVAL_MINUTES}m`
     : t('Monitor Off')
+  const autoSyncLabel = props.source.auto_sync_enabled
+    ? `${t('Auto Sync On')} / ${props.source.auto_sync_interval_minutes || DEFAULT_AUTO_SYNC_INTERVAL_MINUTES}m`
+    : t('Auto Sync Off')
 
   return (
     <div className='flex max-w-[220px] flex-wrap gap-1'>
@@ -363,6 +436,11 @@ function SourceSettingBadges(props: { source: UpstreamSource }) {
       <StatusBadge
         label={monitorLabel}
         variant={props.source.enable_monitor ? 'success' : 'neutral'}
+        copyable={false}
+      />
+      <StatusBadge
+        label={autoSyncLabel}
+        variant={props.source.auto_sync_enabled ? 'success' : 'neutral'}
         copyable={false}
       />
       <StatusBadge
@@ -694,6 +772,34 @@ function SourceFormSheet(props: {
     setForm((previous) => ({ ...previous, [key]: value }))
   }
 
+  const setLocalGroupRule = (
+    index: number,
+    value: UpstreamSourceLocalGroupRule
+  ) => {
+    setForm((previous) => ({
+      ...previous,
+      local_group_rules: previous.local_group_rules.map((rule, ruleIndex) =>
+        ruleIndex === index ? value : rule
+      ),
+    }))
+  }
+
+  const addLocalGroupRule = () => {
+    setForm((previous) => ({
+      ...previous,
+      local_group_rules: [...previous.local_group_rules, emptyLocalGroupRule()],
+    }))
+  }
+
+  const removeLocalGroupRule = (index: number) => {
+    setForm((previous) => ({
+      ...previous,
+      local_group_rules: previous.local_group_rules.filter(
+        (_, ruleIndex) => ruleIndex !== index
+      ),
+    }))
+  }
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!form.name.trim()) {
@@ -709,7 +815,7 @@ function SourceFormSheet(props: {
 
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
-      <SheetContent className={sideDrawerContentClassName('sm:max-w-[660px]')}>
+      <SheetContent className={sideDrawerContentClassName('sm:max-w-[760px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
           <SheetTitle>
             {isUpdate ? t('Edit Upstream Source') : t('Add Upstream Source')}
@@ -847,12 +953,15 @@ function SourceFormSheet(props: {
           <SideDrawerSection>
             <SideDrawerSectionHeader title={t('Generated Channels')} />
             <div className='grid gap-4 sm:grid-cols-2'>
-              <FieldBlock label={t('Local Group')} htmlFor='source-local-group'>
+              <FieldBlock
+                label={t('Default Local Group')}
+                htmlFor='source-default-local-group'
+              >
                 <Input
-                  id='source-local-group'
-                  value={form.local_group}
+                  id='source-default-local-group'
+                  value={form.default_local_group}
                   onChange={(event) =>
-                    setField('local_group', event.target.value)
+                    setField('default_local_group', event.target.value)
                   }
                 />
               </FieldBlock>
@@ -948,6 +1057,150 @@ function SourceFormSheet(props: {
                 setField('allow_private_ip', checked)
               }
             />
+          </SideDrawerSection>
+
+          <SideDrawerSection>
+            <SideDrawerSectionHeader title={t('Sync Schedule')} />
+            <SwitchRow
+              label={t('Enable Auto Sync')}
+              checked={form.auto_sync_enabled}
+              onCheckedChange={(checked) =>
+                setField('auto_sync_enabled', checked)
+              }
+            />
+            <FieldBlock
+              label={t('Auto Sync Interval Minutes')}
+              htmlFor='source-auto-sync-interval'
+            >
+              <Input
+                id='source-auto-sync-interval'
+                type='number'
+                min={5}
+                value={form.auto_sync_interval_minutes}
+                disabled={!form.auto_sync_enabled}
+                onChange={(event) =>
+                  setField(
+                    'auto_sync_interval_minutes',
+                    parseIntegerInput(
+                      event.target.value,
+                      DEFAULT_AUTO_SYNC_INTERVAL_MINUTES
+                    )
+                  )
+                }
+              />
+            </FieldBlock>
+          </SideDrawerSection>
+
+          <SideDrawerSection>
+            <div className='flex items-center justify-between gap-3'>
+              <SideDrawerSectionHeader title={t('Local Group Rules')} />
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={addLocalGroupRule}
+              >
+                <Plus data-icon='inline-start' />
+                {t('Add rule')}
+              </Button>
+            </div>
+            {form.local_group_rules.length === 0 && (
+              <p className='text-muted-foreground text-sm'>
+                {t('No local group rules')}
+              </p>
+            )}
+            <div className='space-y-3'>
+              {form.local_group_rules.map((rule, index) => (
+                <div
+                  key={index}
+                  className='border-border grid gap-3 rounded-lg border p-3'
+                >
+                  <div className='flex items-center justify-between gap-3'>
+                    <span className='text-sm font-medium'>
+                      {rule.name.trim() ||
+                        t('Rule {{index}}', {
+                          index: index + 1,
+                        })}
+                    </span>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='icon'
+                      onClick={() => removeLocalGroupRule(index)}
+                    >
+                      <Trash2 />
+                      <span className='sr-only'>{t('Remove rule')}</span>
+                    </Button>
+                  </div>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <FieldBlock
+                      label={t('Rule Name')}
+                      htmlFor={`source-rule-name-${index}`}
+                    >
+                      <Input
+                        id={`source-rule-name-${index}`}
+                        value={rule.name}
+                        onChange={(event) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            name: event.target.value,
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                    <FieldBlock
+                      label={t('Target Local Group')}
+                      htmlFor={`source-rule-local-group-${index}`}
+                    >
+                      <Input
+                        id={`source-rule-local-group-${index}`}
+                        value={rule.local_group}
+                        onChange={(event) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            local_group: event.target.value,
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                  </div>
+                  <div className='grid gap-3 sm:grid-cols-2'>
+                    <FieldBlock
+                      label={t('Name Keywords')}
+                      htmlFor={`source-rule-name-keywords-${index}`}
+                    >
+                      <Input
+                        id={`source-rule-name-keywords-${index}`}
+                        value={formatKeywordList(rule.name_contains)}
+                        onChange={(event) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            name_contains: parseKeywordList(event.target.value),
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                    <FieldBlock
+                      label={t('Description Keywords')}
+                      htmlFor={`source-rule-description-keywords-${index}`}
+                    >
+                      <Input
+                        id={`source-rule-description-keywords-${index}`}
+                        value={formatKeywordList(rule.description_contains)}
+                        onChange={(event) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            description_contains: parseKeywordList(
+                              event.target.value
+                            ),
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                  </div>
+                </div>
+              ))}
+            </div>
           </SideDrawerSection>
         </form>
         <SheetFooter className={sideDrawerFooterClassName()}>
@@ -1075,8 +1328,7 @@ function MappingsSheet(props: {
 
   const mappings = mappingsQuery.data ?? EMPTY_UPSTREAM_SOURCE_MAPPINGS
   const selectedMappingIDs = useMemo(
-    () =>
-      resolveSelectedMappingIDs(mappings, mappingSelectionOverrides),
+    () => resolveSelectedMappingIDs(mappings, mappingSelectionOverrides),
     [mappingSelectionOverrides, mappings]
   )
   const selectedMappingIDSet = useMemo(
@@ -1273,7 +1525,9 @@ function MappingRow(props: {
   const mapping = props.mapping
   const groupName = mapping.upstream_group_name || mapping.upstream_group_id
   const rowMuted =
-    mapping.discovery_status === 'invalid' || !mapping.has_upstream_key
+    mapping.discovery_status === 'invalid' ||
+    mapping.discovery_status === 'stale' ||
+    !mapping.has_upstream_key
 
   return (
     <TableRow className={cn(rowMuted && 'text-muted-foreground')}>
@@ -1287,6 +1541,11 @@ function MappingRow(props: {
       <TableCell>
         <div className='flex min-w-[180px] flex-col gap-1'>
           <LongText className='max-w-[220px] font-medium'>{groupName}</LongText>
+          {mapping.upstream_group_description && (
+            <LongText className='text-muted-foreground max-w-[220px] text-xs'>
+              {mapping.upstream_group_description}
+            </LongText>
+          )}
           <span className='text-muted-foreground text-xs'>
             {mapping.upstream_group_id}
           </span>
@@ -1554,6 +1813,7 @@ export function UpstreamSources() {
         source.relay_base_url,
         source.masked_email,
         source.local_group,
+        source.default_local_group,
       ].some((value) =>
         String(value || '')
           .toLowerCase()
