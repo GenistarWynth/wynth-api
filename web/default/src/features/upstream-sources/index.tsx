@@ -124,7 +124,9 @@ import {
   resolveSelectedMappingIDs,
 } from './selection'
 import {
+  buildLocalGroupRuleTemplate,
   formatKeywordList,
+  type LocalGroupRuleTemplateKey,
   normalizeKeywordList,
   normalizeModelList,
   normalizeModelStrategy,
@@ -158,6 +160,17 @@ const UPSTREAM_SOURCE_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
 ]
+const LOCAL_GROUP_RULE_TEMPLATE_SETS: {
+  label: string
+  keys: LocalGroupRuleTemplateKey[]
+}[] = [
+  { label: 'OpenAI / Pro', keys: ['openai', 'openai-pro'] },
+  { label: 'Anthropic / Pro', keys: ['anthropic', 'anthropic-pro'] },
+  {
+    label: 'OpenAI + Anthropic',
+    keys: ['openai', 'openai-pro', 'anthropic', 'anthropic-pro'],
+  },
+]
 
 type SourceSheetMode = 'create' | 'update'
 
@@ -184,6 +197,13 @@ function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
     model_strategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
     fixed_models: [],
   }
+}
+
+function monitorIntervalDisplayValue(
+  value: number | undefined,
+  fallback: number
+) {
+  return value && value > 0 ? value : fallback
 }
 
 function normalizeRuleForForm(
@@ -228,8 +248,10 @@ function defaultSourceFormValues(
     default_priority: source?.default_priority ?? 0,
     default_weight: source?.default_weight ?? 0,
     enable_monitor: source?.enable_monitor ?? false,
-    monitor_interval_minutes:
-      source?.monitor_interval_minutes || DEFAULT_MONITOR_INTERVAL_MINUTES,
+    monitor_interval_minutes: monitorIntervalDisplayValue(
+      source?.monitor_interval_minutes,
+      DEFAULT_MONITOR_INTERVAL_MINUTES
+    ),
     auto_sync_models: source?.auto_sync_models ?? true,
     model_strategy:
       source?.model_strategy ?? UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
@@ -237,7 +259,7 @@ function defaultSourceFormValues(
     allow_private_ip: source?.allow_private_ip ?? false,
     auto_sync_enabled: source?.auto_sync_enabled ?? false,
     auto_sync_interval_minutes:
-      source?.auto_sync_interval_minutes || DEFAULT_AUTO_SYNC_INTERVAL_MINUTES,
+      source?.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES,
   }
 }
 
@@ -272,7 +294,7 @@ function buildCreatePayload(
     allow_private_ip: values.allow_private_ip,
     auto_sync_enabled: values.auto_sync_enabled,
     auto_sync_interval_minutes: values.auto_sync_enabled
-      ? Math.max(5, values.auto_sync_interval_minutes)
+      ? Math.max(0, values.auto_sync_interval_minutes)
       : 0,
   }
 }
@@ -307,7 +329,7 @@ function buildUpdatePayload(
     allow_private_ip: values.allow_private_ip,
     auto_sync_enabled: values.auto_sync_enabled,
     auto_sync_interval_minutes: values.auto_sync_enabled
-      ? Math.max(5, values.auto_sync_interval_minutes)
+      ? Math.max(0, values.auto_sync_interval_minutes)
       : 0,
   }
 }
@@ -389,6 +411,12 @@ function formatOptionalTimestamp(value: number) {
   return value > 0 ? formatTimestamp(value) : '-'
 }
 
+function modelStrategyDisplayLabel(strategy: string) {
+  return normalizeModelStrategy(strategy) === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+    ? 'Fixed models'
+    : 'All upstream models'
+}
+
 function apiErrorMessage<T>(result: ApiResponse<T>, fallback: string) {
   return result.message || fallback
 }
@@ -431,10 +459,13 @@ function StatusWithTime(props: {
 function SourceSettingBadges(props: { source: UpstreamSource }) {
   const { t } = useTranslation()
   const monitorLabel = props.source.enable_monitor
-    ? `${t('Monitor On')} / ${props.source.monitor_interval_minutes || DEFAULT_MONITOR_INTERVAL_MINUTES}m`
+    ? `${t('Monitor On')} / ${monitorIntervalDisplayValue(
+        props.source.monitor_interval_minutes,
+        DEFAULT_MONITOR_INTERVAL_MINUTES
+      )}m`
     : t('Monitor Off')
   const autoSyncLabel = props.source.auto_sync_enabled
-    ? `${t('Auto Sync On')} / ${props.source.auto_sync_interval_minutes || DEFAULT_AUTO_SYNC_INTERVAL_MINUTES}m`
+    ? `${t('Auto Sync On')} / ${(props.source.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES)}m`
     : t('Auto Sync Off')
 
   return (
@@ -806,6 +837,9 @@ function ModelCheckboxList(props: {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const selected = new Set(props.values)
+  const selectedOrder = new Map(
+    props.values.map((model, index) => [model, index + 1])
+  )
   const filtered = props.options.filter((model) =>
     model.toLowerCase().includes(query.trim().toLowerCase())
   )
@@ -818,6 +852,22 @@ function ModelCheckboxList(props: {
   }
   return (
     <div className='grid gap-2'>
+      {props.values.length > 0 && (
+        <div className='border-border bg-muted/30 flex flex-wrap gap-1 rounded-md border p-2'>
+          <span className='text-muted-foreground mr-1 text-xs'>
+            {t('Selected order')}
+          </span>
+          {props.values.map((model, index) => (
+            <span
+              key={model}
+              className='bg-background text-foreground inline-flex max-w-full items-center gap-1 rounded-md px-2 py-0.5 text-xs'
+            >
+              <span className='text-muted-foreground'>#{index + 1}</span>
+              <span className='truncate'>{model}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <Input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -835,6 +885,11 @@ function ModelCheckboxList(props: {
                 checked={selected.has(model)}
                 onCheckedChange={(checked) => toggle(model, Boolean(checked))}
               />
+              {selectedOrder.has(model) && (
+                <span className='text-muted-foreground w-7 shrink-0 text-xs'>
+                  #{selectedOrder.get(model)}
+                </span>
+              )}
               <span className='truncate'>{model}</span>
             </label>
           ))
@@ -904,6 +959,56 @@ function SourceFormSheet(props: {
       ...previous,
       local_group_rules: [...previous.local_group_rules, emptyLocalGroupRule()],
     }))
+  }
+
+  const inferProLocalGroup = (defaultLocalGroup: string) => {
+    const normalizedDefault = defaultLocalGroup.trim().toLowerCase()
+    const exactProGroup = groupOptions.find(
+      (option) =>
+        option.value.toLowerCase() === `${normalizedDefault}-pro` ||
+        option.value.toLowerCase() === `${normalizedDefault}_pro`
+    )
+    if (exactProGroup) {
+      return exactProGroup.value
+    }
+    return (
+      groupOptions.find((option) => option.value.toLowerCase().includes('pro'))
+        ?.value || defaultLocalGroup
+    )
+  }
+
+  const addLocalGroupRuleTemplates = (keys: LocalGroupRuleTemplateKey[]) => {
+    setForm((previous) => {
+      const defaultLocalGroup =
+        previous.default_local_group.trim() ||
+        previous.local_group.trim() ||
+        'default'
+      const proLocalGroup = inferProLocalGroup(defaultLocalGroup)
+      const defaults = {
+        defaultLocalGroup,
+        proLocalGroup,
+        monitor: {
+          enabled: previous.enable_monitor,
+          interval_minutes: previous.monitor_interval_minutes,
+        },
+        autoSync: {
+          enabled: previous.auto_sync_enabled,
+          interval_minutes: previous.auto_sync_interval_minutes,
+        },
+        modelStrategy: previous.model_strategy,
+        fixedModels: previous.fixed_models,
+      }
+
+      return {
+        ...previous,
+        local_group_rules: [
+          ...previous.local_group_rules,
+          ...keys.map((key) =>
+            normalizeRuleForForm(buildLocalGroupRuleTemplate(key, defaults))
+          ),
+        ],
+      }
+    })
   }
 
   const removeLocalGroupRule = (index: number) => {
@@ -1172,7 +1277,9 @@ function SourceFormSheet(props: {
                 }
               >
                 <SelectTrigger id='source-model-strategy'>
-                  <SelectValue />
+                  <SelectValue>
+                    {t(modelStrategyDisplayLabel(form.model_strategy))}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
@@ -1220,7 +1327,7 @@ function SourceFormSheet(props: {
               <Input
                 id='source-auto-sync-interval'
                 type='number'
-                min={5}
+                min={0}
                 value={form.auto_sync_interval_minutes}
                 disabled={!form.auto_sync_enabled}
                 onChange={(event) =>
@@ -1239,15 +1346,39 @@ function SourceFormSheet(props: {
           <SideDrawerSection>
             <div className='flex items-center justify-between gap-3'>
               <SideDrawerSectionHeader title={t('Sync Rules')} />
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                onClick={addLocalGroupRule}
-              >
-                <Plus data-icon='inline-start' />
-                {t('Add rule')}
-              </Button>
+              <div className='flex shrink-0 flex-wrap justify-end gap-2'>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button type='button' variant='outline' size='sm' />
+                    }
+                  >
+                    <Settings2 data-icon='inline-start' />
+                    {t('Rule templates')}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align='end' className='w-52'>
+                    {LOCAL_GROUP_RULE_TEMPLATE_SETS.map((templateSet) => (
+                      <DropdownMenuItem
+                        key={templateSet.label}
+                        onClick={() =>
+                          addLocalGroupRuleTemplates(templateSet.keys)
+                        }
+                      >
+                        {t(templateSet.label)}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  onClick={addLocalGroupRule}
+                >
+                  <Plus data-icon='inline-start' />
+                  {t('Add rule')}
+                </Button>
+              </div>
             </div>
             {form.local_group_rules.length === 0 && (
               <p className='text-muted-foreground text-sm'>
@@ -1385,7 +1516,7 @@ function SourceFormSheet(props: {
                   <div className='grid gap-3 sm:grid-cols-2'>
                     <div className='grid gap-3'>
                       <SwitchRow
-                        label={t('Rule Monitor')}
+                        label={t('Monitor')}
                         checked={rule.monitor?.enabled ?? form.enable_monitor}
                         onCheckedChange={(checked) =>
                           setLocalGroupRule(index, {
@@ -1393,8 +1524,10 @@ function SourceFormSheet(props: {
                             monitor: {
                               enabled: checked,
                               interval_minutes:
-                                rule.monitor?.interval_minutes ||
-                                form.monitor_interval_minutes,
+                                monitorIntervalDisplayValue(
+                                  rule.monitor?.interval_minutes,
+                                  form.monitor_interval_minutes
+                                ),
                             },
                           })
                         }
@@ -1407,10 +1540,10 @@ function SourceFormSheet(props: {
                           id={`source-rule-monitor-interval-${index}`}
                           type='number'
                           min={5}
-                          value={
-                            rule.monitor?.interval_minutes ||
+                          value={monitorIntervalDisplayValue(
+                            rule.monitor?.interval_minutes,
                             form.monitor_interval_minutes
-                          }
+                          )}
                           onChange={(event) =>
                             setLocalGroupRule(index, {
                               ...rule,
@@ -1430,7 +1563,7 @@ function SourceFormSheet(props: {
                     </div>
                     <div className='grid gap-3'>
                       <SwitchRow
-                        label={t('Rule Auto Sync')}
+                        label={t('Auto Sync')}
                         checked={
                           rule.auto_sync?.enabled ?? form.auto_sync_enabled
                         }
@@ -1440,7 +1573,7 @@ function SourceFormSheet(props: {
                             auto_sync: {
                               enabled: checked,
                               interval_minutes:
-                                rule.auto_sync?.interval_minutes ||
+                                rule.auto_sync?.interval_minutes ??
                                 form.auto_sync_interval_minutes,
                             },
                           })
@@ -1453,9 +1586,9 @@ function SourceFormSheet(props: {
                         <Input
                           id={`source-rule-auto-sync-interval-${index}`}
                           type='number'
-                          min={5}
+                          min={0}
                           value={
-                            rule.auto_sync?.interval_minutes ||
+                            rule.auto_sync?.interval_minutes ??
                             form.auto_sync_interval_minutes
                           }
                           onChange={(event) =>
@@ -1477,7 +1610,7 @@ function SourceFormSheet(props: {
                     </div>
                   </div>
                   <FieldBlock
-                    label={t('Model Strategy')}
+                    label={t('Model strategy')}
                     htmlFor={`source-rule-model-strategy-${index}`}
                   >
                     <Select
@@ -1490,7 +1623,9 @@ function SourceFormSheet(props: {
                       }
                     >
                       <SelectTrigger id={`source-rule-model-strategy-${index}`}>
-                        <SelectValue />
+                        <SelectValue>
+                          {t(modelStrategyDisplayLabel(rule.model_strategy))}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>

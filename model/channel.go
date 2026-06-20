@@ -30,6 +30,8 @@ type Channel struct {
 	Name               string  `json:"name" gorm:"index"`
 	Weight             *uint   `json:"weight" gorm:"default:0"`
 	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
+	UpdatedTime        int64   `json:"updated_time" gorm:"bigint"`
+	LastSyncTime       int64   `json:"last_sync_time" gorm:"bigint"`
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
 	ResponseTime       int     `json:"response_time"` // in milliseconds
 	BaseURL            *string `json:"base_url" gorm:"column:base_url;default:''"`
@@ -77,12 +79,14 @@ type ChannelSortOptions struct {
 }
 
 var channelSortColumns = map[string]string{
-	"id":            "id",
-	"name":          "name",
-	"priority":      "priority",
-	"balance":       "balance",
-	"response_time": "response_time",
-	"test_time":     "test_time",
+	"id":             "id",
+	"name":           "name",
+	"priority":       "priority",
+	"balance":        "balance",
+	"response_time":  "response_time",
+	"test_time":      "test_time",
+	"updated_time":   "updated_time",
+	"last_sync_time": "last_sync_time",
 }
 
 func NewChannelSortOptions(sortBy string, sortOrder string, idSort bool) ChannelSortOptions {
@@ -351,6 +355,7 @@ func (channel *Channel) SaveWithoutKey() error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
+	channel.UpdatedTime = common.GetTimestamp()
 	return DB.Omit("key").Save(channel).Error
 }
 
@@ -515,6 +520,13 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
+	now := common.GetTimestamp()
+	if channel.CreatedTime == 0 {
+		channel.CreatedTime = now
+	}
+	if channel.UpdatedTime == 0 {
+		channel.UpdatedTime = now
+	}
 	var err error
 	err = DB.Create(channel).Error
 	if err != nil {
@@ -525,6 +537,7 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
+	channel.UpdatedTime = common.GetTimestamp()
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string

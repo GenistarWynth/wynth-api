@@ -48,7 +48,7 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 	assert.Equal(t, "fallback", config.LocalGroup)
 	assert.Equal(t, 5, config.MonitorIntervalMinutes)
 	assert.True(t, config.AutoSyncEnabled)
-	assert.Equal(t, 5, config.AutoSyncIntervalMinutes)
+	assert.Equal(t, 4, config.AutoSyncIntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, config.ModelStrategy)
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, config.FixedModels)
 	require.Len(t, config.LocalGroupRules, 1)
@@ -66,7 +66,7 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 	require.NotNil(t, rule.AutoSync)
 	require.NotNil(t, rule.AutoSync.Enabled)
 	assert.False(t, *rule.AutoSync.Enabled)
-	assert.Equal(t, 5, rule.AutoSync.IntervalMinutes)
+	assert.Equal(t, 4, rule.AutoSync.IntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, rule.ModelStrategy)
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, rule.FixedModels)
 }
@@ -116,9 +116,49 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.True(t, resolution.MonitorEnabled)
 	assert.Equal(t, 5, resolution.MonitorIntervalMinutes)
 	assert.True(t, resolution.AutoSyncEnabled)
-	assert.Equal(t, 5, resolution.AutoSyncIntervalMinutes)
+	assert.Equal(t, 4, resolution.AutoSyncIntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, resolution.ModelStrategy)
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, resolution.FixedModels)
+}
+
+func TestResolveUpstreamSourceRuleAllowsZeroRuleIntervalsToOverrideFallback(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"default_local_group":        "fallback",
+		"enable_monitor":             true,
+		"monitor_interval_minutes":   30,
+		"auto_sync_enabled":          true,
+		"auto_sync_interval_minutes": 30,
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI realtime",
+				"local_group": "openai",
+				"platforms":   []string{"openai"},
+				"monitor": map[string]any{
+					"enabled":          true,
+					"interval_minutes": 3,
+				},
+				"auto_sync": map[string]any{
+					"enabled":          true,
+					"interval_minutes": 0,
+				},
+			},
+		},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:      true,
+		UpstreamPlatform: "openai",
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusActive,
+		LastSyncedAt:     3590,
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.Matched)
+	assert.True(t, resolution.MonitorEnabled)
+	assert.Equal(t, 5, resolution.MonitorIntervalMinutes)
+	assert.True(t, resolution.AutoSyncEnabled)
+	assert.Equal(t, 0, resolution.AutoSyncIntervalMinutes)
+	assert.True(t, upstreamSourceMappingAutoSyncDue(config, mapping, 3600))
 }
 
 func TestResolveUpstreamSourceRuleTreatsClaudePlatformAsAnthropic(t *testing.T) {

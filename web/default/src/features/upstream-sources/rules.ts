@@ -6,6 +6,21 @@ import type {
 export const UPSTREAM_SOURCE_MODEL_STRATEGY_ALL = 'all_upstream' as const
 export const UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED = 'fixed' as const
 
+export type LocalGroupRuleTemplateKey =
+  | 'openai'
+  | 'openai-pro'
+  | 'anthropic'
+  | 'anthropic-pro'
+
+type LocalGroupRuleTemplateDefaults = {
+  defaultLocalGroup: string
+  proLocalGroup: string
+  monitor?: UpstreamSourceLocalGroupRule['monitor']
+  autoSync?: UpstreamSourceLocalGroupRule['auto_sync']
+  modelStrategy?: UpstreamSourceModelStrategy
+  fixedModels?: string[]
+}
+
 export function normalizeKeywordList(value: string | string[]): string[] {
   const raw = Array.isArray(value) ? value.join(',') : value
   const seen = new Set<string>()
@@ -44,6 +59,65 @@ export function normalizeModelStrategy(
   return value === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
     ? UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
     : UPSTREAM_SOURCE_MODEL_STRATEGY_ALL
+}
+
+export function buildLocalGroupRuleTemplate(
+  key: LocalGroupRuleTemplateKey,
+  defaults: LocalGroupRuleTemplateDefaults
+): UpstreamSourceLocalGroupRule {
+  const modelStrategy = normalizeModelStrategy(defaults.modelStrategy)
+  const baseRule: UpstreamSourceLocalGroupRule = {
+    name: '',
+    local_group:
+      key.endsWith('-pro') && defaults.proLocalGroup
+        ? defaults.proLocalGroup
+        : defaults.defaultLocalGroup,
+    platforms: [],
+    name_contains: [],
+    description_contains: [],
+    exclude_keywords: [],
+    ...(defaults.monitor ? { monitor: defaults.monitor } : {}),
+    ...(defaults.autoSync ? { auto_sync: defaults.autoSync } : {}),
+    model_strategy: modelStrategy,
+    fixed_models:
+      modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+        ? normalizeModelList(defaults.fixedModels ?? [])
+        : [],
+  }
+
+  switch (key) {
+    case 'openai':
+      return {
+        ...baseRule,
+        name: 'OpenAI',
+        platforms: ['openai'],
+        name_contains: ['gpt'],
+        exclude_keywords: ['pro'],
+      }
+    case 'openai-pro':
+      return {
+        ...baseRule,
+        name: 'OpenAI Pro',
+        platforms: ['openai'],
+        name_contains: ['pro'],
+        description_contains: ['pro'],
+      }
+    case 'anthropic':
+      return {
+        ...baseRule,
+        name: 'Anthropic',
+        platforms: ['anthropic'],
+        exclude_keywords: ['pro'],
+      }
+    case 'anthropic-pro':
+      return {
+        ...baseRule,
+        name: 'Anthropic Pro',
+        platforms: ['anthropic'],
+        name_contains: ['pro'],
+        description_contains: ['pro'],
+      }
+  }
 }
 
 export function normalizeSyncRules(

@@ -59,6 +59,8 @@ export const channelSchema = z.object({
   name: z.string(),
   weight: z.number().nullish(),
   created_time: z.number(),
+  updated_time: z.number().default(0),
+  last_sync_time: z.number().default(0),
   test_time: z.number(),
   response_time: z.number(), // in milliseconds
   base_url: z.string().nullish(),
@@ -266,6 +268,8 @@ export type ChannelSortBy =
   | 'balance'
   | 'response_time'
   | 'test_time'
+  | 'updated_time'
+  | 'last_sync_time'
 
 export type ChannelSortOrder = 'asc' | 'desc'
 

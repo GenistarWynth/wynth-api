@@ -51,7 +51,7 @@ func ListDueUpstreamSourcesForAutoSync(now int64) ([]model.UpstreamSource, error
 		}
 		if len(mappings) == 0 {
 			intervalMinutes := upstreamSourceCoarseAutoSyncIntervalMinutes(config)
-			if intervalMinutes <= 0 {
+			if intervalMinutes < 0 {
 				continue
 			}
 			if source.LastSyncTime > 0 && now-source.LastSyncTime < int64(intervalMinutes)*60 {

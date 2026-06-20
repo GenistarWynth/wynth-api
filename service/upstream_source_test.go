@@ -781,7 +781,7 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoSyncAndLocalGroupRules(t *test
 
 	require.NoError(t, err)
 	assert.True(t, config.AutoSyncEnabled)
-	assert.Equal(t, 5, config.AutoSyncIntervalMinutes)
+	assert.Equal(t, 3, config.AutoSyncIntervalMinutes)
 	assert.Equal(t, "regular", config.DefaultLocalGroup)
 	require.Len(t, config.LocalGroupRules, 1)
 	assert.Equal(t, "Pro", config.LocalGroupRules[0].Name)
@@ -857,6 +857,8 @@ func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	assert.Equal(t, "source-a", *channels[0].Tag)
 	assert.Equal(t, "gpt-4o,claude-3-haiku", channels[0].Models)
 	assert.Equal(t, common.ChannelStatusEnabled, channels[0].Status)
+	assert.Equal(t, int64(1000), channels[0].LastSyncTime)
+	assert.Equal(t, int64(1000), channels[0].UpdatedTime)
 	settings := channels[0].GetOtherSettings()
 	assert.True(t, settings.ChannelMonitorEnabled)
 	assert.Equal(t, 15, settings.ChannelMonitorIntervalMinutes)

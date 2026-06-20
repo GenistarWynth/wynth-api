@@ -584,7 +584,9 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
-	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
+	now := common.GetTimestamp()
+	addChannelRequest.Channel.CreatedTime = now
+	addChannelRequest.Channel.UpdatedTime = now
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
@@ -1258,7 +1260,10 @@ func CopyChannel(c *gin.Context) {
 	// clone channel
 	clone := *origin // shallow copy is sufficient as we will overwrite primitives
 	clone.Id = 0     // let DB auto-generate
-	clone.CreatedTime = common.GetTimestamp()
+	now := common.GetTimestamp()
+	clone.CreatedTime = now
+	clone.UpdatedTime = now
+	clone.LastSyncTime = 0
 	clone.Name = origin.Name + suffix
 	clone.TestTime = 0
 	clone.ResponseTime = 0

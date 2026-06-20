@@ -94,8 +94,8 @@ func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstream
 		config.MonitorIntervalMinutes = 5
 	}
 	if config.AutoSyncEnabled {
-		if config.AutoSyncIntervalMinutes < 5 {
-			config.AutoSyncIntervalMinutes = 5
+		if config.AutoSyncIntervalMinutes < 0 {
+			config.AutoSyncIntervalMinutes = 0
 		}
 	} else {
 		config.AutoSyncIntervalMinutes = 0
@@ -197,7 +197,7 @@ func normalizeUpstreamSourceRuleAutoSync(autoSync *dto.UpstreamSourceRuleAutoSyn
 	}
 	normalized := &dto.UpstreamSourceRuleAutoSync{
 		Enabled:         cloneUpstreamSourceRuleBool(autoSync.Enabled),
-		IntervalMinutes: normalizeUpstreamSourceRuleInterval(autoSync.IntervalMinutes),
+		IntervalMinutes: normalizeUpstreamSourceAutoSyncInterval(autoSync.IntervalMinutes),
 	}
 	return normalized
 }
@@ -283,8 +283,8 @@ func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstr
 	}
 	autoSyncInterval := config.AutoSyncIntervalMinutes
 	if config.AutoSyncEnabled {
-		if autoSyncInterval < 5 {
-			autoSyncInterval = 5
+		if autoSyncInterval < 0 {
+			autoSyncInterval = 0
 		}
 	} else {
 		autoSyncInterval = 0
@@ -386,9 +386,7 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		if rule.AutoSync.Enabled != nil {
 			resolution.AutoSyncEnabled = *rule.AutoSync.Enabled
 		}
-		if rule.AutoSync.IntervalMinutes > 0 {
-			resolution.AutoSyncIntervalMinutes = normalizeUpstreamSourceRuleInterval(rule.AutoSync.IntervalMinutes)
-		}
+		resolution.AutoSyncIntervalMinutes = normalizeUpstreamSourceAutoSyncInterval(rule.AutoSync.IntervalMinutes)
 	}
 	if modelStrategy := normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy); modelStrategy != "" {
 		resolution.ModelStrategy = modelStrategy
@@ -402,14 +400,11 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 }
 
 func upstreamSourceHasAutoSyncSchedule(config upstreamSourceSyncConfig) bool {
-	if config.AutoSyncEnabled && config.AutoSyncIntervalMinutes > 0 {
+	if config.AutoSyncEnabled {
 		return true
 	}
 	for _, rule := range config.LocalGroupRules {
-		if !upstreamSourceRuleAutoSyncEnabled(config, rule) {
-			continue
-		}
-		if upstreamSourceRuleAutoSyncInterval(config, rule) > 0 {
+		if upstreamSourceRuleAutoSyncEnabled(config, rule) {
 			return true
 		}
 	}
@@ -418,16 +413,16 @@ func upstreamSourceHasAutoSyncSchedule(config upstreamSourceSyncConfig) bool {
 
 func upstreamSourceCoarseAutoSyncIntervalMinutes(config upstreamSourceSyncConfig) int {
 	interval := 0
-	if config.AutoSyncEnabled && config.AutoSyncIntervalMinutes > 0 {
-		interval = config.AutoSyncIntervalMinutes
+	if config.AutoSyncEnabled {
+		interval = normalizeUpstreamSourceAutoSyncInterval(config.AutoSyncIntervalMinutes)
 	}
 	for _, rule := range config.LocalGroupRules {
 		if !upstreamSourceRuleAutoSyncEnabled(config, rule) {
 			continue
 		}
 		ruleInterval := upstreamSourceRuleAutoSyncInterval(config, rule)
-		if ruleInterval <= 0 {
-			continue
+		if ruleInterval == 0 {
+			return 0
 		}
 		if interval == 0 || ruleInterval < interval {
 			interval = ruleInterval
@@ -438,8 +433,11 @@ func upstreamSourceCoarseAutoSyncIntervalMinutes(config upstreamSourceSyncConfig
 
 func upstreamSourceMappingAutoSyncDue(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping, now int64) bool {
 	resolution := resolveUpstreamSourceRule(config, mapping)
-	if !resolution.SyncEligible || !resolution.AutoSyncEnabled || resolution.AutoSyncIntervalMinutes <= 0 {
+	if !resolution.SyncEligible || !resolution.AutoSyncEnabled || resolution.AutoSyncIntervalMinutes < 0 {
 		return false
+	}
+	if resolution.AutoSyncIntervalMinutes == 0 {
+		return true
 	}
 	if mapping == nil || mapping.LastSyncedAt == 0 {
 		return true
@@ -458,13 +456,20 @@ func upstreamSourceRuleAutoSyncEnabled(config upstreamSourceSyncConfig, rule dto
 func upstreamSourceRuleAutoSyncInterval(config upstreamSourceSyncConfig, rule dto.UpstreamSourceLocalGroupRule) int {
 	interval := 0
 	if config.AutoSyncEnabled {
-		interval = config.AutoSyncIntervalMinutes
+		interval = normalizeUpstreamSourceAutoSyncInterval(config.AutoSyncIntervalMinutes)
 	}
-	if rule.AutoSync != nil && rule.AutoSync.IntervalMinutes > 0 {
-		interval = normalizeUpstreamSourceRuleInterval(rule.AutoSync.IntervalMinutes)
+	if rule.AutoSync != nil {
+		interval = normalizeUpstreamSourceAutoSyncInterval(rule.AutoSync.IntervalMinutes)
 	}
 	if !upstreamSourceRuleAutoSyncEnabled(config, rule) {
 		return 0
 	}
 	return interval
+}
+
+func normalizeUpstreamSourceAutoSyncInterval(intervalMinutes int) int {
+	if intervalMinutes < 0 {
+		return 0
+	}
+	return intervalMinutes
 }

@@ -468,7 +468,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	}
 
 	created := mapping.LocalChannelID == 0
-	savedChannel, err := saveGeneratedChannel(channel, created)
+	savedChannel, err := saveGeneratedChannel(channel, created, now)
 	if err != nil {
 		errText := SanitizeUpstreamSourceError(err)
 		_ = updateUpstreamSourceMappingSync(mapping.Id, key.ID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
@@ -736,8 +736,11 @@ func intersectFetchedModelsWithFixedModels(fetchedModels []string, fixedModels [
 	return intersected
 }
 
-func saveGeneratedChannel(channel *model.Channel, create bool) (*model.Channel, error) {
+func saveGeneratedChannel(channel *model.Channel, create bool, now int64) (*model.Channel, error) {
+	channel.LastSyncTime = now
+	channel.UpdatedTime = now
 	if create {
+		channel.CreatedTime = now
 		if err := model.DB.Create(channel).Error; err != nil {
 			return nil, err
 		}
@@ -756,17 +759,19 @@ func saveGeneratedChannel(channel *model.Channel, create bool) (*model.Channel, 
 
 func generatedChannelUpdateMap(channel *model.Channel) map[string]any {
 	return map[string]any{
-		"name":     channel.Name,
-		"type":     channel.Type,
-		"base_url": channel.BaseURL,
-		"key":      channel.Key,
-		"group":    channel.Group,
-		"priority": channel.Priority,
-		"weight":   channel.Weight,
-		"tag":      channel.Tag,
-		"models":   channel.Models,
-		"settings": channel.OtherSettings,
-		"status":   channel.Status,
+		"name":           channel.Name,
+		"type":           channel.Type,
+		"base_url":       channel.BaseURL,
+		"key":            channel.Key,
+		"group":          channel.Group,
+		"priority":       channel.Priority,
+		"weight":         channel.Weight,
+		"tag":            channel.Tag,
+		"models":         channel.Models,
+		"settings":       channel.OtherSettings,
+		"status":         channel.Status,
+		"last_sync_time": channel.LastSyncTime,
+		"updated_time":   channel.UpdatedTime,
 	}
 }
 
@@ -928,7 +933,10 @@ func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredI
 		disableChannelIDs = append(disableChannelIDs, channel.Id)
 	}
 	if len(disableChannelIDs) > 0 {
-		if err := tx.Model(&model.Channel{}).Where("id IN ?", disableChannelIDs).Update("status", common.ChannelStatusManuallyDisabled).Error; err != nil {
+		if err := tx.Model(&model.Channel{}).Where("id IN ?", disableChannelIDs).Updates(map[string]interface{}{
+			"status":       common.ChannelStatusManuallyDisabled,
+			"updated_time": now,
+		}).Error; err != nil {
 			return 0, err
 		}
 	}
