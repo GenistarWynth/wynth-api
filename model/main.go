@@ -258,6 +258,8 @@ func migrateDB() error {
 	err := DB.AutoMigrate(
 		&Channel{},
 		&ChannelMonitorLog{},
+		&UpstreamSource{},
+		&UpstreamSourceChannelMapping{},
 		&Token{},
 		&User{},
 		&PasskeyCredential{},
@@ -308,6 +310,8 @@ func migrateDBFast() error {
 	}{
 		{&Channel{}, "Channel"},
 		{&ChannelMonitorLog{}, "ChannelMonitorLog"},
+		{&UpstreamSource{}, "UpstreamSource"},
+		{&UpstreamSourceChannelMapping{}, "UpstreamSourceChannelMapping"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
