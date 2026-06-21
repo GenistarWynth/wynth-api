@@ -244,6 +244,65 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	assert.Contains(t, source.SyncConfig, "default_priority")
 }
 
+func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	request := dto.UpstreamSourceCreateRequest{
+		Name:                        "auto-priority-source",
+		Type:                        model.UpstreamSourceTypeSub2API,
+		BaseURL:                     "https://admin.example.com",
+		LocalGroup:                  "paid",
+		ChannelType:                 constant.ChannelTypeOpenAI,
+		AutoPriorityEnabled:         true,
+		AutoPriorityIntervalMinutes: 3,
+		AutoPriorityWindowHours:     999,
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
+			{
+				Name:       "OpenAI pro",
+				LocalGroup: "paid",
+				Platforms:  []string{"openai"},
+				AutoPriority: &dto.UpstreamSourceRuleAutoPriority{
+					Enabled:         common.GetPointer(false),
+					IntervalMinutes: 0,
+					WindowHours:     48,
+				},
+			},
+		},
+	}
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.True(t, response.Data.AutoPriorityEnabled)
+	assert.Equal(t, 5, response.Data.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 168, response.Data.AutoPriorityWindowHours)
+	require.Len(t, response.Data.LocalGroupRules, 1)
+	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority)
+	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.Enabled)
+	assert.False(t, *response.Data.LocalGroupRules[0].AutoPriority.Enabled)
+	assert.Equal(t, 0, response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	assert.Equal(t, 48, response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
+	var syncConfig map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
+	assert.Equal(t, true, syncConfig["auto_priority_enabled"])
+	assert.Equal(t, float64(5), syncConfig["auto_priority_interval_minutes"])
+	assert.Equal(t, float64(168), syncConfig["auto_priority_window_hours"])
+	require.Contains(t, syncConfig, "local_group_rules")
+	rules, ok := syncConfig["local_group_rules"].([]any)
+	require.True(t, ok)
+	require.Len(t, rules, 1)
+	rule, ok := rules[0].(map[string]any)
+	require.True(t, ok)
+	autoPriority, ok := rule["auto_priority"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, autoPriority["enabled"])
+	assert.Equal(t, float64(0), autoPriority["interval_minutes"])
+	assert.Equal(t, float64(48), autoPriority["window_hours"])
+}
+
 func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)

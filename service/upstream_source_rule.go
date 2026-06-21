@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	upstreamSourceModelStrategyAllUpstream = "all_upstream"
-	upstreamSourceModelStrategyFixed       = "fixed"
+	upstreamSourceModelStrategyAllUpstream           = "all_upstream"
+	upstreamSourceModelStrategyFixed                 = "fixed"
+	upstreamSourceAutoPriorityDefaultIntervalMinutes = 30
+	upstreamSourceAutoPriorityDefaultWindowHours     = 24
+	upstreamSourceAutoPriorityMaxWindowHours         = 168
 
 	upstreamSourceMatchReasonMatched           = "matched"
 	upstreamSourceMatchReasonNoMatchingRule    = "no matching rule"
@@ -25,44 +28,52 @@ const (
 // AutoSyncModels stays pointer-based here so absent keys can preserve the
 // historical default while explicit false remains distinguishable.
 type upstreamSourceSyncConfig struct {
-	LocalGroup              string                             `json:"local_group"`
-	ChannelType             int                                `json:"channel_type"`
-	DefaultPriority         int64                              `json:"default_priority"`
-	DefaultWeight           uint                               `json:"default_weight"`
-	EnableMonitor           bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes  int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels          *bool                              `json:"auto_sync_models"`
-	ModelStrategy           string                             `json:"model_strategy"`
-	FixedModels             []string                           `json:"fixed_models"`
-	AllowPrivateIP          common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled         bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes int                                `json:"auto_sync_interval_minutes"`
-	DefaultLocalGroup       string                             `json:"default_local_group"`
-	LocalGroupRules         []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	LocalGroup                  string                             `json:"local_group"`
+	ChannelType                 int                                `json:"channel_type"`
+	DefaultPriority             int64                              `json:"default_priority"`
+	DefaultWeight               uint                               `json:"default_weight"`
+	EnableMonitor               bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes      int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels              *bool                              `json:"auto_sync_models"`
+	ModelStrategy               string                             `json:"model_strategy"`
+	FixedModels                 []string                           `json:"fixed_models"`
+	AllowPrivateIP              common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled             bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes     int                                `json:"auto_sync_interval_minutes"`
+	AutoPriorityEnabled         bool                               `json:"auto_priority_enabled"`
+	AutoPriorityIntervalMinutes int                                `json:"auto_priority_interval_minutes"`
+	AutoPriorityWindowHours     int                                `json:"auto_priority_window_hours"`
+	DefaultLocalGroup           string                             `json:"default_local_group"`
+	LocalGroupRules             []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 type upstreamSourceRuleResolution struct {
-	Matched                 bool
-	SyncEligible            bool
-	RuleName                string
-	Reason                  string
-	LocalGroup              string
-	MonitorEnabled          bool
-	MonitorIntervalMinutes  int
-	AutoSyncEnabled         bool
-	AutoSyncIntervalMinutes int
-	ModelStrategy           string
-	FixedModels             []string
+	Matched                     bool
+	SyncEligible                bool
+	RuleName                    string
+	Reason                      string
+	LocalGroup                  string
+	MonitorEnabled              bool
+	MonitorIntervalMinutes      int
+	AutoSyncEnabled             bool
+	AutoSyncIntervalMinutes     int
+	AutoPriorityEnabled         bool
+	AutoPriorityIntervalMinutes int
+	AutoPriorityWindowHours     int
+	ModelStrategy               string
+	FixedModels                 []string
 }
 
 func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {
 	config := upstreamSourceSyncConfig{
-		LocalGroup:      "default",
-		ChannelType:     constant.ChannelTypeOpenAI,
-		AutoSyncModels:  common.GetPointer(true),
-		DefaultPriority: 0,
-		DefaultWeight:   0,
-		ModelStrategy:   upstreamSourceModelStrategyAllUpstream,
+		LocalGroup:                  "default",
+		ChannelType:                 constant.ChannelTypeOpenAI,
+		AutoSyncModels:              common.GetPointer(true),
+		DefaultPriority:             0,
+		DefaultWeight:               0,
+		ModelStrategy:               upstreamSourceModelStrategyAllUpstream,
+		AutoPriorityIntervalMinutes: upstreamSourceAutoPriorityDefaultIntervalMinutes,
+		AutoPriorityWindowHours:     upstreamSourceAutoPriorityDefaultWindowHours,
 	}
 	if strings.TrimSpace(raw) == "" {
 		return normalizeUpstreamSourceSyncConfig(config), nil
@@ -100,6 +111,8 @@ func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstream
 	} else {
 		config.AutoSyncIntervalMinutes = 0
 	}
+	config.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes)
+	config.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours)
 	config.ModelStrategy = normalizeUpstreamSourceFallbackModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
 	config.LocalGroupRules = normalizeUpstreamSourceLocalGroupRules(config.LocalGroupRules)
@@ -169,6 +182,7 @@ func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroup
 			ExcludeKeywords:     normalizeUpstreamSourceRuleKeywords(rule.ExcludeKeywords),
 			Monitor:             normalizeUpstreamSourceRuleMonitor(rule.Monitor),
 			AutoSync:            normalizeUpstreamSourceRuleAutoSync(rule.AutoSync),
+			AutoPriority:        normalizeUpstreamSourceRuleAutoPriority(rule.AutoPriority),
 			ModelStrategy:       normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy),
 			FixedModels:         normalizeUpstreamSourceFixedModels(rule.FixedModels),
 		})
@@ -198,6 +212,18 @@ func normalizeUpstreamSourceRuleAutoSync(autoSync *dto.UpstreamSourceRuleAutoSyn
 	normalized := &dto.UpstreamSourceRuleAutoSync{
 		Enabled:         cloneUpstreamSourceRuleBool(autoSync.Enabled),
 		IntervalMinutes: normalizeUpstreamSourceAutoSyncInterval(autoSync.IntervalMinutes),
+	}
+	return normalized
+}
+
+func normalizeUpstreamSourceRuleAutoPriority(autoPriority *dto.UpstreamSourceRuleAutoPriority) *dto.UpstreamSourceRuleAutoPriority {
+	if autoPriority == nil {
+		return nil
+	}
+	normalized := &dto.UpstreamSourceRuleAutoPriority{
+		Enabled:         cloneUpstreamSourceRuleBool(autoPriority.Enabled),
+		IntervalMinutes: normalizeUpstreamSourceAutoPriorityInterval(autoPriority.IntervalMinutes),
+		WindowHours:     normalizeUpstreamSourceAutoPriorityWindow(autoPriority.WindowHours),
 	}
 	return normalized
 }
@@ -295,14 +321,17 @@ func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstr
 		fixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
 	}
 	return upstreamSourceRuleResolution{
-		Reason:                  upstreamSourceMatchReasonNoMatchingRule,
-		LocalGroup:              upstreamSourceDefaultLocalGroup(config),
-		MonitorEnabled:          config.EnableMonitor,
-		MonitorIntervalMinutes:  monitorInterval,
-		AutoSyncEnabled:         config.AutoSyncEnabled,
-		AutoSyncIntervalMinutes: autoSyncInterval,
-		ModelStrategy:           modelStrategy,
-		FixedModels:             fixedModels,
+		Reason:                      upstreamSourceMatchReasonNoMatchingRule,
+		LocalGroup:                  upstreamSourceDefaultLocalGroup(config),
+		MonitorEnabled:              config.EnableMonitor,
+		MonitorIntervalMinutes:      monitorInterval,
+		AutoSyncEnabled:             config.AutoSyncEnabled,
+		AutoSyncIntervalMinutes:     autoSyncInterval,
+		AutoPriorityEnabled:         config.AutoPriorityEnabled,
+		AutoPriorityIntervalMinutes: normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes),
+		AutoPriorityWindowHours:     normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours),
+		ModelStrategy:               modelStrategy,
+		FixedModels:                 fixedModels,
 	}
 }
 
@@ -388,6 +417,13 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		}
 		resolution.AutoSyncIntervalMinutes = normalizeUpstreamSourceAutoSyncInterval(rule.AutoSync.IntervalMinutes)
 	}
+	if rule.AutoPriority != nil {
+		if rule.AutoPriority.Enabled != nil {
+			resolution.AutoPriorityEnabled = *rule.AutoPriority.Enabled
+		}
+		resolution.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(rule.AutoPriority.IntervalMinutes)
+		resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(rule.AutoPriority.WindowHours)
+	}
 	if modelStrategy := normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy); modelStrategy != "" {
 		resolution.ModelStrategy = modelStrategy
 		if modelStrategy == upstreamSourceModelStrategyFixed {
@@ -472,4 +508,27 @@ func normalizeUpstreamSourceAutoSyncInterval(intervalMinutes int) int {
 		return 0
 	}
 	return intervalMinutes
+}
+
+func normalizeUpstreamSourceAutoPriorityInterval(intervalMinutes int) int {
+	switch {
+	case intervalMinutes < 0:
+		return upstreamSourceAutoPriorityDefaultIntervalMinutes
+	case intervalMinutes == 0:
+		return 0
+	case intervalMinutes < 5:
+		return 5
+	default:
+		return intervalMinutes
+	}
+}
+
+func normalizeUpstreamSourceAutoPriorityWindow(windowHours int) int {
+	if windowHours <= 0 {
+		return upstreamSourceAutoPriorityDefaultWindowHours
+	}
+	if windowHours > upstreamSourceAutoPriorityMaxWindowHours {
+		return upstreamSourceAutoPriorityMaxWindowHours
+	}
+	return windowHours
 }

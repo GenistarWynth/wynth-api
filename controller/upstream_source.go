@@ -32,20 +32,23 @@ const (
 // Defaults are seeded before unmarshaling so an absent auto_sync_models key
 // preserves the service default of true while explicit false still persists.
 type upstreamSourceControllerSyncConfig struct {
-	LocalGroup              string                             `json:"local_group"`
-	ChannelType             int                                `json:"channel_type"`
-	DefaultPriority         int64                              `json:"default_priority"`
-	DefaultWeight           uint                               `json:"default_weight"`
-	EnableMonitor           bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes  int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels          bool                               `json:"auto_sync_models"`
-	ModelStrategy           string                             `json:"model_strategy"`
-	FixedModels             []string                           `json:"fixed_models"`
-	AllowPrivateIP          common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled         bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes int                                `json:"auto_sync_interval_minutes"`
-	DefaultLocalGroup       string                             `json:"default_local_group"`
-	LocalGroupRules         []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	LocalGroup                  string                             `json:"local_group"`
+	ChannelType                 int                                `json:"channel_type"`
+	DefaultPriority             int64                              `json:"default_priority"`
+	DefaultWeight               uint                               `json:"default_weight"`
+	EnableMonitor               bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes      int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels              bool                               `json:"auto_sync_models"`
+	ModelStrategy               string                             `json:"model_strategy"`
+	FixedModels                 []string                           `json:"fixed_models"`
+	AllowPrivateIP              common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled             bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes     int                                `json:"auto_sync_interval_minutes"`
+	AutoPriorityEnabled         bool                               `json:"auto_priority_enabled"`
+	AutoPriorityIntervalMinutes int                                `json:"auto_priority_interval_minutes"`
+	AutoPriorityWindowHours     int                                `json:"auto_priority_window_hours"`
+	DefaultLocalGroup           string                             `json:"default_local_group"`
+	LocalGroupRules             []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 func ListUpstreamSources(c *gin.Context) {
@@ -286,22 +289,29 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 	if err != nil {
 		return model.UpstreamSource{}, err
 	}
-	syncConfig, err := marshalUpstreamSourceSyncConfig(upstreamSourceControllerSyncConfig{
-		LocalGroup:              req.LocalGroup,
-		ChannelType:             req.ChannelType,
-		DefaultPriority:         req.DefaultPriority,
-		DefaultWeight:           req.DefaultWeight,
-		EnableMonitor:           req.EnableMonitor,
-		MonitorIntervalMinutes:  req.MonitorIntervalMinutes,
-		AutoSyncModels:          req.AutoSyncModels,
-		ModelStrategy:           req.ModelStrategy,
-		FixedModels:             req.FixedModels,
-		AllowPrivateIP:          common.FlexibleBool(req.AllowPrivateIP),
-		AutoSyncEnabled:         req.AutoSyncEnabled,
-		AutoSyncIntervalMinutes: req.AutoSyncIntervalMinutes,
-		DefaultLocalGroup:       req.DefaultLocalGroup,
-		LocalGroupRules:         req.LocalGroupRules,
-	})
+	syncConfigInput := defaultUpstreamSourceControllerSyncConfig()
+	syncConfigInput.LocalGroup = req.LocalGroup
+	syncConfigInput.ChannelType = req.ChannelType
+	syncConfigInput.DefaultPriority = req.DefaultPriority
+	syncConfigInput.DefaultWeight = req.DefaultWeight
+	syncConfigInput.EnableMonitor = req.EnableMonitor
+	syncConfigInput.MonitorIntervalMinutes = req.MonitorIntervalMinutes
+	syncConfigInput.AutoSyncModels = req.AutoSyncModels
+	syncConfigInput.ModelStrategy = req.ModelStrategy
+	syncConfigInput.FixedModels = req.FixedModels
+	syncConfigInput.AllowPrivateIP = common.FlexibleBool(req.AllowPrivateIP)
+	syncConfigInput.AutoSyncEnabled = req.AutoSyncEnabled
+	syncConfigInput.AutoSyncIntervalMinutes = req.AutoSyncIntervalMinutes
+	syncConfigInput.AutoPriorityEnabled = req.AutoPriorityEnabled
+	if req.AutoPriorityIntervalMinutes != 0 {
+		syncConfigInput.AutoPriorityIntervalMinutes = req.AutoPriorityIntervalMinutes
+	}
+	if req.AutoPriorityWindowHours != 0 {
+		syncConfigInput.AutoPriorityWindowHours = req.AutoPriorityWindowHours
+	}
+	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
+	syncConfigInput.LocalGroupRules = req.LocalGroupRules
+	syncConfig, err := marshalUpstreamSourceSyncConfig(syncConfigInput)
 	if err != nil {
 		return model.UpstreamSource{}, err
 	}
@@ -322,22 +332,29 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 }
 
 func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]interface{}, error) {
-	syncConfig, err := marshalUpstreamSourceSyncConfig(upstreamSourceControllerSyncConfig{
-		LocalGroup:              req.LocalGroup,
-		ChannelType:             req.ChannelType,
-		DefaultPriority:         req.DefaultPriority,
-		DefaultWeight:           req.DefaultWeight,
-		EnableMonitor:           req.EnableMonitor,
-		MonitorIntervalMinutes:  req.MonitorIntervalMinutes,
-		AutoSyncModels:          req.AutoSyncModels,
-		ModelStrategy:           req.ModelStrategy,
-		FixedModels:             req.FixedModels,
-		AllowPrivateIP:          common.FlexibleBool(req.AllowPrivateIP),
-		AutoSyncEnabled:         req.AutoSyncEnabled,
-		AutoSyncIntervalMinutes: req.AutoSyncIntervalMinutes,
-		DefaultLocalGroup:       req.DefaultLocalGroup,
-		LocalGroupRules:         req.LocalGroupRules,
-	})
+	syncConfigInput := defaultUpstreamSourceControllerSyncConfig()
+	syncConfigInput.LocalGroup = req.LocalGroup
+	syncConfigInput.ChannelType = req.ChannelType
+	syncConfigInput.DefaultPriority = req.DefaultPriority
+	syncConfigInput.DefaultWeight = req.DefaultWeight
+	syncConfigInput.EnableMonitor = req.EnableMonitor
+	syncConfigInput.MonitorIntervalMinutes = req.MonitorIntervalMinutes
+	syncConfigInput.AutoSyncModels = req.AutoSyncModels
+	syncConfigInput.ModelStrategy = req.ModelStrategy
+	syncConfigInput.FixedModels = req.FixedModels
+	syncConfigInput.AllowPrivateIP = common.FlexibleBool(req.AllowPrivateIP)
+	syncConfigInput.AutoSyncEnabled = req.AutoSyncEnabled
+	syncConfigInput.AutoSyncIntervalMinutes = req.AutoSyncIntervalMinutes
+	syncConfigInput.AutoPriorityEnabled = req.AutoPriorityEnabled
+	if req.AutoPriorityIntervalMinutes != 0 {
+		syncConfigInput.AutoPriorityIntervalMinutes = req.AutoPriorityIntervalMinutes
+	}
+	if req.AutoPriorityWindowHours != 0 {
+		syncConfigInput.AutoPriorityWindowHours = req.AutoPriorityWindowHours
+	}
+	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
+	syncConfigInput.LocalGroupRules = req.LocalGroupRules
+	syncConfig, err := marshalUpstreamSourceSyncConfig(syncConfigInput)
 	if err != nil {
 		return nil, err
 	}
@@ -401,37 +418,40 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 	auth := parseUpstreamSourceAuthConfig(source.AuthConfig)
 	sync := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	return dto.UpstreamSourceResponse{
-		Id:                      source.Id,
-		Name:                    source.Name,
-		Type:                    source.Type,
-		Status:                  source.Status,
-		BaseURL:                 source.BaseURL,
-		AdminAPIBasePath:        source.AdminAPIBasePath,
-		RelayBaseURL:            source.RelayBaseURL,
-		LocalGroup:              sync.LocalGroup,
-		ChannelType:             sync.ChannelType,
-		DefaultPriority:         sync.DefaultPriority,
-		DefaultWeight:           sync.DefaultWeight,
-		EnableMonitor:           sync.EnableMonitor,
-		MonitorIntervalMinutes:  sync.MonitorIntervalMinutes,
-		AutoSyncModels:          sync.AutoSyncModels,
-		ModelStrategy:           sync.ModelStrategy,
-		FixedModels:             sync.FixedModels,
-		AllowPrivateIP:          bool(sync.AllowPrivateIP),
-		AutoSyncEnabled:         sync.AutoSyncEnabled,
-		AutoSyncIntervalMinutes: sync.AutoSyncIntervalMinutes,
-		DefaultLocalGroup:       sync.DefaultLocalGroup,
-		LocalGroupRules:         sync.LocalGroupRules,
-		MaskedEmail:             common.MaskEmail(auth.Email),
-		HasCredentials:          upstreamSourceHasCredentials(auth),
-		LastDiscoveryTime:       source.LastDiscoveryTime,
-		LastDiscoveryStatus:     source.LastDiscoveryStatus,
-		LastDiscoveryError:      sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
-		LastSyncTime:            source.LastSyncTime,
-		LastSyncStatus:          source.LastSyncStatus,
-		LastSyncError:           sanitizeUpstreamSourceResponseError(source.LastSyncError),
-		CreatedTime:             source.CreatedTime,
-		UpdatedTime:             source.UpdatedTime,
+		Id:                          source.Id,
+		Name:                        source.Name,
+		Type:                        source.Type,
+		Status:                      source.Status,
+		BaseURL:                     source.BaseURL,
+		AdminAPIBasePath:            source.AdminAPIBasePath,
+		RelayBaseURL:                source.RelayBaseURL,
+		LocalGroup:                  sync.LocalGroup,
+		ChannelType:                 sync.ChannelType,
+		DefaultPriority:             sync.DefaultPriority,
+		DefaultWeight:               sync.DefaultWeight,
+		EnableMonitor:               sync.EnableMonitor,
+		MonitorIntervalMinutes:      sync.MonitorIntervalMinutes,
+		AutoSyncModels:              sync.AutoSyncModels,
+		ModelStrategy:               sync.ModelStrategy,
+		FixedModels:                 sync.FixedModels,
+		AllowPrivateIP:              bool(sync.AllowPrivateIP),
+		AutoSyncEnabled:             sync.AutoSyncEnabled,
+		AutoSyncIntervalMinutes:     sync.AutoSyncIntervalMinutes,
+		AutoPriorityEnabled:         sync.AutoPriorityEnabled,
+		AutoPriorityIntervalMinutes: sync.AutoPriorityIntervalMinutes,
+		AutoPriorityWindowHours:     sync.AutoPriorityWindowHours,
+		DefaultLocalGroup:           sync.DefaultLocalGroup,
+		LocalGroupRules:             sync.LocalGroupRules,
+		MaskedEmail:                 common.MaskEmail(auth.Email),
+		HasCredentials:              upstreamSourceHasCredentials(auth),
+		LastDiscoveryTime:           source.LastDiscoveryTime,
+		LastDiscoveryStatus:         source.LastDiscoveryStatus,
+		LastDiscoveryError:          sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
+		LastSyncTime:                source.LastSyncTime,
+		LastSyncStatus:              source.LastSyncStatus,
+		LastSyncError:               sanitizeUpstreamSourceResponseError(source.LastSyncError),
+		CreatedTime:                 source.CreatedTime,
+		UpdatedTime:                 source.UpdatedTime,
 	}
 }
 
@@ -470,6 +490,20 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	} else {
 		config.AutoSyncIntervalMinutes = 0
 	}
+	switch {
+	case config.AutoPriorityIntervalMinutes < 0:
+		config.AutoPriorityIntervalMinutes = 30
+	case config.AutoPriorityIntervalMinutes == 0:
+		config.AutoPriorityIntervalMinutes = 0
+	case config.AutoPriorityIntervalMinutes < 5:
+		config.AutoPriorityIntervalMinutes = 5
+	}
+	switch {
+	case config.AutoPriorityWindowHours <= 0:
+		config.AutoPriorityWindowHours = 24
+	case config.AutoPriorityWindowHours > 168:
+		config.AutoPriorityWindowHours = 168
+	}
 	config.ModelStrategy = normalizeUpstreamSourceControllerModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceControllerFixedModels(config.FixedModels)
 	config.LocalGroupRules = service.NormalizeUpstreamSourceLocalGroupRulesForConfig(config.LocalGroupRules)
@@ -478,11 +512,13 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 
 func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncConfig {
 	return upstreamSourceControllerSyncConfig{
-		LocalGroup:        "default",
-		ChannelType:       constant.ChannelTypeOpenAI,
-		AutoSyncModels:    true,
-		ModelStrategy:     upstreamSourceControllerModelStrategyAllUpstream,
-		DefaultLocalGroup: "default",
+		LocalGroup:                  "default",
+		ChannelType:                 constant.ChannelTypeOpenAI,
+		AutoSyncModels:              true,
+		AutoPriorityIntervalMinutes: 30,
+		AutoPriorityWindowHours:     24,
+		ModelStrategy:               upstreamSourceControllerModelStrategyAllUpstream,
+		DefaultLocalGroup:           "default",
 	}
 }
 
