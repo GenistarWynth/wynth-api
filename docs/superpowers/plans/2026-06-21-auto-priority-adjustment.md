@@ -424,7 +424,7 @@ func TestBuildAutoPriorityUsageStatsHandlesCacheCreationCost(t *testing.T) {
 	stats := buildAutoPriorityUsageStatsFromLogs(logs, 0)
 
 	require.Contains(t, stats, 1)
-	assert.InDelta(t, 680.0/1000.0, stats[1].CacheAdjustedCostFactor, 0.0001)
+	assert.InDelta(t, 880.0/1000.0, stats[1].CacheAdjustedCostFactor, 0.0001)
 }
 
 func TestBuildAutoPriorityUsageStatsExcludesChannelTests(t *testing.T) {
@@ -600,6 +600,11 @@ func autoPriorityCostUnits(log model.Log, other autoPriorityLogOther) (normal fl
 	return normal, adjusted
 }
 ```
+
+`autoPriorityCacheWriteUnits` must include every cache creation bucket present in
+the log, including `cache_creation_tokens`, `cache_creation_tokens_5m`, and
+`cache_creation_tokens_1h`. Cache creation ratios greater than `1` raise the
+effective cost factor; they are not an independent quality metric.
 
 - [ ] **Step 4: Mark channel-test logs**
 
