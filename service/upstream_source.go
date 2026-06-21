@@ -328,7 +328,7 @@ func validateUpstreamSourceSyncConfig(source *model.UpstreamSource) error {
 	if strings.TrimSpace(source.Type) == "" {
 		return errors.New("upstream source type is required")
 	}
-	if strings.TrimSpace(source.Type) != model.UpstreamSourceTypeSub2API {
+	if !isSupportedUpstreamSourceType(source.Type) {
 		return fmt.Errorf("unsupported upstream source type %q", source.Type)
 	}
 	if strings.TrimSpace(source.BaseURL) == "" && strings.TrimSpace(source.RelayBaseURL) == "" {
@@ -826,6 +826,8 @@ func DefaultUpstreamSourceAdapterFactory(sourceType string) (UpstreamSourceAdapt
 	switch strings.TrimSpace(sourceType) {
 	case model.UpstreamSourceTypeSub2API:
 		return Sub2APIAdapter{}, nil
+	case model.UpstreamSourceTypeNewAPI:
+		return NewAPIAdapter{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported upstream source type %q", sourceType)
 	}
@@ -841,7 +843,7 @@ func validateUpstreamSourceDiscoveryConfig(source *model.UpstreamSource) error {
 	if strings.TrimSpace(source.Type) == "" {
 		return errors.New("upstream source type is required")
 	}
-	if strings.TrimSpace(source.Type) != model.UpstreamSourceTypeSub2API {
+	if !isSupportedUpstreamSourceType(source.Type) {
 		return fmt.Errorf("unsupported upstream source type %q", source.Type)
 	}
 	if err := validateAbsoluteHTTPURL("base URL", source.BaseURL); err != nil {
@@ -851,6 +853,15 @@ func validateUpstreamSourceDiscoveryConfig(source *model.UpstreamSource) error {
 		return err
 	}
 	return nil
+}
+
+func isSupportedUpstreamSourceType(sourceType string) bool {
+	switch strings.TrimSpace(sourceType) {
+	case model.UpstreamSourceTypeSub2API, model.UpstreamSourceTypeNewAPI:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateAbsoluteHTTPURL(name string, value string) error {

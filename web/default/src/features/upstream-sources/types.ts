@@ -23,8 +23,11 @@ export type ApiResponse<T = unknown> = {
 }
 
 export const UPSTREAM_SOURCE_TYPE_SUB2API = 'sub2api' as const
+export const UPSTREAM_SOURCE_TYPE_NEW_API = 'new-api' as const
 
-export type UpstreamSourceType = typeof UPSTREAM_SOURCE_TYPE_SUB2API
+export type UpstreamSourceType =
+  | typeof UPSTREAM_SOURCE_TYPE_SUB2API
+  | typeof UPSTREAM_SOURCE_TYPE_NEW_API
 
 export type UpstreamSourceStatus = 'enabled' | 'disabled' | 'deleted'
 

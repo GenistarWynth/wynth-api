@@ -142,6 +142,7 @@ import {
   UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED,
 } from './rules'
 import {
+  UPSTREAM_SOURCE_TYPE_NEW_API,
   UPSTREAM_SOURCE_TYPE_SUB2API,
   type ApiResponse,
   type UpstreamDiscoveryStatus,
@@ -193,7 +194,19 @@ const SOURCE_TYPE_OPTIONS = [
     label: 'sub2api',
     value: UPSTREAM_SOURCE_TYPE_SUB2API,
   },
+  {
+    label: 'new-api',
+    value: UPSTREAM_SOURCE_TYPE_NEW_API,
+  },
 ]
+
+function defaultAdminAPIBasePath(sourceType: UpstreamSourceType) {
+  return sourceType === UPSTREAM_SOURCE_TYPE_NEW_API ? '/api' : '/api/v1'
+}
+
+function sourceTypeLabel(sourceType: UpstreamSourceType) {
+  return sourceType === UPSTREAM_SOURCE_TYPE_NEW_API ? 'new-api' : 'sub2api'
+}
 
 function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
   return {
@@ -243,7 +256,9 @@ function defaultSourceFormValues(
         ? source.status
         : 'enabled',
     base_url: source?.base_url ?? '',
-    admin_api_base_path: source?.admin_api_base_path || '/api/v1',
+    admin_api_base_path:
+      source?.admin_api_base_path ||
+      defaultAdminAPIBasePath(source?.type ?? UPSTREAM_SOURCE_TYPE_SUB2API),
     relay_base_url: source?.relay_base_url ?? '',
     email: '',
     password: '',
@@ -934,6 +949,22 @@ function SourceFormSheet(props: {
     setForm((previous) => ({ ...previous, [key]: value }))
   }
 
+  const setSourceType = (value: UpstreamSourceType) => {
+    setForm((previous) => {
+      const previousDefaultPath = defaultAdminAPIBasePath(previous.type)
+      const shouldReplacePath =
+        previous.admin_api_base_path.trim() === '' ||
+        previous.admin_api_base_path === previousDefaultPath
+      return {
+        ...previous,
+        type: value,
+        admin_api_base_path: shouldReplacePath
+          ? defaultAdminAPIBasePath(value)
+          : previous.admin_api_base_path,
+      }
+    })
+  }
+
   const setLocalGroupRule = (
     index: number,
     value: UpstreamSourceLocalGroupRule
@@ -1057,6 +1088,10 @@ function SourceFormSheet(props: {
     }
     props.onSubmit(form)
   }
+  const credentialLabel =
+    form.type === UPSTREAM_SOURCE_TYPE_NEW_API
+      ? t('Username or Email')
+      : t('Email')
 
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
@@ -1066,7 +1101,7 @@ function SourceFormSheet(props: {
             {isUpdate ? t('Edit Upstream Source') : t('Add Upstream Source')}
           </SheetTitle>
           <SheetDescription>
-            {isUpdate ? props.source?.name : t('sub2api')}
+            {isUpdate ? props.source?.name : sourceTypeLabel(form.type)}
           </SheetDescription>
         </SheetHeader>
         <form
@@ -1089,7 +1124,7 @@ function SourceFormSheet(props: {
                   items={SOURCE_TYPE_OPTIONS}
                   value={form.type}
                   onValueChange={(value) =>
-                    value && setField('type', value as UpstreamSourceType)
+                    value && setSourceType(value as UpstreamSourceType)
                   }
                 >
                   <SelectTrigger id='source-type'>
@@ -1097,9 +1132,11 @@ function SourceFormSheet(props: {
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
                     <SelectGroup>
-                      <SelectItem value={UPSTREAM_SOURCE_TYPE_SUB2API}>
-                        sub2api
-                      </SelectItem>
+                      {SOURCE_TYPE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -1175,7 +1212,7 @@ function SourceFormSheet(props: {
           {!isUpdate && (
             <SideDrawerSection>
               <SideDrawerSectionHeader title={t('Credentials')} />
-              <FieldBlock label={t('Email')} htmlFor='source-email'>
+              <FieldBlock label={credentialLabel} htmlFor='source-email'>
                 <Input
                   id='source-email'
                   value={form.email}
@@ -1744,6 +1781,10 @@ function CredentialsSheet(props: {
   const { t } = useTranslation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const credentialLabel =
+    props.source?.type === UPSTREAM_SOURCE_TYPE_NEW_API
+      ? t('Username or Email')
+      : t('Email')
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -1763,7 +1804,7 @@ function CredentialsSheet(props: {
           onSubmit={handleSubmit}
         >
           <SideDrawerSection>
-            <FieldBlock label={t('Email')} htmlFor='credentials-email'>
+            <FieldBlock label={credentialLabel} htmlFor='credentials-email'>
               <Input
                 id='credentials-email'
                 value={email}
@@ -2395,7 +2436,7 @@ export function UpstreamSources() {
                   columnId: 'type',
                   title: t('Type'),
                   singleSelect: true,
-                  options: [{ label: 'sub2api', value: 'sub2api' }],
+                  options: SOURCE_TYPE_OPTIONS,
                 },
               ],
             }}

@@ -12,6 +12,7 @@ import (
 
 const (
 	UpstreamSourceTypeSub2API = "sub2api"
+	UpstreamSourceTypeNewAPI  = "new-api"
 
 	UpstreamSourceStatusEnabled  = "enabled"
 	UpstreamSourceStatusDisabled = "disabled"
@@ -71,7 +72,7 @@ func (source *UpstreamSource) BeforeCreate(tx *gorm.DB) error {
 		source.Status = UpstreamSourceStatusEnabled
 	}
 	if source.AdminAPIBasePath == "" {
-		source.AdminAPIBasePath = "/api/v1"
+		source.AdminAPIBasePath = DefaultUpstreamSourceAdminAPIBasePath(source.Type)
 	}
 	if source.RelayBaseURL == "" {
 		source.RelayBaseURL = source.BaseURL
@@ -83,6 +84,13 @@ func (source *UpstreamSource) BeforeCreate(tx *gorm.DB) error {
 		source.LastSyncStatus = UpstreamSyncStatusNever
 	}
 	return nil
+}
+
+func DefaultUpstreamSourceAdminAPIBasePath(sourceType string) string {
+	if strings.TrimSpace(sourceType) == UpstreamSourceTypeNewAPI {
+		return "/api"
+	}
+	return "/api/v1"
 }
 
 func (source *UpstreamSource) BeforeUpdate(tx *gorm.DB) error {
