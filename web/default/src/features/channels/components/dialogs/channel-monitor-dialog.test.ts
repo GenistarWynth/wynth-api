@@ -19,6 +19,16 @@ describe('channel monitor dialog theme contract', () => {
     assert.equal(/\bclassName=['"][^'"]*\bdark\b/.test(dialogSource), false)
   })
 
+  test('renders monitor history details with themed tooltip content', () => {
+    assert.match(dialogSource, /TooltipProvider/)
+    assert.match(dialogSource, /TooltipTrigger/)
+    assert.match(dialogSource, /TooltipContent/)
+    assert.doesNotMatch(dialogSource, /title=\{historyTitle\(bar, t\)\}/)
+    assert.match(dialogSource, /bar\.model/)
+    assert.match(dialogSource, /Average first token latency/)
+    assert.match(dialogSource, /Successful checks/)
+  })
+
   test('owns editable monitor settings instead of the channel edit drawer', () => {
     assert.match(dialogSource, /Monitor Settings/)
     assert.match(dialogSource, /channel_monitor_enabled/)

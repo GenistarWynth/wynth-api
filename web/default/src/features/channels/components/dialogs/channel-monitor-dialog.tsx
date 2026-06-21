@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bolt,
+  CheckCircle2,
   Clock,
   Globe2,
   Hash,
@@ -57,6 +58,12 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { StatusBadge } from '@/components/status-badge'
 import { getChannelMonitorDetail, updateChannel } from '../../api'
 import {
@@ -217,25 +224,9 @@ function refreshText(info: ChannelMonitorInfo | undefined, t: TFn) {
   return t('Due now')
 }
 
-function historyTitle(bar: MonitorHistoryBar, t: TFn) {
+function historyAriaLabel(bar: MonitorHistoryBar, t: TFn) {
   if (bar.status === 'empty') return t('No data')
-  const checkedAt =
-    bar.checkedAt > 0 ? formatRelativeTime(bar.checkedAt) : t('No data')
-  const status = monitorStatusText(bar.status, t)
-  const conversation = metricText(bar.latencyMS, t)
-  const firstToken = metricText(bar.firstTokenLatencyMS, t)
-  const endpoint = metricText(bar.endpointLatencyMS, t)
-  const tokens = tokenText(bar.promptTokens, bar.completionTokens)
-  const parts = [
-    checkedAt,
-    status,
-    `${t('Conversation latency')}: ${conversation}`,
-    `${t('First token')}: ${firstToken}`,
-    `${t('Endpoint ping')}: ${endpoint}`,
-    `${t('Input tokens')} / ${t('Output tokens')}: ${tokens}`,
-  ]
-  if (bar.message) parts.push(bar.message)
-  return parts.join(' · ')
+  return `${monitorStatusText(bar.status, t)} · ${bar.model || t('No data')}`
 }
 
 function MetricTile({
@@ -294,24 +285,72 @@ function SecondaryMetric({
   )
 }
 
+function MonitorHistoryDetails({ bar }: { bar: MonitorHistoryBar }) {
+  const { t } = useTranslation()
+
+  if (bar.status === 'empty') return <span>{t('No data')}</span>
+
+  const checkedAt =
+    bar.checkedAt > 0 ? formatRelativeTime(bar.checkedAt) : t('No data')
+  const rows = [
+    [t('Status'), monitorStatusText(bar.status, t)],
+    [t('Time'), checkedAt],
+    [t('Model'), bar.model || t('No data')],
+    [t('First token latency'), metricText(bar.firstTokenLatencyMS, t)],
+    [t('Endpoint latency'), metricText(bar.endpointLatencyMS, t)],
+    [t('Conversation latency'), metricText(bar.latencyMS, t)],
+    [
+      `${t('Input tokens')} / ${t('Output tokens')}`,
+      tokenText(bar.promptTokens, bar.completionTokens),
+    ],
+  ] as const
+
+  return (
+    <div className='grid min-w-56 gap-1.5 text-left text-xs'>
+      {rows.map(([label, value]) => (
+        <div key={label} className='grid grid-cols-[auto_1fr] gap-3'>
+          <span className='text-muted-foreground'>{label}</span>
+          <span className='text-right font-medium'>{value}</span>
+        </div>
+      ))}
+      {bar.message && (
+        <div className='border-border/70 bg-muted/40 mt-1 max-w-64 rounded-md border px-2 py-1.5 break-words whitespace-pre-wrap'>
+          {bar.message}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MonitorHistory({ bars }: { bars: MonitorHistoryBar[] }) {
   const { t } = useTranslation()
 
   return (
     <div className='flex flex-col gap-2'>
-      <div className='border-border/50 bg-background/45 flex h-10 items-center gap-1 rounded-lg border px-2 py-2'>
-        {bars.map((bar) => (
-          <div
-            key={bar.id}
-            className={cn(
-              'h-full min-w-0 flex-1 rounded-full transition-opacity hover:opacity-80',
-              monitorHistoryToneClass(bar.tone),
-              bar.tone === 'empty' && 'opacity-25'
-            )}
-            title={historyTitle(bar, t)}
-          />
-        ))}
-      </div>
+      <TooltipProvider delay={120}>
+        <div className='border-border/50 bg-background/45 flex h-10 items-center gap-1 rounded-lg border px-2 py-2'>
+          {bars.map((bar) => (
+            <Tooltip key={bar.id}>
+              <TooltipTrigger
+                render={
+                  <button
+                    type='button'
+                    className={cn(
+                      'h-full min-w-0 flex-1 rounded-full transition-opacity hover:opacity-80 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+                      monitorHistoryToneClass(bar.tone),
+                      bar.tone === 'empty' && 'opacity-25'
+                    )}
+                    aria-label={historyAriaLabel(bar, t)}
+                  />
+                }
+              />
+              <TooltipContent className='border-border bg-popover text-popover-foreground max-w-sm rounded-lg border px-3 py-2 shadow-md'>
+                <MonitorHistoryDetails bar={bar} />
+              </TooltipContent>
+            </Tooltip>
+          ))}
+        </div>
+      </TooltipProvider>
       <div className='text-muted-foreground flex items-center justify-between text-[11px] font-semibold tracking-normal uppercase'>
         <span>{t('Past')}</span>
         <span>{t('Now')}</span>
@@ -412,7 +451,11 @@ export function ChannelMonitorDialog({
   const channelType = channel?.type ?? 1
   const typeLabel = t(getChannelTypeLabel(channelType))
   const icon = getLobeIcon(`${getChannelTypeIcon(channelType)}.Color`, 28)
-  const latestModel = latestRecord?.model?.trim() || channel?.test_model || ''
+  const latestModel =
+    info?.latest_model?.trim() ||
+    latestRecord?.model?.trim() ||
+    channel?.test_model?.trim() ||
+    ''
   const latestTime =
     info?.latest_checked_at && info.latest_checked_at > 0
       ? formatRelativeTime(info.latest_checked_at)
@@ -652,12 +695,22 @@ export function ChannelMonitorDialog({
                 value={metricText(info?.latest_first_token_latency_ms, t)}
               />
               <SecondaryMetric
+                icon={Clock}
+                label={t('Average first token latency')}
+                value={metricText(info?.average_first_token_latency_ms, t)}
+              />
+              <SecondaryMetric
                 icon={Hash}
                 label={`${t('Input tokens')} / ${t('Output tokens')}`}
                 value={tokenText(
                   info?.latest_prompt_tokens,
                   info?.latest_completion_tokens
                 )}
+              />
+              <SecondaryMetric
+                icon={CheckCircle2}
+                label={t('Successful checks')}
+                value={`${info?.seven_day_successes ?? 0} / ${info?.seven_day_checks ?? 0}`}
               />
             </div>
 
