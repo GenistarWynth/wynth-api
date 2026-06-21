@@ -264,6 +264,20 @@ func TestGetChannelMonitorDetail(t *testing.T) {
 	require.Len(t, response.Data.RecentRecords, 4)
 	assert.Equal(t, checkedAtBase+1, response.Data.RecentRecords[0].CheckedAt)
 	assert.Equal(t, 14, response.Data.RecentRecords[3].CompletionTokens)
+
+	var detailEnvelope struct {
+		Data struct {
+			Info struct {
+				LatestModel            string `json:"latest_model"`
+				LatestPromptTokens     int    `json:"latest_prompt_tokens"`
+				LatestCompletionTokens int    `json:"latest_completion_tokens"`
+			} `json:"info"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &detailEnvelope))
+	assert.Equal(t, "gpt-4o-mini", detailEnvelope.Data.Info.LatestModel)
+	assert.Equal(t, 4, detailEnvelope.Data.Info.LatestPromptTokens)
+	assert.Equal(t, 14, detailEnvelope.Data.Info.LatestCompletionTokens)
 }
 
 func TestFilterDueChannelMonitorCandidates(t *testing.T) {

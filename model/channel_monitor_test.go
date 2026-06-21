@@ -183,6 +183,7 @@ func TestGetChannelMonitorStatsIncludesTimingBreakdowns(t *testing.T) {
 		{ChannelID: 1, Status: ChannelMonitorStatusSuccess, LatencyMS: 100, EndpointLatencyMS: 20, FirstTokenLatencyMS: 60, CheckedAt: 100},
 		{ChannelID: 1, Status: ChannelMonitorStatusDegraded, LatencyMS: 300, EndpointLatencyMS: 40, FirstTokenLatencyMS: 120, CheckedAt: 110},
 		{ChannelID: 1, Status: ChannelMonitorStatusFailed, LatencyMS: 500, EndpointLatencyMS: 0, FirstTokenLatencyMS: 0, CheckedAt: 120},
+		{ChannelID: 1, Status: ChannelMonitorStatusSuccess, LatencyMS: 0, EndpointLatencyMS: 0, FirstTokenLatencyMS: 0, CheckedAt: 130},
 	}
 	for _, log := range logs {
 		require.NoError(t, RecordChannelMonitorLog(log))
@@ -192,8 +193,8 @@ func TestGetChannelMonitorStatsIncludesTimingBreakdowns(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Contains(t, stats, 1)
-	assert.Equal(t, int64(3), stats[1].TotalChecks)
-	assert.Equal(t, int64(2), stats[1].SuccessChecks)
+	assert.Equal(t, int64(4), stats[1].TotalChecks)
+	assert.Equal(t, int64(3), stats[1].SuccessChecks)
 	assert.InDelta(t, 300.0, stats[1].AverageLatencyMS, 0.0001)
 	assert.InDelta(t, 30.0, stats[1].AverageEndpointLatencyMS, 0.0001)
 	assert.InDelta(t, 90.0, stats[1].AverageFirstTokenLatencyMS, 0.0001)
@@ -289,6 +290,7 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 
 	require.NoError(t, RecordChannelMonitorLog(ChannelMonitorLog{
 		ChannelID: 1,
+		Model:     "gpt-4o-mini",
 		Status:    ChannelMonitorStatusSuccess,
 		LatencyMS: 101,
 		Message:   "old",
@@ -296,6 +298,7 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 	}))
 	require.NoError(t, RecordChannelMonitorLog(ChannelMonitorLog{
 		ChannelID: 1,
+		Model:     "gpt-4o",
 		Status:    ChannelMonitorStatusSuccess,
 		LatencyMS: 100,
 		Message:   "ok",
@@ -303,8 +306,9 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 	}))
 	require.NoError(t, RecordChannelMonitorLog(ChannelMonitorLog{
 		ChannelID:           1,
+		Model:               "gpt-4o-realtime",
 		Status:              ChannelMonitorStatusFailed,
-		LatencyMS:           201,
+		LatencyMS:           0,
 		EndpointLatencyMS:   81,
 		FirstTokenLatencyMS: 161,
 		PromptTokens:        12,
@@ -316,11 +320,16 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 	require.NoError(t, AttachChannelMonitorInfo(channels, now))
 
 	require.NotNil(t, channels[0].MonitorInfo)
+	monitorInfoJSON, err := common.Marshal(channels[0].MonitorInfo)
+	require.NoError(t, err)
+	var monitorInfoMap map[string]any
+	require.NoError(t, common.Unmarshal(monitorInfoJSON, &monitorInfoMap))
 	assert.True(t, channels[0].MonitorInfo.Enabled)
 	assert.Equal(t, DefaultChannelMonitorIntervalMinutes, channels[0].MonitorInfo.IntervalMinutes)
 	assert.Equal(t, ChannelMonitorStatusFailed, channels[0].MonitorInfo.LatestStatus)
+	assert.Equal(t, "gpt-4o-realtime", monitorInfoMap["latest_model"])
 	assert.Equal(t, now-50, channels[0].MonitorInfo.LatestCheckedAt)
-	assert.Equal(t, int64(201), channels[0].MonitorInfo.LatestLatencyMS)
+	assert.Equal(t, int64(0), channels[0].MonitorInfo.LatestLatencyMS)
 	assert.Equal(t, int64(81), channels[0].MonitorInfo.LatestEndpointLatencyMS)
 	assert.Equal(t, int64(161), channels[0].MonitorInfo.LatestFirstTokenLatencyMS)
 	assert.Equal(t, 12, channels[0].MonitorInfo.LatestPromptTokens)
@@ -330,7 +339,7 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 	assert.Equal(t, int64(1), channels[0].MonitorInfo.SevenDaySuccesses)
 	require.NotNil(t, channels[0].MonitorInfo.SevenDayAvailability)
 	assert.Equal(t, 0.5, *channels[0].MonitorInfo.SevenDayAvailability)
-	assert.Equal(t, int64(151), channels[0].MonitorInfo.AverageLatencyMS)
+	assert.Equal(t, int64(100), channels[0].MonitorInfo.AverageLatencyMS)
 
 	require.NotNil(t, channels[1].MonitorInfo)
 	assert.True(t, channels[1].MonitorInfo.Enabled)

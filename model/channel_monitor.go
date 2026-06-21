@@ -49,6 +49,7 @@ type ChannelMonitorInfo struct {
 	Enabled                    bool     `json:"enabled"`
 	IntervalMinutes            int      `json:"interval_minutes"`
 	LatestStatus               string   `json:"latest_status,omitempty"`
+	LatestModel                string   `json:"latest_model,omitempty"`
 	LatestCheckedAt            int64    `json:"latest_checked_at,omitempty"`
 	LatestLatencyMS            int64    `json:"latest_latency_ms,omitempty"`
 	LatestEndpointLatencyMS    int64    `json:"latest_endpoint_latency_ms,omitempty"`
@@ -185,7 +186,7 @@ func GetChannelMonitorStats(channelIDs []int, windowStart int64) (map[int]Channe
 	var rows []statsRow
 	err := DB.Model(&ChannelMonitorLog{}).
 		Select(
-			"channel_id, COUNT(*) AS total_checks, SUM(CASE WHEN status = ? OR status = ? THEN 1 ELSE 0 END) AS success_checks, AVG(latency_ms) AS average_latency_ms, AVG(CASE WHEN endpoint_latency_ms > 0 THEN endpoint_latency_ms ELSE NULL END) AS average_endpoint_latency_ms, AVG(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE NULL END) AS average_first_token_latency_ms",
+			"channel_id, COUNT(*) AS total_checks, SUM(CASE WHEN status = ? OR status = ? THEN 1 ELSE 0 END) AS success_checks, AVG(CASE WHEN latency_ms > 0 THEN latency_ms ELSE NULL END) AS average_latency_ms, AVG(CASE WHEN endpoint_latency_ms > 0 THEN endpoint_latency_ms ELSE NULL END) AS average_endpoint_latency_ms, AVG(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE NULL END) AS average_first_token_latency_ms",
 			ChannelMonitorStatusSuccess,
 			ChannelMonitorStatusDegraded,
 		).
@@ -313,6 +314,7 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 		}
 		if log, ok := latest[channel.Id]; ok {
 			info.LatestStatus = log.Status
+			info.LatestModel = log.Model
 			info.LatestCheckedAt = log.CheckedAt
 			info.LatestLatencyMS = log.LatencyMS
 			info.LatestEndpointLatencyMS = log.EndpointLatencyMS
