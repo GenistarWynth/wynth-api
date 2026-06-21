@@ -157,6 +157,8 @@ func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
 	// Shared record age: inside the 24h window, outside the 1h window.
 	createAutoPriorityTestUsageLog(t, longChannel.Id, now-2*3600)
 	createAutoPriorityTestMonitorLog(t, longChannel.Id, now-2*3600)
+	createAutoPriorityTestUsageLog(t, shortChannel.Id, now-2*3600)
+	createAutoPriorityTestMonitorLog(t, shortChannel.Id, now-2*3600)
 
 	service := UpstreamSourceService{Now: func() int64 { return now }}
 
@@ -446,4 +448,93 @@ func TestRunUpstreamSourceAutoPrioritySkipsDisabledAndMissingRate(t *testing.T) 
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
 	assert.Equal(t, int64(300), reloadedChannel.GetPriority())
+}
+
+func TestRunUpstreamSourceAutoPriorityPreservesResultOrder(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(6_000_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "Long rule",
+				"local_group":   "long",
+				"name_contains": []string{"long"},
+				"auto_priority": map[string]any{
+					"enabled":      true,
+					"window_hours": 24,
+				},
+			},
+			{
+				"name":          "Disabled rule",
+				"local_group":   "disabled",
+				"name_contains": []string{"disabled"},
+				"auto_priority": map[string]any{
+					"enabled": false,
+				},
+			},
+			{
+				"name":          "Missing rule",
+				"local_group":   "missing",
+				"name_contains": []string{"missing"},
+				"auto_priority": map[string]any{
+					"enabled":      true,
+					"window_hours": 24,
+				},
+			},
+			{
+				"name":          "Short rule",
+				"local_group":   "short",
+				"name_contains": []string{"short"},
+				"auto_priority": map[string]any{
+					"enabled":      true,
+					"window_hours": 24,
+				},
+			},
+		},
+	})
+	rate := 0.5
+	longMapping := createSyncTestMapping(t, source.Id, "10", "long upstream", &rate)
+	_ = createSyncTestMapping(t, source.Id, "20", "disabled upstream", &rate)
+	missingRateMapping := createSyncTestMapping(t, source.Id, "30", "missing upstream", nil)
+	shortMapping := createSyncTestMapping(t, source.Id, "40", "short upstream", &rate)
+
+	longChannel := createAutoPriorityTestChannel(t, "source-a / long", 100, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        source.Id,
+		GeneratedByUpstreamMappingID:       longMapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+	})
+	shortChannel := createAutoPriorityTestChannel(t, "source-a / short", 200, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        source.Id,
+		GeneratedByUpstreamMappingID:       shortMapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", longMapping.Id).Update("local_channel_id", longChannel.Id).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", shortMapping.Id).Update("local_channel_id", shortChannel.Id).Error)
+
+	createAutoPriorityTestUsageLog(t, longChannel.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, longChannel.Id, now-60)
+	createAutoPriorityTestUsageLog(t, shortChannel.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, shortChannel.Id, now-60)
+
+	service := UpstreamSourceService{Now: func() int64 { return now }}
+
+	result, err := service.RunAutoPriority(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 2, result.Updated)
+	assert.Equal(t, 2, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	require.Len(t, result.Results, 3)
+	assert.Equal(t, longMapping.Id, result.Results[0].MappingID)
+	assert.Equal(t, missingRateMapping.Id, result.Results[1].MappingID)
+	assert.Equal(t, shortMapping.Id, result.Results[2].MappingID)
+	assert.Equal(t, "missing_effective_rate_multiplier", result.Results[1].Reason)
 }

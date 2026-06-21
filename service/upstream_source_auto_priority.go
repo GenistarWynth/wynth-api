@@ -21,6 +21,7 @@ type upstreamSourceAutoPriorityCandidate struct {
 	scoreInput  AutoPriorityScoreInput
 	windowStart int64
 	windowEnd   int64
+	resultIndex int
 }
 
 func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID int, now int64) (*dto.UpstreamSourceAutoPriorityResult, error) {
@@ -58,6 +59,7 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 
 	pending := make([]upstreamSourceAutoPriorityCandidate, 0, len(mappings))
 	groupedPending := make(map[int64][]int, len(mappings))
+	resultSlots := make([]*dto.UpstreamSourceAutoPriorityChannelResult, len(mappings))
 
 	for i := range mappings {
 		mapping := mappings[i]
@@ -68,27 +70,29 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 		}
 
 		if mapping.EffectiveRateMultiplier == nil || *mapping.EffectiveRateMultiplier <= 0 {
-			result.Results = append(result.Results, dto.UpstreamSourceAutoPriorityChannelResult{
+			slot := dto.UpstreamSourceAutoPriorityChannelResult{
 				MappingID:      mapping.Id,
 				LocalChannelID: mapping.LocalChannelID,
 				OldPriority:    0,
 				NewPriority:    0,
 				Applied:        false,
 				Reason:         "missing_effective_rate_multiplier",
-			})
+			}
+			resultSlots[i] = &slot
 			result.Skipped++
 			continue
 		}
 
 		if mapping.LocalChannelID == 0 {
-			result.Results = append(result.Results, dto.UpstreamSourceAutoPriorityChannelResult{
+			slot := dto.UpstreamSourceAutoPriorityChannelResult{
 				MappingID:      mapping.Id,
 				LocalChannelID: 0,
 				OldPriority:    0,
 				NewPriority:    0,
 				Applied:        false,
 				Reason:         "local_channel_missing",
-			})
+			}
+			resultSlots[i] = &slot
 			result.Skipped++
 			continue
 		}
@@ -96,14 +100,15 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 		channel, err := loadChannelByID(mapping.LocalChannelID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				result.Results = append(result.Results, dto.UpstreamSourceAutoPriorityChannelResult{
+				slot := dto.UpstreamSourceAutoPriorityChannelResult{
 					MappingID:      mapping.Id,
 					LocalChannelID: mapping.LocalChannelID,
 					OldPriority:    0,
 					NewPriority:    0,
 					Applied:        false,
 					Reason:         "local_channel_missing",
-				})
+				}
+				resultSlots[i] = &slot
 				result.Skipped++
 				continue
 			}
@@ -116,14 +121,15 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 
 		settings := channel.GetOtherSettings()
 		if !isGeneratedChannelMetadataMatching(&settings, source.Id, mapping.Id) {
-			result.Results = append(result.Results, dto.UpstreamSourceAutoPriorityChannelResult{
+			slot := dto.UpstreamSourceAutoPriorityChannelResult{
 				MappingID:      mapping.Id,
 				LocalChannelID: channel.Id,
 				OldPriority:    channel.GetPriority(),
 				NewPriority:    channel.GetPriority(),
 				Applied:        false,
 				Reason:         "generated_channel_metadata_mismatch",
-			})
+			}
+			resultSlots[i] = &slot
 			result.Skipped++
 			continue
 		}
@@ -140,10 +146,11 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 		}
 
 		pending = append(pending, upstreamSourceAutoPriorityCandidate{
-			mapping:    mapping,
-			channel:    *channel,
-			settings:   settings,
-			resolution: resolution,
+			mapping:     mapping,
+			channel:     *channel,
+			settings:    settings,
+			resolution:  resolution,
+			resultIndex: i,
 			scoreInput: AutoPriorityScoreInput{
 				ChannelID:               channel.Id,
 				LocalGroup:              localGroup,
@@ -162,10 +169,6 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 			windowEnd:   now,
 		})
 		groupedPending[windowStart] = append(groupedPending[windowStart], len(pending)-1)
-	}
-
-	if len(pending) == 0 {
-		return result, nil
 	}
 
 	scoreInputs := make([]AutoPriorityScoreInput, len(pending))
@@ -257,7 +260,7 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 				}
 				candidateResult.Applied = false
 				candidateResult.Reason = "update_failed"
-				result.Results = append(result.Results, candidateResult)
+				resultSlots[candidate.resultIndex] = &candidateResult
 				continue
 			}
 			result.Updated++
@@ -275,17 +278,22 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 				}
 				candidateResult.Applied = false
 				candidateResult.Reason = "update_failed"
-				result.Results = append(result.Results, candidateResult)
+				resultSlots[candidate.resultIndex] = &candidateResult
 				continue
 			}
 			result.Skipped++
 		}
-
-		result.Results = append(result.Results, candidateResult)
+		resultSlots[candidate.resultIndex] = &candidateResult
 	}
 
 	if appliedAny {
 		model.InitChannelCache()
+	}
+
+	for _, slot := range resultSlots {
+		if slot != nil {
+			result.Results = append(result.Results, *slot)
+		}
 	}
 
 	return result, nil
