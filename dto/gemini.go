@@ -461,6 +461,27 @@ type GeminiChatResponse struct {
 	UsageMetadata  GeminiUsageMetadata       `json:"usageMetadata"`
 }
 
+// UnmarshalJSON allows GeminiChatResponse to accept both snake_case and camelCase fields.
+func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
+	type Alias GeminiChatResponse
+	var aux struct {
+		Alias
+		ModelVersionSnake string `json:"model_version,omitempty"`
+	}
+
+	if err := common.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*r = GeminiChatResponse(aux.Alias)
+
+	if aux.ModelVersionSnake != "" && r.ModelVersion == "" {
+		r.ModelVersion = aux.ModelVersionSnake
+	}
+
+	return nil
+}
+
 type GeminiUsageMetadata struct {
 	PromptTokenCount           int                         `json:"promptTokenCount"`
 	ToolUsePromptTokenCount    int                         `json:"toolUsePromptTokenCount"`
