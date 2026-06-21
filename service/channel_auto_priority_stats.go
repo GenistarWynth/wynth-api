@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"math"
 	"strings"
 
@@ -37,6 +38,10 @@ type autoPriorityUsageLogOther struct {
 }
 
 func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error) {
+	return CollectAutoPriorityUsageStatsWithContext(context.Background(), channelIDs, windowStart)
+}
+
+func CollectAutoPriorityUsageStatsWithContext(ctx context.Context, channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error) {
 	statsByChannel := make(map[int]AutoPriorityUsageStats)
 	validChannelIDs := make([]int, 0, len(channelIDs))
 	for _, channelID := range channelIDs {
@@ -52,7 +57,7 @@ func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (map[int
 	}
 
 	var logs []model.Log
-	if err := model.LOG_DB.
+	if err := model.LOG_DB.WithContext(ctx).
 		Where("type = ?", model.LogTypeConsume).
 		Where("channel_id IN ?", validChannelIDs).
 		Where("created_at >= ?", windowStart).

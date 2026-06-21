@@ -15,8 +15,8 @@ const upstreamSourceAutoPriorityScoreVersion = "v1"
 
 var errAutoPriorityGeneratedChannelChanged = errors.New("generated channel changed")
 
-type autoPriorityMonitorStatsCollector func(channelIDs []int, windowStart int64) (map[int]model.ChannelMonitorStats, error)
-type autoPriorityUsageStatsCollector func(channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error)
+type autoPriorityMonitorStatsCollector func(ctx context.Context, channelIDs []int, windowStart int64) (map[int]model.ChannelMonitorStats, error)
+type autoPriorityUsageStatsCollector func(ctx context.Context, channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error)
 
 type upstreamSourceAutoPriorityCandidate struct {
 	mapping     model.UpstreamSourceChannelMapping
@@ -178,7 +178,7 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 
 	scoreInputs := make([]AutoPriorityScoreInput, len(pending))
 	for windowStart, indexes := range groupedPending {
-		if err := fillAutoPriorityScoreInputsForWindow(ctx, pending, indexes, windowStart, scoreInputs, result, resultSlots, model.GetChannelMonitorStats, CollectAutoPriorityUsageStats); err != nil {
+		if err := fillAutoPriorityScoreInputsForWindow(ctx, pending, indexes, windowStart, scoreInputs, result, resultSlots, model.GetChannelMonitorStatsWithContext, CollectAutoPriorityUsageStatsWithContext); err != nil {
 			appendAutoPriorityResultSlots(result, resultSlots)
 			return result, err
 		}
@@ -260,12 +260,12 @@ func fillAutoPriorityScoreInputsForWindow(ctx context.Context, pending []upstrea
 		channelIDList = append(channelIDList, pending[idx].channel.Id)
 	}
 
-	monitorStats, err := monitorCollector(channelIDList, windowStart)
+	monitorStats, err := monitorCollector(ctx, channelIDList, windowStart)
 	if err != nil {
 		markAutoPriorityGroupFailure(result, resultSlots, pending, indexes, "monitor_stats_failed", err)
 		return err
 	}
-	usageStats, err := usageCollector(channelIDList, windowStart)
+	usageStats, err := usageCollector(ctx, channelIDList, windowStart)
 	if err != nil {
 		markAutoPriorityGroupFailure(result, resultSlots, pending, indexes, "usage_stats_failed", err)
 		return err
@@ -326,8 +326,10 @@ func persistAutoPriorityCandidate(ctx context.Context, candidate upstreamSourceA
 			if abilityRes.Error != nil {
 				return abilityRes.Error
 			}
-			if abilityRes.RowsAffected == 0 {
-				return errors.New("ability priority update affected no rows")
+			if err := resolveAutoPriorityAbilityUpdateResult(candidate.channel.Id, abilityRes.RowsAffected, func(channelID int) (bool, error) {
+				return autoPriorityAbilityExists(tx, channelID)
+			}); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -374,6 +376,28 @@ func appendAutoPriorityResultSlots(result *dto.UpstreamSourceAutoPriorityResult,
 			result.Results = append(result.Results, *slot)
 		}
 	}
+}
+
+func resolveAutoPriorityAbilityUpdateResult(channelID int, rowsAffected int64, abilityExists func(channelID int) (bool, error)) error {
+	if rowsAffected != 0 {
+		return nil
+	}
+	exists, err := abilityExists(channelID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	return errors.New("ability priority update affected no rows")
+}
+
+func autoPriorityAbilityExists(tx *gorm.DB, channelID int) (bool, error) {
+	var count int64
+	if err := tx.Model(&model.Ability{}).Where("channel_id = ?", channelID).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func loadChannelByIDWithContext(ctx context.Context, channelID int) (*model.Channel, error) {

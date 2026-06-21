@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -170,6 +171,10 @@ func GetRecentChannelMonitorLogs(channelID int, limit int) ([]ChannelMonitorLog,
 }
 
 func GetChannelMonitorStats(channelIDs []int, windowStart int64) (map[int]ChannelMonitorStats, error) {
+	return GetChannelMonitorStatsWithContext(context.Background(), channelIDs, windowStart)
+}
+
+func GetChannelMonitorStatsWithContext(ctx context.Context, channelIDs []int, windowStart int64) (map[int]ChannelMonitorStats, error) {
 	stats := make(map[int]ChannelMonitorStats, len(channelIDs))
 	if len(channelIDs) == 0 {
 		return stats, nil
@@ -184,7 +189,7 @@ func GetChannelMonitorStats(channelIDs []int, windowStart int64) (map[int]Channe
 		AverageFirstTokenLatencyMS *float64 `gorm:"column:average_first_token_latency_ms"`
 	}
 	var rows []statsRow
-	err := DB.Model(&ChannelMonitorLog{}).
+	err := DB.WithContext(ctx).Model(&ChannelMonitorLog{}).
 		Select(
 			"channel_id, COUNT(*) AS total_checks, SUM(CASE WHEN status = ? OR status = ? THEN 1 ELSE 0 END) AS success_checks, AVG(CASE WHEN latency_ms > 0 THEN latency_ms ELSE NULL END) AS average_latency_ms, AVG(CASE WHEN endpoint_latency_ms > 0 THEN endpoint_latency_ms ELSE NULL END) AS average_endpoint_latency_ms, AVG(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE NULL END) AS average_first_token_latency_ms",
 			ChannelMonitorStatusSuccess,

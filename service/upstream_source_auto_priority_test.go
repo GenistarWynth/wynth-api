@@ -625,10 +625,10 @@ func TestFillAutoPriorityScoreInputsForWindowMarksStatsFailure(t *testing.T) {
 		scoreInputs,
 		result,
 		resultSlots,
-		func([]int, int64) (map[int]model.ChannelMonitorStats, error) {
+		func(context.Context, []int, int64) (map[int]model.ChannelMonitorStats, error) {
 			return nil, errors.New("monitor db down")
 		},
-		func([]int, int64) (map[int]AutoPriorityUsageStats, error) {
+		func(context.Context, []int, int64) (map[int]AutoPriorityUsageStats, error) {
 			t.Fatal("usage collector should not be called after monitor failure")
 			return nil, nil
 		},
@@ -642,4 +642,70 @@ func TestFillAutoPriorityScoreInputsForWindowMarksStatsFailure(t *testing.T) {
 	assert.Equal(t, int64(30), resultSlots[0].OldPriority)
 	assert.Equal(t, int64(30), resultSlots[0].NewPriority)
 	assert.Contains(t, result.Error, "monitor db down")
+}
+
+func TestFillAutoPriorityScoreInputsForWindowMarksUsageStatsFailure(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	candidate := upstreamSourceAutoPriorityCandidate{
+		mapping: model.UpstreamSourceChannelMapping{Id: 12},
+		channel: model.Channel{Id: 23, Priority: common.GetPointer(int64(40))},
+		scoreInput: AutoPriorityScoreInput{
+			ChannelID:               23,
+			CurrentPriority:         40,
+			EffectiveRateMultiplier: 0.5,
+		},
+		resultIndex: 0,
+	}
+	pending := []upstreamSourceAutoPriorityCandidate{candidate}
+	resultSlots := make([]*dto.UpstreamSourceAutoPriorityChannelResult, 1)
+	result := &dto.UpstreamSourceAutoPriorityResult{}
+	scoreInputs := make([]AutoPriorityScoreInput, 1)
+
+	err := fillAutoPriorityScoreInputsForWindow(
+		context.Background(),
+		pending,
+		[]int{0},
+		1234,
+		scoreInputs,
+		result,
+		resultSlots,
+		func(context.Context, []int, int64) (map[int]model.ChannelMonitorStats, error) {
+			return map[int]model.ChannelMonitorStats{
+				23: {
+					ChannelID:     23,
+					TotalChecks:   2,
+					SuccessChecks: 1,
+				},
+			}, nil
+		},
+		func(context.Context, []int, int64) (map[int]AutoPriorityUsageStats, error) {
+			return nil, errors.New("usage db down")
+		},
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, 1, result.Failed)
+	require.Len(t, resultSlots, 1)
+	require.NotNil(t, resultSlots[0])
+	assert.Equal(t, "usage_stats_failed", resultSlots[0].Reason)
+	assert.Equal(t, int64(40), resultSlots[0].OldPriority)
+	assert.Equal(t, int64(40), resultSlots[0].NewPriority)
+	assert.Contains(t, result.Error, "usage db down")
+}
+
+func TestResolveAutoPriorityAbilityUpdateResultAllowsExistingAbilityOnZeroRows(t *testing.T) {
+	err := resolveAutoPriorityAbilityUpdateResult(123, 0, func(channelID int) (bool, error) {
+		assert.Equal(t, 123, channelID)
+		return true, nil
+	})
+	require.NoError(t, err)
+}
+
+func TestResolveAutoPriorityAbilityUpdateResultFailsWhenAbilityMissing(t *testing.T) {
+	err := resolveAutoPriorityAbilityUpdateResult(123, 0, func(channelID int) (bool, error) {
+		assert.Equal(t, 123, channelID)
+		return false, nil
+	})
+	require.Error(t, err)
+	assert.Equal(t, "ability priority update affected no rows", err.Error())
 }
