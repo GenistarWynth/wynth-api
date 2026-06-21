@@ -29,6 +29,13 @@ describe('channel monitor dialog theme contract', () => {
     assert.match(dialogSource, /Successful checks/)
   })
 
+  test('keeps monitor settings available when detail loading fails', () => {
+    assert.doesNotMatch(dialogSource, /\)\s*:\s*query\.isError\s*\?\s*\(/)
+    assert.match(dialogSource, /query\.isError &&/)
+    assert.match(dialogSource, /Failed to load monitor data/)
+    assert.match(dialogSource, /Monitor Settings/)
+  })
+
   test('owns editable monitor settings instead of the channel edit drawer', () => {
     assert.match(dialogSource, /Monitor Settings/)
     assert.match(dialogSource, /channel_monitor_enabled/)

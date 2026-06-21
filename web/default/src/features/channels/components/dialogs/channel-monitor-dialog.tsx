@@ -423,6 +423,7 @@ export function ChannelMonitorDialog({
   ])
 
   const detail = query.data?.data
+  const detailLoadError = query.isError ? query.error.message : null
   const info = detail?.info ?? channel?.monitor_info ?? undefined
   const records = detail?.recent_records ?? []
   const latestRecord = records.length > 0 ? records[records.length - 1] : null
@@ -523,15 +524,6 @@ export function ChannelMonitorDialog({
         {query.isLoading ? (
           <div className='p-1'>
             <ChannelMonitorSkeleton />
-          </div>
-        ) : query.isError ? (
-          <div className='border-border bg-card text-card-foreground rounded-2xl border p-4 shadow-2xl'>
-            <Empty className='border-border/60 rounded-lg border py-8'>
-              <EmptyHeader>
-                <EmptyTitle>{t('Failed to load monitor data')}</EmptyTitle>
-                <EmptyDescription>{query.error.message}</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
           </div>
         ) : (
           <div className='border-border bg-card flex flex-col gap-5 rounded-2xl border p-5 shadow-2xl'>
@@ -674,6 +666,15 @@ export function ChannelMonitorDialog({
                 </Button>
               </div>
             </div>
+
+            {query.isError && (
+              <Empty className='border-border/60 bg-background/35 rounded-xl border py-6'>
+                <EmptyHeader>
+                  <EmptyTitle>{t('Failed to load monitor data')}</EmptyTitle>
+                  <EmptyDescription>{detailLoadError}</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
 
             <div className='grid gap-3 sm:grid-cols-2'>
               <MetricTile
