@@ -32,6 +32,7 @@ import { toast } from 'sonner'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Combobox } from '@/components/ui/combobox'
 import {
   Dialog,
   DialogContent,
@@ -64,6 +65,7 @@ import {
   getChannelTypeIcon,
   getChannelTypeLabel,
   channelsQueryKeys,
+  parseModelsString,
 } from '../../lib'
 import {
   buildMonitorHistoryBars,
@@ -395,6 +397,18 @@ export function ChannelMonitorDialog({
     () => buildMonitorHistoryBars(records, 60),
     [records]
   )
+  const testModelOptions = useMemo(() => {
+    const models = parseModelsString(channel?.models ?? '')
+    const selectedModel = monitorTestModel.trim()
+    const allModels = new Set([
+      ...models,
+      ...(selectedModel ? [selectedModel] : []),
+    ])
+    return Array.from(allModels).map((model) => ({
+      value: model,
+      label: model,
+    }))
+  }, [channel?.models, monitorTestModel])
   const channelType = channel?.type ?? 1
   const typeLabel = t(getChannelTypeLabel(channelType))
   const icon = getLobeIcon(`${getChannelTypeIcon(channelType)}.Color`, 28)
@@ -580,13 +594,15 @@ export function ChannelMonitorDialog({
                   >
                     {t('Test model')}
                   </FieldLabel>
-                  <Input
+                  <Combobox
                     id={`channel-monitor-test-model-${channelId}`}
+                    options={testModelOptions}
                     value={monitorTestModel}
                     placeholder={t('Test model')}
-                    onChange={(event) =>
-                      setMonitorTestModel(event.target.value)
-                    }
+                    searchPlaceholder={t('Search models...')}
+                    emptyText={t('No models found')}
+                    allowCustomValue
+                    onValueChange={(value) => setMonitorTestModel(value ?? '')}
                   />
                 </Field>
               </FieldGroup>

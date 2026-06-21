@@ -32,4 +32,16 @@ describe('channel monitor dialog theme contract', () => {
       /name='channel_monitor_interval_minutes'/
     )
   })
+
+  test('selects the monitor test model from channel models with custom fallback', () => {
+    assert.match(dialogSource, /import \{ Combobox \}/)
+    assert.match(dialogSource, /parseModelsString/)
+    assert.match(dialogSource, /channel\?\.models/)
+    assert.match(dialogSource, /testModelOptions/)
+    assert.match(dialogSource, /allowCustomValue/)
+    assert.doesNotMatch(
+      dialogSource,
+      /<Input\s+id=\{`channel-monitor-test-model-\$\{channelId\}`\}/
+    )
+  })
 })
