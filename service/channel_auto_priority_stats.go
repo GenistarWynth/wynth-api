@@ -9,6 +9,7 @@ import (
 )
 
 type AutoPriorityUsageStats struct {
+	ChannelID                  int     `json:"channel_id"`
 	WindowStart                int64   `json:"window_start"`
 	UsageLogCount              int64   `json:"usage_log_count"`
 	NormalCostUnits            float64 `json:"normal_cost_units"`
@@ -35,10 +36,7 @@ type autoPriorityUsageLogOther struct {
 	IsChannelTest         bool    `json:"is_channel_test"`
 }
 
-func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (AutoPriorityUsageStats, error) {
-	stats := AutoPriorityUsageStats{
-		WindowStart: windowStart,
-	}
+func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error) {
 	validChannelIDs := make([]int, 0, len(channelIDs))
 	for _, channelID := range channelIDs {
 		if channelID > 0 {
@@ -46,7 +44,7 @@ func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (AutoPri
 		}
 	}
 	if len(validChannelIDs) == 0 {
-		return stats, nil
+		return map[int]AutoPriorityUsageStats{}, nil
 	}
 
 	var logs []model.Log
@@ -56,16 +54,14 @@ func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (AutoPri
 		Where("created_at >= ?", windowStart).
 		Order("created_at asc, id asc").
 		Find(&logs).Error; err != nil {
-		return AutoPriorityUsageStats{}, err
+		return nil, err
 	}
 
 	return buildAutoPriorityUsageStatsFromLogs(logs, windowStart), nil
 }
 
-func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) AutoPriorityUsageStats {
-	stats := AutoPriorityUsageStats{
-		WindowStart: windowStart,
-	}
+func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) map[int]AutoPriorityUsageStats {
+	statsByChannel := make(map[int]AutoPriorityUsageStats)
 
 	for _, log := range logs {
 		if log.Type != model.LogTypeConsume {
@@ -74,12 +70,21 @@ func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) Au
 		if windowStart > 0 && log.CreatedAt < windowStart {
 			continue
 		}
+		if log.ChannelId <= 0 {
+			continue
+		}
 
-		other := parseAutoPriorityUsageLogOther(log.Other)
+		other, ok := parseAutoPriorityUsageLogOther(log.Other)
+		if !ok {
+			continue
+		}
 		if isAutoPriorityUsageTestLog(log, other) {
 			continue
 		}
 
+		stats := statsByChannel[log.ChannelId]
+		stats.ChannelID = log.ChannelId
+		stats.WindowStart = windowStart
 		stats.UsageLogCount++
 
 		inputTotal := other.InputTokensTotal
@@ -120,27 +125,33 @@ func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) Au
 			stats.FirstTokenSampleCount++
 			stats.FirstTokenLatencyTotalMS += int64(math.Round(other.FRT))
 		}
+
+		statsByChannel[log.ChannelId] = stats
 	}
 
-	if stats.FirstTokenSampleCount > 0 {
-		stats.AverageFirstTokenLatencyMS = int64(math.Round(float64(stats.FirstTokenLatencyTotalMS) / float64(stats.FirstTokenSampleCount)))
+	for channelID, stats := range statsByChannel {
+		if stats.FirstTokenSampleCount > 0 {
+			stats.AverageFirstTokenLatencyMS = int64(math.Round(float64(stats.FirstTokenLatencyTotalMS) / float64(stats.FirstTokenSampleCount)))
+		}
+		if stats.NormalCostUnits > 0 {
+			stats.CacheAdjustedCostFactor = stats.AdjustedCostUnits / stats.NormalCostUnits
+		} else {
+			stats.CacheAdjustedCostFactor = 1
+		}
+		statsByChannel[channelID] = stats
 	}
-
-	if stats.NormalCostUnits > 0 {
-		stats.CacheAdjustedCostFactor = stats.AdjustedCostUnits / stats.NormalCostUnits
-	} else {
-		stats.CacheAdjustedCostFactor = 1
-	}
-	return stats
+	return statsByChannel
 }
 
-func parseAutoPriorityUsageLogOther(raw string) autoPriorityUsageLogOther {
+func parseAutoPriorityUsageLogOther(raw string) (autoPriorityUsageLogOther, bool) {
 	var other autoPriorityUsageLogOther
 	if strings.TrimSpace(raw) == "" {
-		return other
+		return other, true
 	}
-	_ = common.UnmarshalJsonStr(raw, &other)
-	return other
+	if err := common.UnmarshalJsonStr(raw, &other); err != nil {
+		return autoPriorityUsageLogOther{}, false
+	}
+	return other, true
 }
 
 func isAutoPriorityUsageTestLog(log model.Log, other autoPriorityUsageLogOther) bool {
