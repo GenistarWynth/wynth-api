@@ -20,3 +20,18 @@ func TestGeminiChatResponseUnmarshalModelVersionSnakeCase(t *testing.T) {
 
 	assert.Equal(t, "gemini-2.5-pro-001", resp.ModelVersion)
 }
+
+func TestGeminiChatResponseUnmarshalPrefersCamelCaseAndPreservesFields(t *testing.T) {
+	raw := []byte(`{
+		"modelVersion":"gemini-camel",
+		"model_version":"gemini-snake",
+		"candidates":[],
+		"usageMetadata":{"totalTokenCount":7}
+	}`)
+
+	var resp GeminiChatResponse
+	require.NoError(t, common.Unmarshal(raw, &resp))
+
+	assert.Equal(t, "gemini-camel", resp.ModelVersion)
+	assert.Equal(t, 7, resp.UsageMetadata.TotalTokenCount)
+}
