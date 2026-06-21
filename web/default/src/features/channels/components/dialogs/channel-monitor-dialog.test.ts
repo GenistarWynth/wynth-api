@@ -32,8 +32,12 @@ describe('channel monitor dialog theme contract', () => {
   test('can switch history between availability and first token waveform', () => {
     assert.match(dialogSource, /ToggleGroup/)
     assert.match(dialogSource, /historyViewMode/)
-    assert.match(dialogSource, /firstTokenPath/)
+    assert.match(dialogSource, /linePoints/)
+    assert.match(dialogSource, /anomalyPoints/)
     assert.match(dialogSource, /polyline/)
+    assert.match(dialogSource, /rounded-full bg-destructive/)
+    assert.doesNotMatch(dialogSource, /<circle/)
+    assert.doesNotMatch(dialogSource, /segments/)
     assert.match(dialogSource, /First token waveform/)
     assert.match(dialogSource, /Availability status/)
   })

@@ -234,6 +234,8 @@ function historyAriaLabel(bar: MonitorHistoryBar, t: TFn) {
 }
 
 function buildFirstTokenWaveform(bars: MonitorHistoryBar[]) {
+  const baselineY = 34
+  const markerOffsetY = 5
   const maxFirstToken = Math.max(
     1,
     ...bars.map((bar) =>
@@ -246,23 +248,19 @@ function buildFirstTokenWaveform(bars: MonitorHistoryBar[]) {
     const x = (index / divisor) * 100
     const y = hasValue
       ? 36 - (bar.firstTokenLatencyMS / maxFirstToken) * 30
-      : 34
-    return { bar, hasValue, x, y }
+      : baselineY
+    const isAnomaly = bar.tone === 'danger'
+    const markerY = isAnomaly
+      ? Math.max(4, hasValue ? y - markerOffsetY : 8)
+      : y
+    return { bar, isAnomaly, x, y, markerY }
   })
+  const linePoints = points
+    .map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+    .join(' ')
+  const anomalyPoints = points.filter((point) => point.isAnomaly)
 
-  const segments: string[] = []
-  let current: string[] = []
-  for (const point of points) {
-    if (point.hasValue) {
-      current.push(`${point.x.toFixed(2)},${point.y.toFixed(2)}`)
-    } else if (current.length > 0) {
-      segments.push(current.join(' '))
-      current = []
-    }
-  }
-  if (current.length > 0) segments.push(current.join(' '))
-
-  return { points, segments }
+  return { points, linePoints, anomalyPoints, baselineY }
 }
 
 function MetricTile({
@@ -406,42 +404,46 @@ function MonitorHistory({
                 <line
                   x1='0'
                   x2='100'
-                  y1='34'
-                  y2='34'
+                  y1={waveform.baselineY}
+                  y2={waveform.baselineY}
                   className='stroke-border'
                   strokeWidth='0.8'
                   vectorEffect='non-scaling-stroke'
                 />
-                {waveform.segments.map((firstTokenPath, index) => (
-                  <polyline
-                    key={`${firstTokenPath}-${index}`}
-                    points={firstTokenPath}
-                    fill='none'
-                    className='stroke-success'
-                    strokeWidth='2'
-                    strokeLinecap='round'
-                    strokeLinejoin='round'
-                    vectorEffect='non-scaling-stroke'
-                  />
-                ))}
+                <polyline
+                  points={waveform.linePoints}
+                  fill='none'
+                  className='stroke-chart-2'
+                  strokeWidth='2.2'
+                  strokeLinecap='round'
+                  strokeLinejoin='round'
+                  vectorEffect='non-scaling-stroke'
+                />
               </svg>
-              {waveform.points.map(({ bar, hasValue, x, y }) => (
+              {waveform.anomalyPoints.map(({ bar, x, markerY }) => (
+                <span
+                  key={`${bar.id}-anomaly`}
+                  aria-hidden='true'
+                  className='ring-background pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-destructive ring-1'
+                  style={{
+                    left: `${x}%`,
+                    top: `${(markerY / 40) * 100}%`,
+                  }}
+                />
+              ))}
+              {waveform.points.map(({ bar, x }) => (
                 <Tooltip key={bar.id}>
                   <TooltipTrigger
                     render={
                       <button
                         type='button'
                         className={cn(
-                          'absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition-transform hover:scale-125 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-                          hasValue
-                            ? 'border-success bg-success'
-                            : bar.tone === 'danger'
-                              ? 'border-destructive/60 bg-destructive/40'
-                              : 'border-muted-foreground/35 bg-muted'
+                          'absolute h-full w-2 -translate-x-1/2 rounded-sm opacity-0 transition-opacity hover:opacity-100 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+                          'bg-chart-2/10'
                         )}
                         style={{
                           left: `${x}%`,
-                          top: `${(y / 40) * 100}%`,
+                          top: 0,
                         }}
                         aria-label={historyAriaLabel(bar, t)}
                       />
