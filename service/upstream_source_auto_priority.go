@@ -57,7 +57,7 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 	}
 
 	pending := make([]upstreamSourceAutoPriorityCandidate, 0, len(mappings))
-	channelIDs := make(map[int]struct{}, len(mappings))
+	groupedPending := make(map[int64][]int, len(mappings))
 
 	for i := range mappings {
 		mapping := mappings[i]
@@ -128,7 +128,6 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 			continue
 		}
 
-		channelIDs[channel.Id] = struct{}{}
 		windowHours := resolution.AutoPriorityWindowHours
 		if windowHours <= 0 {
 			windowHours = 1
@@ -162,45 +161,48 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 			windowStart: windowStart,
 			windowEnd:   now,
 		})
+		groupedPending[windowStart] = append(groupedPending[windowStart], len(pending)-1)
 	}
 
 	if len(pending) == 0 {
 		return result, nil
 	}
 
-	channelIDList := make([]int, 0, len(channelIDs))
-	for channelID := range channelIDs {
-		channelIDList = append(channelIDList, channelID)
-	}
-
-	monitorStats, err := model.GetChannelMonitorStats(channelIDList, pending[0].windowStart)
-	if err != nil {
-		result.Error = SanitizeUpstreamSourceError(err)
-		return result, err
-	}
-	usageStats, err := CollectAutoPriorityUsageStats(channelIDList, pending[0].windowStart)
-	if err != nil {
-		result.Error = SanitizeUpstreamSourceError(err)
-		return result, err
-	}
-
 	scoreInputs := make([]AutoPriorityScoreInput, len(pending))
-	for i := range pending {
-		channelID := pending[i].channel.Id
-		scoreInput := pending[i].scoreInput
-		if stat, ok := monitorStats[channelID]; ok {
-			scoreInput.Availability = stat.Availability
-			scoreInput.MonitorCheckCount = stat.TotalChecks
+	for windowStart, indexes := range groupedPending {
+		channelIDList := make([]int, 0, len(indexes))
+		for _, idx := range indexes {
+			channelIDList = append(channelIDList, pending[idx].channel.Id)
 		}
-		if stat, ok := usageStats[channelID]; ok {
-			scoreInput.CacheAdjustedCostFactor = stat.CacheAdjustedCostFactor
-			scoreInput.UsageLogCount = stat.UsageLogCount
-			scoreInput.FirstTokenSampleCount = stat.FirstTokenSampleCount
-			if stat.FirstTokenSampleCount > 0 {
-				scoreInput.FirstTokenLatencyMS = float64(stat.AverageFirstTokenLatencyMS)
+
+		monitorStats, err := model.GetChannelMonitorStats(channelIDList, windowStart)
+		if err != nil {
+			result.Error = SanitizeUpstreamSourceError(err)
+			return result, err
+		}
+		usageStats, err := CollectAutoPriorityUsageStats(channelIDList, windowStart)
+		if err != nil {
+			result.Error = SanitizeUpstreamSourceError(err)
+			return result, err
+		}
+
+		for _, idx := range indexes {
+			channelID := pending[idx].channel.Id
+			scoreInput := pending[idx].scoreInput
+			if stat, ok := monitorStats[channelID]; ok {
+				scoreInput.Availability = stat.Availability
+				scoreInput.MonitorCheckCount = stat.TotalChecks
 			}
+			if stat, ok := usageStats[channelID]; ok {
+				scoreInput.CacheAdjustedCostFactor = stat.CacheAdjustedCostFactor
+				scoreInput.UsageLogCount = stat.UsageLogCount
+				scoreInput.FirstTokenSampleCount = stat.FirstTokenSampleCount
+				if stat.FirstTokenSampleCount > 0 {
+					scoreInput.FirstTokenLatencyMS = float64(stat.AverageFirstTokenLatencyMS)
+				}
+			}
+			scoreInputs[idx] = scoreInput
 		}
-		scoreInputs[i] = scoreInput
 	}
 
 	scoreResults := ScoreAutoPriorityCandidates(scoreInputs, 1000)

@@ -105,6 +105,110 @@ func createAutoPriorityTestMonitorLog(t *testing.T, channelID int, checkedAt int
 	}).Error)
 }
 
+func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(5_000_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "Long window",
+				"local_group":   "long",
+				"name_contains": []string{"long"},
+				"auto_priority": map[string]any{
+					"enabled":      true,
+					"window_hours": 24,
+				},
+			},
+			{
+				"name":          "Short window",
+				"local_group":   "short",
+				"name_contains": []string{"short"},
+				"auto_priority": map[string]any{
+					"enabled":      true,
+					"window_hours": 1,
+				},
+			},
+		},
+	})
+	longRate := 0.5
+	shortRate := 0.5
+	longMapping := createSyncTestMapping(t, source.Id, "10", "long upstream", &longRate)
+	shortMapping := createSyncTestMapping(t, source.Id, "20", "short upstream", &shortRate)
+	longChannel := createAutoPriorityTestChannel(t, "source-a / long", 100, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        source.Id,
+		GeneratedByUpstreamMappingID:       longMapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+	})
+	shortChannel := createAutoPriorityTestChannel(t, "source-a / short", 200, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        source.Id,
+		GeneratedByUpstreamMappingID:       shortMapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     1,
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", longMapping.Id).Update("local_channel_id", longChannel.Id).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", shortMapping.Id).Update("local_channel_id", shortChannel.Id).Error)
+
+	// Shared record age: inside the 24h window, outside the 1h window.
+	createAutoPriorityTestUsageLog(t, longChannel.Id, now-2*3600)
+	createAutoPriorityTestMonitorLog(t, longChannel.Id, now-2*3600)
+
+	service := UpstreamSourceService{Now: func() int64 { return now }}
+
+	result, err := service.RunAutoPriority(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Results, 2)
+
+	var longResult, shortResult *dto.UpstreamSourceAutoPriorityChannelResult
+	for i := range result.Results {
+		switch result.Results[i].MappingID {
+		case longMapping.Id:
+			longResult = &result.Results[i]
+		case shortMapping.Id:
+			shortResult = &result.Results[i]
+		}
+	}
+	require.NotNil(t, longResult)
+	require.NotNil(t, shortResult)
+
+	assert.Equal(t, now-24*3600, resultSnapshotWindowStart(t, source.Id, longChannel.Id))
+	assert.Equal(t, now-3600, resultSnapshotWindowStart(t, source.Id, shortChannel.Id))
+
+	var longChannelReloaded, shortChannelReloaded model.Channel
+	require.NoError(t, model.DB.First(&longChannelReloaded, longChannel.Id).Error)
+	require.NoError(t, model.DB.First(&shortChannelReloaded, shortChannel.Id).Error)
+	longSettings := longChannelReloaded.GetOtherSettings()
+	shortSettings := shortChannelReloaded.GetOtherSettings()
+	require.NotNil(t, longSettings.ChannelAutoPriorityLastScore)
+	require.NotNil(t, shortSettings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, now-24*3600, longSettings.ChannelAutoPriorityLastScore.WindowStart)
+	assert.Equal(t, now-3600, shortSettings.ChannelAutoPriorityLastScore.WindowStart)
+	assert.Equal(t, int64(1), longSettings.ChannelAutoPriorityLastScore.UsageLogCount)
+	assert.Equal(t, int64(0), shortSettings.ChannelAutoPriorityLastScore.UsageLogCount)
+	assert.Equal(t, int64(1), longSettings.ChannelAutoPriorityLastScore.MonitorCheckCount)
+	assert.Equal(t, int64(0), shortSettings.ChannelAutoPriorityLastScore.MonitorCheckCount)
+	assert.Equal(t, int64(1), longSettings.ChannelAutoPriorityLastScore.FirstTokenSampleCount)
+	assert.Equal(t, int64(0), shortSettings.ChannelAutoPriorityLastScore.FirstTokenSampleCount)
+}
+
+func resultSnapshotWindowStart(t *testing.T, sourceID int, channelID int) int64 {
+	t.Helper()
+
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, channelID).Error)
+	settings := channel.GetOtherSettings()
+	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, sourceID, settings.GeneratedByUpstreamSourceID)
+	return settings.ChannelAutoPriorityLastScore.WindowStart
+}
+
 func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(1_000_000)
