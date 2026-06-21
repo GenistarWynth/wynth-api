@@ -601,10 +601,13 @@ func autoPriorityCostUnits(log model.Log, other autoPriorityLogOther) (normal fl
 }
 ```
 
-`autoPriorityCacheWriteUnits` must include every cache creation bucket present in
-the log, including `cache_creation_tokens`, `cache_creation_tokens_5m`, and
-`cache_creation_tokens_1h`. Cache creation ratios greater than `1` raise the
-effective cost factor; they are not an independent quality metric.
+`autoPriorityCacheWriteUnits` must avoid double-counting cache creation. If split
+`cache_creation_tokens_5m` or `cache_creation_tokens_1h` fields are present, use
+the split buckets and ignore the aggregate `cache_creation_tokens`. If no split
+buckets are present, use aggregate `cache_creation_tokens`. If no detailed cache
+creation tokens are present, `cache_write_tokens` may be used as a 1x fallback.
+Cache creation ratios greater than `1` raise the effective cost factor; they are
+not an independent quality metric.
 
 - [ ] **Step 4: Mark channel-test logs**
 
