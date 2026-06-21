@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 
 	"gorm.io/gorm"
@@ -30,6 +32,21 @@ type upstreamSourceAutoPriorityCandidate struct {
 }
 
 func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID int, now int64) (*dto.UpstreamSourceAutoPriorityResult, error) {
+	return s.runAutoPriority(ctx, sourceID, now, nil)
+}
+
+func (s *UpstreamSourceService) RunAutoPriorityForMappings(ctx context.Context, sourceID int, now int64, mappingIDs []int) (*dto.UpstreamSourceAutoPriorityResult, error) {
+	filter := make(map[int]struct{}, len(mappingIDs))
+	for _, mappingID := range mappingIDs {
+		if mappingID == 0 {
+			continue
+		}
+		filter[mappingID] = struct{}{}
+	}
+	return s.runAutoPriority(ctx, sourceID, now, filter)
+}
+
+func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID int, now int64, mappingFilter map[int]struct{}) (*dto.UpstreamSourceAutoPriorityResult, error) {
 	if sourceID == 0 {
 		return nil, errors.New("source ID is required")
 	}
@@ -68,6 +85,11 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 
 	for i := range mappings {
 		mapping := mappings[i]
+		if mappingFilter != nil {
+			if _, ok := mappingFilter[mapping.Id]; !ok {
+				continue
+			}
+		}
 		resolution := resolveUpstreamSourceRule(config, &mapping)
 		if !resolution.SyncEligible || !resolution.AutoPriorityEnabled {
 			result.Skipped++
@@ -242,7 +264,7 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 	}
 
 	if appliedAny {
-		model.InitChannelCache()
+		initChannelCacheAfterAutoPriority(ctx)
 	}
 
 	for _, slot := range resultSlots {
@@ -252,6 +274,15 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 	}
 
 	return result, nil
+}
+
+func initChannelCacheAfterAutoPriority(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: InitChannelCache panic: %v", r))
+		}
+	}()
+	model.InitChannelCache()
 }
 
 func fillAutoPriorityScoreInputsForWindow(ctx context.Context, pending []upstreamSourceAutoPriorityCandidate, indexes []int, windowStart int64, scoreInputs []AutoPriorityScoreInput, result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult, monitorCollector autoPriorityMonitorStatsCollector, usageCollector autoPriorityUsageStatsCollector) error {

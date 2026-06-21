@@ -195,6 +195,31 @@ func TestListDueUpstreamSourcesForAutoPrioritySkipsMissingLocalChannel(t *testin
 	assert.Empty(t, due)
 }
 
+func TestListDueUpstreamSourcesForAutoPriorityDoesNotMutateInvalidChannelSettings(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	rate := 0.01
+	mapping := createSyncTestMapping(t, source.Id, "OpenAI", "OpenAI", &rate)
+	channel := createAutoPriorityTestChannel(t, "source-a / invalid settings", 1000, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", "{invalid-json").Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+
+	due, err := ListDueUpstreamSourcesForAutoPriority(2000)
+
+	require.NoError(t, err)
+	assert.Empty(t, due)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, "{invalid-json", reloaded.OtherSettings)
+}
+
 func TestListDueUpstreamSourcesForAutoPrioritySkipsMappingLoadFailure(t *testing.T) {
 	failingSource := model.UpstreamSource{
 		Id:         1,
@@ -225,13 +250,13 @@ func TestListDueUpstreamSourcesForAutoPrioritySkipsMappingLoadFailure(t *testing
 	due := listDueUpstreamSourcesForAutoPriorityFromSources(
 		[]model.UpstreamSource{failingSource, dueSource},
 		2000,
-		func(source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
+		func(_ context.Context, source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
 			if source.Id == failingSource.Id {
 				return nil, errors.New("mapping table locked")
 			}
 			return []model.UpstreamSourceChannelMapping{mapping}, nil
 		},
-		func([]model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
+		func(context.Context, []model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
 			return map[int]model.Channel{channel.Id: channel}, nil
 		},
 	)
@@ -282,10 +307,10 @@ func TestListDueUpstreamSourcesForAutoPriorityBatchLoadsChannels(t *testing.T) {
 	due := listDueUpstreamSourcesForAutoPriorityFromSources(
 		[]model.UpstreamSource{source},
 		2000,
-		func(model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
+		func(context.Context, model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
 			return mappings, nil
 		},
-		func(loadedMappings []model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
+		func(_ context.Context, loadedMappings []model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
 			loadCalls++
 			assert.ElementsMatch(t, []int{101, 102}, []int{loadedMappings[0].LocalChannelID, loadedMappings[1].LocalChannelID})
 			return channels, nil
@@ -295,6 +320,44 @@ func TestListDueUpstreamSourcesForAutoPriorityBatchLoadsChannels(t *testing.T) {
 	require.Len(t, due, 1)
 	assert.Equal(t, source.Id, due[0].Id)
 	assert.Equal(t, 1, loadCalls)
+}
+
+func TestRunDueUpstreamSourceAutoPriorityOnlyProcessesDueMappings(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(8_000_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     24,
+	})
+	dueChannel, dueMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "due", 100)
+	notDueChannel, _ := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "not-due", 200)
+	dueSettings := dueChannel.GetOtherSettings()
+	dueSettings.ChannelAutoPriorityLastRunAt = now - 3600
+	dueChannel.SetOtherSettings(dueSettings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", dueChannel.Id).Update("settings", dueChannel.OtherSettings).Error)
+	notDueLastRunAt := now - 60
+	notDueSettings := notDueChannel.GetOtherSettings()
+	notDueSettings.ChannelAutoPriorityLastRunAt = notDueLastRunAt
+	notDueChannel.SetOtherSettings(notDueSettings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", notDueChannel.Id).Update("settings", notDueChannel.OtherSettings).Error)
+	createAutoPriorityTestUsageLog(t, dueChannel.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, dueChannel.Id, now-60)
+	createAutoPriorityTestUsageLog(t, notDueChannel.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, notDueChannel.Id, now-60)
+
+	results := (&UpstreamSourceService{}).RunDueUpstreamSourceAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, source.Id, results[0].SourceID)
+	require.Len(t, results[0].Results, 1)
+	assert.Equal(t, dueMapping.Id, results[0].Results[0].MappingID)
+
+	var reloadedDue, reloadedNotDue model.Channel
+	require.NoError(t, model.DB.First(&reloadedDue, dueChannel.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedNotDue, notDueChannel.Id).Error)
+	assert.Equal(t, now, reloadedDue.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Equal(t, notDueLastRunAt, reloadedNotDue.GetOtherSettings().ChannelAutoPriorityLastRunAt)
 }
 
 func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
