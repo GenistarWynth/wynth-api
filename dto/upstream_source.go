@@ -194,3 +194,29 @@ type UpstreamSourceSyncResult struct {
 	Results  []UpstreamSourceMappingSyncResult `json:"results"`
 	Error    string                            `json:"error,omitempty"`
 }
+
+type UpstreamSourceAutoPriorityChannelResult struct {
+	MappingID               int     `json:"mapping_id"`
+	LocalChannelID          int     `json:"local_channel_id"`
+	OldPriority             int64   `json:"old_priority"`
+	NewPriority             int64   `json:"new_priority"`
+	ComputedPriority        int64   `json:"computed_priority"`
+	Applied                 bool    `json:"applied"`
+	Reason                  string  `json:"reason,omitempty"`
+	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier"`
+	CacheAdjustedCostFactor float64 `json:"cache_adjusted_cost_factor"`
+	EffectiveCostMultiplier float64 `json:"effective_cost_multiplier"`
+	EffectivePriceScore     float64 `json:"effective_price_score"`
+	AvailabilityScore       float64 `json:"availability_score"`
+	FirstTokenScore         float64 `json:"first_token_score"`
+	FinalScore              float64 `json:"final_score"`
+}
+
+type UpstreamSourceAutoPriorityResult struct {
+	SourceID int                                       `json:"source_id"`
+	Updated  int                                       `json:"updated"`
+	Skipped  int                                       `json:"skipped"`
+	Failed   int                                       `json:"failed"`
+	Results  []UpstreamSourceAutoPriorityChannelResult `json:"results"`
+	Error    string                                    `json:"error,omitempty"`
+}
