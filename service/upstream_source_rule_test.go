@@ -102,25 +102,55 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 	require.NotNil(t, rule.AutoPriority)
 	require.NotNil(t, rule.AutoPriority.Enabled)
 	assert.False(t, *rule.AutoPriority.Enabled)
-	assert.Equal(t, 0, rule.AutoPriority.IntervalMinutes)
-	assert.Equal(t, 48, rule.AutoPriority.WindowHours)
+	require.NotNil(t, rule.AutoPriority.IntervalMinutes)
+	require.NotNil(t, rule.AutoPriority.WindowHours)
+	assert.Equal(t, 0, *rule.AutoPriority.IntervalMinutes)
+	assert.Equal(t, 48, *rule.AutoPriority.WindowHours)
 }
 
 func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
 		"auto_priority_enabled":          false,
 		"auto_priority_interval_minutes": 30,
-		"auto_priority_window_hours":     24,
+		"auto_priority_window_hours":     48,
 		"local_group_rules": []map[string]any{
 			{
-				"name":          "OpenAI pro",
-				"local_group":   "paid",
-				"platforms":     []string{"openai"},
-				"name_contains": []string{"pro"},
+				"name":        "OpenAI pro",
+				"local_group": "paid",
+				"platforms":   []string{"openai"},
 				"auto_priority": map[string]any{
-					"enabled":          true,
-					"interval_minutes": 7,
-					"window_hours":     72,
+					"enabled": false,
+				},
+			},
+		},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:       true,
+		DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamPlatform:  "openai",
+		UpstreamGroupName: "ChatGPT Pro",
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.SyncEligible)
+	assert.False(t, resolution.AutoPriorityEnabled)
+	assert.Equal(t, 30, resolution.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 48, resolution.AutoPriorityWindowHours)
+}
+
+func TestResolveUpstreamSourceRuleAutoPriorityPreservesExplicitZeroInterval(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     48,
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI pro",
+				"local_group": "paid",
+				"platforms":   []string{"openai"},
+				"auto_priority": map[string]any{
+					"interval_minutes": 0,
 				},
 			},
 		},
@@ -136,8 +166,8 @@ func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
 
 	assert.True(t, resolution.SyncEligible)
 	assert.True(t, resolution.AutoPriorityEnabled)
-	assert.Equal(t, 7, resolution.AutoPriorityIntervalMinutes)
-	assert.Equal(t, 72, resolution.AutoPriorityWindowHours)
+	assert.Equal(t, 0, resolution.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 48, resolution.AutoPriorityWindowHours)
 }
 
 func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {

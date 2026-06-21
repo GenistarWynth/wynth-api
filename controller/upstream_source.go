@@ -303,11 +303,11 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 	syncConfigInput.AutoSyncEnabled = req.AutoSyncEnabled
 	syncConfigInput.AutoSyncIntervalMinutes = req.AutoSyncIntervalMinutes
 	syncConfigInput.AutoPriorityEnabled = req.AutoPriorityEnabled
-	if req.AutoPriorityIntervalMinutes != 0 {
-		syncConfigInput.AutoPriorityIntervalMinutes = req.AutoPriorityIntervalMinutes
+	if req.AutoPriorityIntervalMinutes != nil {
+		syncConfigInput.AutoPriorityIntervalMinutes = *req.AutoPriorityIntervalMinutes
 	}
-	if req.AutoPriorityWindowHours != 0 {
-		syncConfigInput.AutoPriorityWindowHours = req.AutoPriorityWindowHours
+	if req.AutoPriorityWindowHours != nil {
+		syncConfigInput.AutoPriorityWindowHours = *req.AutoPriorityWindowHours
 	}
 	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
 	syncConfigInput.LocalGroupRules = req.LocalGroupRules
@@ -346,11 +346,11 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 	syncConfigInput.AutoSyncEnabled = req.AutoSyncEnabled
 	syncConfigInput.AutoSyncIntervalMinutes = req.AutoSyncIntervalMinutes
 	syncConfigInput.AutoPriorityEnabled = req.AutoPriorityEnabled
-	if req.AutoPriorityIntervalMinutes != 0 {
-		syncConfigInput.AutoPriorityIntervalMinutes = req.AutoPriorityIntervalMinutes
+	if req.AutoPriorityIntervalMinutes != nil {
+		syncConfigInput.AutoPriorityIntervalMinutes = *req.AutoPriorityIntervalMinutes
 	}
-	if req.AutoPriorityWindowHours != 0 {
-		syncConfigInput.AutoPriorityWindowHours = req.AutoPriorityWindowHours
+	if req.AutoPriorityWindowHours != nil {
+		syncConfigInput.AutoPriorityWindowHours = *req.AutoPriorityWindowHours
 	}
 	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
 	syncConfigInput.LocalGroupRules = req.LocalGroupRules

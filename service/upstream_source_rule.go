@@ -221,9 +221,15 @@ func normalizeUpstreamSourceRuleAutoPriority(autoPriority *dto.UpstreamSourceRul
 		return nil
 	}
 	normalized := &dto.UpstreamSourceRuleAutoPriority{
-		Enabled:         cloneUpstreamSourceRuleBool(autoPriority.Enabled),
-		IntervalMinutes: normalizeUpstreamSourceAutoPriorityInterval(autoPriority.IntervalMinutes),
-		WindowHours:     normalizeUpstreamSourceAutoPriorityWindow(autoPriority.WindowHours),
+		Enabled: cloneUpstreamSourceRuleBool(autoPriority.Enabled),
+	}
+	if autoPriority.IntervalMinutes != nil {
+		value := normalizeUpstreamSourceAutoPriorityInterval(*autoPriority.IntervalMinutes)
+		normalized.IntervalMinutes = &value
+	}
+	if autoPriority.WindowHours != nil {
+		value := normalizeUpstreamSourceAutoPriorityWindow(*autoPriority.WindowHours)
+		normalized.WindowHours = &value
 	}
 	return normalized
 }
@@ -421,8 +427,12 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		if rule.AutoPriority.Enabled != nil {
 			resolution.AutoPriorityEnabled = *rule.AutoPriority.Enabled
 		}
-		resolution.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(rule.AutoPriority.IntervalMinutes)
-		resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(rule.AutoPriority.WindowHours)
+		if rule.AutoPriority.IntervalMinutes != nil {
+			resolution.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(*rule.AutoPriority.IntervalMinutes)
+		}
+		if rule.AutoPriority.WindowHours != nil {
+			resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.WindowHours)
+		}
 	}
 	if modelStrategy := normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy); modelStrategy != "" {
 		resolution.ModelStrategy = modelStrategy

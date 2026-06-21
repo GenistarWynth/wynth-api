@@ -21,8 +21,8 @@ type UpstreamSourceCreateRequest struct {
 	AutoSyncEnabled             bool                           `json:"auto_sync_enabled"`
 	AutoSyncIntervalMinutes     int                            `json:"auto_sync_interval_minutes"`
 	AutoPriorityEnabled         bool                           `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes int                            `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours     int                            `json:"auto_priority_window_hours"`
+	AutoPriorityIntervalMinutes *int                           `json:"auto_priority_interval_minutes,omitempty"`
+	AutoPriorityWindowHours     *int                           `json:"auto_priority_window_hours,omitempty"`
 	DefaultLocalGroup           string                         `json:"default_local_group"`
 	LocalGroupRules             []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
@@ -46,8 +46,8 @@ type UpstreamSourceUpdateRequest struct {
 	AutoSyncEnabled             bool                           `json:"auto_sync_enabled"`
 	AutoSyncIntervalMinutes     int                            `json:"auto_sync_interval_minutes"`
 	AutoPriorityEnabled         bool                           `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes int                            `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours     int                            `json:"auto_priority_window_hours"`
+	AutoPriorityIntervalMinutes *int                           `json:"auto_priority_interval_minutes,omitempty"`
+	AutoPriorityWindowHours     *int                           `json:"auto_priority_window_hours,omitempty"`
 	DefaultLocalGroup           string                         `json:"default_local_group"`
 	LocalGroupRules             []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
@@ -120,8 +120,8 @@ type UpstreamSourceRuleAutoSync struct {
 
 type UpstreamSourceRuleAutoPriority struct {
 	Enabled         *bool `json:"enabled,omitempty"`
-	IntervalMinutes int   `json:"interval_minutes"`
-	WindowHours     int   `json:"window_hours"`
+	IntervalMinutes *int  `json:"interval_minutes,omitempty"`
+	WindowHours     *int  `json:"window_hours,omitempty"`
 }
 
 type UpstreamSourceMappingResponse struct {
