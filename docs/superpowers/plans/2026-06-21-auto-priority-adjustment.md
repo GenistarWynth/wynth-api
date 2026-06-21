@@ -88,14 +88,16 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, config.AutoPriorityEnabled)
-	assert.Equal(t, 5, config.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 3, config.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 168, config.AutoPriorityWindowHours)
 	require.Len(t, config.LocalGroupRules, 1)
 	require.NotNil(t, config.LocalGroupRules[0].AutoPriority)
 	require.NotNil(t, config.LocalGroupRules[0].AutoPriority.Enabled)
 	assert.False(t, *config.LocalGroupRules[0].AutoPriority.Enabled)
-	assert.Equal(t, 0, config.LocalGroupRules[0].AutoPriority.IntervalMinutes)
-	assert.Equal(t, 48, config.LocalGroupRules[0].AutoPriority.WindowHours)
+	require.NotNil(t, config.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	require.NotNil(t, config.LocalGroupRules[0].AutoPriority.WindowHours)
+	assert.Equal(t, 0, *config.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	assert.Equal(t, 48, *config.LocalGroupRules[0].AutoPriority.WindowHours)
 }
 
 func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
@@ -144,7 +146,15 @@ Expected: compile failure because automatic-priority fields and rule DTOs do not
 
 - [ ] **Step 3: Add DTO fields**
 
-In `dto/upstream_source.go`, add fields to `UpstreamSourceCreateRequest`, `UpstreamSourceUpdateRequest`, and `UpstreamSourceResponse`:
+In `dto/upstream_source.go`, add presence-aware fields to `UpstreamSourceCreateRequest` and `UpstreamSourceUpdateRequest`:
+
+```go
+AutoPriorityEnabled         bool `json:"auto_priority_enabled"`
+AutoPriorityIntervalMinutes *int `json:"auto_priority_interval_minutes,omitempty"`
+AutoPriorityWindowHours     *int `json:"auto_priority_window_hours,omitempty"`
+```
+
+Add normalized response fields to `UpstreamSourceResponse`:
 
 ```go
 AutoPriorityEnabled         bool `json:"auto_priority_enabled"`
@@ -163,8 +173,8 @@ Add this DTO type:
 ```go
 type UpstreamSourceRuleAutoPriority struct {
 	Enabled         *bool `json:"enabled,omitempty"`
-	IntervalMinutes int   `json:"interval_minutes,omitempty"`
-	WindowHours     int   `json:"window_hours,omitempty"`
+	IntervalMinutes *int  `json:"interval_minutes,omitempty"`
+	WindowHours     *int  `json:"window_hours,omitempty"`
 }
 ```
 
@@ -173,24 +183,24 @@ In `dto/channel_settings.go`, add score types below `ChannelOtherSettings`:
 ```go
 type ChannelAutoPriorityScore struct {
 	Version                 string  `json:"version,omitempty"`
-	ComputedAt              int64   `json:"computed_at,omitempty"`
-	WindowStart             int64   `json:"window_start,omitempty"`
-	WindowEnd               int64   `json:"window_end,omitempty"`
+	ComputedAt              int64   `json:"computed_at"`
+	WindowStart             int64   `json:"window_start"`
+	WindowEnd               int64   `json:"window_end"`
 	Cohort                  string  `json:"cohort,omitempty"`
-	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier,omitempty"`
-	CacheAdjustedCostFactor float64 `json:"cache_adjusted_cost_factor,omitempty"`
-	EffectiveCostMultiplier float64 `json:"effective_cost_multiplier,omitempty"`
-	EffectivePriceScore     float64 `json:"effective_price_score,omitempty"`
-	AvailabilityScore       float64 `json:"availability_score,omitempty"`
-	FirstTokenScore         float64 `json:"first_token_score,omitempty"`
-	FinalScore              float64 `json:"final_score,omitempty"`
+	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier"`
+	CacheAdjustedCostFactor float64 `json:"cache_adjusted_cost_factor"`
+	EffectiveCostMultiplier float64 `json:"effective_cost_multiplier"`
+	EffectivePriceScore     float64 `json:"effective_price_score"`
+	AvailabilityScore       float64 `json:"availability_score"`
+	FirstTokenScore         float64 `json:"first_token_score"`
+	FinalScore              float64 `json:"final_score"`
 	OldPriority             int64   `json:"old_priority"`
 	NewPriority             int64   `json:"new_priority"`
 	Applied                 bool    `json:"applied"`
 	Reason                  string  `json:"reason,omitempty"`
-	UsageLogCount           int64   `json:"usage_log_count,omitempty"`
-	MonitorCheckCount       int64   `json:"monitor_check_count,omitempty"`
-	FirstTokenSampleCount   int64   `json:"first_token_sample_count,omitempty"`
+	UsageLogCount           int64   `json:"usage_log_count"`
+	MonitorCheckCount       int64   `json:"monitor_check_count"`
+	FirstTokenSampleCount   int64   `json:"first_token_sample_count"`
 }
 ```
 
