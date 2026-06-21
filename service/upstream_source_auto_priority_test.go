@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -537,4 +538,108 @@ func TestRunUpstreamSourceAutoPriorityPreservesResultOrder(t *testing.T) {
 	assert.Equal(t, missingRateMapping.Id, result.Results[1].MappingID)
 	assert.Equal(t, shortMapping.Id, result.Results[2].MappingID)
 	assert.Equal(t, "missing_effective_rate_multiplier", result.Results[1].Reason)
+}
+
+func TestPersistAutoPriorityCandidateRejectsChangedChannel(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(7_000_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+	})
+	rate := 0.5
+	mapping := createSyncTestMapping(t, source.Id, "10", "long upstream", &rate)
+	channel := createAutoPriorityTestChannel(t, "source-a / long", 100, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        source.Id,
+		GeneratedByUpstreamMappingID:       mapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+	})
+	candidate := upstreamSourceAutoPriorityCandidate{
+		mapping:  mapping,
+		channel:  channel,
+		settings: channel.GetOtherSettings(),
+		resolution: upstreamSourceRuleResolution{
+			AutoPriorityEnabled:         true,
+			AutoPriorityIntervalMinutes: 15,
+			AutoPriorityWindowHours:     24,
+		},
+		windowStart: now - 24*3600,
+		windowEnd:   now,
+	}
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+		ChannelMonitorEnabled:        true,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
+
+	reason, err := persistAutoPriorityCandidate(context.Background(), candidate, AutoPriorityScoreResult{
+		ChannelID:        channel.Id,
+		OldPriority:      100,
+		ComputedPriority: 200,
+		NewPriority:      200,
+		Applied:          true,
+	}, now)
+
+	require.NoError(t, err)
+	assert.Equal(t, "generated_channel_changed", reason)
+
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, int64(100), reloadedChannel.GetPriority())
+	assert.Equal(t, channel.OtherSettings, reloadedChannel.OtherSettings)
+
+	var reloadedAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
+	require.NotNil(t, reloadedAbility.Priority)
+	assert.Equal(t, int64(100), *reloadedAbility.Priority)
+}
+
+func TestFillAutoPriorityScoreInputsForWindowMarksStatsFailure(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	candidate := upstreamSourceAutoPriorityCandidate{
+		mapping: model.UpstreamSourceChannelMapping{Id: 11},
+		channel: model.Channel{Id: 22, Priority: common.GetPointer(int64(30))},
+		scoreInput: AutoPriorityScoreInput{
+			ChannelID:               22,
+			CurrentPriority:         30,
+			EffectiveRateMultiplier: 0.5,
+		},
+		resultIndex: 0,
+	}
+	pending := []upstreamSourceAutoPriorityCandidate{candidate}
+	resultSlots := make([]*dto.UpstreamSourceAutoPriorityChannelResult, 1)
+	result := &dto.UpstreamSourceAutoPriorityResult{}
+	scoreInputs := make([]AutoPriorityScoreInput, 1)
+
+	err := fillAutoPriorityScoreInputsForWindow(
+		context.Background(),
+		pending,
+		[]int{0},
+		1234,
+		scoreInputs,
+		result,
+		resultSlots,
+		func([]int, int64) (map[int]model.ChannelMonitorStats, error) {
+			return nil, errors.New("monitor db down")
+		},
+		func([]int, int64) (map[int]AutoPriorityUsageStats, error) {
+			t.Fatal("usage collector should not be called after monitor failure")
+			return nil, nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, 1, result.Failed)
+	require.Len(t, resultSlots, 1)
+	require.NotNil(t, resultSlots[0])
+	assert.Equal(t, "monitor_stats_failed", resultSlots[0].Reason)
+	assert.Equal(t, int64(30), resultSlots[0].OldPriority)
+	assert.Equal(t, int64(30), resultSlots[0].NewPriority)
+	assert.Contains(t, result.Error, "monitor db down")
 }

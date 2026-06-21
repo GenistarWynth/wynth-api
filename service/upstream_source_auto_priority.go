@@ -13,6 +13,11 @@ import (
 
 const upstreamSourceAutoPriorityScoreVersion = "v1"
 
+var errAutoPriorityGeneratedChannelChanged = errors.New("generated channel changed")
+
+type autoPriorityMonitorStatsCollector func(channelIDs []int, windowStart int64) (map[int]model.ChannelMonitorStats, error)
+type autoPriorityUsageStatsCollector func(channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error)
+
 type upstreamSourceAutoPriorityCandidate struct {
 	mapping     model.UpstreamSourceChannelMapping
 	channel     model.Channel
@@ -97,7 +102,7 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 			continue
 		}
 
-		channel, err := loadChannelByID(mapping.LocalChannelID)
+		channel, err := loadChannelByIDWithContext(ctx, mapping.LocalChannelID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				slot := dto.UpstreamSourceAutoPriorityChannelResult{
@@ -173,38 +178,9 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 
 	scoreInputs := make([]AutoPriorityScoreInput, len(pending))
 	for windowStart, indexes := range groupedPending {
-		channelIDList := make([]int, 0, len(indexes))
-		for _, idx := range indexes {
-			channelIDList = append(channelIDList, pending[idx].channel.Id)
-		}
-
-		monitorStats, err := model.GetChannelMonitorStats(channelIDList, windowStart)
-		if err != nil {
-			result.Error = SanitizeUpstreamSourceError(err)
+		if err := fillAutoPriorityScoreInputsForWindow(ctx, pending, indexes, windowStart, scoreInputs, result, resultSlots, model.GetChannelMonitorStats, CollectAutoPriorityUsageStats); err != nil {
+			appendAutoPriorityResultSlots(result, resultSlots)
 			return result, err
-		}
-		usageStats, err := CollectAutoPriorityUsageStats(channelIDList, windowStart)
-		if err != nil {
-			result.Error = SanitizeUpstreamSourceError(err)
-			return result, err
-		}
-
-		for _, idx := range indexes {
-			channelID := pending[idx].channel.Id
-			scoreInput := pending[idx].scoreInput
-			if stat, ok := monitorStats[channelID]; ok {
-				scoreInput.Availability = stat.Availability
-				scoreInput.MonitorCheckCount = stat.TotalChecks
-			}
-			if stat, ok := usageStats[channelID]; ok {
-				scoreInput.CacheAdjustedCostFactor = stat.CacheAdjustedCostFactor
-				scoreInput.UsageLogCount = stat.UsageLogCount
-				scoreInput.FirstTokenSampleCount = stat.FirstTokenSampleCount
-				if stat.FirstTokenSampleCount > 0 {
-					scoreInput.FirstTokenLatencyMS = float64(stat.AverageFirstTokenLatencyMS)
-				}
-			}
-			scoreInputs[idx] = scoreInput
 		}
 	}
 
@@ -239,48 +215,27 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 
 		if score.Applied {
 			candidate.settings.ChannelAutoPriorityLastAppliedAt = now
-			channelSettings := candidate.channel
-			channelSettings.SetOtherSettings(candidate.settings)
-			txErr := model.DB.Transaction(func(tx *gorm.DB) error {
-				if err := tx.Model(&model.Channel{}).Where("id = ?", candidate.channel.Id).Updates(map[string]any{
-					"priority": score.NewPriority,
-					"settings": channelSettings.OtherSettings,
-				}).Error; err != nil {
-					return err
-				}
-				if err := tx.Model(&model.Ability{}).Where("channel_id = ?", candidate.channel.Id).Update("priority", score.NewPriority).Error; err != nil {
-					return err
-				}
-				return nil
-			})
-			if txErr != nil {
-				result.Failed++
-				if result.Error == "" {
-					result.Error = SanitizeUpstreamSourceError(txErr)
-				}
-				candidateResult.Applied = false
-				candidateResult.Reason = "update_failed"
-				resultSlots[candidate.resultIndex] = &candidateResult
-				continue
+		}
+		reason, txErr := persistAutoPriorityCandidate(ctx, candidate, score, now)
+		if txErr != nil {
+			result.Failed++
+			if result.Error == "" {
+				result.Error = SanitizeUpstreamSourceError(txErr)
 			}
+			candidateResult.Applied = false
+			candidateResult.Reason = "update_failed"
+			resultSlots[candidate.resultIndex] = &candidateResult
+			continue
+		}
+		if reason != "" {
+			candidateResult.Applied = false
+			candidateResult.Reason = reason
+			candidateResult.NewPriority = candidateResult.OldPriority
+		}
+		if score.Applied && reason == "" {
 			result.Updated++
 			appliedAny = true
 		} else {
-			channelSettings := candidate.channel
-			channelSettings.SetOtherSettings(candidate.settings)
-			txErr := model.DB.Transaction(func(tx *gorm.DB) error {
-				return tx.Model(&model.Channel{}).Where("id = ?", candidate.channel.Id).Update("settings", channelSettings.OtherSettings).Error
-			})
-			if txErr != nil {
-				result.Failed++
-				if result.Error == "" {
-					result.Error = SanitizeUpstreamSourceError(txErr)
-				}
-				candidateResult.Applied = false
-				candidateResult.Reason = "update_failed"
-				resultSlots[candidate.resultIndex] = &candidateResult
-				continue
-			}
 			result.Skipped++
 		}
 		resultSlots[candidate.resultIndex] = &candidateResult
@@ -297,6 +252,136 @@ func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID in
 	}
 
 	return result, nil
+}
+
+func fillAutoPriorityScoreInputsForWindow(ctx context.Context, pending []upstreamSourceAutoPriorityCandidate, indexes []int, windowStart int64, scoreInputs []AutoPriorityScoreInput, result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult, monitorCollector autoPriorityMonitorStatsCollector, usageCollector autoPriorityUsageStatsCollector) error {
+	channelIDList := make([]int, 0, len(indexes))
+	for _, idx := range indexes {
+		channelIDList = append(channelIDList, pending[idx].channel.Id)
+	}
+
+	monitorStats, err := monitorCollector(channelIDList, windowStart)
+	if err != nil {
+		markAutoPriorityGroupFailure(result, resultSlots, pending, indexes, "monitor_stats_failed", err)
+		return err
+	}
+	usageStats, err := usageCollector(channelIDList, windowStart)
+	if err != nil {
+		markAutoPriorityGroupFailure(result, resultSlots, pending, indexes, "usage_stats_failed", err)
+		return err
+	}
+
+	for _, idx := range indexes {
+		channelID := pending[idx].channel.Id
+		scoreInput := pending[idx].scoreInput
+		if stat, ok := monitorStats[channelID]; ok {
+			scoreInput.Availability = stat.Availability
+			scoreInput.MonitorCheckCount = stat.TotalChecks
+		}
+		if stat, ok := usageStats[channelID]; ok {
+			scoreInput.CacheAdjustedCostFactor = stat.CacheAdjustedCostFactor
+			scoreInput.UsageLogCount = stat.UsageLogCount
+			scoreInput.FirstTokenSampleCount = stat.FirstTokenSampleCount
+			if stat.FirstTokenSampleCount > 0 {
+				scoreInput.FirstTokenLatencyMS = float64(stat.AverageFirstTokenLatencyMS)
+			}
+		}
+		scoreInputs[idx] = scoreInput
+	}
+	return nil
+}
+
+func persistAutoPriorityCandidate(ctx context.Context, candidate upstreamSourceAutoPriorityCandidate, score AutoPriorityScoreResult, now int64) (string, error) {
+	settings := candidate.settings
+	settings.ChannelAutoPriorityEnabled = candidate.resolution.AutoPriorityEnabled
+	settings.ChannelAutoPriorityIntervalMinutes = candidate.resolution.AutoPriorityIntervalMinutes
+	settings.ChannelAutoPriorityWindowHours = candidate.resolution.AutoPriorityWindowHours
+	settings.ChannelAutoPriorityLastRunAt = now
+	settings.ChannelAutoPriorityLastScore = buildChannelAutoPriorityScoreSnapshot(score, candidate.windowStart, candidate.windowEnd)
+	if score.Applied {
+		settings.ChannelAutoPriorityLastAppliedAt = now
+	}
+
+	channelSettings := candidate.channel
+	channelSettings.SetOtherSettings(settings)
+
+	err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"settings": channelSettings.OtherSettings,
+		}
+		if score.Applied {
+			updates["priority"] = score.NewPriority
+		}
+		res := tx.Model(&model.Channel{}).
+			Where("id = ? AND settings = ?", candidate.channel.Id, candidate.channel.OtherSettings).
+			Updates(updates)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return errAutoPriorityGeneratedChannelChanged
+		}
+		if score.Applied {
+			abilityRes := tx.Model(&model.Ability{}).Where("channel_id = ?", candidate.channel.Id).Update("priority", score.NewPriority)
+			if abilityRes.Error != nil {
+				return abilityRes.Error
+			}
+			if abilityRes.RowsAffected == 0 {
+				return errors.New("ability priority update affected no rows")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errAutoPriorityGeneratedChannelChanged) {
+			return "generated_channel_changed", nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
+func markAutoPriorityGroupFailure(result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult, pending []upstreamSourceAutoPriorityCandidate, indexes []int, reason string, err error) {
+	for _, idx := range indexes {
+		candidate := pending[idx]
+		slot := dto.UpstreamSourceAutoPriorityChannelResult{
+			MappingID:               candidate.mapping.Id,
+			LocalChannelID:          candidate.channel.Id,
+			OldPriority:             candidate.scoreInput.CurrentPriority,
+			NewPriority:             candidate.scoreInput.CurrentPriority,
+			ComputedPriority:        candidate.scoreInput.CurrentPriority,
+			Applied:                 false,
+			Reason:                  reason,
+			EffectiveRateMultiplier: candidate.scoreInput.EffectiveRateMultiplier,
+			CacheAdjustedCostFactor: candidate.scoreInput.CacheAdjustedCostFactor,
+			EffectiveCostMultiplier: candidate.scoreInput.EffectiveRateMultiplier * candidate.scoreInput.CacheAdjustedCostFactor,
+			EffectivePriceScore:     0,
+			AvailabilityScore:       0,
+			FirstTokenScore:         0,
+			FinalScore:              0,
+		}
+		resultSlots[candidate.resultIndex] = &slot
+	}
+	result.Failed += len(indexes)
+	if result.Error == "" {
+		result.Error = SanitizeUpstreamSourceError(err)
+	}
+}
+
+func appendAutoPriorityResultSlots(result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult) {
+	for _, slot := range resultSlots {
+		if slot != nil {
+			result.Results = append(result.Results, *slot)
+		}
+	}
+}
+
+func loadChannelByIDWithContext(ctx context.Context, channelID int) (*model.Channel, error) {
+	var channel model.Channel
+	if err := model.DB.WithContext(ctx).First(&channel, channelID).Error; err != nil {
+		return nil, err
+	}
+	return &channel, nil
 }
 
 func isGeneratedChannelMetadataMatching(settings *dto.ChannelOtherSettings, sourceID int, mappingID int) bool {
