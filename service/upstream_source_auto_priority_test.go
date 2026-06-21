@@ -62,6 +62,22 @@ func createAutoPriorityTestChannel(t *testing.T, name string, priority int64, se
 	return channel
 }
 
+func createGeneratedAutoPriorityTestChannel(t *testing.T, sourceID int, rate float64, groupName string, priority int64) (model.Channel, model.UpstreamSourceChannelMapping) {
+	t.Helper()
+
+	mapping := createSyncTestMapping(t, sourceID, groupName, groupName, &rate)
+	channel := createAutoPriorityTestChannel(t, "source-a / "+groupName, priority, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        sourceID,
+		GeneratedByUpstreamMappingID:       mapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 30,
+		ChannelAutoPriorityWindowHours:     24,
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+	mapping.LocalChannelID = channel.Id
+	return channel, mapping
+}
+
 func createAutoPriorityTestUsageLog(t *testing.T, channelID int, createdAt int64) {
 	t.Helper()
 
@@ -104,6 +120,62 @@ func createAutoPriorityTestMonitorLog(t *testing.T, channelID int, checkedAt int
 		CheckedAt:           checkedAt,
 		CreatedAt:           checkedAt,
 	}).Error)
+}
+
+func TestListDueUpstreamSourcesForAutoPriorityHonorsIntervalZero(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	_, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.01, "OpenAI", 1000)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("last_synced_at", 1999).Error)
+
+	due, err := ListDueUpstreamSourcesForAutoPriority(2000)
+
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.Equal(t, source.Id, due[0].Id)
+}
+
+func TestListDueUpstreamSourcesForAutoPrioritySkipsNotDue(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     24,
+	})
+	channel, _ := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.01, "OpenAI", 1000)
+	settings := channel.GetOtherSettings()
+	settings.ChannelAutoPriorityLastRunAt = 1900
+	channel.SetOtherSettings(settings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
+
+	due, err := ListDueUpstreamSourcesForAutoPriority(2000)
+
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}
+
+func TestListDueUpstreamSourcesForAutoPrioritySkipsMetadataMismatch(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     24,
+	})
+	channel, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.01, "OpenAI", 1000)
+	settings := channel.GetOtherSettings()
+	settings.GeneratedByUpstreamSourceID = source.Id + 1
+	settings.GeneratedByUpstreamMappingID = mapping.Id
+	channel.SetOtherSettings(settings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
+
+	due, err := ListDueUpstreamSourcesForAutoPriority(2000)
+
+	require.NoError(t, err)
+	assert.Empty(t, due)
 }
 
 func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {

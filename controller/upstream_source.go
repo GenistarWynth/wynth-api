@@ -245,6 +245,26 @@ func SyncUpstreamSource(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
+func RunUpstreamSourceAutoPriority(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	result, err := (&service.UpstreamSourceService{}).RunAutoPriority(c.Request.Context(), source.Id, common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "upstream_source.auto_priority_run", map[string]interface{}{
+		"id":      source.Id,
+		"name":    source.Name,
+		"updated": result.Updated,
+		"skipped": result.Skipped,
+		"failed":  result.Failed,
+	})
+	common.ApiSuccess(c, result)
+}
+
 func GetUpstreamSourceSyncResult(c *gin.Context) {
 	source, ok := loadUpstreamSourceForController(c)
 	if !ok {

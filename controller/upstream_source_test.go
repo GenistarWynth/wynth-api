@@ -53,7 +53,7 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		common.TranslateMessage = oldTranslateMessage
 	})
 
-	require.NoError(t, db.AutoMigrate(&model.UpstreamSource{}, &model.UpstreamSourceChannelMapping{}, &model.Channel{}, &model.Ability{}, &model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.UpstreamSource{}, &model.UpstreamSourceChannelMapping{}, &model.Channel{}, &model.Ability{}, &model.User{}, &model.Log{}, &model.ChannelMonitorLog{}))
 	require.NoError(t, db.Create(&model.User{
 		Id:       1,
 		Username: "admin",
@@ -95,6 +95,7 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.PUT("/:id/mappings", UpdateUpstreamSourceMappings)
 		group.POST("/:id/sync", SyncUpstreamSource)
 		group.GET("/:id/sync_result", GetUpstreamSourceSyncResult)
+		group.POST("/:id/auto_priority/run", RunUpstreamSourceAutoPriority)
 	}
 	if authenticated {
 		recorder := httptest.NewRecorder()
@@ -533,6 +534,66 @@ func TestUpstreamSourceAPISyncReturnsMappingResults(t *testing.T) {
 	assert.Equal(t, "10", response.Data.Results[0].UpstreamGroupID)
 	raw := string(mustMarshalUpstreamSourceAPITest(t, response))
 	assert.NotContains(t, raw, "sk-")
+}
+
+func TestUpstreamSourceAPIRunAutoPriorityReturnsResults(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	syncConfig, err := common.Marshal(map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("sync_config", string(syncConfig)).Error)
+	rate := 0.5
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "10",
+		UpstreamGroupName:       "primary",
+		UpstreamPlatform:        "openai",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamStatus:          model.UpstreamSourceStatusEnabled,
+		EffectiveRateMultiplier: &rate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+	channel := model.Channel{
+		Type:          constant.ChannelTypeOpenAI,
+		Key:           "sk-test",
+		Status:        common.ChannelStatusEnabled,
+		Name:          "source-a / primary",
+		Weight:        common.GetPointer(uint(0)),
+		Models:        "gpt-4o",
+		Group:         "default",
+		Priority:      common.GetPointer(int64(100)),
+		Other:         "{}",
+		OtherInfo:     "{}",
+		OtherSettings: "{}",
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     channel.Group,
+		Model:     "gpt-4o",
+		ChannelId: channel.Id,
+		Enabled:   true,
+		Priority:  common.GetPointer(int64(100)),
+		Weight:    0,
+	}).Error)
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceAutoPriorityResult](t, router, http.MethodPost, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/auto_priority/run", nil, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.Equal(t, source.Id, response.Data.SourceID)
+	require.Len(t, response.Data.Results, 1)
+	assert.Equal(t, mapping.Id, response.Data.Results[0].MappingID)
+	assert.Equal(t, channel.Id, response.Data.Results[0].LocalChannelID)
 }
 
 func TestUpstreamSourceAPISyncResultReturnsLastMappingStatuses(t *testing.T) {

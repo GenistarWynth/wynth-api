@@ -239,6 +239,7 @@ func SetApiRouter(router *gin.Engine) {
 			upstreamSourceRoute.PUT("/:id/mappings", controller.UpdateUpstreamSourceMappings)
 			upstreamSourceRoute.POST("/:id/sync", controller.SyncUpstreamSource)
 			upstreamSourceRoute.GET("/:id/sync_result", controller.GetUpstreamSourceSyncResult)
+			upstreamSourceRoute.POST("/:id/auto_priority/run", controller.RunUpstreamSourceAutoPriority)
 		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
