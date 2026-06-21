@@ -123,6 +123,11 @@ func TestRelayInfoSetActualResponseModel(t *testing.T) {
 	require.False(t, ok)
 	assert.Equal(t, "gpt-5.5", info.ActualResponseModel)
 	assert.Equal(t, ActualResponseModelSourceOpenAIChat, info.ActualResponseModelSource)
+
+	ok = info.SetActualResponseModel("gpt-5.4", ActualResponseModelSource("bogus"))
+	require.False(t, ok)
+	assert.Equal(t, "gpt-5.5", info.ActualResponseModel)
+	assert.Equal(t, ActualResponseModelSourceOpenAIChat, info.ActualResponseModelSource)
 }
 
 func TestRelayInfoApplyActualResponseModelAudit(t *testing.T) {

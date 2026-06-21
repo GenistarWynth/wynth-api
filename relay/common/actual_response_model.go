@@ -113,11 +113,23 @@ func (info *RelayInfo) ApplyActualResponseModelAudit(kind ActualResponseModelKin
 func newActualResponseModelAudit(model string, source ActualResponseModelSource) ActualResponseModelAudit {
 	model = strings.TrimSpace(model)
 	source = ActualResponseModelSource(strings.TrimSpace(string(source)))
-	if model == "" || source == "" {
+	if model == "" || !isSupportedActualResponseModelSource(source) {
 		return ActualResponseModelAudit{}
 	}
 	return ActualResponseModelAudit{
 		Model:  model,
 		Source: source,
+	}
+}
+
+func isSupportedActualResponseModelSource(source ActualResponseModelSource) bool {
+	switch source {
+	case ActualResponseModelSourceOpenAIChat,
+		ActualResponseModelSourceOpenAIResponses,
+		ActualResponseModelSourceAnthropicMessage,
+		ActualResponseModelSourceGeminiModelVersion:
+		return true
+	default:
+		return false
 	}
 }
