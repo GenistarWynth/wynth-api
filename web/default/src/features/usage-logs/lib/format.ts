@@ -189,7 +189,7 @@ export function formatModelName(log: UsageLog): {
     name: requestedModel,
     isMapped,
     upstreamModel,
-    actualModel: upstreamModel,
+    actualModel: isMapped ? upstreamModel : undefined,
     actualResponseModel,
     actualResponseModelSource,
     secondaryActualModel,

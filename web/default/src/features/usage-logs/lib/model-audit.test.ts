@@ -57,6 +57,21 @@ describe('formatModelName model audit', () => {
     assert.equal(result.secondaryActualModel, 'gpt-4.1-mini')
   })
 
+  test('keeps upstream audit baseline separate from model mapping when mapping is disabled', () => {
+    const result = formatModelName(
+      buildUsageLog({
+        is_model_mapped: false,
+        upstream_model_name: 'gpt-4.1-mini',
+        actual_response_model: 'gpt-4.1-mini',
+      })
+    )
+
+    assert.equal(result.isMapped, false)
+    assert.equal(result.actualModel, undefined)
+    assert.equal(result.upstreamModel, 'gpt-4.1-mini')
+    assert.equal(result.secondaryActualModel, undefined)
+  })
+
   test('does not include a secondary actual model when actual matches the mapped upstream model', () => {
     const result = formatModelName(
       buildUsageLog({

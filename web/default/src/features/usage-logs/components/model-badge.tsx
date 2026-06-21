@@ -29,6 +29,7 @@ import { StatusBadge } from '@/components/status-badge'
 
 interface ModelBadgeProps {
   modelName: string
+  isMapped?: boolean
   upstreamModel?: string
   actualResponseModel?: string
   actualResponseModelSource?: string
@@ -129,9 +130,7 @@ function ModelBadgeContent(props: ModelBadgeProps) {
 export function ModelBadge(props: ModelBadgeProps) {
   const { t } = useTranslation()
   const upstreamModel = props.upstreamModel ?? props.actualModel
-  const isMapped = Boolean(
-    upstreamModel && upstreamModel !== '' && upstreamModel !== props.modelName
-  )
+  const isMapped = Boolean(props.isMapped && upstreamModel)
   const hasActualMismatch = Boolean(props.secondaryActualModel)
 
   if (!isMapped && !hasActualMismatch) {
