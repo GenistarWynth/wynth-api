@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +11,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"gorm.io/gorm"
 )
 
 const fetchModelsResponseBodyLimitBytes int64 = 10 << 20
@@ -47,6 +50,37 @@ type fetchOllamaModel struct {
 
 func FetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	return FetchChannelUpstreamModelIDsWithOptions(channel, FetchChannelUpstreamModelIDsOptions{})
+}
+
+func FetchChannelUpstreamModelIDsForGeneratedSource(channel *model.Channel, settings dto.ChannelOtherSettings) ([]string, error) {
+	options, err := FetchChannelUpstreamModelIDsOptionsForGeneratedSource(settings)
+	if err != nil {
+		return nil, err
+	}
+	return FetchChannelUpstreamModelIDsWithOptions(channel, options)
+}
+
+func FetchChannelUpstreamModelIDsOptionsForGeneratedSource(settings dto.ChannelOtherSettings) (FetchChannelUpstreamModelIDsOptions, error) {
+	if settings.GeneratedByUpstreamSourceID == 0 {
+		return FetchChannelUpstreamModelIDsOptions{}, nil
+	}
+
+	var source model.UpstreamSource
+	if err := model.DB.Select("id", "sync_config").
+		Where("id = ? AND status <> ?", settings.GeneratedByUpstreamSourceID, model.UpstreamSourceStatusDeleted).
+		First(&source).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return FetchChannelUpstreamModelIDsOptions{}, nil
+		}
+		return FetchChannelUpstreamModelIDsOptions{}, err
+	}
+	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
+	if err != nil {
+		return FetchChannelUpstreamModelIDsOptions{}, err
+	}
+	return FetchChannelUpstreamModelIDsOptions{
+		AllowPrivateIP: bool(config.AllowPrivateIP),
+	}, nil
 }
 
 func FetchChannelUpstreamModelIDsWithOptions(channel *model.Channel, options FetchChannelUpstreamModelIDsOptions) ([]string, error) {

@@ -232,7 +232,7 @@ func collectPendingUpstreamModelChangesFromModels(
 }
 
 func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.ChannelOtherSettings) (pendingAddModels []string, pendingRemoveModels []string, err error) {
-	upstreamModels, err := service.FetchChannelUpstreamModelIDs(channel)
+	upstreamModels, err := service.FetchChannelUpstreamModelIDsForGeneratedSource(channel, settings)
 	if err != nil {
 		return nil, nil, err
 	}
