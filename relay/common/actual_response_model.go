@@ -70,7 +70,11 @@ func DetectActualResponseModel(kind ActualResponseModelKind, payload []byte) Act
 			return ActualResponseModelAudit{}
 		}
 		if response.Type == "message_start" {
-			return newActualResponseModelAudit(response.Message.Model, ActualResponseModelSourceAnthropicMessage)
+			model := response.Message.Model
+			if strings.TrimSpace(model) == "" {
+				model = response.Model
+			}
+			return newActualResponseModelAudit(model, ActualResponseModelSourceAnthropicMessage)
 		}
 		return newActualResponseModelAudit(response.Model, ActualResponseModelSourceAnthropicMessage)
 	case ActualResponseModelKindGemini:
@@ -108,6 +112,7 @@ func (info *RelayInfo) ApplyActualResponseModelAudit(kind ActualResponseModelKin
 
 func newActualResponseModelAudit(model string, source ActualResponseModelSource) ActualResponseModelAudit {
 	model = strings.TrimSpace(model)
+	source = ActualResponseModelSource(strings.TrimSpace(string(source)))
 	if model == "" || source == "" {
 		return ActualResponseModelAudit{}
 	}

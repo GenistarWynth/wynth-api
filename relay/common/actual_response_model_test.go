@@ -58,6 +58,13 @@ func TestDetectActualResponseModel(t *testing.T) {
 			wantSource: ActualResponseModelSourceAnthropicMessage,
 		},
 		{
+			name:       "anthropic stream message_start falls back to top-level model",
+			kind:       ActualResponseModelKindAnthropic,
+			payload:    `{"type":"message_start","model":"claude-sonnet-4-5-20250929","message":{"id":"msg_1","type":"message","model":"   "}}`,
+			wantModel:  "claude-sonnet-4-5-20250929",
+			wantSource: ActualResponseModelSourceAnthropicMessage,
+		},
+		{
 			name:       "gemini camel modelVersion",
 			kind:       ActualResponseModelKindGemini,
 			payload:    `{"modelVersion":"gemini-2.5-pro","candidates":[]}`,
@@ -109,6 +116,11 @@ func TestRelayInfoSetActualResponseModel(t *testing.T) {
 	assert.Equal(t, ActualResponseModelSourceOpenAIChat, info.ActualResponseModelSource)
 
 	info.SetActualResponseModel("   ", ActualResponseModelSourceOpenAIResponses)
+	assert.Equal(t, "gpt-5.5", info.ActualResponseModel)
+	assert.Equal(t, ActualResponseModelSourceOpenAIChat, info.ActualResponseModelSource)
+
+	ok := info.SetActualResponseModel("gpt-5.4", ActualResponseModelSource("   "))
+	require.False(t, ok)
 	assert.Equal(t, "gpt-5.5", info.ActualResponseModel)
 	assert.Equal(t, ActualResponseModelSourceOpenAIChat, info.ActualResponseModelSource)
 }
