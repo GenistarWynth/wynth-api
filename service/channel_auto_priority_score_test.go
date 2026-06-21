@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +15,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               101,
 				LocalGroup:              " shared ",
-				ChannelType:             " openai ",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         500,
 				EffectiveRateMultiplier: 1,
 				Availability:            floatPtr(0.10),
@@ -22,12 +23,11 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				UsageLogCount:           4,
 				MonitorCheckCount:       8,
 				FirstTokenSampleCount:   2,
-				HasPreviousSnapshot:     false,
 			},
 			{
 				ChannelID:               102,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         500,
 				EffectiveRateMultiplier: 5,
 				Availability:            floatPtr(1),
@@ -35,7 +35,6 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				UsageLogCount:           4,
 				MonitorCheckCount:       8,
 				FirstTokenSampleCount:   2,
-				HasPreviousSnapshot:     false,
 			},
 		}, 1000)
 
@@ -45,8 +44,8 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 
 		require.NotNil(t, cheap)
 		require.NotNil(t, expensive)
-		assert.Equal(t, "shared|openai", cheap.Cohort)
-		assert.Equal(t, "shared|openai", expensive.Cohort)
+		assert.Equal(t, "shared#1", cheap.Cohort)
+		assert.Equal(t, "shared#1", expensive.Cohort)
 		assert.Greater(t, cheap.EffectivePriceScore, expensive.EffectivePriceScore)
 		assert.Greater(t, cheap.FinalScore, expensive.FinalScore)
 		assert.Greater(t, cheap.ComputedPriority, expensive.ComputedPriority)
@@ -57,7 +56,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               201,
 				LocalGroup:              "alpha",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         300,
 				EffectiveRateMultiplier: 2,
 				Availability:            floatPtr(0.9),
@@ -69,7 +68,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               202,
 				LocalGroup:              "beta",
-				ChannelType:             "claude",
+				ChannelType:             constant.ChannelTypeAnthropic,
 				CurrentPriority:         300,
 				EffectiveRateMultiplier: 2,
 				Availability:            floatPtr(0.9),
@@ -90,7 +89,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               301,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         400,
 				EffectiveRateMultiplier: 1.0,
 				CacheAdjustedCostFactor: 3.0,
@@ -99,12 +98,11 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				UsageLogCount:           2,
 				MonitorCheckCount:       3,
 				FirstTokenSampleCount:   1,
-				HasPreviousSnapshot:     false,
 			},
 			{
 				ChannelID:               302,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         400,
 				EffectiveRateMultiplier: 1.5,
 				CacheAdjustedCostFactor: 0.5,
@@ -113,7 +111,6 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				UsageLogCount:           2,
 				MonitorCheckCount:       3,
 				FirstTokenSampleCount:   1,
-				HasPreviousSnapshot:     false,
 			},
 		}, 1000)
 
@@ -134,7 +131,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               401,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         943,
 				EffectiveRateMultiplier: 1,
 				Availability:            floatPtr(0.7),
@@ -160,7 +157,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               402,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         943,
 				EffectiveRateMultiplier: 1,
 				Availability:            floatPtr(0.7),
@@ -184,7 +181,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               501,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         600,
 				EffectiveRateMultiplier: 1.25,
 				Availability:            floatPtr(0.85),
@@ -199,7 +196,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               501,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         600,
 				EffectiveRateMultiplier: 1.25,
 				Availability:            floatPtr(0.85),
@@ -211,7 +208,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               502,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         777,
 				EffectiveRateMultiplier: 0,
 				Availability:            floatPtr(1),
@@ -245,7 +242,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 			{
 				ChannelID:               601,
 				LocalGroup:              "shared",
-				ChannelType:             "openai",
+				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         200,
 				EffectiveRateMultiplier: 1,
 				UsageLogCount:           0,
@@ -263,13 +260,69 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.Equal(t, int64(0), result.MonitorCheckCount)
 		assert.Equal(t, int64(0), result.FirstTokenSampleCount)
 	})
+
+	t.Run("zero latency sample participates and beats neutral first token", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               602,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         200,
+				EffectiveRateMultiplier: 1,
+				FirstTokenLatencyMS:     0,
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				FirstTokenSampleCount:   1,
+			},
+			{
+				ChannelID:               603,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         200,
+				EffectiveRateMultiplier: 1,
+				FirstTokenLatencyMS:     100,
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				FirstTokenSampleCount:   1,
+			},
+		}, 1000)
+
+		require.Len(t, results, 2)
+		zeroLatency := resultByChannelID(results, 602)
+		slowLatency := resultByChannelID(results, 603)
+
+		require.NotNil(t, zeroLatency)
+		require.NotNil(t, slowLatency)
+		assert.Greater(t, zeroLatency.FirstTokenScore, slowLatency.FirstTokenScore)
+		assert.NotEqual(t, 70, zeroLatency.FirstTokenScore)
+		assert.NotEqual(t, 70, slowLatency.FirstTokenScore)
+	})
+
+	t.Run("negative latency with sample count stays neutral", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               604,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         200,
+				EffectiveRateMultiplier: 1,
+				FirstTokenLatencyMS:     -1,
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				FirstTokenSampleCount:   1,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 70, results[0].FirstTokenScore, 0.0001)
+	})
 }
 
 func floatPtr(v float64) *float64 {
 	return &v
 }
 
-func resultByChannelID(results []AutoPriorityScoreResult, channelID int64) *AutoPriorityScoreResult {
+func resultByChannelID(results []AutoPriorityScoreResult, channelID int) *AutoPriorityScoreResult {
 	for i := range results {
 		if results[i].ChannelID == channelID {
 			return &results[i]
@@ -283,7 +336,7 @@ func TestScoreAutoPriorityCandidatesClampsPriorityBounds(t *testing.T) {
 		{
 			ChannelID:               701,
 			LocalGroup:              "shared",
-			ChannelType:             "openai",
+			ChannelType:             constant.ChannelTypeOpenAI,
 			CurrentPriority:         9999,
 			EffectiveRateMultiplier: 1,
 			Availability:            floatPtr(1),
@@ -304,7 +357,7 @@ func TestScoreAutoPriorityCandidatesHandlesNonFiniteMultiplier(t *testing.T) {
 		{
 			ChannelID:               801,
 			LocalGroup:              "shared",
-			ChannelType:             "openai",
+			ChannelType:             constant.ChannelTypeOpenAI,
 			CurrentPriority:         321,
 			EffectiveRateMultiplier: math.Inf(1),
 			Availability:            floatPtr(1),

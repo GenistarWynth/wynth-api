@@ -1,14 +1,15 @@
 package service
 
 import (
+	"fmt"
 	"math"
 	"strings"
 )
 
 type AutoPriorityScoreInput struct {
-	ChannelID               int64
+	ChannelID               int
 	LocalGroup              string
-	ChannelType             string
+	ChannelType             int
 	CurrentPriority         int64
 	EffectiveRateMultiplier float64
 	CacheAdjustedCostFactor float64
@@ -21,7 +22,7 @@ type AutoPriorityScoreInput struct {
 }
 
 type AutoPriorityScoreResult struct {
-	ChannelID               int64
+	ChannelID               int
 	Cohort                  string
 	EffectiveRateMultiplier float64
 	CacheAdjustedCostFactor float64
@@ -78,7 +79,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 		result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
 		priceCohorts[cohort] = append(priceCohorts[cohort], i)
-		if hasPositiveFirstTokenSample(input.FirstTokenSampleCount, input.FirstTokenLatencyMS) {
+		if hasSampledFirstTokenLatency(input.FirstTokenSampleCount, input.FirstTokenLatencyMS) {
 			firstTokenCohorts[cohort] = append(firstTokenCohorts[cohort], i)
 		}
 		results[i] = result
@@ -159,8 +160,8 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 	return results
 }
 
-func autoPriorityCohortKey(localGroup, channelType string) string {
-	return strings.TrimSpace(localGroup) + "|" + strings.TrimSpace(channelType)
+func autoPriorityCohortKey(localGroup string, channelType int) string {
+	return strings.TrimSpace(localGroup) + "#" + fmt.Sprint(channelType)
 }
 
 func isValidAutoPriorityMultiplier(v float64) bool {
@@ -191,8 +192,8 @@ func autoPriorityAvailabilityScore(avail *float64) float64 {
 	return score
 }
 
-func hasPositiveFirstTokenSample(sampleCount int64, latencyMS float64) bool {
-	return sampleCount > 0 && latencyMS > 0 && !math.IsNaN(latencyMS) && !math.IsInf(latencyMS, 0)
+func hasSampledFirstTokenLatency(sampleCount int64, latencyMS float64) bool {
+	return sampleCount > 0 && latencyMS >= 0 && !math.IsNaN(latencyMS) && !math.IsInf(latencyMS, 0)
 }
 
 func normalizedAutoPriorityDescendingScore(value, minValue, maxValue float64) float64 {
