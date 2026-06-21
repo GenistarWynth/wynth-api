@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Activity,
   Bolt,
   CheckCircle2,
   Clock,
@@ -58,6 +59,7 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   Tooltip,
   TooltipContent,
@@ -101,6 +103,8 @@ interface ChannelMonitorSettingsDraft {
   intervalMinutes: number
   testModel: string
 }
+
+type MonitorHistoryViewMode = 'availability' | 'first-token'
 
 const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
 
@@ -229,6 +233,38 @@ function historyAriaLabel(bar: MonitorHistoryBar, t: TFn) {
   return `${monitorStatusText(bar.status, t)} · ${bar.model || t('No data')}`
 }
 
+function buildFirstTokenWaveform(bars: MonitorHistoryBar[]) {
+  const maxFirstToken = Math.max(
+    1,
+    ...bars.map((bar) =>
+      bar.firstTokenLatencyMS > 0 ? bar.firstTokenLatencyMS : 0
+    )
+  )
+  const divisor = Math.max(1, bars.length - 1)
+  const points = bars.map((bar, index) => {
+    const hasValue = bar.firstTokenLatencyMS > 0
+    const x = (index / divisor) * 100
+    const y = hasValue
+      ? 36 - (bar.firstTokenLatencyMS / maxFirstToken) * 30
+      : 34
+    return { bar, hasValue, x, y }
+  })
+
+  const segments: string[] = []
+  let current: string[] = []
+  for (const point of points) {
+    if (point.hasValue) {
+      current.push(`${point.x.toFixed(2)},${point.y.toFixed(2)}`)
+    } else if (current.length > 0) {
+      segments.push(current.join(' '))
+      current = []
+    }
+  }
+  if (current.length > 0) segments.push(current.join(' '))
+
+  return { points, segments }
+}
+
 function MetricTile({
   icon: Icon,
   label,
@@ -322,34 +358,103 @@ function MonitorHistoryDetails({ bar }: { bar: MonitorHistoryBar }) {
   )
 }
 
-function MonitorHistory({ bars }: { bars: MonitorHistoryBar[] }) {
+function MonitorHistory({
+  bars,
+  viewMode,
+}: {
+  bars: MonitorHistoryBar[]
+  viewMode: MonitorHistoryViewMode
+}) {
   const { t } = useTranslation()
+  const waveform = buildFirstTokenWaveform(bars)
 
   return (
     <div className='flex flex-col gap-2'>
       <TooltipProvider delay={120}>
-        <div className='border-border/50 bg-background/45 flex h-10 items-center gap-1 rounded-lg border px-2 py-2'>
-          {bars.map((bar) => (
-            <Tooltip key={bar.id}>
-              <TooltipTrigger
-                render={
-                  <button
-                    type='button'
-                    className={cn(
-                      'h-full min-w-0 flex-1 rounded-full transition-opacity hover:opacity-80 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-                      monitorHistoryToneClass(bar.tone),
-                      bar.tone === 'empty' && 'opacity-25'
-                    )}
-                    aria-label={historyAriaLabel(bar, t)}
+        {viewMode === 'availability' ? (
+          <div className='border-border/50 bg-background/45 flex h-10 items-center gap-1 rounded-lg border px-2 py-2'>
+            {bars.map((bar) => (
+              <Tooltip key={bar.id}>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type='button'
+                      className={cn(
+                        'h-full min-w-0 flex-1 rounded-full transition-opacity hover:opacity-80 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+                        monitorHistoryToneClass(bar.tone),
+                        bar.tone === 'empty' && 'opacity-25'
+                      )}
+                      aria-label={historyAriaLabel(bar, t)}
+                    />
+                  }
+                />
+                <TooltipContent className='border-border bg-popover text-popover-foreground max-w-sm rounded-lg border px-3 py-2 shadow-md'>
+                  <MonitorHistoryDetails bar={bar} />
+                </TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
+        ) : (
+          <div className='border-border/50 bg-background/45 relative h-24 overflow-hidden rounded-lg border px-3 py-3'>
+            <div className='absolute inset-3'>
+              <svg
+                className='pointer-events-none absolute inset-0 h-full w-full overflow-visible'
+                viewBox='0 0 100 40'
+                preserveAspectRatio='none'
+                aria-hidden='true'
+              >
+                <line
+                  x1='0'
+                  x2='100'
+                  y1='34'
+                  y2='34'
+                  className='stroke-border'
+                  strokeWidth='0.8'
+                  vectorEffect='non-scaling-stroke'
+                />
+                {waveform.segments.map((firstTokenPath, index) => (
+                  <polyline
+                    key={`${firstTokenPath}-${index}`}
+                    points={firstTokenPath}
+                    fill='none'
+                    className='stroke-success'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    vectorEffect='non-scaling-stroke'
                   />
-                }
-              />
-              <TooltipContent className='border-border bg-popover text-popover-foreground max-w-sm rounded-lg border px-3 py-2 shadow-md'>
-                <MonitorHistoryDetails bar={bar} />
-              </TooltipContent>
-            </Tooltip>
-          ))}
-        </div>
+                ))}
+              </svg>
+              {waveform.points.map(({ bar, hasValue, x, y }) => (
+                <Tooltip key={bar.id}>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type='button'
+                        className={cn(
+                          'absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border transition-transform hover:scale-125 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
+                          hasValue
+                            ? 'border-success bg-success'
+                            : bar.tone === 'danger'
+                              ? 'border-destructive/60 bg-destructive/40'
+                              : 'border-muted-foreground/35 bg-muted'
+                        )}
+                        style={{
+                          left: `${x}%`,
+                          top: `${(y / 40) * 100}%`,
+                        }}
+                        aria-label={historyAriaLabel(bar, t)}
+                      />
+                    }
+                  />
+                  <TooltipContent className='border-border bg-popover text-popover-foreground max-w-sm rounded-lg border px-3 py-2 shadow-md'>
+                    <MonitorHistoryDetails bar={bar} />
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
       </TooltipProvider>
       <div className='text-muted-foreground flex items-center justify-between text-[11px] font-semibold tracking-normal uppercase'>
         <span>{t('Past')}</span>
@@ -403,6 +508,8 @@ export function ChannelMonitorDialog({
   const [savedMonitorSettings, setSavedMonitorSettings] =
     useState<ChannelMonitorSettingsDraft>(monitorDefaults)
   const [isSavingMonitorSettings, setIsSavingMonitorSettings] = useState(false)
+  const [historyViewMode, setHistoryViewMode] =
+    useState<MonitorHistoryViewMode>('availability')
   const query = useQuery({
     queryKey: ['channel-monitor-detail', channelId],
     queryFn: async () => getChannelMonitorDetail(channelId),
@@ -741,11 +848,45 @@ export function ChannelMonitorDialog({
             </div>
 
             <div className='flex flex-col gap-3'>
-              <div className='text-muted-foreground flex items-center justify-between gap-3 text-sm font-semibold'>
-                <span>{t('Recent {{value}} records', { value: 60 })}</span>
-                <span>{records.length}/60</span>
+              <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                <div className='text-muted-foreground flex items-center justify-between gap-3 text-sm font-semibold sm:min-w-0 sm:flex-1 sm:justify-start'>
+                  <span>{t('Recent {{value}} records', { value: 60 })}</span>
+                  <span>{records.length}/60</span>
+                </div>
+                <ToggleGroup
+                  value={[historyViewMode]}
+                  onValueChange={(value) => {
+                    const nextValue = value.find(
+                      (item): item is MonitorHistoryViewMode =>
+                        item === 'availability' || item === 'first-token'
+                    )
+                    if (nextValue) setHistoryViewMode(nextValue)
+                  }}
+                  aria-label={t('History view')}
+                  variant='outline'
+                  size='sm'
+                  spacing={1}
+                  className='w-full justify-end sm:w-auto'
+                >
+                  <ToggleGroupItem
+                    value='availability'
+                    className='min-w-0 flex-1 sm:flex-none'
+                  >
+                    <CheckCircle2 data-icon='inline-start' />
+                    <span className='truncate'>{t('Availability status')}</span>
+                  </ToggleGroupItem>
+                  <ToggleGroupItem
+                    value='first-token'
+                    className='min-w-0 flex-1 sm:flex-none'
+                  >
+                    <Activity data-icon='inline-start' />
+                    <span className='truncate'>
+                      {t('First token waveform')}
+                    </span>
+                  </ToggleGroupItem>
+                </ToggleGroup>
               </div>
-              <MonitorHistory bars={historyBars} />
+              <MonitorHistory bars={historyBars} viewMode={historyViewMode} />
             </div>
 
             {info?.latest_message && (

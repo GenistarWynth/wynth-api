@@ -29,6 +29,15 @@ describe('channel monitor dialog theme contract', () => {
     assert.match(dialogSource, /Successful checks/)
   })
 
+  test('can switch history between availability and first token waveform', () => {
+    assert.match(dialogSource, /ToggleGroup/)
+    assert.match(dialogSource, /historyViewMode/)
+    assert.match(dialogSource, /firstTokenPath/)
+    assert.match(dialogSource, /polyline/)
+    assert.match(dialogSource, /First token waveform/)
+    assert.match(dialogSource, /Availability status/)
+  })
+
   test('keeps monitor settings available when detail loading fails', () => {
     assert.doesNotMatch(dialogSource, /\)\s*:\s*query\.isError\s*\?\s*\(/)
     assert.match(dialogSource, /query\.isError &&/)
