@@ -43,9 +43,13 @@ describe('channel monitor history helpers', () => {
 
     assert.equal(bars.length, 5)
     assert.equal(bars[0].status, 'empty')
+    assert.equal(bars[0].tone, 'empty')
     assert.equal(bars[2].status, 'success')
+    assert.equal(bars[2].tone, 'success')
     assert.equal(bars[3].status, 'degraded')
+    assert.equal(bars[3].tone, 'warning')
     assert.equal(bars[4].status, 'failed')
+    assert.equal(bars[4].tone, 'danger')
     assert.ok(bars[2].heightPercent >= 25)
     assert.ok(bars[3].heightPercent > bars[2].heightPercent)
     assert.equal(bars[4].message, 'upstream timeout')

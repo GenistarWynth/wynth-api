@@ -22,9 +22,12 @@ export type MonitorVisualStatus =
   | ChannelMonitorRecord['status']
   | 'empty'
 
+export type MonitorHistoryTone = 'success' | 'warning' | 'danger' | 'empty'
+
 export interface MonitorHistoryBar {
   id: string
   status: MonitorVisualStatus
+  tone: MonitorHistoryTone
   heightPercent: number
   latencyMS: number
   endpointLatencyMS: number
@@ -44,6 +47,13 @@ export function monitorStatusText(
   if (status === 'failed') return t('Failed')
   if (status === 'error') return t('Error')
   return t('No data')
+}
+
+export function monitorHistoryTone(status: MonitorVisualStatus): MonitorHistoryTone {
+  if (status === 'success') return 'success'
+  if (status === 'degraded') return 'warning'
+  if (status === 'failed' || status === 'error') return 'danger'
+  return 'empty'
 }
 
 function metricValue(record: Partial<ChannelMonitorRecord>) {
@@ -69,9 +79,11 @@ export function buildMonitorHistoryBars(
   const bars = recentRecords.map((record, index): MonitorHistoryBar => {
     const value = metricValue(record)
     const heightPercent = value > 0 ? Math.max(25, Math.round((value / maxMetric) * 100)) : 25
+    const status = record.status ?? 'error'
     return {
       id: String(record.id ?? `${record.checked_at ?? 'record'}-${index}`),
-      status: record.status ?? 'error',
+      status,
+      tone: monitorHistoryTone(status),
       heightPercent,
       latencyMS: record.latency_ms ?? 0,
       endpointLatencyMS: record.endpoint_latency_ms ?? 0,
@@ -90,6 +102,7 @@ export function buildMonitorHistoryBars(
     ...Array.from({ length: emptyCount }, (_, index): MonitorHistoryBar => ({
       id: `empty-${index}`,
       status: 'empty',
+      tone: 'empty',
       heightPercent: 25,
       latencyMS: 0,
       endpointLatencyMS: 0,
