@@ -43,6 +43,10 @@ interface ModelProvider {
   label: string
 }
 
+interface ModelBadgeContentProps extends ModelBadgeProps {
+  copyable?: boolean
+}
+
 function resolveModelProvider(modelName: string): ModelProvider | null {
   const model = modelName.toLowerCase()
   const hasAny = (keywords: string[]) =>
@@ -96,11 +100,12 @@ function resolveModelProvider(modelName: string): ModelProvider | null {
   return null
 }
 
-function ModelBadgeContent(props: ModelBadgeProps) {
+function ModelBadgeContent(props: ModelBadgeContentProps) {
   const provider = resolveModelProvider(props.modelName)
 
   return (
     <StatusBadge
+      copyable={props.copyable}
       copyText={props.modelName}
       size='sm'
       showDot={!provider}
@@ -132,8 +137,13 @@ export function ModelBadge(props: ModelBadgeProps) {
   const upstreamModel = props.upstreamModel ?? props.actualModel
   const isMapped = Boolean(props.isMapped && upstreamModel)
   const hasActualMismatch = Boolean(props.secondaryActualModel)
+  const hasAuditDetails = Boolean(
+    upstreamModel ||
+      props.actualResponseModel ||
+      props.actualResponseModelSource
+  )
 
-  if (!isMapped && !hasActualMismatch) {
+  if (!isMapped && !hasActualMismatch && !hasAuditDetails) {
     return <ModelBadgeContent {...props} />
   }
 
@@ -148,7 +158,7 @@ export function ModelBadge(props: ModelBadgeProps) {
         }
       >
         <div className='flex min-w-0 items-center gap-1'>
-          <ModelBadgeContent {...props} />
+          <ModelBadgeContent {...props} copyable={false} />
           {isMapped && <Route className='text-muted-foreground size-3 shrink-0' />}
         </div>
         {hasActualMismatch && (
