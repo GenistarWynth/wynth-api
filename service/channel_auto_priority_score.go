@@ -146,7 +146,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		results[i].ComputedPriority = clampAutoPriorityPriority(int64(math.Round(results[i].FinalScore*10)), 0, int64(maxPriority))
 		results[i].NewPriority = results[i].ComputedPriority
 
-		if inputs[i].HasPreviousSnapshot && absInt64(results[i].ComputedPriority-results[i].OldPriority) < 10 {
+		if inputs[i].HasPreviousSnapshot && autoPriorityDeltaBelowThreshold(results[i].OldPriority, results[i].ComputedPriority, 10) {
 			results[i].Applied = false
 			results[i].NewPriority = results[i].OldPriority
 			results[i].Reason = "hysteresis_delta_below_threshold"
@@ -246,13 +246,35 @@ func clampAutoPriorityPriority(value, minValue, maxValue int64) int64 {
 	return value
 }
 
-func nearlyEqualFloat64(a, b float64) bool {
-	return math.Abs(a-b) <= 1e-12
+func autoPriorityDeltaBelowThreshold(oldPriority, computedPriority, threshold int64) bool {
+	if threshold <= 0 {
+		return false
+	}
+
+	delta := threshold - 1
+	lower, lowerOK := safeAddInt64(oldPriority, -delta)
+	if !lowerOK {
+		lower = math.MinInt64
+	}
+
+	upper, upperOK := safeAddInt64(oldPriority, delta)
+	if !upperOK {
+		upper = math.MaxInt64
+	}
+
+	return computedPriority >= lower && computedPriority <= upper
 }
 
-func absInt64(v int64) int64 {
-	if v < 0 {
-		return -v
+func safeAddInt64(a, b int64) (int64, bool) {
+	if b > 0 && a > math.MaxInt64-b {
+		return 0, false
 	}
-	return v
+	if b < 0 && a < math.MinInt64-b {
+		return 0, false
+	}
+	return a + b, true
+}
+
+func nearlyEqualFloat64(a, b float64) bool {
+	return math.Abs(a-b) <= 1e-12
 }

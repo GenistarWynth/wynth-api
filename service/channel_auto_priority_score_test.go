@@ -332,24 +332,47 @@ func resultByChannelID(results []AutoPriorityScoreResult, channelID int) *AutoPr
 }
 
 func TestScoreAutoPriorityCandidatesClampsPriorityBounds(t *testing.T) {
-	results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
-		{
-			ChannelID:               701,
-			LocalGroup:              "shared",
-			ChannelType:             constant.ChannelTypeOpenAI,
-			CurrentPriority:         9999,
-			EffectiveRateMultiplier: 1,
-			Availability:            floatPtr(1),
-			FirstTokenLatencyMS:     1,
-			UsageLogCount:           1,
-			MonitorCheckCount:       1,
-			FirstTokenSampleCount:   1,
-		},
-	}, 0)
+	t.Run("clamps to a positive low cap", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               701,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         9999,
+				EffectiveRateMultiplier: 1,
+				Availability:            floatPtr(1),
+				FirstTokenLatencyMS:     1,
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				FirstTokenSampleCount:   1,
+			},
+		}, 500)
 
-	require.Len(t, results, 1)
-	assert.LessOrEqual(t, results[0].ComputedPriority, int64(1000))
-	assert.GreaterOrEqual(t, results[0].ComputedPriority, int64(0))
+		require.Len(t, results, 1)
+		assert.Equal(t, int64(500), results[0].ComputedPriority)
+		assert.Equal(t, int64(500), results[0].NewPriority)
+	})
+
+	t.Run("defaults to 1000 when maxPriority is non-positive", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               702,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         9999,
+				EffectiveRateMultiplier: 1,
+				Availability:            floatPtr(1),
+				FirstTokenLatencyMS:     1,
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				FirstTokenSampleCount:   1,
+			},
+		}, 0)
+
+		require.Len(t, results, 1)
+		assert.LessOrEqual(t, results[0].ComputedPriority, int64(1000))
+		assert.GreaterOrEqual(t, results[0].ComputedPriority, int64(0))
+	})
 }
 
 func TestScoreAutoPriorityCandidatesHandlesNonFiniteMultiplier(t *testing.T) {
@@ -373,4 +396,10 @@ func TestScoreAutoPriorityCandidatesHandlesNonFiniteMultiplier(t *testing.T) {
 	assert.False(t, results[0].Applied)
 	assert.Equal(t, int64(321), results[0].ComputedPriority)
 	assert.Equal(t, int64(321), results[0].NewPriority)
+}
+
+func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {
+	assert.True(t, autoPriorityDeltaBelowThreshold(100, 109, 10))
+	assert.False(t, autoPriorityDeltaBelowThreshold(100, 110, 10))
+	assert.False(t, autoPriorityDeltaBelowThreshold(math.MinInt64+1, math.MaxInt64, 10))
 }
