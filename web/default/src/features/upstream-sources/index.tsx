@@ -42,11 +42,12 @@ import {
   Save,
   Settings2,
   Trash2,
+  TrendingUp,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatTimestamp } from '@/lib/format'
 import { getUserGroups, getUserModels } from '@/lib/api'
+import { formatTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -109,22 +110,20 @@ import { LongText } from '@/components/long-text'
 import { MultiSelect } from '@/components/multi-select'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
+import { channelsQueryKeys } from '@/features/channels/lib/channel-actions'
 import {
   createUpstreamSource,
   deleteUpstreamSource,
   discoverUpstreamSource,
   listUpstreamSourceMappings,
   listUpstreamSources,
+  runUpstreamSourceAutoPriority,
   syncUpstreamSource,
   updateUpstreamSource,
   updateUpstreamSourceCredentials,
   updateUpstreamSourceMappings,
   upstreamSourcesQueryKeys,
 } from './api'
-import {
-  hasMappingSelectionChanges,
-  resolveSelectedMappingIDs,
-} from './selection'
 import {
   buildLocalGroupRuleTemplate,
   createLocalGroupRuleUserTemplate,
@@ -142,6 +141,10 @@ import {
   UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED,
 } from './rules'
 import {
+  hasMappingSelectionChanges,
+  resolveSelectedMappingIDs,
+} from './selection'
+import {
   UPSTREAM_SOURCE_TYPE_NEW_API,
   UPSTREAM_SOURCE_TYPE_SUB2API,
   type ApiResponse,
@@ -149,6 +152,7 @@ import {
   type UpstreamMappingDiscoveryStatus,
   type UpstreamMappingSyncStatus,
   type UpstreamSource,
+  type UpstreamSourceAutoPriorityResult,
   type UpstreamSourceCreateRequest,
   type UpstreamSourceFormValues,
   type UpstreamSourceLocalGroupRule,
@@ -163,6 +167,8 @@ import {
 const CHANNEL_TYPE_OPENAI = 1
 const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
 const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 30
+const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
+const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
 const UPSTREAM_SOURCE_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
@@ -221,6 +227,10 @@ function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
   }
 }
 
+function intervalDisplayValue(value: number | undefined, fallback: number) {
+  return value !== undefined && value >= 0 ? value : fallback
+}
+
 function monitorIntervalDisplayValue(
   value: number | undefined,
   fallback: number
@@ -236,9 +246,7 @@ function normalizeRuleForForm(
     ...rule,
     platforms: normalizeKeywordList(rule.platforms ?? []),
     name_contains: normalizeKeywordList(rule.name_contains ?? []),
-    description_contains: normalizeKeywordList(
-      rule.description_contains ?? []
-    ),
+    description_contains: normalizeKeywordList(rule.description_contains ?? []),
     exclude_keywords: normalizeKeywordList(rule.exclude_keywords ?? []),
     model_strategy: normalizeModelStrategy(rule.model_strategy),
     fixed_models: normalizeModelList(rule.fixed_models ?? []),
@@ -284,6 +292,13 @@ function defaultSourceFormValues(
     auto_sync_enabled: source?.auto_sync_enabled ?? false,
     auto_sync_interval_minutes:
       source?.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES,
+    auto_priority_enabled: source?.auto_priority_enabled ?? false,
+    auto_priority_interval_minutes: intervalDisplayValue(
+      source?.auto_priority_interval_minutes,
+      DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
+    ),
+    auto_priority_window_hours:
+      source?.auto_priority_window_hours ?? DEFAULT_AUTO_PRIORITY_WINDOW_HOURS,
   }
 }
 
@@ -320,6 +335,12 @@ function buildCreatePayload(
     auto_sync_interval_minutes: values.auto_sync_enabled
       ? Math.max(0, values.auto_sync_interval_minutes)
       : 0,
+    auto_priority_enabled: values.auto_priority_enabled,
+    auto_priority_interval_minutes: Math.max(
+      0,
+      values.auto_priority_interval_minutes
+    ),
+    auto_priority_window_hours: Math.max(1, values.auto_priority_window_hours),
   }
 }
 
@@ -355,6 +376,12 @@ function buildUpdatePayload(
     auto_sync_interval_minutes: values.auto_sync_enabled
       ? Math.max(0, values.auto_sync_interval_minutes)
       : 0,
+    auto_priority_enabled: values.auto_priority_enabled,
+    auto_priority_interval_minutes: Math.max(
+      0,
+      values.auto_priority_interval_minutes
+    ),
+    auto_priority_window_hours: Math.max(1, values.auto_priority_window_hours),
   }
 }
 
@@ -436,7 +463,8 @@ function formatOptionalTimestamp(value: number) {
 }
 
 function modelStrategyDisplayLabel(strategy: string) {
-  return normalizeModelStrategy(strategy) === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+  return normalizeModelStrategy(strategy) ===
+    UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
     ? 'Fixed models'
     : 'All upstream models'
 }
@@ -489,11 +517,17 @@ function SourceSettingBadges(props: { source: UpstreamSource }) {
       )}m`
     : t('Monitor Off')
   const autoSyncLabel = props.source.auto_sync_enabled
-    ? `${t('Auto Sync On')} / ${(props.source.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES)}m`
+    ? `${t('Auto Sync On')} / ${props.source.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES}m`
     : t('Auto Sync Off')
+  const autoPriorityLabel = props.source.auto_priority_enabled
+    ? `${t('Auto Priority On')} / ${intervalDisplayValue(
+        props.source.auto_priority_interval_minutes,
+        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
+      )}m / ${props.source.auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h`
+    : t('Auto Priority Off')
 
   return (
-    <div className='flex max-w-[220px] flex-wrap gap-1'>
+    <div className='flex max-w-[260px] flex-wrap gap-1'>
       <StatusBadge
         label={`${t('Priority')}: ${props.source.default_priority}`}
         variant='neutral'
@@ -515,6 +549,11 @@ function SourceSettingBadges(props: { source: UpstreamSource }) {
         copyable={false}
       />
       <StatusBadge
+        label={autoPriorityLabel}
+        variant={props.source.auto_priority_enabled ? 'success' : 'neutral'}
+        copyable={false}
+      />
+      <StatusBadge
         label={
           props.source.allow_private_ip
             ? t('Private IP Allowed')
@@ -533,9 +572,11 @@ function useUpstreamSourceColumns(props: {
   onMappings: (source: UpstreamSource) => void
   onDiscover: (source: UpstreamSource) => void
   onSync: (source: UpstreamSource) => void
+  onAutoPriority: (source: UpstreamSource) => void
   onDelete: (source: UpstreamSource) => void
   discoveringID?: number
   syncingID?: number
+  autoPriorityID?: number
 }): ColumnDef<UpstreamSource>[] {
   const { t } = useTranslation()
 
@@ -676,9 +717,11 @@ function useUpstreamSourceColumns(props: {
             onMappings={props.onMappings}
             onDiscover={props.onDiscover}
             onSync={props.onSync}
+            onAutoPriority={props.onAutoPriority}
             onDelete={props.onDelete}
             discovering={props.discoveringID === row.original.id}
             syncing={props.syncingID === row.original.id}
+            autoPrioritizing={props.autoPriorityID === row.original.id}
           />
         ),
         meta: { pinned: 'right' as const },
@@ -695,9 +738,11 @@ function SourceActions(props: {
   onMappings: (source: UpstreamSource) => void
   onDiscover: (source: UpstreamSource) => void
   onSync: (source: UpstreamSource) => void
+  onAutoPriority: (source: UpstreamSource) => void
   onDelete: (source: UpstreamSource) => void
   discovering: boolean
   syncing: boolean
+  autoPrioritizing: boolean
 }) {
   const { t } = useTranslation()
   const source = props.row.original
@@ -760,6 +805,21 @@ function SourceActions(props: {
                 <Loader2 size={16} className='animate-spin' />
               ) : (
                 <RefreshCcw size={16} />
+              )}
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={props.autoPrioritizing}
+            onClick={() => props.onAutoPriority(source)}
+          >
+            {props.autoPrioritizing
+              ? t('Adjusting priority...')
+              : t('Adjust priority')}
+            <DropdownMenuShortcut>
+              {props.autoPrioritizing ? (
+                <Loader2 size={16} className='animate-spin' />
+              ) : (
+                <TrendingUp size={16} />
               )}
             </DropdownMenuShortcut>
           </DropdownMenuItem>
@@ -844,7 +904,9 @@ function CheckboxList(props: {
         >
           <Checkbox
             checked={selected.has(option.value)}
-            onCheckedChange={(checked) => toggle(option.value, Boolean(checked))}
+            onCheckedChange={(checked) =>
+              toggle(option.value, Boolean(checked))
+            }
           />
           <span>{option.label}</span>
         </label>
@@ -906,7 +968,8 @@ function SourceFormSheet(props: {
     () =>
       Object.entries(groupsQuery.data?.data ?? {}).map(([value, info]) => ({
         value,
-        label: info.desc && info.desc !== value ? `${value} (${info.desc})` : value,
+        label:
+          info.desc && info.desc !== value ? `${value} (${info.desc})` : value,
       })),
     [groupsQuery.data]
   )
@@ -1017,6 +1080,11 @@ function SourceFormSheet(props: {
         autoSync: {
           enabled: previous.auto_sync_enabled,
           interval_minutes: previous.auto_sync_interval_minutes,
+        },
+        autoPriority: {
+          enabled: previous.auto_priority_enabled,
+          interval_minutes: previous.auto_priority_interval_minutes,
+          window_hours: previous.auto_priority_window_hours,
         },
         modelStrategy: previous.model_strategy,
         fixedModels: previous.fixed_models,
@@ -1406,6 +1474,62 @@ function SourceFormSheet(props: {
           </SideDrawerSection>
 
           <SideDrawerSection>
+            <SideDrawerSectionHeader title={t('Priority Adjustment')} />
+            <SwitchRow
+              label={t('Enable Auto Priority')}
+              checked={form.auto_priority_enabled}
+              onCheckedChange={(checked) =>
+                setField('auto_priority_enabled', checked)
+              }
+            />
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <FieldBlock
+                label={t('Auto Priority Interval Minutes')}
+                htmlFor='source-auto-priority-interval'
+              >
+                <Input
+                  id='source-auto-priority-interval'
+                  type='number'
+                  min={0}
+                  value={form.auto_priority_interval_minutes}
+                  disabled={!form.auto_priority_enabled}
+                  onChange={(event) =>
+                    setField(
+                      'auto_priority_interval_minutes',
+                      parseIntegerInput(
+                        event.target.value,
+                        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
+                      )
+                    )
+                  }
+                />
+              </FieldBlock>
+              <FieldBlock
+                label={t('Metrics Window Hours')}
+                htmlFor='source-auto-priority-window'
+              >
+                <Input
+                  id='source-auto-priority-window'
+                  type='number'
+                  min={1}
+                  max={168}
+                  value={form.auto_priority_window_hours}
+                  disabled={!form.auto_priority_enabled}
+                  onChange={(event) =>
+                    setField(
+                      'auto_priority_window_hours',
+                      parseIntegerInput(
+                        event.target.value,
+                        DEFAULT_AUTO_PRIORITY_WINDOW_HOURS
+                      )
+                    )
+                  }
+                />
+              </FieldBlock>
+            </div>
+          </SideDrawerSection>
+
+          <SideDrawerSection>
             <div className='flex items-center justify-between gap-3'>
               <SideDrawerSectionHeader title={t('Sync Rules')} />
               <div className='flex shrink-0 flex-wrap justify-end gap-2'>
@@ -1419,7 +1543,9 @@ function SourceFormSheet(props: {
                     {t('Rule templates')}
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align='end' className='w-60'>
-                    <DropdownMenuLabel>{t('Built-in templates')}</DropdownMenuLabel>
+                    <DropdownMenuLabel>
+                      {t('Built-in templates')}
+                    </DropdownMenuLabel>
                     {LOCAL_GROUP_RULE_TEMPLATE_SETS.map((templateSet) => (
                       <DropdownMenuItem
                         key={templateSet.label}
@@ -1431,7 +1557,9 @@ function SourceFormSheet(props: {
                       </DropdownMenuItem>
                     ))}
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel>{t('Saved templates')}</DropdownMenuLabel>
+                    <DropdownMenuLabel>
+                      {t('Saved templates')}
+                    </DropdownMenuLabel>
                     {userRuleTemplates.length === 0 ? (
                       <DropdownMenuItem disabled>
                         {t('No saved templates')}
@@ -1440,7 +1568,9 @@ function SourceFormSheet(props: {
                       userRuleTemplates.map((template) => (
                         <DropdownMenuItem
                           key={template.id}
-                          onClick={() => addUserLocalGroupRuleTemplate(template)}
+                          onClick={() =>
+                            addUserLocalGroupRuleTemplate(template)
+                          }
                         >
                           <span className='truncate'>{template.name}</span>
                         </DropdownMenuItem>
@@ -1482,7 +1612,9 @@ function SourceFormSheet(props: {
                         type='button'
                         variant='outline'
                         size='sm'
-                        onClick={() => saveLocalGroupRuleAsTemplate(index, rule)}
+                        onClick={() =>
+                          saveLocalGroupRuleAsTemplate(index, rule)
+                        }
                       >
                         <Save data-icon='inline-start' />
                         {t('Save as template')}
@@ -1603,7 +1735,7 @@ function SourceFormSheet(props: {
                       }
                     />
                   </FieldBlock>
-                  <div className='grid gap-3 sm:grid-cols-2'>
+                  <div className='grid gap-3 lg:grid-cols-3'>
                     <div className='grid gap-3'>
                       <SwitchRow
                         label={t('Monitor')}
@@ -1613,11 +1745,10 @@ function SourceFormSheet(props: {
                             ...rule,
                             monitor: {
                               enabled: checked,
-                              interval_minutes:
-                                monitorIntervalDisplayValue(
-                                  rule.monitor?.interval_minutes,
-                                  form.monitor_interval_minutes
-                                ),
+                              interval_minutes: monitorIntervalDisplayValue(
+                                rule.monitor?.interval_minutes,
+                                form.monitor_interval_minutes
+                              ),
                             },
                           })
                         }
@@ -1639,8 +1770,7 @@ function SourceFormSheet(props: {
                               ...rule,
                               monitor: {
                                 enabled:
-                                  rule.monitor?.enabled ??
-                                  form.enable_monitor,
+                                  rule.monitor?.enabled ?? form.enable_monitor,
                                 interval_minutes: parseIntegerInput(
                                   event.target.value,
                                   form.monitor_interval_minutes
@@ -1698,6 +1828,96 @@ function SourceFormSheet(props: {
                         />
                       </FieldBlock>
                     </div>
+                    <div className='grid gap-3'>
+                      <SwitchRow
+                        label={t('Auto Priority')}
+                        checked={
+                          rule.auto_priority?.enabled ??
+                          form.auto_priority_enabled
+                        }
+                        onCheckedChange={(checked) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            auto_priority: {
+                              enabled: checked,
+                              interval_minutes: intervalDisplayValue(
+                                rule.auto_priority?.interval_minutes,
+                                form.auto_priority_interval_minutes
+                              ),
+                              window_hours:
+                                rule.auto_priority?.window_hours ??
+                                form.auto_priority_window_hours,
+                            },
+                          })
+                        }
+                      />
+                      <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-1'>
+                        <FieldBlock
+                          label={t('Auto Priority Interval Minutes')}
+                          htmlFor={`source-rule-auto-priority-interval-${index}`}
+                        >
+                          <Input
+                            id={`source-rule-auto-priority-interval-${index}`}
+                            type='number'
+                            min={0}
+                            value={intervalDisplayValue(
+                              rule.auto_priority?.interval_minutes,
+                              form.auto_priority_interval_minutes
+                            )}
+                            onChange={(event) =>
+                              setLocalGroupRule(index, {
+                                ...rule,
+                                auto_priority: {
+                                  enabled:
+                                    rule.auto_priority?.enabled ??
+                                    form.auto_priority_enabled,
+                                  interval_minutes: parseIntegerInput(
+                                    event.target.value,
+                                    form.auto_priority_interval_minutes
+                                  ),
+                                  window_hours:
+                                    rule.auto_priority?.window_hours ??
+                                    form.auto_priority_window_hours,
+                                },
+                              })
+                            }
+                          />
+                        </FieldBlock>
+                        <FieldBlock
+                          label={t('Metrics Window Hours')}
+                          htmlFor={`source-rule-auto-priority-window-${index}`}
+                        >
+                          <Input
+                            id={`source-rule-auto-priority-window-${index}`}
+                            type='number'
+                            min={1}
+                            max={168}
+                            value={
+                              rule.auto_priority?.window_hours ??
+                              form.auto_priority_window_hours
+                            }
+                            onChange={(event) =>
+                              setLocalGroupRule(index, {
+                                ...rule,
+                                auto_priority: {
+                                  enabled:
+                                    rule.auto_priority?.enabled ??
+                                    form.auto_priority_enabled,
+                                  interval_minutes: intervalDisplayValue(
+                                    rule.auto_priority?.interval_minutes,
+                                    form.auto_priority_interval_minutes
+                                  ),
+                                  window_hours: parseIntegerInput(
+                                    event.target.value,
+                                    form.auto_priority_window_hours
+                                  ),
+                                },
+                              })
+                            }
+                          />
+                        </FieldBlock>
+                      </div>
+                    </div>
                   </div>
                   <FieldBlock
                     label={t('Model strategy')}
@@ -1719,7 +1939,9 @@ function SourceFormSheet(props: {
                       </SelectTrigger>
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
-                          <SelectItem value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}>
+                          <SelectItem
+                            value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}
+                          >
                             {t('All upstream models')}
                           </SelectItem>
                           <SelectItem
@@ -2083,6 +2305,12 @@ function MappingRow(props: {
     mapping.resolved_model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
       ? t('Fixed models')
       : t('All upstream models')
+  const autoPriorityLabel = mapping.resolved_auto_priority_enabled
+    ? `${t('Auto priority')}: ${intervalDisplayValue(
+        mapping.resolved_auto_priority_interval_minutes,
+        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
+      )}m / ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h`
+    : `${t('Auto priority')}: ${t('Disabled')}`
   const rowMuted =
     mapping.discovery_status === 'invalid' ||
     mapping.discovery_status === 'stale' ||
@@ -2118,6 +2346,9 @@ function MappingRow(props: {
           </span>
           <span className='text-muted-foreground text-xs'>
             {t('Model strategy')}: {modelStrategyLabel}
+          </span>
+          <span className='text-muted-foreground text-xs'>
+            {autoPriorityLabel}
           </span>
         </div>
       </TableCell>
@@ -2320,6 +2551,38 @@ export function UpstreamSources() {
     },
   })
 
+  const autoPriorityMutation = useMutation({
+    mutationFn: async (source: UpstreamSource) =>
+      runUpstreamSourceAutoPriority(source.id),
+    onSuccess: (result, source) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Priority adjustment failed')))
+        return
+      }
+      const data: UpstreamSourceAutoPriorityResult | undefined = result.data
+      toast.success(
+        t(
+          'Priority adjustment finished: {{updated}} updated, {{skipped}} skipped, {{failed}} failed',
+          {
+            updated: data?.updated ?? 0,
+            skipped: data?.skipped ?? 0,
+            failed: data?.failed ?? 0,
+          }
+        )
+      )
+      invalidateSources()
+      queryClient.invalidateQueries({
+        queryKey: upstreamSourcesQueryKeys.mappings(source.id),
+      })
+      queryClient.invalidateQueries({
+        queryKey: channelsQueryKeys.lists(),
+      })
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
   const deleteMutation = useMutation({
     mutationFn: async (source: UpstreamSource) =>
       deleteUpstreamSource(source.id),
@@ -2355,11 +2618,15 @@ export function UpstreamSources() {
     onMappings: setMappingSource,
     onDiscover: (source) => discoverMutation.mutate(source),
     onSync: (source) => syncMutation.mutate(source),
+    onAutoPriority: (source) => autoPriorityMutation.mutate(source),
     onDelete: setDeleteSource,
     discoveringID: discoverMutation.isPending
       ? discoverMutation.variables?.id
       : undefined,
     syncingID: syncMutation.isPending ? syncMutation.variables?.id : undefined,
+    autoPriorityID: autoPriorityMutation.isPending
+      ? autoPriorityMutation.variables?.id
+      : undefined,
   })
 
   const sources = sourcesQuery.data ?? []

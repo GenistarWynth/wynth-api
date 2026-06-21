@@ -65,6 +65,7 @@ import {
   parseModelsList,
   parseGroupsList,
   parseChannelSettings,
+  parseChannelOtherSettings,
   handleUpdateChannelField,
   handleUpdateTagField,
   handleUpdateChannelBalance,
@@ -72,7 +73,7 @@ import {
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
-import type { Channel } from '../types'
+import type { Channel, ChannelAutoPriorityScore } from '../types'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -156,6 +157,91 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
   )
 }
 
+function formatAutoPriorityScore(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-'
+  }
+  return `${Math.round(value * 100)}%`
+}
+
+function formatAutoPriorityNumber(
+  value: number | undefined,
+  digits?: number
+) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-'
+  }
+  return typeof digits === 'number' ? value.toFixed(digits) : value
+}
+
+function getAutoPrioritySnapshot(
+  value: unknown
+): ChannelAutoPriorityScore | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  return value as ChannelAutoPriorityScore
+}
+
+function AutoPriorityHint({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const settings = parseChannelOtherSettings(channel.settings)
+  if (!settings.channel_auto_priority_enabled) {
+    return null
+  }
+
+  const snapshot = getAutoPrioritySnapshot(
+    settings.channel_auto_priority_last_score
+  )
+  const label = snapshot
+    ? snapshot.applied
+      ? t('Auto: {{priority}} / {{score}}', {
+          priority: formatAutoPriorityNumber(snapshot.new_priority),
+          score: formatAutoPriorityScore(snapshot.final_score),
+        })
+      : t('Auto: {{priority}} / {{reason}}', {
+          priority: formatAutoPriorityNumber(snapshot.new_priority),
+          reason: snapshot.reason || t('not applied'),
+        })
+    : t('Auto priority enabled')
+
+  const tooltip = snapshot
+    ? t(
+        'Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}.',
+        {
+          time: formatRelativeTime(
+            settings.channel_auto_priority_last_run_at ?? 0
+          ),
+          cost: formatAutoPriorityNumber(
+            snapshot.effective_cost_multiplier,
+            3
+          ),
+          availability: formatAutoPriorityScore(snapshot.availability_score),
+          firstToken: formatAutoPriorityScore(snapshot.first_token_score),
+        }
+      )
+    : t('Auto priority may overwrite manual edits on the next run.')
+
+  return (
+    <TooltipProvider delay={150}>
+      <Tooltip>
+        <TooltipTrigger render={<span className='max-w-full' />}>
+          <StatusBadge
+            label={label}
+            variant={snapshot?.applied ? 'success' : 'warning'}
+            size='sm'
+            copyable={false}
+            className='max-w-[120px]'
+          />
+        </TooltipTrigger>
+        <TooltipContent side='top' className='max-w-80'>
+          {tooltip}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 /**
  * Priority cell component with inline editing
  */
@@ -201,13 +287,16 @@ function PriorityCell({ channel }: { channel: Channel }) {
 
   // Regular channel row - editable
   return (
-    <NumericSpinnerInput
-      value={priority ?? 0}
-      onChange={(value) => {
-        handleUpdateChannelField(channel.id, 'priority', value, queryClient)
-      }}
-      min={-999}
-    />
+    <div className='flex min-w-[120px] flex-col gap-1'>
+      <NumericSpinnerInput
+        value={priority ?? 0}
+        onChange={(value) => {
+          handleUpdateChannelField(channel.id, 'priority', value, queryClient)
+        }}
+        min={-999}
+      />
+      <AutoPriorityHint channel={channel} />
+    </div>
   )
 }
 

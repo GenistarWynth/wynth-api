@@ -17,6 +17,7 @@ type LocalGroupRuleTemplateDefaults = {
   proLocalGroup: string
   monitor?: UpstreamSourceLocalGroupRule['monitor']
   autoSync?: UpstreamSourceLocalGroupRule['auto_sync']
+  autoPriority?: UpstreamSourceLocalGroupRule['auto_priority']
   modelStrategy?: UpstreamSourceModelStrategy
   fixedModels?: string[]
 }
@@ -115,6 +116,7 @@ export function buildLocalGroupRuleTemplate(
     exclude_keywords: [],
     ...(defaults.monitor ? { monitor: defaults.monitor } : {}),
     ...(defaults.autoSync ? { auto_sync: defaults.autoSync } : {}),
+    ...(defaults.autoPriority ? { auto_priority: defaults.autoPriority } : {}),
     model_strategy: modelStrategy,
     fixed_models:
       modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
@@ -161,6 +163,7 @@ function normalizeTemplateRule(
   rule: Partial<UpstreamSourceLocalGroupRule>
 ): UpstreamSourceLocalGroupRule {
   const modelStrategy = normalizeModelStrategy(rule.model_strategy)
+  const autoPriority = normalizeRuleAutoPriority(rule.auto_priority)
   return {
     name: String(rule.name ?? '').trim(),
     local_group: String(rule.local_group ?? '').trim(),
@@ -169,15 +172,46 @@ function normalizeTemplateRule(
     description_contains: normalizeKeywordList(
       toStringArray(rule.description_contains)
     ),
-    exclude_keywords: normalizeKeywordList(toStringArray(rule.exclude_keywords)),
+    exclude_keywords: normalizeKeywordList(
+      toStringArray(rule.exclude_keywords)
+    ),
     ...(rule.monitor ? { monitor: rule.monitor } : {}),
     ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
+    ...(autoPriority ? { auto_priority: autoPriority } : {}),
     model_strategy: modelStrategy,
     fixed_models:
       modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
         ? normalizeModelList(toStringArray(rule.fixed_models))
         : [],
   }
+}
+
+function normalizeRuleAutoPriority(
+  value: UpstreamSourceLocalGroupRule['auto_priority'] | undefined
+): UpstreamSourceLocalGroupRule['auto_priority'] | undefined {
+  if (!value) {
+    return undefined
+  }
+  const normalized: UpstreamSourceLocalGroupRule['auto_priority'] = {}
+  if (typeof value.enabled === 'boolean') {
+    normalized.enabled = value.enabled
+  }
+  if (
+    typeof value.interval_minutes === 'number' &&
+    Number.isFinite(value.interval_minutes)
+  ) {
+    normalized.interval_minutes = Math.max(
+      0,
+      Math.trunc(value.interval_minutes)
+    )
+  }
+  if (
+    typeof value.window_hours === 'number' &&
+    Number.isFinite(value.window_hours)
+  ) {
+    normalized.window_hours = Math.max(1, Math.trunc(value.window_hours))
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
 export function createLocalGroupRuleUserTemplate(
@@ -266,6 +300,7 @@ export function normalizeSyncRules(
         modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
           ? normalizeModelList(rule.fixed_models ?? [])
           : []
+      const autoPriority = normalizeRuleAutoPriority(rule.auto_priority)
 
       return {
         name: rule.name.trim(),
@@ -276,6 +311,7 @@ export function normalizeSyncRules(
         exclude_keywords: excludeKeywords,
         ...(rule.monitor ? { monitor: rule.monitor } : {}),
         ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
+        ...(autoPriority ? { auto_priority: autoPriority } : {}),
         model_strategy: modelStrategy,
         fixed_models: fixedModels,
       }

@@ -21,6 +21,7 @@ import type {
   ApiResponse,
   UpstreamSource,
   UpstreamSourceCreateRequest,
+  UpstreamSourceAutoPriorityResult,
   UpstreamSourceCredentialsUpdateRequest,
   UpstreamSourceDiscoveryResult,
   UpstreamSourceMapping,
@@ -134,6 +135,17 @@ export async function syncUpstreamSource(
 ): Promise<ApiResponse<UpstreamSourceSyncResult>> {
   const res = await api.post(
     `/api/upstream_sources/${id}/sync`,
+    undefined,
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function runUpstreamSourceAutoPriority(
+  id: number
+): Promise<ApiResponse<UpstreamSourceAutoPriorityResult>> {
+  const res = await api.post(
+    `/api/upstream_sources/${id}/auto_priority/run`,
     undefined,
     upstreamSourceActionConfig()
   )

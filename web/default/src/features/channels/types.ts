@@ -73,9 +73,7 @@ export const channelMonitorRecordSchema = z.object({
   created_at: z.number().default(0),
 })
 
-export type ChannelMonitorRecord = z.infer<
-  typeof channelMonitorRecordSchema
->
+export type ChannelMonitorRecord = z.infer<typeof channelMonitorRecordSchema>
 
 export const channelMonitorDetailSchema = z.object({
   channel_id: z.number(),
@@ -83,9 +81,7 @@ export const channelMonitorDetailSchema = z.object({
   recent_records: z.array(channelMonitorRecordSchema).default([]),
 })
 
-export type ChannelMonitorDetail = z.infer<
-  typeof channelMonitorDetailSchema
->
+export type ChannelMonitorDetail = z.infer<typeof channelMonitorDetailSchema>
 
 export const channelSchema = z.object({
   id: z.number(),
@@ -163,7 +159,37 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   channel_monitor_enabled?: boolean
   channel_monitor_interval_minutes?: number
+  channel_auto_priority_enabled?: boolean
+  channel_auto_priority_interval_minutes?: number
+  channel_auto_priority_window_hours?: number
+  channel_auto_priority_last_run_at?: number
+  channel_auto_priority_last_applied_at?: number
+  channel_auto_priority_last_score?: ChannelAutoPriorityScore
+  generated_by_upstream_source_id?: number
+  generated_by_upstream_mapping_id?: number
   advanced_custom?: AdvancedCustomConfig
+}
+
+export interface ChannelAutoPriorityScore {
+  version?: string
+  computed_at: number
+  window_start: number
+  window_end: number
+  cohort?: string
+  effective_rate_multiplier: number
+  cache_adjusted_cost_factor: number
+  effective_cost_multiplier: number
+  effective_price_score: number
+  availability_score: number
+  first_token_score: number
+  final_score: number
+  old_priority: number
+  new_priority: number
+  applied: boolean
+  reason?: string
+  usage_log_count: number
+  monitor_check_count: number
+  first_token_sample_count: number
 }
 
 export interface AdvancedCustomConfig {

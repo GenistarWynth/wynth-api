@@ -90,6 +90,11 @@ describe('upstream source rule normalization', () => {
         proLocalGroup: 'OpenAI-Pro',
         monitor: { enabled: true, interval_minutes: 10 },
         autoSync: { enabled: true, interval_minutes: 0 },
+        autoPriority: {
+          enabled: true,
+          interval_minutes: 0,
+          window_hours: 48,
+        },
         modelStrategy: 'fixed',
         fixedModels: ['gpt-5', 'gpt-4o'],
       }),
@@ -102,6 +107,11 @@ describe('upstream source rule normalization', () => {
         exclude_keywords: [],
         monitor: { enabled: true, interval_minutes: 10 },
         auto_sync: { enabled: true, interval_minutes: 0 },
+        auto_priority: {
+          enabled: true,
+          interval_minutes: 0,
+          window_hours: 48,
+        },
         model_strategy: 'fixed',
         fixed_models: ['gpt-5', 'gpt-4o'],
       }
@@ -120,6 +130,11 @@ describe('upstream source rule normalization', () => {
         exclude_keywords: [' pro '],
         monitor: { enabled: true, interval_minutes: 10 },
         auto_sync: { enabled: true, interval_minutes: 0 },
+        auto_priority: {
+          enabled: false,
+          interval_minutes: 15,
+          window_hours: 24,
+        },
         model_strategy: 'fixed',
         fixed_models: [' gpt-4o ', 'gpt-5', 'gpt-4o'],
       },
@@ -139,6 +154,11 @@ describe('upstream source rule normalization', () => {
         exclude_keywords: ['pro'],
         monitor: { enabled: true, interval_minutes: 10 },
         auto_sync: { enabled: true, interval_minutes: 0 },
+        auto_priority: {
+          enabled: false,
+          interval_minutes: 15,
+          window_hours: 24,
+        },
         model_strategy: 'fixed',
         fixed_models: ['gpt-4o', 'gpt-5'],
       },

@@ -60,6 +60,12 @@ export type UpstreamSourceRuleAutoSync = {
   interval_minutes?: number
 }
 
+export type UpstreamSourceRuleAutoPriority = {
+  enabled?: boolean
+  interval_minutes?: number
+  window_hours?: number
+}
+
 export type UpstreamSource = {
   id: number
   name: string
@@ -78,6 +84,9 @@ export type UpstreamSource = {
   allow_private_ip: boolean
   auto_sync_enabled: boolean
   auto_sync_interval_minutes: number
+  auto_priority_enabled: boolean
+  auto_priority_interval_minutes: number
+  auto_priority_window_hours: number
   default_local_group: string
   model_strategy: UpstreamSourceModelStrategy
   fixed_models: string[]
@@ -103,6 +112,7 @@ export type UpstreamSourceLocalGroupRule = {
   exclude_keywords: string[]
   monitor?: UpstreamSourceRuleMonitor
   auto_sync?: UpstreamSourceRuleAutoSync
+  auto_priority?: UpstreamSourceRuleAutoPriority
   model_strategy: UpstreamSourceModelStrategy
   fixed_models: string[]
 }
@@ -131,6 +141,9 @@ export type UpstreamSourceMapping = {
   resolved_monitor_interval_minutes: number
   resolved_auto_sync_enabled: boolean
   resolved_auto_sync_interval_minutes: number
+  resolved_auto_priority_enabled: boolean
+  resolved_auto_priority_interval_minutes: number
+  resolved_auto_priority_window_hours: number
   resolved_model_strategy: UpstreamSourceModelStrategy
   resolved_fixed_models: string[]
   last_error: string
@@ -157,6 +170,9 @@ export type UpstreamSourceFormValues = {
   allow_private_ip: boolean
   auto_sync_enabled: boolean
   auto_sync_interval_minutes: number
+  auto_priority_enabled: boolean
+  auto_priority_interval_minutes: number
+  auto_priority_window_hours: number
   default_local_group: string
   model_strategy: UpstreamSourceModelStrategy
   fixed_models: string[]
@@ -206,5 +222,31 @@ export type UpstreamSourceSyncResult = {
   skipped: number
   failed: number
   results: UpstreamSourceMappingSyncResult[]
+  error?: string
+}
+
+export type UpstreamSourceAutoPriorityChannelResult = {
+  mapping_id: number
+  local_channel_id: number
+  old_priority: number
+  new_priority: number
+  computed_priority: number
+  applied: boolean
+  reason?: string
+  effective_rate_multiplier: number
+  cache_adjusted_cost_factor: number
+  effective_cost_multiplier: number
+  effective_price_score: number
+  availability_score: number
+  first_token_score: number
+  final_score: number
+}
+
+export type UpstreamSourceAutoPriorityResult = {
+  source_id: number
+  updated: number
+  skipped: number
+  failed: number
+  results: UpstreamSourceAutoPriorityChannelResult[]
   error?: string
 }

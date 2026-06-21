@@ -280,6 +280,45 @@ func TestBuildUpstreamSourceMappingResponseFallsBackOnInvalidConfig(t *testing.T
 	assert.Equal(t, upstreamSourceModelStrategyAllUpstream, response.ResolvedModelStrategy)
 }
 
+func TestBuildUpstreamSourceMappingResponseIncludesResolvedAutoPriority(t *testing.T) {
+	rate := 1.0
+	mapping := model.UpstreamSourceChannelMapping{
+		SyncEnabled:              true,
+		UpstreamGroupID:          "openai-pro",
+		UpstreamGroupName:        "GPT Pro",
+		UpstreamGroupDescription: "fast pro",
+		UpstreamPlatform:         "openai",
+		DiscoveryStatus:          model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier:  &rate,
+	}
+	rawConfig, err := common.Marshal(map[string]interface{}{
+		"local_group":                    "default",
+		"auto_priority_enabled":          false,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     24,
+		"local_group_rules": []map[string]interface{}{
+			{
+				"name":          "Pro",
+				"local_group":   "pro",
+				"platforms":     []string{"openai"},
+				"name_contains": []string{"pro"},
+				"auto_priority": map[string]interface{}{
+					"enabled":          true,
+					"interval_minutes": 0,
+					"window_hours":     48,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	response := BuildUpstreamSourceMappingResponse(mapping, string(rawConfig))
+
+	assert.True(t, response.ResolvedAutoPriorityEnabled)
+	assert.Equal(t, 0, response.ResolvedAutoPriorityIntervalMinutes)
+	assert.Equal(t, 48, response.ResolvedAutoPriorityWindowHours)
+}
+
 func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)
