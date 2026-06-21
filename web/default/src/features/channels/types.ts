@@ -45,6 +45,8 @@ export const channelMonitorInfoSchema = z.object({
   latest_prompt_tokens: z.number().optional(),
   latest_completion_tokens: z.number().optional(),
   latest_message: z.string().optional(),
+  next_check_at: z.number().optional(),
+  seconds_until_next_check: z.number().optional(),
   seven_day_checks: z.number().default(0),
   seven_day_successes: z.number().default(0),
   seven_day_availability: z.number().nullable().optional(),

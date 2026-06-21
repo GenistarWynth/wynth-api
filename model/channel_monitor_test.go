@@ -236,6 +236,8 @@ func TestGetChannelMonitorDetailReturnsSummaryAndRecentRecords(t *testing.T) {
 	assert.Equal(t, int64(500), detail.Info.LatestLatencyMS)
 	assert.Equal(t, int64(50), detail.Info.LatestEndpointLatencyMS)
 	assert.Equal(t, int64(250), detail.Info.LatestFirstTokenLatencyMS)
+	assert.Equal(t, int64(1305), detail.Info.NextCheckAt)
+	assert.Equal(t, int64(0), detail.Info.SecondsUntilNextCheck)
 	assert.Equal(t, 5, detail.Info.LatestPromptTokens)
 	assert.Equal(t, 15, detail.Info.LatestCompletionTokens)
 	require.Len(t, detail.RecentRecords, 3)

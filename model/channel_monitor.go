@@ -56,6 +56,8 @@ type ChannelMonitorInfo struct {
 	LatestPromptTokens         int      `json:"latest_prompt_tokens,omitempty"`
 	LatestCompletionTokens     int      `json:"latest_completion_tokens,omitempty"`
 	LatestMessage              string   `json:"latest_message,omitempty"`
+	NextCheckAt                int64    `json:"next_check_at,omitempty"`
+	SecondsUntilNextCheck      int64    `json:"seconds_until_next_check,omitempty"`
 	SevenDayChecks             int64    `json:"seven_day_checks"`
 	SevenDaySuccesses          int64    `json:"seven_day_successes"`
 	SevenDayAvailability       *float64 `json:"seven_day_availability,omitempty"`
@@ -318,6 +320,12 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 			info.LatestPromptTokens = log.PromptTokens
 			info.LatestCompletionTokens = log.CompletionTokens
 			info.LatestMessage = log.Message
+			if info.Enabled && info.IntervalMinutes > 0 && log.CheckedAt > 0 {
+				info.NextCheckAt = log.CheckedAt + int64(info.IntervalMinutes)*60
+				if info.NextCheckAt > now {
+					info.SecondsUntilNextCheck = info.NextCheckAt - now
+				}
+			}
 		}
 		if stat, ok := stats[channel.Id]; ok {
 			info.SevenDayChecks = stat.TotalChecks
