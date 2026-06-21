@@ -178,6 +178,23 @@ func TestListDueUpstreamSourcesForAutoPrioritySkipsMetadataMismatch(t *testing.T
 	assert.Empty(t, due)
 }
 
+func TestListDueUpstreamSourcesForAutoPrioritySkipsMissingLocalChannel(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	rate := 0.01
+	mapping := createSyncTestMapping(t, source.Id, "OpenAI", "OpenAI", &rate)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", 999999).Error)
+
+	due, err := ListDueUpstreamSourcesForAutoPriority(2000)
+
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}
+
 func TestListDueUpstreamSourcesForAutoPrioritySkipsMappingLoadFailure(t *testing.T) {
 	failingSource := model.UpstreamSource{
 		Id:         1,
