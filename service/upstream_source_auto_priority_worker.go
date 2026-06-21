@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -14,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/bytedance/gopkg/util/gopool"
-	"gorm.io/gorm"
 )
 
 const (
@@ -27,12 +25,24 @@ var (
 	upstreamSourceAutoPriorityRunning atomic.Bool
 )
 
+type upstreamSourceAutoPriorityMappingLoader func(source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error)
+type upstreamSourceAutoPriorityChannelLoader func(mappings []model.UpstreamSourceChannelMapping) (map[int]model.Channel, error)
+
 func ListDueUpstreamSourcesForAutoPriority(now int64) ([]model.UpstreamSource, error) {
 	var sources []model.UpstreamSource
 	if err := model.DB.Where("status = ?", model.UpstreamSourceStatusEnabled).Order("id").Find(&sources).Error; err != nil {
 		return nil, err
 	}
 
+	return listDueUpstreamSourcesForAutoPriorityFromSources(
+		sources,
+		now,
+		listUpstreamSourceAutoPriorityMappings,
+		loadUpstreamSourceAutoPriorityChannels,
+	), nil
+}
+
+func listDueUpstreamSourcesForAutoPriorityFromSources(sources []model.UpstreamSource, now int64, loadMappings upstreamSourceAutoPriorityMappingLoader, loadChannels upstreamSourceAutoPriorityChannelLoader) []model.UpstreamSource {
 	due := make([]model.UpstreamSource, 0, len(sources))
 	for _, source := range sources {
 		config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
@@ -41,18 +51,61 @@ func ListDueUpstreamSourcesForAutoPriority(now int64) ([]model.UpstreamSource, e
 			continue
 		}
 
-		var mappings []model.UpstreamSourceChannelMapping
-		if err := model.DB.Where("source_id = ?", source.Id).Order("id").Find(&mappings).Error; err != nil {
-			return nil, err
+		mappings, err := loadMappings(source)
+		if err != nil {
+			logger.LogWarn(context.Background(), fmt.Sprintf("upstream source auto-priority: skip source_id=%d mapping query failed: %v", source.Id, err))
+			continue
+		}
+		channels, err := loadChannels(mappings)
+		if err != nil {
+			logger.LogWarn(context.Background(), fmt.Sprintf("upstream source auto-priority: skip source_id=%d channel query failed: %v", source.Id, err))
+			continue
 		}
 		for i := range mappings {
-			if upstreamSourceMappingAutoPriorityDue(source, config, &mappings[i], now) {
+			if upstreamSourceMappingAutoPriorityDue(source, config, &mappings[i], channels, now) {
 				due = append(due, source)
 				break
 			}
 		}
 	}
-	return due, nil
+	return due
+}
+
+func listUpstreamSourceAutoPriorityMappings(source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
+	var mappings []model.UpstreamSourceChannelMapping
+	if err := model.DB.Where("source_id = ?", source.Id).Order("id").Find(&mappings).Error; err != nil {
+		return nil, err
+	}
+	return mappings, nil
+}
+
+func loadUpstreamSourceAutoPriorityChannels(mappings []model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
+	channelIDs := make([]int, 0, len(mappings))
+	seen := make(map[int]struct{}, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.LocalChannelID == 0 {
+			continue
+		}
+		if _, ok := seen[mapping.LocalChannelID]; ok {
+			continue
+		}
+		seen[mapping.LocalChannelID] = struct{}{}
+		channelIDs = append(channelIDs, mapping.LocalChannelID)
+	}
+
+	channelsByID := make(map[int]model.Channel, len(channelIDs))
+	if len(channelIDs) == 0 {
+		return channelsByID, nil
+	}
+
+	var channels []model.Channel
+	if err := model.DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	for _, channel := range channels {
+		channelsByID[channel.Id] = channel
+	}
+	return channelsByID, nil
 }
 
 func (s *UpstreamSourceService) RunDueUpstreamSourceAutoPriority(ctx context.Context, now int64) []dto.UpstreamSourceAutoPriorityResult {
@@ -112,7 +165,7 @@ func runDueUpstreamSourceAutoPriorityOnce() {
 	(&UpstreamSourceService{}).RunDueUpstreamSourceAutoPriority(context.Background(), now)
 }
 
-func upstreamSourceMappingAutoPriorityDue(source model.UpstreamSource, config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping, now int64) bool {
+func upstreamSourceMappingAutoPriorityDue(source model.UpstreamSource, config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping, channels map[int]model.Channel, now int64) bool {
 	resolution := resolveUpstreamSourceRule(config, mapping)
 	if !resolution.SyncEligible || !resolution.AutoPriorityEnabled {
 		return false
@@ -121,11 +174,8 @@ func upstreamSourceMappingAutoPriorityDue(source model.UpstreamSource, config up
 		return false
 	}
 
-	channel, err := loadChannelByID(mapping.LocalChannelID)
-	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			logger.LogWarn(context.Background(), fmt.Sprintf("upstream source auto-priority: load channel_id=%d source_id=%d failed: %v", mapping.LocalChannelID, source.Id, err))
-		}
+	channel, ok := channels[mapping.LocalChannelID]
+	if !ok {
 		return false
 	}
 	settings := channel.GetOtherSettings()

@@ -178,6 +178,108 @@ func TestListDueUpstreamSourcesForAutoPrioritySkipsMetadataMismatch(t *testing.T
 	assert.Empty(t, due)
 }
 
+func TestListDueUpstreamSourcesForAutoPrioritySkipsMappingLoadFailure(t *testing.T) {
+	failingSource := model.UpstreamSource{
+		Id:         1,
+		Status:     model.UpstreamSourceStatusEnabled,
+		SyncConfig: `{"auto_priority_enabled":true,"auto_priority_interval_minutes":0,"auto_priority_window_hours":24}`,
+	}
+	dueSource := model.UpstreamSource{
+		Id:         2,
+		Status:     model.UpstreamSourceStatusEnabled,
+		SyncConfig: `{"auto_priority_enabled":true,"auto_priority_interval_minutes":0,"auto_priority_window_hours":24}`,
+	}
+	mapping := model.UpstreamSourceChannelMapping{
+		Id:                22,
+		SourceID:          dueSource.Id,
+		SyncEnabled:       true,
+		LocalChannelID:    33,
+		UpstreamGroupID:   "OpenAI",
+		UpstreamGroupName: "OpenAI",
+		UpstreamPlatform:  "openai",
+		DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+	}
+	channel := model.Channel{Id: mapping.LocalChannelID, OtherSettings: "{}"}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  dueSource.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+
+	due := listDueUpstreamSourcesForAutoPriorityFromSources(
+		[]model.UpstreamSource{failingSource, dueSource},
+		2000,
+		func(source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
+			if source.Id == failingSource.Id {
+				return nil, errors.New("mapping table locked")
+			}
+			return []model.UpstreamSourceChannelMapping{mapping}, nil
+		},
+		func([]model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
+			return map[int]model.Channel{channel.Id: channel}, nil
+		},
+	)
+
+	require.Len(t, due, 1)
+	assert.Equal(t, dueSource.Id, due[0].Id)
+}
+
+func TestListDueUpstreamSourcesForAutoPriorityBatchLoadsChannels(t *testing.T) {
+	source := model.UpstreamSource{
+		Id:         1,
+		Status:     model.UpstreamSourceStatusEnabled,
+		SyncConfig: `{"auto_priority_enabled":true,"auto_priority_interval_minutes":0,"auto_priority_window_hours":24}`,
+	}
+	mappings := []model.UpstreamSourceChannelMapping{
+		{
+			Id:                11,
+			SourceID:          source.Id,
+			SyncEnabled:       true,
+			LocalChannelID:    101,
+			UpstreamGroupID:   "OpenAI",
+			UpstreamGroupName: "OpenAI",
+			UpstreamPlatform:  "openai",
+			DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+		},
+		{
+			Id:                12,
+			SourceID:          source.Id,
+			SyncEnabled:       true,
+			LocalChannelID:    102,
+			UpstreamGroupID:   "Claude",
+			UpstreamGroupName: "Claude",
+			UpstreamPlatform:  "openai",
+			DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+		},
+	}
+	channels := make(map[int]model.Channel)
+	for _, mapping := range mappings {
+		channel := model.Channel{Id: mapping.LocalChannelID, OtherSettings: "{}"}
+		channel.SetOtherSettings(dto.ChannelOtherSettings{
+			GeneratedByUpstreamSourceID:  source.Id,
+			GeneratedByUpstreamMappingID: mapping.Id,
+		})
+		channels[channel.Id] = channel
+	}
+	loadCalls := 0
+
+	due := listDueUpstreamSourcesForAutoPriorityFromSources(
+		[]model.UpstreamSource{source},
+		2000,
+		func(model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error) {
+			return mappings, nil
+		},
+		func(loadedMappings []model.UpstreamSourceChannelMapping) (map[int]model.Channel, error) {
+			loadCalls++
+			assert.ElementsMatch(t, []int{101, 102}, []int{loadedMappings[0].LocalChannelID, loadedMappings[1].LocalChannelID})
+			return channels, nil
+		},
+	)
+
+	require.Len(t, due, 1)
+	assert.Equal(t, source.Id, due[0].Id)
+	assert.Equal(t, 1, loadCalls)
+}
+
 func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(5_000_000)
