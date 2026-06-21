@@ -37,6 +37,7 @@ export type ChannelInfo = z.infer<typeof channelInfoSchema>
 export const channelMonitorInfoSchema = z.object({
   enabled: z.boolean().default(false),
   interval_minutes: z.number().default(10),
+  latest_model: z.string().optional(),
   latest_status: z.enum(['success', 'failed', 'degraded', 'error']).optional(),
   latest_checked_at: z.number().optional(),
   latest_latency_ms: z.number().optional(),

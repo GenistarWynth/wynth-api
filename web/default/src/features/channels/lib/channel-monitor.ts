@@ -29,6 +29,7 @@ export interface MonitorHistoryBar {
   status: MonitorVisualStatus
   tone: MonitorHistoryTone
   heightPercent: number
+  model: string
   latencyMS: number
   endpointLatencyMS: number
   firstTokenLatencyMS: number
@@ -85,6 +86,7 @@ export function buildMonitorHistoryBars(
       status,
       tone: monitorHistoryTone(status),
       heightPercent,
+      model: record.model ?? '',
       latencyMS: record.latency_ms ?? 0,
       endpointLatencyMS: record.endpoint_latency_ms ?? 0,
       firstTokenLatencyMS: record.first_token_latency_ms ?? 0,
@@ -104,6 +106,7 @@ export function buildMonitorHistoryBars(
       status: 'empty',
       tone: 'empty',
       heightPercent: 25,
+      model: '',
       latencyMS: 0,
       endpointLatencyMS: 0,
       firstTokenLatencyMS: 0,
