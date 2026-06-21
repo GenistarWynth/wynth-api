@@ -532,6 +532,10 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
           <div className='flex w-fit flex-col gap-0.5'>
             <ModelBadge
               modelName={modelInfo.name}
+              upstreamModel={modelInfo.upstreamModel}
+              actualResponseModel={modelInfo.actualResponseModel}
+              actualResponseModelSource={modelInfo.actualResponseModelSource}
+              secondaryActualModel={modelInfo.secondaryActualModel}
               actualModel={modelInfo.actualModel}
             />
           </div>

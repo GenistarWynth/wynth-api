@@ -29,6 +29,10 @@ import { StatusBadge } from '@/components/status-badge'
 
 interface ModelBadgeProps {
   modelName: string
+  upstreamModel?: string
+  actualResponseModel?: string
+  actualResponseModelSource?: string
+  secondaryActualModel?: string
   actualModel?: string
   className?: string
 }
@@ -124,8 +128,13 @@ function ModelBadgeContent(props: ModelBadgeProps) {
 
 export function ModelBadge(props: ModelBadgeProps) {
   const { t } = useTranslation()
+  const upstreamModel = props.upstreamModel ?? props.actualModel
+  const isMapped = Boolean(
+    upstreamModel && upstreamModel !== '' && upstreamModel !== props.modelName
+  )
+  const hasActualMismatch = Boolean(props.secondaryActualModel)
 
-  if (!props.actualModel) {
+  if (!isMapped && !hasActualMismatch) {
     return <ModelBadgeContent {...props} />
   }
 
@@ -133,11 +142,21 @@ export function ModelBadge(props: ModelBadgeProps) {
     <Popover>
       <PopoverTrigger
         render={
-          <button type='button' className='inline-flex items-center gap-1' />
+          <button
+            type='button'
+            className='flex max-w-full flex-col items-start gap-0.5 text-left'
+          />
         }
       >
-        <ModelBadgeContent {...props} />
-        <Route className='text-muted-foreground size-3 shrink-0' />
+        <div className='flex min-w-0 items-center gap-1'>
+          <ModelBadgeContent {...props} />
+          {isMapped && <Route className='text-muted-foreground size-3 shrink-0' />}
+        </div>
+        {hasActualMismatch && (
+          <span className='text-muted-foreground max-w-full truncate pl-1 font-mono text-[11px] leading-none'>
+            {'\u21b3'} {props.secondaryActualModel}
+          </span>
+        )}
       </PopoverTrigger>
       <PopoverContent className='w-72'>
         <div className='space-y-2'>
@@ -149,14 +168,36 @@ export function ModelBadge(props: ModelBadgeProps) {
               {props.modelName}
             </span>
           </div>
-          <div className='flex items-start justify-between gap-3'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Actual Model:')}
-            </span>
-            <span className='truncate font-mono text-xs font-medium'>
-              {props.actualModel}
-            </span>
-          </div>
+          {upstreamModel && (
+            <div className='flex items-start justify-between gap-3'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Upstream Model:')}
+              </span>
+              <span className='truncate font-mono text-xs font-medium'>
+                {upstreamModel}
+              </span>
+            </div>
+          )}
+          {props.actualResponseModel && (
+            <div className='flex items-start justify-between gap-3'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Actual Response Model:')}
+              </span>
+              <span className='truncate font-mono text-xs font-medium'>
+                {props.actualResponseModel}
+              </span>
+            </div>
+          )}
+          {props.actualResponseModelSource && (
+            <div className='flex items-start justify-between gap-3'>
+              <span className='text-muted-foreground text-xs'>
+                {t('Detection Source:')}
+              </span>
+              <span className='truncate font-mono text-xs font-medium'>
+                {props.actualResponseModelSource}
+              </span>
+            </div>
+          )}
         </div>
       </PopoverContent>
     </Popover>
