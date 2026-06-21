@@ -274,7 +274,7 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 
 	require.True(t, response.Success, response.Message)
 	assert.True(t, response.Data.AutoPriorityEnabled)
-	assert.Equal(t, 5, response.Data.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 3, response.Data.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 168, response.Data.AutoPriorityWindowHours)
 	require.Len(t, response.Data.LocalGroupRules, 1)
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority)
@@ -290,7 +290,7 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	var syncConfig map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
 	assert.Equal(t, true, syncConfig["auto_priority_enabled"])
-	assert.Equal(t, float64(5), syncConfig["auto_priority_interval_minutes"])
+	assert.Equal(t, float64(3), syncConfig["auto_priority_interval_minutes"])
 	assert.Equal(t, float64(168), syncConfig["auto_priority_window_hours"])
 	require.Contains(t, syncConfig, "local_group_rules")
 	rules, ok := syncConfig["local_group_rules"].([]any)
@@ -343,6 +343,22 @@ func TestUpstreamSourceAPICreatePersistsExplicitZeroAutoPriorityInterval(t *test
 	require.True(t, updateResponse.Success, updateResponse.Message)
 	assert.Equal(t, 0, updateResponse.Data.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 168, updateResponse.Data.AutoPriorityWindowHours)
+}
+
+func TestChannelAutoPriorityScoreSerializesZeroValues(t *testing.T) {
+	snapshot := dto.ChannelOtherSettings{
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			OldPriority: 0,
+			NewPriority: 0,
+			Applied:     false,
+		},
+	}
+
+	raw := string(mustMarshalUpstreamSourceAPITest(t, snapshot))
+
+	assert.Contains(t, raw, "\"old_priority\":0")
+	assert.Contains(t, raw, "\"new_priority\":0")
+	assert.Contains(t, raw, "\"applied\":false")
 }
 
 func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) {

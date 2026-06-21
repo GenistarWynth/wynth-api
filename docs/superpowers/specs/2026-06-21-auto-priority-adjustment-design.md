@@ -138,7 +138,8 @@ Defaults:
 - metrics window: 24 hours
 - maximum metrics window: 168 hours
 - interval `0`: due on every worker tick, intended for debugging/manual local use
-- negative intervals/windows normalize to defaults
+- positive intervals are preserved verbatim; only negative intervals normalize to the 30 minute default
+- negative windows normalize to defaults
 
 ## Score Model
 

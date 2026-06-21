@@ -495,8 +495,6 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 		config.AutoPriorityIntervalMinutes = 30
 	case config.AutoPriorityIntervalMinutes == 0:
 		config.AutoPriorityIntervalMinutes = 0
-	case config.AutoPriorityIntervalMinutes < 5:
-		config.AutoPriorityIntervalMinutes = 5
 	}
 	switch {
 	case config.AutoPriorityWindowHours <= 0:

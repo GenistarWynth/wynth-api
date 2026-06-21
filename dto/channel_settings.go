@@ -62,24 +62,24 @@ type ChannelOtherSettings struct {
 
 type ChannelAutoPriorityScore struct {
 	Version                 string  `json:"version,omitempty"`
-	ComputedAt              int64   `json:"computed_at,omitempty"`
-	WindowStart             int64   `json:"window_start,omitempty"`
-	WindowEnd               int64   `json:"window_end,omitempty"`
+	ComputedAt              int64   `json:"computed_at"`
+	WindowStart             int64   `json:"window_start"`
+	WindowEnd               int64   `json:"window_end"`
 	Cohort                  string  `json:"cohort,omitempty"`
-	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier,omitempty"`
-	CacheAdjustedCostFactor float64 `json:"cache_adjusted_cost_factor,omitempty"`
-	EffectiveCostMultiplier float64 `json:"effective_cost_multiplier,omitempty"`
-	EffectivePriceScore     float64 `json:"effective_price_score,omitempty"`
-	AvailabilityScore       float64 `json:"availability_score,omitempty"`
-	FirstTokenScore         float64 `json:"first_token_score,omitempty"`
-	FinalScore              float64 `json:"final_score,omitempty"`
-	OldPriority             int64   `json:"old_priority,omitempty"`
-	NewPriority             int64   `json:"new_priority,omitempty"`
-	Applied                 bool    `json:"applied,omitempty"`
+	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier"`
+	CacheAdjustedCostFactor float64 `json:"cache_adjusted_cost_factor"`
+	EffectiveCostMultiplier float64 `json:"effective_cost_multiplier"`
+	EffectivePriceScore     float64 `json:"effective_price_score"`
+	AvailabilityScore       float64 `json:"availability_score"`
+	FirstTokenScore         float64 `json:"first_token_score"`
+	FinalScore              float64 `json:"final_score"`
+	OldPriority             int64   `json:"old_priority"`
+	NewPriority             int64   `json:"new_priority"`
+	Applied                 bool    `json:"applied"`
 	Reason                  string  `json:"reason,omitempty"`
-	UsageLogCount           int64   `json:"usage_log_count,omitempty"`
-	MonitorCheckCount       int64   `json:"monitor_check_count,omitempty"`
-	FirstTokenSampleCount   int64   `json:"first_token_sample_count,omitempty"`
+	UsageLogCount           int64   `json:"usage_log_count"`
+	MonitorCheckCount       int64   `json:"monitor_check_count"`
+	FirstTokenSampleCount   int64   `json:"first_token_sample_count"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

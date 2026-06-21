@@ -526,8 +526,6 @@ func normalizeUpstreamSourceAutoPriorityInterval(intervalMinutes int) int {
 		return upstreamSourceAutoPriorityDefaultIntervalMinutes
 	case intervalMinutes == 0:
 		return 0
-	case intervalMinutes < 5:
-		return 5
 	default:
 		return intervalMinutes
 	}

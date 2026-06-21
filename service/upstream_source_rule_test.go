@@ -95,7 +95,7 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, config.AutoPriorityEnabled)
-	assert.Equal(t, 5, config.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 3, config.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 168, config.AutoPriorityWindowHours)
 	require.Len(t, config.LocalGroupRules, 1)
 	rule := config.LocalGroupRules[0]
