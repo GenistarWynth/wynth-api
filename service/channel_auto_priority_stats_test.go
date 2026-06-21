@@ -140,6 +140,34 @@ func TestBuildAutoPriorityUsageStats(t *testing.T) {
 		assert.Equal(t, int64(0), stats.AverageFirstTokenLatencyMS)
 	})
 
+	t.Run("keeps first token latency for zero denominator real logs without adding cost", func(t *testing.T) {
+		statsByChannel := buildAutoPriorityUsageStatsFromLogs([]model.Log{
+			{
+				CreatedAt: 150,
+				Type:      model.LogTypeConsume,
+				ChannelId: 4,
+				Content:   "real request",
+				Other: mustAutoPriorityOtherJSON(t, map[string]interface{}{
+					"input_tokens_total": 0,
+					"frt":                222,
+				}),
+			},
+		}, 100)
+
+		require.Len(t, statsByChannel, 1)
+		stats, ok := statsByChannel[4]
+		require.True(t, ok)
+		assert.Equal(t, 4, stats.ChannelID)
+		assert.Equal(t, int64(100), stats.WindowStart)
+		assert.Equal(t, int64(1), stats.UsageLogCount)
+		assert.InDelta(t, 0.0, stats.NormalCostUnits, 0.0001)
+		assert.InDelta(t, 0.0, stats.AdjustedCostUnits, 0.0001)
+		assert.InDelta(t, 1.0, stats.CacheAdjustedCostFactor, 0.0001)
+		assert.Equal(t, int64(1), stats.FirstTokenSampleCount)
+		assert.Equal(t, int64(222), stats.FirstTokenLatencyTotalMS)
+		assert.Equal(t, int64(222), stats.AverageFirstTokenLatencyMS)
+	})
+
 	t.Run("returns empty map for empty or invalid channel ids", func(t *testing.T) {
 		statsByChannel, err := CollectAutoPriorityUsageStats([]int{}, 100)
 		require.NoError(t, err)
@@ -148,5 +176,63 @@ func TestBuildAutoPriorityUsageStats(t *testing.T) {
 		statsByChannel, err = CollectAutoPriorityUsageStats([]int{0, -1}, 100)
 		require.NoError(t, err)
 		assert.Empty(t, statsByChannel)
+	})
+
+	t.Run("collects neutral buckets for requested channels without usable logs", func(t *testing.T) {
+		channelID := 51
+		otherChannelID := 52
+		require.NoError(t, model.LOG_DB.Exec("DELETE FROM logs").Error)
+		t.Cleanup(func() {
+			_ = model.LOG_DB.Exec("DELETE FROM logs").Error
+		})
+
+		require.NoError(t, model.LOG_DB.Create([]model.Log{
+			{
+				CreatedAt: 120,
+				Type:      model.LogTypeConsume,
+				ChannelId: channelID,
+				Content:   "模型测试",
+				Other: mustAutoPriorityOtherJSON(t, map[string]interface{}{
+					"input_tokens_total": 1000,
+					"cache_tokens":       100,
+					"cache_ratio":        0.1,
+				}),
+			},
+			{
+				CreatedAt: 130,
+				Type:      model.LogTypeConsume,
+				ChannelId: otherChannelID,
+				Content:   "real request",
+				Other:     `{"input_tokens_total":`,
+			},
+		}).Error)
+
+		statsByChannel, err := CollectAutoPriorityUsageStats([]int{channelID, otherChannelID}, 100)
+		require.NoError(t, err)
+		require.Len(t, statsByChannel, 2)
+
+		channelStats, ok := statsByChannel[channelID]
+		require.True(t, ok)
+		assert.Equal(t, channelID, channelStats.ChannelID)
+		assert.Equal(t, int64(100), channelStats.WindowStart)
+		assert.Equal(t, int64(0), channelStats.UsageLogCount)
+		assert.InDelta(t, 0.0, channelStats.NormalCostUnits, 0.0001)
+		assert.InDelta(t, 0.0, channelStats.AdjustedCostUnits, 0.0001)
+		assert.InDelta(t, 1.0, channelStats.CacheAdjustedCostFactor, 0.0001)
+		assert.Equal(t, int64(0), channelStats.FirstTokenSampleCount)
+		assert.Equal(t, int64(0), channelStats.FirstTokenLatencyTotalMS)
+		assert.Equal(t, int64(0), channelStats.AverageFirstTokenLatencyMS)
+
+		otherStats, ok := statsByChannel[otherChannelID]
+		require.True(t, ok)
+		assert.Equal(t, otherChannelID, otherStats.ChannelID)
+		assert.Equal(t, int64(100), otherStats.WindowStart)
+		assert.Equal(t, int64(0), otherStats.UsageLogCount)
+		assert.InDelta(t, 0.0, otherStats.NormalCostUnits, 0.0001)
+		assert.InDelta(t, 0.0, otherStats.AdjustedCostUnits, 0.0001)
+		assert.InDelta(t, 1.0, otherStats.CacheAdjustedCostFactor, 0.0001)
+		assert.Equal(t, int64(0), otherStats.FirstTokenSampleCount)
+		assert.Equal(t, int64(0), otherStats.FirstTokenLatencyTotalMS)
+		assert.Equal(t, int64(0), otherStats.AverageFirstTokenLatencyMS)
 	})
 }

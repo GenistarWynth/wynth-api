@@ -37,10 +37,14 @@ type autoPriorityUsageLogOther struct {
 }
 
 func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error) {
+	statsByChannel := make(map[int]AutoPriorityUsageStats)
 	validChannelIDs := make([]int, 0, len(channelIDs))
 	for _, channelID := range channelIDs {
 		if channelID > 0 {
 			validChannelIDs = append(validChannelIDs, channelID)
+			if _, exists := statsByChannel[channelID]; !exists {
+				statsByChannel[channelID] = newNeutralAutoPriorityUsageStats(channelID, windowStart)
+			}
 		}
 	}
 	if len(validChannelIDs) == 0 {
@@ -57,7 +61,10 @@ func CollectAutoPriorityUsageStats(channelIDs []int, windowStart int64) (map[int
 		return nil, err
 	}
 
-	return buildAutoPriorityUsageStatsFromLogs(logs, windowStart), nil
+	for channelID, stats := range buildAutoPriorityUsageStatsFromLogs(logs, windowStart) {
+		statsByChannel[channelID] = stats
+	}
+	return statsByChannel, nil
 }
 
 func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) map[int]AutoPriorityUsageStats {
@@ -104,6 +111,15 @@ func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) ma
 			completionRatio = 1
 		}
 		normalCost := float64(inputTotal) + float64(completionTokens)*completionRatio
+		if normalCost <= 0 {
+			if other.FRT > 0 {
+				stats.FirstTokenSampleCount++
+				stats.FirstTokenLatencyTotalMS += int64(math.Round(other.FRT))
+			}
+			statsByChannel[log.ChannelId] = stats
+			continue
+		}
+
 		stats.NormalCostUnits += normalCost
 
 		cacheReadTokens := clampToZero(other.CacheTokens)
@@ -141,6 +157,14 @@ func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) ma
 		statsByChannel[channelID] = stats
 	}
 	return statsByChannel
+}
+
+func newNeutralAutoPriorityUsageStats(channelID int, windowStart int64) AutoPriorityUsageStats {
+	return AutoPriorityUsageStats{
+		ChannelID:               channelID,
+		WindowStart:             windowStart,
+		CacheAdjustedCostFactor: 1,
+	}
 }
 
 func parseAutoPriorityUsageLogOther(raw string) (autoPriorityUsageLogOther, bool) {
