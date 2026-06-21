@@ -289,7 +289,10 @@ export const STATIC_I18N_KEYS = [
   'Payment page opened',
 
   // Upstream model updates
-  'Upstream Model Updates',
+  'Model List Updates',
+  'Model Updates',
+  'Detect All Model Updates',
+  'Apply All Model Updates',
   'Sync Fields',
   'Add Models',
   'Remove Models',

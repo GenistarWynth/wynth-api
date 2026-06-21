@@ -256,7 +256,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
-          {/* Detect Upstream Updates (only for fetchable channel types) */}
+          {/* Detect model list updates (only for fetchable channel types) */}
           {MODEL_FETCHABLE_TYPES.has(channel.type) && (
             <DropdownMenuItem
               onClick={() => {
@@ -276,7 +276,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
                 }
               }}
             >
-              {t('Upstream Updates')}
+              {t('Model Updates')}
               <DropdownMenuShortcut>
                 <RefreshCw size={16} />
               </DropdownMenuShortcut>
