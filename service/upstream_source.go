@@ -414,8 +414,11 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	if existingChannel != nil {
 		rawKey = strings.TrimSpace(existingChannel.Key)
 	}
-	if rawKey == "" {
-		key, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
+	var ensuredKey UpstreamKey
+	ensuredKeyCreated := false
+	ensuredKeyLoaded := false
+	if upstreamKeyID != "" {
+		key, created, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
 		if err != nil {
 			errText := SanitizeUpstreamSourceError(err)
 			_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
@@ -432,10 +435,43 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 			return result, nil
 		}
 
+		ensuredKey = key
+		ensuredKeyCreated = created
+		ensuredKeyLoaded = true
 		upstreamKeyID = strings.TrimSpace(key.ID)
-		rawKey = strings.TrimSpace(key.Key)
-		if rawKey == "" && mapping.UpstreamKeyID != "" && mapping.LocalChannelID == 0 {
-			recoveredKey, err := recoverUpstreamSourceKeyForChannelCreate(ctx, adapter, source, mapping, key)
+		if keyValue := strings.TrimSpace(key.Key); keyValue != "" {
+			rawKey = keyValue
+		} else if created {
+			rawKey = ""
+		}
+	}
+	if rawKey == "" {
+		if !ensuredKeyLoaded {
+			key, created, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
+			if err != nil {
+				errText := SanitizeUpstreamSourceError(err)
+				_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+				result.Status = model.UpstreamMappingSyncStatusFailed
+				result.Error = errText
+				return result, nil
+			}
+			if key.ID == "" {
+				err := errors.New("upstream key ID is missing")
+				errText := SanitizeUpstreamSourceError(err)
+				_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+				result.Status = model.UpstreamMappingSyncStatusFailed
+				result.Error = errText
+				return result, nil
+			}
+
+			ensuredKey = key
+			ensuredKeyCreated = created
+			ensuredKeyLoaded = true
+			upstreamKeyID = strings.TrimSpace(key.ID)
+			rawKey = strings.TrimSpace(key.Key)
+		}
+		if rawKey == "" && mapping.UpstreamKeyID != "" && mapping.LocalChannelID == 0 && !ensuredKeyCreated {
+			recoveredKey, err := recoverUpstreamSourceKeyForChannelCreate(ctx, adapter, source, mapping, ensuredKey)
 			if err != nil {
 				errText := SanitizeUpstreamSourceError(err)
 				_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
@@ -546,22 +582,24 @@ func isGeneratedChannelOwnedByMapping(channel *model.Channel, source *model.Upst
 	return channelName == legacyUpstreamSourceGeneratedChannelName(source, mapping) && actualTag == expectedTag
 }
 
-func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) (UpstreamKey, error) {
+func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) (UpstreamKey, bool, error) {
 	name := upstreamSourceKeyName(source, mapping)
 	if strings.TrimSpace(mapping.UpstreamKeyID) == "" {
 		if key, found := findReusableUpstreamSourceKey(ctx, adapter, source, mapping, name); found {
-			return key, nil
+			return key, false, nil
 		}
-		return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
+		key, err := adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
+		return key, true, err
 	}
 	key, err := adapter.UpdateKey(ctx, source, mapping.UpstreamKeyID, mapping.UpstreamGroupID, name)
 	if err == nil {
-		return key, nil
+		return key, false, nil
 	}
 	if !isUpstreamKeyNotFoundError(err) {
-		return UpstreamKey{}, err
+		return UpstreamKey{}, false, err
 	}
-	return adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
+	key, err = adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
+	return key, true, err
 }
 
 func findReusableUpstreamSourceKey(ctx context.Context, adapter UpstreamSourceAdapter, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, name string) (UpstreamKey, bool) {
