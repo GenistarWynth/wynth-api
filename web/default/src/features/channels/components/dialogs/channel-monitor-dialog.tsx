@@ -235,7 +235,7 @@ function MonitorHistory({
 
 function ChannelMonitorSkeleton() {
   return (
-    <div className='dark border-border bg-card text-card-foreground flex flex-col gap-5 rounded-2xl border p-5 shadow-2xl'>
+    <div className='border-border bg-card text-card-foreground flex flex-col gap-5 rounded-2xl border p-5 shadow-2xl'>
       <div className='flex items-start justify-between gap-3'>
         <div className='flex items-start gap-3'>
           <Skeleton className='size-12 rounded-lg' />
@@ -287,7 +287,7 @@ export function ChannelMonitorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='dark max-h-[calc(100vh-2rem)] overflow-y-auto border-0 bg-transparent p-0 text-card-foreground shadow-none ring-0 sm:max-w-[520px]'>
+      <DialogContent className='max-h-[calc(100vh-2rem)] overflow-y-auto p-0 text-card-foreground sm:max-w-[520px]'>
         <DialogHeader className='sr-only'>
           <DialogTitle>{t('Channel Monitor')}</DialogTitle>
           <DialogDescription>{channel?.name ?? t('No data')}</DialogDescription>
@@ -298,7 +298,7 @@ export function ChannelMonitorDialog({
             <ChannelMonitorSkeleton />
           </div>
         ) : query.isError ? (
-          <div className='dark rounded-2xl border border-border bg-card p-4 text-card-foreground shadow-2xl'>
+          <div className='rounded-2xl border border-border bg-card p-4 text-card-foreground shadow-2xl'>
             <Empty className='border-border/60 rounded-lg border py-8'>
               <EmptyHeader>
                 <EmptyTitle>{t('Failed to load monitor data')}</EmptyTitle>
