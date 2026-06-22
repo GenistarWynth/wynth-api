@@ -27,6 +27,9 @@ import type {
   AccountPoolProxyStatus,
 } from '../types'
 
+const MODEL_MAPPING_ERROR =
+  'Model mapping must be a JSON object with string values'
+
 export type AccountPoolFormValues = {
   name: string
   platform: AccountPoolPlatform | string
@@ -207,14 +210,17 @@ export function buildProxyPayload(
 }
 
 function parseModelMapping(value: string): Record<string, string> {
-  if (!value.trim()) return {}
+  const text = value.trim()
+  if (!text) return {}
 
   try {
-    const parsed: unknown = JSON.parse(value)
-    if (!isStringRecord(parsed)) return {}
+    const parsed: unknown = JSON.parse(text)
+    if (!isStringRecord(parsed)) {
+      throw new Error(MODEL_MAPPING_ERROR)
+    }
     return parsed
   } catch {
-    return {}
+    throw new Error(MODEL_MAPPING_ERROR)
   }
 }
 

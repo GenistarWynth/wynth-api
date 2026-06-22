@@ -84,6 +84,41 @@ describe('account pool form helpers', () => {
     )
   })
 
+  test('rejects invalid model mapping text instead of silently dropping it', () => {
+    assert.throws(
+      () =>
+        buildAccountPayload({
+          ...emptyAccountForm(),
+          name: 'Mapped account',
+          model_mapping_text: '{"gpt-5":',
+        }),
+      /Model mapping must be a JSON object with string values/
+    )
+
+    assert.throws(
+      () =>
+        buildAccountPayload({
+          ...emptyAccountForm(),
+          name: 'Mapped account',
+          model_mapping_text: '{"gpt-5": 5}',
+        }),
+      /Model mapping must be a JSON object with string values/
+    )
+  })
+
+  test('preserves valid string-to-string model mappings', () => {
+    assert.deepEqual(
+      buildAccountPayload({
+        ...emptyAccountForm(),
+        name: 'Mapped account',
+        model_mapping_text: '{"gpt-5":"upstream-gpt-5"}',
+      }).model_mapping,
+      {
+        'gpt-5': 'upstream-gpt-5',
+      }
+    )
+  })
+
   test('normalizes model list text with commas, newlines, and duplicates', () => {
     assert.deepEqual(normalizeModelListText('gpt-5, gpt-4\ngpt-5'), [
       'gpt-5',
