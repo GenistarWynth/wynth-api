@@ -173,17 +173,33 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 			Type:   "api_key",
 			APIKey: "sk-account-secret",
 		},
+		TokenState: dto.AccountPoolTokenStateRequest{
+			AccessToken:  "account-access-secret",
+			RefreshToken: "account-refresh-secret",
+			Version:      1,
+		},
 	})
 	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
 	assert.True(t, accountResult.Response.Data.HasCredential)
+	assert.True(t, accountResult.Response.Data.HasToken)
+
+	var storedAccount model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&storedAccount, accountResult.Response.Data.Id).Error)
 
 	listResult := accountPoolAPIRequest[[]dto.AccountPoolAccountResponse](t, router, http.MethodGet, "/api/account_pools/"+strconv.Itoa(poolResult.Response.Data.Id)+"/accounts", nil)
 
 	require.True(t, listResult.Response.Success, listResult.Response.Message)
 	require.Len(t, listResult.Response.Data, 1)
 	assert.True(t, listResult.Response.Data[0].HasCredential)
+	assert.True(t, listResult.Response.Data[0].HasToken)
 	raw := string(listResult.Raw)
 	assert.NotContains(t, raw, "sk-account-secret")
+	assert.NotContains(t, raw, "account-access-secret")
+	assert.NotContains(t, raw, "account-refresh-secret")
+	assert.NotContains(t, raw, storedAccount.CredentialConfig)
+	assert.NotContains(t, raw, storedAccount.TokenState)
+	assert.NotContains(t, raw, "ciphertext")
+	assert.NotContains(t, raw, "nonce")
 	assert.NotContains(t, raw, "credential_preview")
 }
 
@@ -244,7 +260,11 @@ func TestAccountPoolAPIProxyRedaction(t *testing.T) {
 	require.True(t, listResult.Response.Success, listResult.Response.Message)
 	require.Len(t, listResult.Response.Data, 1)
 	assert.True(t, listResult.Response.Data[0].HasPassword)
-	assert.NotContains(t, string(listResult.Raw), "proxy-password-secret")
+	raw := string(listResult.Raw)
+	assert.NotContains(t, raw, "proxy-password-secret")
+	assert.NotContains(t, raw, stored.Password)
+	assert.NotContains(t, raw, "ciphertext")
+	assert.NotContains(t, raw, "nonce")
 }
 
 func TestAccountPoolAPIRejectsMissingRequiredFields(t *testing.T) {

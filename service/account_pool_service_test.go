@@ -68,6 +68,44 @@ func TestAccountPoolServiceCreatesDraftBindingForDisabledChannel(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 }
 
+func TestAccountPoolServiceCreateBindingRejectsNonPhaseOneStatus(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+
+	_, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+		Status:    "enabled",
+	})
+
+	require.ErrorContains(t, err, "account pool binding status must be draft or disabled in phase 1")
+}
+
+func TestAccountPoolServiceDeletePoolDisablesBindingsAndPreservesChannelStatus(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, service.DeletePool(pool.Id))
+
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
+
+	var reloadedBinding model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&reloadedBinding, binding.Id).Error)
+	assert.Equal(t, model.AccountPoolBindingStatusDisabled, reloadedBinding.Status)
+	assert.NotZero(t, reloadedBinding.UpdatedTime)
+}
+
 func TestAccountPoolServiceProxyCreateListRedactsPassword(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

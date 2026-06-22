@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"gorm.io/gorm"
 )
 
 type AccountPoolService struct{}
@@ -46,6 +47,7 @@ type AccountPoolBindingCreateParams struct {
 	ModelPolicy         AccountPoolModelPolicy
 	SchedulePolicy      string
 	AccountRetryTimes   int
+	Status              string
 }
 
 type AccountPoolProxyCreateParams struct {
@@ -169,7 +171,23 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 }
 
 func (s AccountPoolService) DeletePool(id int) error {
-	return model.DB.Model(&model.AccountPool{}).Where("id = ?", id).Update("status", model.AccountPoolStatusDeleted).Error
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		now := common.GetTimestamp()
+		if err := tx.Model(&model.AccountPool{}).
+			Where("id = ? AND status <> ?", id, model.AccountPoolStatusDeleted).
+			Updates(map[string]any{
+				"status":       model.AccountPoolStatusDeleted,
+				"updated_time": now,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.AccountPoolChannelBinding{}).
+			Where("pool_id = ?", id).
+			Updates(map[string]any{
+				"status":       model.AccountPoolBindingStatusDisabled,
+				"updated_time": now,
+			}).Error
+	})
 }
 
 func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
@@ -244,6 +262,9 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if _, err := getAccountPoolExistingPool(params.PoolID); err != nil {
 		return AccountPoolBindingView{}, err
 	}
+	if err := validateAccountPoolBindingStatus(params.Status); err != nil {
+		return AccountPoolBindingView{}, err
+	}
 	var channel model.Channel
 	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
 		return AccountPoolBindingView{}, err
@@ -259,6 +280,10 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
+	status := strings.TrimSpace(params.Status)
+	if status == "" {
+		status = model.AccountPoolBindingStatusDraft
+	}
 	binding := model.AccountPoolChannelBinding{
 		PoolID:              params.PoolID,
 		ChannelID:           params.ChannelID,
@@ -266,7 +291,7 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 		ModelPolicy:         modelPolicy,
 		SchedulePolicy:      params.SchedulePolicy,
 		AccountRetryTimes:   params.AccountRetryTimes,
-		Status:              model.AccountPoolBindingStatusDraft,
+		Status:              status,
 	}
 	if err := model.DB.Create(&binding).Error; err != nil {
 		return AccountPoolBindingView{}, err
@@ -357,6 +382,14 @@ func normalizeAccountPoolPlatform(platform string) (string, error) {
 		return "", errors.New("unsupported account pool platform")
 	}
 	return platform, nil
+}
+
+func validateAccountPoolBindingStatus(status string) error {
+	status = strings.TrimSpace(status)
+	if status == "" || status == model.AccountPoolBindingStatusDraft || status == model.AccountPoolBindingStatusDisabled {
+		return nil
+	}
+	return errors.New("account pool binding status must be draft or disabled in phase 1")
 }
 
 func getAccountPoolExistingPool(poolID int) (model.AccountPool, error) {
