@@ -14,6 +14,8 @@ import (
 const secretEnvelopeVersion = 1
 const secretEnvelopeAlgorithm = "AES-256-GCM"
 
+var ErrUnstableSecretEnvelopeKey = errors.New("account pool secret encryption requires CRYPTO_SECRET or SESSION_SECRET to be set")
+
 type SecretEnvelope struct {
 	Version    int    `json:"v"`
 	Algorithm  string `json:"alg"`
@@ -105,6 +107,10 @@ func DecryptSecretString(envelope string) (string, error) {
 }
 
 func newSecretEnvelopeBlock() (cipher.Block, error) {
+	if !CryptoSecretStable {
+		return nil, ErrUnstableSecretEnvelopeKey
+	}
+
 	sum := sha256.Sum256([]byte("wynth-account-pool:" + CryptoSecret))
 	return aes.NewCipher(sum[:])
 }

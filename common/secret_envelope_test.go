@@ -9,9 +9,7 @@ import (
 )
 
 func TestSecretEnvelopeRoundTripDoesNotExposePlaintext(t *testing.T) {
-	oldSecret := CryptoSecret
-	CryptoSecret = "account-pool-secret-for-tests"
-	t.Cleanup(func() { CryptoSecret = oldSecret })
+	setStableCryptoSecretForEnvelopeTest(t, "account-pool-secret-for-tests")
 
 	encrypted, err := EncryptSecretString("sk-test-secret")
 	require.NoError(t, err)
@@ -25,12 +23,18 @@ func TestSecretEnvelopeRoundTripDoesNotExposePlaintext(t *testing.T) {
 
 func TestSecretEnvelopeRejectsWrongKey(t *testing.T) {
 	oldSecret := CryptoSecret
+	oldStable := CryptoSecretStable
 	CryptoSecret = "first-secret"
+	CryptoSecretStable = true
+	t.Cleanup(func() {
+		CryptoSecret = oldSecret
+		CryptoSecretStable = oldStable
+	})
+
 	encrypted, err := EncryptSecretString("refresh-token")
 	require.NoError(t, err)
 
 	CryptoSecret = "second-secret"
-	t.Cleanup(func() { CryptoSecret = oldSecret })
 	_, err = DecryptSecretString(encrypted)
 	require.Error(t, err)
 }
@@ -46,12 +50,42 @@ func TestSecretEnvelopeKeepsEmptyValueEmpty(t *testing.T) {
 }
 
 func TestSecretEnvelopeHasVersionedShape(t *testing.T) {
-	oldSecret := CryptoSecret
-	CryptoSecret = "shape-secret"
-	t.Cleanup(func() { CryptoSecret = oldSecret })
+	setStableCryptoSecretForEnvelopeTest(t, "shape-secret")
 
 	encrypted, err := EncryptSecretString("plain")
 	require.NoError(t, err)
 	assert.True(t, strings.Contains(encrypted, `"v":1`) || strings.Contains(encrypted, `"v": 1`))
 	assert.Contains(t, encrypted, `"alg":"AES-256-GCM"`)
+}
+
+func TestSecretEnvelopeRejectsUnstableDefaultSecret(t *testing.T) {
+	oldSecret := CryptoSecret
+	oldStable := CryptoSecretStable
+	CryptoSecret = "process-random-default-secret"
+	CryptoSecretStable = false
+	t.Cleanup(func() {
+		CryptoSecret = oldSecret
+		CryptoSecretStable = oldStable
+	})
+
+	encrypted, err := EncryptSecretString("refresh-token")
+	require.Error(t, err)
+	assert.Empty(t, encrypted)
+	assert.ErrorContains(t, err, "CRYPTO_SECRET or SESSION_SECRET")
+
+	_, err = DecryptSecretString(`{"v":1,"alg":"AES-256-GCM","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAA"}`)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CRYPTO_SECRET or SESSION_SECRET")
+}
+
+func setStableCryptoSecretForEnvelopeTest(t *testing.T, secret string) {
+	t.Helper()
+	oldSecret := CryptoSecret
+	oldStable := CryptoSecretStable
+	CryptoSecret = secret
+	CryptoSecretStable = true
+	t.Cleanup(func() {
+		CryptoSecret = oldSecret
+		CryptoSecretStable = oldStable
+	})
 }
