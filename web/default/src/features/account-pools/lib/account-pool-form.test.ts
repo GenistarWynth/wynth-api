@@ -1,0 +1,122 @@
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import {
+  buildAccountPayload,
+  buildPoolPayload,
+  buildProxyPayload,
+  emptyAccountForm,
+  emptyPoolForm,
+  emptyProxyForm,
+  maskSecretPreview,
+  normalizeModelListText,
+} from './account-pool-form'
+
+describe('account pool form helpers', () => {
+  test('builds a trimmed pool payload with OpenAI defaults', () => {
+    assert.deepEqual(
+      buildPoolPayload({ ...emptyPoolForm(), name: '  自建号池  ' }),
+      {
+        name: '自建号池',
+        platform: 'openai',
+        default_proxy_id: 0,
+        default_monitor_enabled: false,
+        default_schedule_policy: '',
+        remark: '',
+      }
+    )
+  })
+
+  test('serializes write-only api key credential and normalizes models in first-seen order', () => {
+    assert.deepEqual(
+      buildAccountPayload({
+        ...emptyAccountForm(),
+        name: '  primary account  ',
+        account_identifier: '  acct-1  ',
+        api_key: '  sk-test  ',
+        supported_models_text: 'gpt-5, gpt-4\ngpt-5，gpt-4o',
+      }),
+      {
+        name: 'primary account',
+        account_identifier: 'acct-1',
+        credential: {
+          type: 'api_key',
+          api_key: 'sk-test',
+          email: '',
+          refresh_token: '',
+        },
+        token_state: {
+          access_token: '',
+          refresh_token: '',
+          expires_at: 0,
+          version: 0,
+        },
+        status: 'enabled',
+        priority: 0,
+        weight: 1,
+        max_concurrency: 1,
+        proxy_id: 0,
+        supported_models: ['gpt-5', 'gpt-4', 'gpt-4o'],
+        model_mapping: {},
+        last_used_at: 0,
+        rate_limited_until: 0,
+        temp_disabled_until: 0,
+        temp_disabled_reason: '',
+        last_error: '',
+      }
+    )
+  })
+
+  test('serializes oauth credential payload', () => {
+    assert.deepEqual(
+      buildAccountPayload({
+        ...emptyAccountForm(),
+        name: 'OAuth account',
+        credential_type: 'oauth',
+        email: '  user@example.com  ',
+        refresh_token: '  refresh-token  ',
+      }).credential,
+      {
+        type: 'oauth',
+        api_key: '',
+        email: 'user@example.com',
+        refresh_token: 'refresh-token',
+      }
+    )
+  })
+
+  test('normalizes model list text with commas, newlines, and duplicates', () => {
+    assert.deepEqual(normalizeModelListText('gpt-5, gpt-4\ngpt-5'), [
+      'gpt-5',
+      'gpt-4',
+    ])
+  })
+
+  test('masks local secret previews', () => {
+    assert.equal(maskSecretPreview(''), '')
+    assert.equal(maskSecretPreview('abc'), '***')
+    assert.equal(maskSecretPreview('sk-1234567890'), 'sk-1...7890')
+  })
+
+  test('builds proxy payload with trimmed host credentials and numeric defaults', () => {
+    assert.deepEqual(
+      buildProxyPayload({
+        ...emptyProxyForm(),
+        name: '  local proxy  ',
+        host: '  127.0.0.1  ',
+        port: 8080,
+        username: '  proxy-user  ',
+        password: '  proxy-secret  ',
+      }),
+      {
+        name: 'local proxy',
+        protocol: 'http',
+        host: '127.0.0.1',
+        port: 8080,
+        username: 'proxy-user',
+        password: 'proxy-secret',
+        status: 'enabled',
+        fallback_proxy_id: 0,
+      }
+    )
+  })
+})
