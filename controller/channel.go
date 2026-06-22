@@ -741,15 +741,67 @@ func DeleteDisabledChannel(c *gin.Context) {
 }
 
 type ChannelTag struct {
-	Tag            string  `json:"tag"`
-	NewTag         *string `json:"new_tag"`
-	Priority       *int64  `json:"priority"`
-	Weight         *uint   `json:"weight"`
-	ModelMapping   *string `json:"model_mapping"`
-	Models         *string `json:"models"`
-	Groups         *string `json:"groups"`
-	ParamOverride  *string `json:"param_override"`
-	HeaderOverride *string `json:"header_override"`
+	Tag            string    `json:"tag"`
+	NewTag         *string   `json:"new_tag"`
+	Priority       *int64    `json:"priority"`
+	Weight         *uint     `json:"weight"`
+	ModelMapping   *string   `json:"model_mapping"`
+	Models         *string   `json:"models"`
+	Groups         *string   `json:"groups"`
+	ParamOverride  *string   `json:"param_override"`
+	HeaderOverride *string   `json:"header_override"`
+	Fields         *[]string `json:"fields"`
+}
+
+func (channelTag *ChannelTag) applySelectedFields() {
+	if channelTag == nil || channelTag.Fields == nil {
+		return
+	}
+	selected := make(map[string]struct{}, len(*channelTag.Fields))
+	for _, field := range *channelTag.Fields {
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "tag", "new_tag":
+			selected["new_tag"] = struct{}{}
+		case "priority":
+			selected["priority"] = struct{}{}
+		case "weight":
+			selected["weight"] = struct{}{}
+		case "model_mapping":
+			selected["model_mapping"] = struct{}{}
+		case "models":
+			selected["models"] = struct{}{}
+		case "group", "groups":
+			selected["groups"] = struct{}{}
+		case "param_override":
+			selected["param_override"] = struct{}{}
+		case "header_override":
+			selected["header_override"] = struct{}{}
+		}
+	}
+	if _, ok := selected["new_tag"]; !ok {
+		channelTag.NewTag = nil
+	}
+	if _, ok := selected["priority"]; !ok {
+		channelTag.Priority = nil
+	}
+	if _, ok := selected["weight"]; !ok {
+		channelTag.Weight = nil
+	}
+	if _, ok := selected["model_mapping"]; !ok {
+		channelTag.ModelMapping = nil
+	}
+	if _, ok := selected["models"]; !ok {
+		channelTag.Models = nil
+	}
+	if _, ok := selected["groups"]; !ok {
+		channelTag.Groups = nil
+	}
+	if _, ok := selected["param_override"]; !ok {
+		channelTag.ParamOverride = nil
+	}
+	if _, ok := selected["header_override"]; !ok {
+		channelTag.HeaderOverride = nil
+	}
 }
 
 func DisableTagChannels(c *gin.Context) {
@@ -821,6 +873,7 @@ func EditTagChannels(c *gin.Context) {
 		})
 		return
 	}
+	channelTag.applySelectedFields()
 	if channelTag.ParamOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.ParamOverride)
 		if trimmed != "" && !json.Valid([]byte(trimmed)) {

@@ -23,8 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { Dialog } from '@/components/dialog'
@@ -35,8 +35,8 @@ import {
   getAllModels,
   getGroups,
 } from '../../api'
-import { channelsQueryKeys } from '../../lib'
-import type { TagOperationParams } from '../../types'
+import { buildTagBatchEditPayload, channelsQueryKeys } from '../../lib'
+import type { TagBatchEditField } from '../../types'
 import { useChannels } from '../channels-provider'
 import { ModelMappingEditor } from '../model-mapping-editor'
 
@@ -60,6 +60,7 @@ export function TagBatchEditDialog({
   const [models, setModels] = useState('')
   const [modelMapping, setModelMapping] = useState('')
   const [groups, setGroups] = useState<string[]>([])
+  const [selectedFields, setSelectedFields] = useState<TagBatchEditField[]>([])
 
   // Fetch available groups
   const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
@@ -103,6 +104,7 @@ export function TagBatchEditDialog({
 
       // Initialize new tag with current tag name
       setNewTag(currentTag)
+      setSelectedFields([])
     } catch (_error: unknown) {
       toast.error(
         _error instanceof Error ? _error.message : t('Failed to load tag data')
@@ -115,8 +117,13 @@ export function TagBatchEditDialog({
   const handleSave = async () => {
     if (!currentTag) return
 
+    if (selectedFields.length === 0) {
+      toast.warning(t('Select at least one field to overwrite.'))
+      return
+    }
+
     // Validate model mapping JSON if provided
-    if (modelMapping.trim()) {
+    if (selectedFields.includes('model_mapping') && modelMapping.trim()) {
       try {
         JSON.parse(modelMapping)
       } catch (_error) {
@@ -124,38 +131,24 @@ export function TagBatchEditDialog({
         return
       }
     }
-
+    if (selectedFields.includes('models') && !models.trim()) {
+      toast.error(t('Models cannot be empty when selected'))
+      return
+    }
     setIsSaving(true)
     try {
-      const params: Record<string, string | undefined> = {
-        tag: currentTag,
-      }
+      const params = buildTagBatchEditPayload({
+        currentTag,
+        selectedFields,
+        values: {
+          newTag,
+          models,
+          modelMapping,
+          groups,
+        },
+      })
 
-      if (newTag !== currentTag) {
-        params.new_tag = newTag || undefined
-      }
-
-      if (models.trim()) {
-        params.models = models
-      }
-
-      if (modelMapping.trim()) {
-        params.model_mapping = modelMapping
-      }
-
-      if (groups.length > 0) {
-        params.groups = groups.join(',')
-      }
-
-      // Check if there are any changes
-      if (Object.keys(params).length === 1) {
-        toast.warning(t('No changes made'))
-        return
-      }
-
-      const response = await editTagChannels(
-        params as unknown as TagOperationParams
-      )
+      const response = await editTagChannels(params)
       if (response.success) {
         toast.success(t('Tag updated successfully'))
         queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
@@ -177,8 +170,32 @@ export function TagBatchEditDialog({
     setModels('')
     setModelMapping('')
     setGroups([])
+    setSelectedFields([])
     onOpenChange(false)
   }
+
+  const isFieldSelected = (field: TagBatchEditField) =>
+    selectedFields.includes(field)
+
+  const setFieldSelected = (field: TagBatchEditField, checked: boolean) => {
+    setSelectedFields((previous) => {
+      if (checked) {
+        return previous.includes(field) ? previous : [...previous, field]
+      }
+      return previous.filter((item) => item !== field)
+    })
+  }
+
+  const fieldToggle = (field: TagBatchEditField, label: string) => (
+    <label className='flex cursor-pointer items-center gap-2 text-sm font-medium'>
+      <Checkbox
+        checked={isFieldSelected(field)}
+        onCheckedChange={(checked) => setFieldSelected(field, checked === true)}
+        disabled={isSaving}
+      />
+      <span>{t(label)}</span>
+    </label>
+  )
 
   if (!currentTag) return null
 
@@ -223,14 +240,16 @@ export function TagBatchEditDialog({
               <AlertCircle className='h-4 w-4' />
               <AlertDescription>
                 {t(
-                  'All edits are overwrite operations. Leave fields empty to keep current values unchanged.'
+                  'Select the fields you want to overwrite for this tag. Unselected fields stay unchanged even if they have visible values.'
                 )}
               </AlertDescription>
             </Alert>
 
             {/* Tag Name */}
             <div className='space-y-2'>
-              <Label htmlFor='new-tag'>{t('Tag Name')}</Label>
+              <div className='flex items-center justify-between gap-3'>
+                {fieldToggle('tag', 'Tag Name')}
+              </div>
               <Input
                 id='new-tag'
                 placeholder={t(
@@ -238,7 +257,7 @@ export function TagBatchEditDialog({
                 )}
                 value={newTag}
                 onChange={(e) => setNewTag(e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || !isFieldSelected('tag')}
               />
               <p className='text-muted-foreground text-xs'>
                 {t('Leave empty to disband the tag')}
@@ -247,7 +266,9 @@ export function TagBatchEditDialog({
 
             {/* Models */}
             <div className='space-y-2'>
-              <Label htmlFor='models'>{t('Models')}</Label>
+              <div className='flex items-center justify-between gap-3'>
+                {fieldToggle('models', 'Models')}
+              </div>
               <Textarea
                 id='models'
                 placeholder={t(
@@ -255,7 +276,7 @@ export function TagBatchEditDialog({
                 )}
                 value={models}
                 onChange={(e) => setModels(e.target.value)}
-                disabled={isSaving}
+                disabled={isSaving || !isFieldSelected('models')}
                 rows={3}
               />
               <p className='text-muted-foreground text-xs'>
@@ -267,17 +288,21 @@ export function TagBatchEditDialog({
 
             {/* Model Mapping */}
             <div className='space-y-2'>
-              <Label htmlFor='model-mapping'>{t('Model Mapping')}</Label>
+              <div className='flex items-center justify-between gap-3'>
+                {fieldToggle('model_mapping', 'Model Mapping')}
+              </div>
               <ModelMappingEditor
                 value={modelMapping}
                 onChange={setModelMapping}
-                disabled={isSaving}
+                disabled={isSaving || !isFieldSelected('model_mapping')}
               />
             </div>
 
             {/* Groups */}
             <div className='space-y-2'>
-              <Label htmlFor='groups'>{t('Groups')}</Label>
+              <div className='flex items-center justify-between gap-3'>
+                {fieldToggle('groups', 'Groups')}
+              </div>
               {isLoadingGroups ? (
                 <Skeleton className='h-10 w-full' />
               ) : (
@@ -286,6 +311,7 @@ export function TagBatchEditDialog({
                   selected={groups}
                   onChange={setGroups}
                   placeholder={t('Select groups (leave empty to keep current)')}
+                  disabled={isSaving || !isFieldSelected('groups')}
                 />
               )}
               <p className='text-muted-foreground text-xs'>

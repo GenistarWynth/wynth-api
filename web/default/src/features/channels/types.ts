@@ -404,8 +404,19 @@ export interface BatchSetTagParams {
   tag: string | null
 }
 
+export type TagBatchEditField =
+  | 'tag'
+  | 'models'
+  | 'model_mapping'
+  | 'groups'
+  | 'priority'
+  | 'weight'
+  | 'param_override'
+  | 'header_override'
+
 export interface TagOperationParams {
   tag: string
+  fields?: TagBatchEditField[]
   new_tag?: string
   priority?: number
   weight?: number
