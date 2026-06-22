@@ -36,6 +36,7 @@ func TestAccountPoolAutoMigrateSQLite(t *testing.T) {
 		&AccountPoolProxy{},
 		&AccountPoolChannelBinding{},
 	))
+	assert.True(t, DB.Migrator().HasIndex(&AccountPoolAccount{}, "idx_account_pool_status"))
 }
 
 func TestAccountPoolModelDefaults(t *testing.T) {

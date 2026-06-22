@@ -62,12 +62,12 @@ func (p *AccountPool) BeforeUpdate(tx *gorm.DB) error {
 
 type AccountPoolAccount struct {
 	Id                 int    `json:"id"`
-	PoolID             int    `json:"pool_id" gorm:"not null;index"`
+	PoolID             int    `json:"pool_id" gorm:"not null;index:idx_account_pool_status,priority:1"`
 	Name               string `json:"name" gorm:"type:varchar(191);not null;index"`
 	AccountIdentifier  string `json:"account_identifier" gorm:"type:varchar(191);index"`
 	CredentialConfig   string `json:"-" gorm:"type:text"`
 	TokenState         string `json:"-" gorm:"type:text"`
-	Status             string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
+	Status             string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index:idx_account_pool_status,priority:2"`
 	Priority           int64  `json:"priority" gorm:"bigint;not null;default:0;index"`
 	Weight             uint   `json:"weight" gorm:"not null;default:0"`
 	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null;default:1"`
