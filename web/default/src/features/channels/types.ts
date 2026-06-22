@@ -37,17 +37,51 @@ export type ChannelInfo = z.infer<typeof channelInfoSchema>
 export const channelMonitorInfoSchema = z.object({
   enabled: z.boolean().default(false),
   interval_minutes: z.number().default(10),
+  latest_model: z.string().optional(),
   latest_status: z.enum(['success', 'failed', 'degraded', 'error']).optional(),
   latest_checked_at: z.number().optional(),
   latest_latency_ms: z.number().optional(),
+  latest_endpoint_latency_ms: z.number().optional(),
+  latest_first_token_latency_ms: z.number().optional(),
+  latest_prompt_tokens: z.number().optional(),
+  latest_completion_tokens: z.number().optional(),
   latest_message: z.string().optional(),
+  next_check_at: z.number().optional(),
+  seconds_until_next_check: z.number().optional(),
   seven_day_checks: z.number().default(0),
   seven_day_successes: z.number().default(0),
   seven_day_availability: z.number().nullable().optional(),
   average_latency_ms: z.number().optional(),
+  average_endpoint_latency_ms: z.number().optional(),
+  average_first_token_latency_ms: z.number().optional(),
 })
 
 export type ChannelMonitorInfo = z.infer<typeof channelMonitorInfoSchema>
+
+export const channelMonitorRecordSchema = z.object({
+  id: z.number(),
+  channel_id: z.number(),
+  model: z.string().default(''),
+  status: z.enum(['success', 'failed', 'degraded', 'error']),
+  latency_ms: z.number().default(0),
+  endpoint_latency_ms: z.number().default(0),
+  first_token_latency_ms: z.number().default(0),
+  prompt_tokens: z.number().default(0),
+  completion_tokens: z.number().default(0),
+  message: z.string().default(''),
+  checked_at: z.number().default(0),
+  created_at: z.number().default(0),
+})
+
+export type ChannelMonitorRecord = z.infer<typeof channelMonitorRecordSchema>
+
+export const channelMonitorDetailSchema = z.object({
+  channel_id: z.number(),
+  info: channelMonitorInfoSchema,
+  recent_records: z.array(channelMonitorRecordSchema).default([]),
+})
+
+export type ChannelMonitorDetail = z.infer<typeof channelMonitorDetailSchema>
 
 export const channelSchema = z.object({
   id: z.number(),
@@ -59,6 +93,8 @@ export const channelSchema = z.object({
   name: z.string(),
   weight: z.number().nullish(),
   created_time: z.number(),
+  updated_time: z.number().default(0),
+  last_sync_time: z.number().default(0),
   test_time: z.number(),
   response_time: z.number(), // in milliseconds
   base_url: z.string().nullish(),
@@ -123,7 +159,39 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   channel_monitor_enabled?: boolean
   channel_monitor_interval_minutes?: number
+  channel_auto_priority_enabled?: boolean
+  channel_auto_priority_interval_minutes?: number
+  channel_auto_priority_window_hours?: number
+  channel_auto_priority_last_run_at?: number
+  channel_auto_priority_last_applied_at?: number
+  channel_auto_priority_last_score?: ChannelAutoPriorityScore
+  generated_by_upstream_source_id?: number
+  generated_by_upstream_mapping_id?: number
+  codex_image_generation_bridge_policy?: 'follow' | 'enabled' | 'disabled'
+  auto_retry_times?: number
   advanced_custom?: AdvancedCustomConfig
+}
+
+export interface ChannelAutoPriorityScore {
+  version?: string
+  computed_at: number
+  window_start: number
+  window_end: number
+  cohort?: string
+  effective_rate_multiplier: number
+  cache_adjusted_cost_factor: number
+  effective_cost_multiplier: number
+  effective_price_score: number
+  availability_score: number
+  first_token_score: number
+  final_score: number
+  old_priority: number
+  new_priority: number
+  applied: boolean
+  reason?: string
+  usage_log_count: number
+  monitor_check_count: number
+  first_token_sample_count: number
 }
 
 export interface AdvancedCustomConfig {
@@ -183,6 +251,12 @@ export interface GetChannelResponse {
   success: boolean
   message?: string
   data?: Channel
+}
+
+export interface GetChannelMonitorDetailResponse {
+  success: boolean
+  message?: string
+  data?: ChannelMonitorDetail
 }
 
 export interface ChannelTestResponse {
@@ -266,6 +340,8 @@ export type ChannelSortBy =
   | 'balance'
   | 'response_time'
   | 'test_time'
+  | 'updated_time'
+  | 'last_sync_time'
 
 export type ChannelSortOrder = 'asc' | 'desc'
 
@@ -329,8 +405,19 @@ export interface BatchSetTagParams {
   tag: string | null
 }
 
+export type TagBatchEditField =
+  | 'tag'
+  | 'models'
+  | 'model_mapping'
+  | 'groups'
+  | 'priority'
+  | 'weight'
+  | 'param_override'
+  | 'header_override'
+
 export interface TagOperationParams {
   tag: string
+  fields?: TagBatchEditField[]
   new_tag?: string
   priority?: number
   weight?: number

@@ -117,7 +117,7 @@ export function UpstreamUpdateDialog(props: UpstreamUpdateDialogProps) {
       <Dialog
         open={props.open}
         onOpenChange={(v) => !v && props.onCancel()}
-        title={t('Upstream Model Updates')}
+        title={t('Model List Updates')}
         contentClassName='sm:max-w-lg'
         contentHeight='auto'
         bodyClassName='space-y-4'

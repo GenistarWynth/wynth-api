@@ -224,9 +224,25 @@ func filterAbilitiesByRequestPath(abilities []Ability, requestPath string) []Abi
 	return filtered
 }
 
+func splitNonEmptyCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
-	models_ := strings.Split(channel.Models, ",")
-	groups_ := strings.Split(channel.Group, ",")
+	models_ := splitNonEmptyCSV(channel.Models)
+	groups_ := splitNonEmptyCSV(channel.Group)
+	if len(models_) == 0 || len(groups_) == 0 {
+		return nil
+	}
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {
@@ -297,8 +313,14 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	}
 
 	// Then add new abilities
-	models_ := strings.Split(channel.Models, ",")
-	groups_ := strings.Split(channel.Group, ",")
+	models_ := splitNonEmptyCSV(channel.Models)
+	groups_ := splitNonEmptyCSV(channel.Group)
+	if len(models_) == 0 || len(groups_) == 0 {
+		if isNewTx {
+			return tx.Commit().Error
+		}
+		return nil
+	}
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
 	for _, model := range models_ {

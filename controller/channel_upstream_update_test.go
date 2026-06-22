@@ -1,11 +1,19 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestNormalizeModelNames(t *testing.T) {
@@ -123,6 +131,50 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithIgnoredRegexPatterns(t
 	require.Equal(t, []string{}, pendingRemoveModels)
 }
 
+func TestCollectPendingUpstreamModelChangesUsesGeneratedSourcePrivateIPSetting(t *testing.T) {
+	setupChannelUpstreamUpdateTestDB(t)
+	withChannelUpstreamUpdateFetchSetting(t, false)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1/models", r.URL.Path)
+		assert.Equal(t, "Bearer sk-source", r.Header.Get("Authorization"))
+		writeChannelUpstreamUpdateTestJSON(t, w, map[string]any{
+			"data": []map[string]string{{"id": "gpt-4o"}, {"id": "gpt-4.1"}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	syncConfig, err := common.Marshal(map[string]any{
+		"allow_private_ip": true,
+	})
+	require.NoError(t, err)
+	source := model.UpstreamSource{
+		Name:         "source-a",
+		Type:         model.UpstreamSourceTypeSub2API,
+		Status:       model.UpstreamSourceStatusEnabled,
+		BaseURL:      server.URL,
+		RelayBaseURL: server.URL,
+		SyncConfig:   string(syncConfig),
+	}
+	require.NoError(t, model.DB.Create(&source).Error)
+	channel := model.Channel{
+		Type:    constant.ChannelTypeOpenAI,
+		Key:     "sk-source",
+		BaseURL: common.GetPointer(server.URL),
+		Models:  "gpt-4o",
+		Status:  common.ChannelStatusEnabled,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID: source.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+
+	pendingAddModels, pendingRemoveModels, err := collectPendingUpstreamModelChanges(&channel, channel.GetOtherSettings())
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4.1"}, pendingAddModels)
+	require.Equal(t, []string{}, pendingRemoveModels)
+}
+
 func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *testing.T) {
 	channelSummaries := make([]upstreamModelUpdateChannelSummary, 0, 12)
 	for i := 0; i < 12; i++ {
@@ -176,4 +228,49 @@ func TestShouldSendUpstreamModelUpdateNotification(t *testing.T) {
 	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+10000, 0, 4))
 	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+90000, 7, 0))
 	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+90001, 0, 0))
+}
+
+func setupChannelUpstreamUpdateTestDB(t *testing.T) {
+	t.Helper()
+
+	oldDB := model.DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = oldDB
+	})
+
+	require.NoError(t, model.DB.AutoMigrate(&model.UpstreamSource{}, &model.Channel{}))
+}
+
+func withChannelUpstreamUpdateFetchSetting(t *testing.T, allowPrivate bool) {
+	t.Helper()
+
+	fetchSetting := system_setting.GetFetchSetting()
+	old := *fetchSetting
+	fetchSetting.EnableSSRFProtection = true
+	fetchSetting.AllowPrivateIp = allowPrivate
+	fetchSetting.DomainFilterMode = false
+	fetchSetting.IpFilterMode = false
+	fetchSetting.DomainList = nil
+	fetchSetting.IpList = nil
+	fetchSetting.AllowedPorts = []string{}
+	fetchSetting.ApplyIPFilterForDomain = false
+	t.Cleanup(func() {
+		*fetchSetting = old
+	})
+}
+
+func writeChannelUpstreamUpdateTestJSON(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+
+	w.Header().Set("Content-Type", "application/json")
+	data, err := common.Marshal(value)
+	require.NoError(t, err)
+	_, err = w.Write(data)
+	require.NoError(t, err)
 }

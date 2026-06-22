@@ -21,6 +21,8 @@ For commercial licensing, please contact support@quantumnous.com
 // All label/name values are i18n keys; use t(value) when displaying.
 // ============================================================================
 
+export const CHANNEL_TYPE_CODEX = 57
+
 export const CHANNEL_TYPES = {
   0: 'Unknown',
   1: 'OpenAI',
@@ -345,6 +347,7 @@ export const FIELD_PLACEHOLDERS = {
   PARAM_OVERRIDE: '{"temperature": 0.7}',
   HEADER_OVERRIDE: '{"X-Custom-Header": "value"}',
   STATUS_CODE_MAPPING: '{"400": "500"}',
+  AUTO_RETRY_TIMES: 'Follow global retry count',
 } as const
 
 export const FIELD_DESCRIPTIONS = {
@@ -362,6 +365,8 @@ export const FIELD_DESCRIPTIONS = {
   TEST_MODEL: 'Model to use when testing channel connectivity',
   AUTO_BAN: 'Automatically disable channel on repeated failures',
   STATUS_CODE_MAPPING: 'Map response status codes (JSON format)',
+  AUTO_RETRY_TIMES:
+    'Overrides the global auto-retry count for this channel. Leave empty to follow the system setting; use 0 to disable retries after this channel fails.',
   TAG: 'Group channels by tag for batch operations',
   REMARK: 'Internal notes (not shown to users)',
   SETTING: 'Channel-specific settings (JSON format)',

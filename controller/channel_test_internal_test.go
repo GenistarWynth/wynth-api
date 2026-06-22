@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -10,6 +11,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +43,7 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	require.Equal(t, "stream", result.MatchedTier)
 }
 
-func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
+func TestBuildTestLogOtherMarksChannelTest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 
@@ -68,6 +70,7 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 	require.Equal(t, "tiered_expr", other["billing_mode"])
 	require.Equal(t, "base", other["matched_tier"])
 	require.NotEmpty(t, other["expr_b64"])
+	assert.Equal(t, true, other["is_channel_test"])
 }
 
 func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
@@ -79,4 +82,28 @@ func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 2, userID)
+}
+
+func TestChannelTestFirstTokenLatencyMSRequiresStreamResponse(t *testing.T) {
+	start := time.Unix(100, 0)
+	streamInfo := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(123 * time.Millisecond),
+		IsStream:          true,
+	}
+	require.Equal(t, int64(123), channelTestFirstTokenLatencyMS(streamInfo))
+
+	nonStreamInfo := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(123 * time.Millisecond),
+		IsStream:          false,
+	}
+	require.Equal(t, int64(0), channelTestFirstTokenLatencyMS(nonStreamInfo))
+
+	withoutFirstResponse := &relaycommon.RelayInfo{
+		StartTime:         start,
+		FirstResponseTime: start.Add(-time.Second),
+		IsStream:          true,
+	}
+	require.Equal(t, int64(0), channelTestFirstTokenLatencyMS(withoutFirstResponse))
 }

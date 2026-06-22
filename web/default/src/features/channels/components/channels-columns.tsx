@@ -48,7 +48,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { ProviderBadge } from '@/components/provider-badge'
-import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
+import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { TruncatedText } from '@/components/truncated-text'
 import { getCodexUsage } from '../api'
@@ -65,6 +65,7 @@ import {
   parseModelsList,
   parseGroupsList,
   parseChannelSettings,
+  parseChannelOtherSettings,
   handleUpdateChannelField,
   handleUpdateTagField,
   handleUpdateChannelBalance,
@@ -72,7 +73,7 @@ import {
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
-import type { Channel } from '../types'
+import type { Channel, ChannelAutoPriorityScore } from '../types'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -81,10 +82,6 @@ import {
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
 import { NumericSpinnerInput } from './numeric-spinner-input'
-
-type MonitorLatestStatus = NonNullable<
-  Channel['monitor_info']
->['latest_status']
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
   source?: string
@@ -160,45 +157,88 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
   )
 }
 
-function getMonitorBadgeVariant(
-  status: MonitorLatestStatus
-): StatusBadgeProps['variant'] {
-  if (status === 'success') return 'success'
-  if (status === 'failed' || status === 'error') return 'danger'
-  return 'warning'
-}
-
-function formatMonitorAvailability(
-  availability: number | null | undefined,
-  noDataLabel: string
-): string {
-  if (typeof availability !== 'number' || !Number.isFinite(availability)) {
-    return noDataLabel
+function formatAutoPriorityScore(value: number | undefined) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-'
   }
-  return `${Math.round(availability * 100)}%`
+  return `${Math.round(value * 100)}%`
 }
 
-function ChannelMonitorBadge({ channel }: { channel: Channel }) {
+function formatAutoPriorityNumber(
+  value: number | undefined,
+  digits?: number
+) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return '-'
+  }
+  return typeof digits === 'number' ? value.toFixed(digits) : value
+}
+
+function getAutoPrioritySnapshot(
+  value: unknown
+): ChannelAutoPriorityScore | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined
+  }
+  return value as ChannelAutoPriorityScore
+}
+
+function AutoPriorityHint({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
-  const monitorInfo = channel.monitor_info
-  const enabled = monitorInfo?.enabled === true
-  const latestStatus = monitorInfo?.latest_status
-  const latestStatusLabel = latestStatus ? t(latestStatus) : t('No data')
-  const availabilityLabel = formatMonitorAvailability(
-    monitorInfo?.seven_day_availability,
-    t('No data')
+  const settings = parseChannelOtherSettings(channel.settings)
+  if (!settings.channel_auto_priority_enabled) {
+    return null
+  }
+
+  const snapshot = getAutoPrioritySnapshot(
+    settings.channel_auto_priority_last_score
   )
-  const enabledLabel = enabled ? t('Enabled') : t('Disabled')
-  const label = `${t('Monitor')}: ${enabledLabel} / ${latestStatusLabel} / ${availabilityLabel}`
+  const label = snapshot
+    ? snapshot.applied
+      ? t('Auto: {{priority}} / {{score}}', {
+          priority: formatAutoPriorityNumber(snapshot.new_priority),
+          score: formatAutoPriorityScore(snapshot.final_score),
+        })
+      : t('Auto: {{priority}} / {{reason}}', {
+          priority: formatAutoPriorityNumber(snapshot.new_priority),
+          reason: snapshot.reason || t('not applied'),
+        })
+    : t('Auto priority enabled')
+
+  const tooltip = snapshot
+    ? t(
+        'Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}.',
+        {
+          time: formatRelativeTime(
+            settings.channel_auto_priority_last_run_at ?? 0
+          ),
+          cost: formatAutoPriorityNumber(
+            snapshot.effective_cost_multiplier,
+            3
+          ),
+          availability: formatAutoPriorityScore(snapshot.availability_score),
+          firstToken: formatAutoPriorityScore(snapshot.first_token_score),
+        }
+      )
+    : t('Auto priority may overwrite manual edits on the next run.')
 
   return (
-    <StatusBadge
-      label={label}
-      variant={enabled ? getMonitorBadgeVariant(latestStatus) : 'neutral'}
-      size='sm'
-      copyable={false}
-      className='max-w-[16rem] shrink-0'
-    />
+    <TooltipProvider delay={150}>
+      <Tooltip>
+        <TooltipTrigger render={<span className='max-w-full' />}>
+          <StatusBadge
+            label={label}
+            variant={snapshot?.applied ? 'success' : 'warning'}
+            size='sm'
+            copyable={false}
+            className='max-w-[120px]'
+          />
+        </TooltipTrigger>
+        <TooltipContent side='top' className='max-w-80'>
+          {tooltip}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -247,13 +287,16 @@ function PriorityCell({ channel }: { channel: Channel }) {
 
   // Regular channel row - editable
   return (
-    <NumericSpinnerInput
-      value={priority ?? 0}
-      onChange={(value) => {
-        handleUpdateChannelField(channel.id, 'priority', value, queryClient)
-      }}
-      min={-999}
-    />
+    <div className='flex min-w-[120px] flex-col gap-1'>
+      <NumericSpinnerInput
+        value={priority ?? 0}
+        onChange={(value) => {
+          handleUpdateChannelField(channel.id, 'priority', value, queryClient)
+        }}
+        min={-999}
+      />
+      <AutoPriorityHint channel={channel} />
+    </div>
   )
 }
 
@@ -466,6 +509,32 @@ function BalanceCell({ channel }: { channel: Channel }) {
   )
 }
 
+function TimestampCell({ value }: { value: number }) {
+  if (!value || value === 0) {
+    return <span className='text-muted-foreground text-xs'>-</span>
+  }
+
+  const timeText = formatRelativeTime(value)
+  const fullDate = formatTimestampToDate(value)
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className='text-muted-foreground cursor-pointer font-mono text-sm' />
+          }
+        >
+          {timeText}
+        </TooltipTrigger>
+        <TooltipContent side='top'>
+          <p className='font-mono text-sm'>{fullDate}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 /**
  * Generate channels columns configuration
  */
@@ -603,7 +672,6 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
                   </TooltipProvider>
                 )}
                 <UpstreamUpdateTags channel={channel} />
-                <ChannelMonitorBadge channel={channel} />
               </div>
               {channel.remark && (
                 <TooltipProvider delay={200}>
@@ -1004,42 +1072,37 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
       size: 110,
     },
 
+    // Last Sync Time column
+    {
+      accessorKey: 'last_sync_time',
+      header: t('Last Synced'),
+      meta: { mobileHidden: true },
+      cell: ({ row }) => (
+        <TimestampCell value={row.getValue('last_sync_time') as number} />
+      ),
+      size: 120,
+    },
+
+    // Updated Time column
+    {
+      accessorKey: 'updated_time',
+      header: t('Last Modified'),
+      meta: { mobileHidden: true },
+      cell: ({ row }) => (
+        <TimestampCell value={row.getValue('updated_time') as number} />
+      ),
+      size: 120,
+    },
+
     // Test Time column
     {
       accessorKey: 'test_time',
       header: t('Last Tested'),
       meta: { mobileHidden: true },
       cell: ({ row }) => {
-        const testTime = row.getValue('test_time') as number
-
-        // For invalid timestamps, show "Never" badge
-        if (!testTime || testTime === 0) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
-
-        const timeText = formatRelativeTime(testTime)
-        const fullDate = formatTimestampToDate(testTime)
-
-        // For valid timestamps, show tooltip with full date
-        return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span className='text-muted-foreground cursor-pointer font-mono text-sm' />
-                }
-              >
-                {timeText}
-              </TooltipTrigger>
-              <TooltipContent side='top'>
-                <p className='font-mono text-sm'>{fullDate}</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )
+        return <TimestampCell value={row.getValue('test_time') as number} />
       },
       size: 120,
-      enableSorting: false,
     },
 
     // Actions column

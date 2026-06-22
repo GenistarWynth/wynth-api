@@ -225,6 +225,22 @@ func SetApiRouter(router *gin.Engine) {
 			ratioSyncRoute.GET("/channels", controller.GetSyncableChannels)
 			ratioSyncRoute.POST("/fetch", controller.FetchUpstreamRatios)
 		}
+		upstreamSourceRoute := apiRouter.Group("/upstream_sources")
+		upstreamSourceRoute.Use(middleware.AdminAuth())
+		{
+			upstreamSourceRoute.GET("", controller.ListUpstreamSources)
+			upstreamSourceRoute.POST("", controller.CreateUpstreamSource)
+			upstreamSourceRoute.GET("/:id", controller.GetUpstreamSource)
+			upstreamSourceRoute.PUT("/:id", controller.UpdateUpstreamSource)
+			upstreamSourceRoute.PUT("/:id/credentials", controller.UpdateUpstreamSourceCredentials)
+			upstreamSourceRoute.DELETE("/:id", controller.DeleteUpstreamSource)
+			upstreamSourceRoute.POST("/:id/discover", controller.DiscoverUpstreamSource)
+			upstreamSourceRoute.GET("/:id/mappings", controller.ListUpstreamSourceMappings)
+			upstreamSourceRoute.PUT("/:id/mappings", controller.UpdateUpstreamSourceMappings)
+			upstreamSourceRoute.POST("/:id/sync", controller.SyncUpstreamSource)
+			upstreamSourceRoute.GET("/:id/sync_result", controller.GetUpstreamSourceSyncResult)
+			upstreamSourceRoute.POST("/:id/auto_priority/run", controller.RunUpstreamSourceAutoPriority)
+		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
 		{
@@ -232,6 +248,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/search", controller.SearchChannels)
 			channelRoute.GET("/models", controller.ChannelListModels)
 			channelRoute.GET("/models_enabled", controller.EnabledListModels)
+			channelRoute.GET("/:id/monitor", controller.GetChannelMonitorDetail)
 			channelRoute.GET("/:id", controller.GetChannel)
 			channelRoute.POST("/:id/key", middleware.RootAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.SecureVerificationRequired(), controller.GetChannelKey)
 			channelRoute.GET("/test", controller.TestAllChannels)

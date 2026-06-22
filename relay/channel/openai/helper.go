@@ -129,6 +129,7 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 	*createAt = lastStreamResponse.Created
 	*systemFingerprint = lastStreamResponse.GetSystemFingerprint()
 	*model = lastStreamResponse.Model
+	info.SetActualResponseModel(lastStreamResponse.Model, relaycommon.ActualResponseModelSourceOpenAIChat)
 
 	if service.ValidUsage(lastStreamResponse.Usage) {
 		*containStreamUsage = true

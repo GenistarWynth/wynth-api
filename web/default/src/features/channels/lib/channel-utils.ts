@@ -543,6 +543,8 @@ export function aggregateChannelsByTag(
         balance: 0,
         test_time: 0,
         created_time: 0,
+        updated_time: 0,
+        last_sync_time: 0,
         balance_updated_time: 0,
         models: '',
         children: [],

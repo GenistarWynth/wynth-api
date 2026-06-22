@@ -37,11 +37,15 @@ import (
 )
 
 type testResult struct {
-	context           *gin.Context
-	localErr          error
-	newAPIError       *types.NewAPIError
-	testedModel       string
-	upstreamAttempted bool
+	context             *gin.Context
+	localErr            error
+	newAPIError         *types.NewAPIError
+	testedModel         string
+	upstreamAttempted   bool
+	endpointLatencyMS   int64
+	firstTokenLatencyMS int64
+	promptTokens        int
+	completionTokens    int
 }
 
 type channelTestOptions struct {
@@ -452,13 +456,16 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+	endpointStart := time.Now()
 	resp, err := adaptor.DoRequest(c, info, requestBody)
+	endpointLatencyMS := time.Since(endpointStart).Milliseconds()
 	if err != nil {
 		return testResult{
 			context:           c,
 			localErr:          err,
 			newAPIError:       types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
 			upstreamAttempted: true,
+			endpointLatencyMS: endpointLatencyMS,
 		}
 	}
 	var httpResp *http.Response
@@ -481,43 +488,56 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 				localErr:          err,
 				newAPIError:       types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
 				upstreamAttempted: true,
+				endpointLatencyMS: endpointLatencyMS,
 			}
 		}
 	}
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
 	if respErr != nil {
 		return testResult{
-			context:           c,
-			localErr:          respErr,
-			newAPIError:       respErr,
-			upstreamAttempted: true,
+			context:             c,
+			localErr:            respErr,
+			newAPIError:         respErr,
+			upstreamAttempted:   true,
+			endpointLatencyMS:   endpointLatencyMS,
+			firstTokenLatencyMS: channelTestFirstTokenLatencyMS(info),
 		}
 	}
 	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
 	if usageErr != nil {
 		return testResult{
-			context:           c,
-			localErr:          usageErr,
-			newAPIError:       types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
-			upstreamAttempted: true,
+			context:             c,
+			localErr:            usageErr,
+			newAPIError:         types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamAttempted:   true,
+			endpointLatencyMS:   endpointLatencyMS,
+			firstTokenLatencyMS: channelTestFirstTokenLatencyMS(info),
 		}
 	}
 	httpResult := w.Result()
 	respBody, err := readTestResponseBody(httpResult.Body, isStream)
 	if err != nil {
 		return testResult{
-			context:           c,
-			localErr:          err,
-			newAPIError:       types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
-			upstreamAttempted: true,
+			context:             c,
+			localErr:            err,
+			newAPIError:         types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			upstreamAttempted:   true,
+			endpointLatencyMS:   endpointLatencyMS,
+			firstTokenLatencyMS: channelTestFirstTokenLatencyMS(info),
+			promptTokens:        usage.PromptTokens,
+			completionTokens:    usage.CompletionTokens,
 		}
 	}
 	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
 		return testResult{
-			context:           c,
-			localErr:          bodyErr,
-			newAPIError:       types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
-			upstreamAttempted: true,
+			context:             c,
+			localErr:            bodyErr,
+			newAPIError:         types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			upstreamAttempted:   true,
+			endpointLatencyMS:   endpointLatencyMS,
+			firstTokenLatencyMS: channelTestFirstTokenLatencyMS(info),
+			promptTokens:        usage.PromptTokens,
+			completionTokens:    usage.CompletionTokens,
 		}
 	}
 	info.SetEstimatePromptTokens(usage.PromptTokens)
@@ -542,11 +562,26 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:           c,
-		localErr:          nil,
-		newAPIError:       nil,
-		upstreamAttempted: true,
+		context:             c,
+		localErr:            nil,
+		newAPIError:         nil,
+		upstreamAttempted:   true,
+		endpointLatencyMS:   endpointLatencyMS,
+		firstTokenLatencyMS: channelTestFirstTokenLatencyMS(info),
+		promptTokens:        usage.PromptTokens,
+		completionTokens:    usage.CompletionTokens,
 	}
+}
+
+func channelTestFirstTokenLatencyMS(info *relaycommon.RelayInfo) int64 {
+	if info == nil || !info.IsStream || !info.HasSendResponse() {
+		return 0
+	}
+	milliseconds := info.FirstResponseTime.Sub(info.StartTime).Milliseconds()
+	if milliseconds < 0 {
+		return 0
+	}
+	return milliseconds
 }
 
 func recordChannelTestConsumeLog(options channelTestOptions, c *gin.Context, testUserID int, params model.RecordConsumeLogParams) {
@@ -594,6 +629,7 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usa
 func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
+	other["is_channel_test"] = true
 	if tieredResult != nil {
 		service.InjectTieredBillingInfo(other, info, tieredResult)
 	}
@@ -698,7 +734,7 @@ func validateTestResponseBody(respBody []byte, isStream bool) error {
 }
 
 func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
-	return channel != nil && channel.Type == constant.ChannelTypeCodex
+	return channel != nil && relaycommon.SupportsStreamOptions(channel.Type)
 }
 
 func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int]model.ChannelMonitorLog, now int64) []*model.Channel {
@@ -827,12 +863,16 @@ func runChannelMonitorProbe(channel *model.Channel, testUserID int) {
 	milliseconds := time.Since(tik).Milliseconds()
 
 	if err := model.RecordChannelMonitorLog(model.ChannelMonitorLog{
-		ChannelID: channel.Id,
-		Model:     result.testedModel,
-		Status:    channelMonitorStatusFromResult(result),
-		LatencyMS: milliseconds,
-		Message:   channelMonitorMessageFromResult(result),
-		CheckedAt: common.GetTimestamp(),
+		ChannelID:           channel.Id,
+		Model:               result.testedModel,
+		Status:              channelMonitorStatusFromResult(result),
+		LatencyMS:           milliseconds,
+		EndpointLatencyMS:   result.endpointLatencyMS,
+		FirstTokenLatencyMS: result.firstTokenLatencyMS,
+		PromptTokens:        result.promptTokens,
+		CompletionTokens:    result.completionTokens,
+		Message:             channelMonitorMessageFromResult(result),
+		CheckedAt:           common.GetTimestamp(),
 	}); err != nil {
 		common.SysError(fmt.Sprintf("failed to record channel monitor log: channel_id=%d, error=%v", channel.Id, err))
 	}
@@ -1089,17 +1129,21 @@ func TestChannel(c *gin.Context) {
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
 		c.JSON(http.StatusOK, gin.H{
-			"success":    false,
-			"message":    result.newAPIError.Error(),
-			"time":       consumedTime,
-			"error_code": result.newAPIError.GetErrorCode(),
+			"success":                false,
+			"message":                result.newAPIError.Error(),
+			"time":                   consumedTime,
+			"endpoint_latency_ms":    result.endpointLatencyMS,
+			"first_token_latency_ms": result.firstTokenLatencyMS,
+			"error_code":             result.newAPIError.GetErrorCode(),
 		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"time":    consumedTime,
+		"success":                true,
+		"message":                "",
+		"time":                   consumedTime,
+		"endpoint_latency_ms":    result.endpointLatencyMS,
+		"first_token_latency_ms": result.firstTokenLatencyMS,
 	})
 }
 

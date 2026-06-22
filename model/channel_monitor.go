@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -21,35 +22,56 @@ const (
 )
 
 type ChannelMonitorLog struct {
-	ID        int    `json:"id" gorm:"primaryKey"`
-	ChannelID int    `json:"channel_id" gorm:"index:idx_channel_monitor_channel_checked,priority:1"`
-	Model     string `json:"model" gorm:"type:varchar(191)"`
-	Status    string `json:"status" gorm:"type:varchar(32)"`
-	LatencyMS int64  `json:"latency_ms" gorm:"bigint"`
-	Message   string `json:"message" gorm:"type:text"`
-	CheckedAt int64  `json:"checked_at" gorm:"bigint;index;index:idx_channel_monitor_channel_checked,priority:2"`
-	CreatedAt int64  `json:"created_at" gorm:"bigint"`
+	ID                  int    `json:"id" gorm:"primaryKey"`
+	ChannelID           int    `json:"channel_id" gorm:"index:idx_channel_monitor_channel_checked,priority:1"`
+	Model               string `json:"model" gorm:"type:varchar(191)"`
+	Status              string `json:"status" gorm:"type:varchar(32)"`
+	LatencyMS           int64  `json:"latency_ms" gorm:"bigint"`
+	EndpointLatencyMS   int64  `json:"endpoint_latency_ms" gorm:"bigint"`
+	FirstTokenLatencyMS int64  `json:"first_token_latency_ms" gorm:"bigint"`
+	PromptTokens        int    `json:"prompt_tokens"`
+	CompletionTokens    int    `json:"completion_tokens"`
+	Message             string `json:"message" gorm:"type:text"`
+	CheckedAt           int64  `json:"checked_at" gorm:"bigint;index;index:idx_channel_monitor_channel_checked,priority:2"`
+	CreatedAt           int64  `json:"created_at" gorm:"bigint"`
 }
 
 type ChannelMonitorStats struct {
-	ChannelID        int      `json:"channel_id"`
-	TotalChecks      int64    `json:"total_checks"`
-	SuccessChecks    int64    `json:"success_checks"`
-	Availability     *float64 `json:"availability,omitempty"`
-	AverageLatencyMS float64  `json:"average_latency_ms"`
+	ChannelID                  int      `json:"channel_id"`
+	TotalChecks                int64    `json:"total_checks"`
+	SuccessChecks              int64    `json:"success_checks"`
+	Availability               *float64 `json:"availability,omitempty"`
+	AverageLatencyMS           float64  `json:"average_latency_ms"`
+	AverageEndpointLatencyMS   float64  `json:"average_endpoint_latency_ms"`
+	AverageFirstTokenLatencyMS float64  `json:"average_first_token_latency_ms"`
 }
 
 type ChannelMonitorInfo struct {
-	Enabled              bool     `json:"enabled"`
-	IntervalMinutes      int      `json:"interval_minutes"`
-	LatestStatus         string   `json:"latest_status,omitempty"`
-	LatestCheckedAt      int64    `json:"latest_checked_at,omitempty"`
-	LatestLatencyMS      int64    `json:"latest_latency_ms,omitempty"`
-	LatestMessage        string   `json:"latest_message,omitempty"`
-	SevenDayChecks       int64    `json:"seven_day_checks"`
-	SevenDaySuccesses    int64    `json:"seven_day_successes"`
-	SevenDayAvailability *float64 `json:"seven_day_availability,omitempty"`
-	AverageLatencyMS     int64    `json:"average_latency_ms,omitempty"`
+	Enabled                    bool     `json:"enabled"`
+	IntervalMinutes            int      `json:"interval_minutes"`
+	LatestStatus               string   `json:"latest_status,omitempty"`
+	LatestModel                string   `json:"latest_model,omitempty"`
+	LatestCheckedAt            int64    `json:"latest_checked_at,omitempty"`
+	LatestLatencyMS            int64    `json:"latest_latency_ms,omitempty"`
+	LatestEndpointLatencyMS    int64    `json:"latest_endpoint_latency_ms,omitempty"`
+	LatestFirstTokenLatencyMS  int64    `json:"latest_first_token_latency_ms,omitempty"`
+	LatestPromptTokens         int      `json:"latest_prompt_tokens,omitempty"`
+	LatestCompletionTokens     int      `json:"latest_completion_tokens,omitempty"`
+	LatestMessage              string   `json:"latest_message,omitempty"`
+	NextCheckAt                int64    `json:"next_check_at,omitempty"`
+	SecondsUntilNextCheck      int64    `json:"seconds_until_next_check,omitempty"`
+	SevenDayChecks             int64    `json:"seven_day_checks"`
+	SevenDaySuccesses          int64    `json:"seven_day_successes"`
+	SevenDayAvailability       *float64 `json:"seven_day_availability,omitempty"`
+	AverageLatencyMS           int64    `json:"average_latency_ms,omitempty"`
+	AverageEndpointLatencyMS   int64    `json:"average_endpoint_latency_ms,omitempty"`
+	AverageFirstTokenLatencyMS int64    `json:"average_first_token_latency_ms,omitempty"`
+}
+
+type ChannelMonitorDetail struct {
+	ChannelID     int                 `json:"channel_id"`
+	Info          ChannelMonitorInfo  `json:"info"`
+	RecentRecords []ChannelMonitorLog `json:"recent_records"`
 }
 
 func NormalizeChannelMonitorSettings(settings dto.ChannelOtherSettings) dto.ChannelOtherSettings {
@@ -121,23 +143,57 @@ func GetLatestChannelMonitorLogs(channelIDs []int) (map[int]ChannelMonitorLog, e
 	return latest, nil
 }
 
+func GetRecentChannelMonitorLogs(channelID int, limit int) ([]ChannelMonitorLog, error) {
+	if channelID == 0 {
+		return []ChannelMonitorLog{}, nil
+	}
+	if limit <= 0 {
+		limit = 60
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	var newest []ChannelMonitorLog
+	if err := DB.Model(&ChannelMonitorLog{}).
+		Where("channel_id = ?", channelID).
+		Order("checked_at DESC").
+		Order("id DESC").
+		Limit(limit).
+		Find(&newest).Error; err != nil {
+		return nil, err
+	}
+
+	for i, j := 0, len(newest)-1; i < j; i, j = i+1, j-1 {
+		newest[i], newest[j] = newest[j], newest[i]
+	}
+	return newest, nil
+}
+
 func GetChannelMonitorStats(channelIDs []int, windowStart int64) (map[int]ChannelMonitorStats, error) {
+	return GetChannelMonitorStatsWithContext(context.Background(), channelIDs, windowStart)
+}
+
+func GetChannelMonitorStatsWithContext(ctx context.Context, channelIDs []int, windowStart int64) (map[int]ChannelMonitorStats, error) {
 	stats := make(map[int]ChannelMonitorStats, len(channelIDs))
 	if len(channelIDs) == 0 {
 		return stats, nil
 	}
 
 	type statsRow struct {
-		ChannelID        int      `gorm:"column:channel_id"`
-		TotalChecks      int64    `gorm:"column:total_checks"`
-		SuccessChecks    int64    `gorm:"column:success_checks"`
-		AverageLatencyMS *float64 `gorm:"column:average_latency_ms"`
+		ChannelID                  int      `gorm:"column:channel_id"`
+		TotalChecks                int64    `gorm:"column:total_checks"`
+		SuccessChecks              int64    `gorm:"column:success_checks"`
+		AverageLatencyMS           *float64 `gorm:"column:average_latency_ms"`
+		AverageEndpointLatencyMS   *float64 `gorm:"column:average_endpoint_latency_ms"`
+		AverageFirstTokenLatencyMS *float64 `gorm:"column:average_first_token_latency_ms"`
 	}
 	var rows []statsRow
-	err := DB.Model(&ChannelMonitorLog{}).
+	err := DB.WithContext(ctx).Model(&ChannelMonitorLog{}).
 		Select(
-			"channel_id, COUNT(*) AS total_checks, SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS success_checks, AVG(latency_ms) AS average_latency_ms",
+			"channel_id, COUNT(*) AS total_checks, SUM(CASE WHEN status = ? OR status = ? THEN 1 ELSE 0 END) AS success_checks, AVG(CASE WHEN latency_ms > 0 THEN latency_ms ELSE NULL END) AS average_latency_ms, AVG(CASE WHEN endpoint_latency_ms > 0 THEN endpoint_latency_ms ELSE NULL END) AS average_endpoint_latency_ms, AVG(CASE WHEN first_token_latency_ms > 0 THEN first_token_latency_ms ELSE NULL END) AS average_first_token_latency_ms",
 			ChannelMonitorStatusSuccess,
+			ChannelMonitorStatusDegraded,
 		).
 		Where("channel_id IN ? AND checked_at >= ?", channelIDs, windowStart).
 		Group("channel_id").
@@ -155,6 +211,12 @@ func GetChannelMonitorStats(channelIDs []int, windowStart int64) (map[int]Channe
 		if row.AverageLatencyMS != nil {
 			stat.AverageLatencyMS = *row.AverageLatencyMS
 		}
+		if row.AverageEndpointLatencyMS != nil {
+			stat.AverageEndpointLatencyMS = *row.AverageEndpointLatencyMS
+		}
+		if row.AverageFirstTokenLatencyMS != nil {
+			stat.AverageFirstTokenLatencyMS = *row.AverageFirstTokenLatencyMS
+		}
 		if row.TotalChecks > 0 {
 			availability := float64(row.SuccessChecks) / float64(row.TotalChecks)
 			stat.Availability = &availability
@@ -162,6 +224,28 @@ func GetChannelMonitorStats(channelIDs []int, windowStart int64) (map[int]Channe
 		stats[row.ChannelID] = stat
 	}
 	return stats, nil
+}
+
+func GetChannelMonitorDetail(channel *Channel, now int64, limit int) (*ChannelMonitorDetail, error) {
+	if channel == nil {
+		return nil, fmt.Errorf("channel is required")
+	}
+	if err := AttachChannelMonitorInfo([]*Channel{channel}, now); err != nil {
+		return nil, err
+	}
+	info := ChannelMonitorInfo{}
+	if channel.MonitorInfo != nil {
+		info = *channel.MonitorInfo
+	}
+	recent, err := GetRecentChannelMonitorLogs(channel.Id, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &ChannelMonitorDetail{
+		ChannelID:     channel.Id,
+		Info:          info,
+		RecentRecords: recent,
+	}, nil
 }
 
 func DeleteOldChannelMonitorLogs(cutoff int64, batchSize int) (int64, error) {
@@ -235,15 +319,28 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 		}
 		if log, ok := latest[channel.Id]; ok {
 			info.LatestStatus = log.Status
+			info.LatestModel = log.Model
 			info.LatestCheckedAt = log.CheckedAt
 			info.LatestLatencyMS = log.LatencyMS
+			info.LatestEndpointLatencyMS = log.EndpointLatencyMS
+			info.LatestFirstTokenLatencyMS = log.FirstTokenLatencyMS
+			info.LatestPromptTokens = log.PromptTokens
+			info.LatestCompletionTokens = log.CompletionTokens
 			info.LatestMessage = log.Message
+			if info.Enabled && info.IntervalMinutes > 0 && log.CheckedAt > 0 {
+				info.NextCheckAt = log.CheckedAt + int64(info.IntervalMinutes)*60
+				if info.NextCheckAt > now {
+					info.SecondsUntilNextCheck = info.NextCheckAt - now
+				}
+			}
 		}
 		if stat, ok := stats[channel.Id]; ok {
 			info.SevenDayChecks = stat.TotalChecks
 			info.SevenDaySuccesses = stat.SuccessChecks
 			info.SevenDayAvailability = stat.Availability
 			info.AverageLatencyMS = int64(math.Round(stat.AverageLatencyMS))
+			info.AverageEndpointLatencyMS = int64(math.Round(stat.AverageEndpointLatencyMS))
+			info.AverageFirstTokenLatencyMS = int64(math.Round(stat.AverageFirstTokenLatencyMS))
 		}
 		channel.MonitorInfo = info
 	}

@@ -20,6 +20,7 @@ import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type Row } from '@tanstack/react-table'
 import {
+  Activity,
   MoreHorizontal,
   Boxes,
   Pencil,
@@ -109,6 +110,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleQueryBalance = () => {
     setCurrentRow(channel)
     setOpen('balance-query')
+  }
+
+  const handleMonitor = () => {
+    setCurrentRow(channel)
+    setOpen('channel-monitor')
   }
 
   const handleFetchModels = () => {
@@ -208,7 +214,16 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           <MoreHorizontal className='h-4 w-4' />
           <span className='sr-only'>{t('Open menu')}</span>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align='end' className='w-48'>
+        <DropdownMenuContent align='end' className='w-56'>
+          <DropdownMenuItem onClick={handleMonitor}>
+            {t('Channel Monitor')}
+            <DropdownMenuShortcut>
+              <Activity size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+
+          <DropdownMenuSeparator />
+
           {/* Edit */}
           <DropdownMenuItem onClick={handleEdit}>
             {t('Edit')}
@@ -241,7 +256,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
-          {/* Detect Upstream Updates (only for fetchable channel types) */}
+          {/* Detect model list updates (only for fetchable channel types) */}
           {MODEL_FETCHABLE_TYPES.has(channel.type) && (
             <DropdownMenuItem
               onClick={() => {
@@ -261,7 +276,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
                 }
               }}
             >
-              {t('Upstream Updates')}
+              {t('Model Updates')}
               <DropdownMenuShortcut>
                 <RefreshCw size={16} />
               </DropdownMenuShortcut>

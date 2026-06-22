@@ -29,6 +29,7 @@ import type {
   CopyChannelResponse,
   FetchModelsResponse,
   GetChannelResponse,
+  GetChannelMonitorDetailResponse,
   GetChannelsParams,
   GetChannelsResponse,
   MultiKeyManageParams,
@@ -96,6 +97,13 @@ export async function searchChannels(
  */
 export async function getChannel(id: number): Promise<GetChannelResponse> {
   const res = await api.get(`/api/channel/${id}`)
+  return res.data
+}
+
+export async function getChannelMonitorDetail(
+  id: number
+): Promise<GetChannelMonitorDetailResponse> {
+  const res = await api.get(`/api/channel/${id}/monitor`)
   return res.data
 }
 

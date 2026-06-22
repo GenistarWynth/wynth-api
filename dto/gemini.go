@@ -44,9 +44,9 @@ func (r *GeminiChatRequest) UnmarshalJSON(data []byte) error {
 }
 
 type ToolConfig struct {
-	FunctionCallingConfig *FunctionCallingConfig `json:"functionCallingConfig,omitempty"`
-	RetrievalConfig       *RetrievalConfig       `json:"retrievalConfig,omitempty"`
-	IncludeServerSideToolInvocations *bool       `json:"includeServerSideToolInvocations,omitempty"`
+	FunctionCallingConfig            *FunctionCallingConfig `json:"functionCallingConfig,omitempty"`
+	RetrievalConfig                  *RetrievalConfig       `json:"retrievalConfig,omitempty"`
+	IncludeServerSideToolInvocations *bool                  `json:"includeServerSideToolInvocations,omitempty"`
 }
 
 type FunctionCallingConfig struct {
@@ -455,9 +455,31 @@ type GeminiChatPromptFeedback struct {
 }
 
 type GeminiChatResponse struct {
+	ModelVersion   string                    `json:"modelVersion"`
 	Candidates     []GeminiChatCandidate     `json:"candidates"`
 	PromptFeedback *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
 	UsageMetadata  GeminiUsageMetadata       `json:"usageMetadata"`
+}
+
+// UnmarshalJSON allows GeminiChatResponse to accept both snake_case and camelCase fields.
+func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
+	type Alias GeminiChatResponse
+	var aux struct {
+		Alias
+		ModelVersionSnake string `json:"model_version,omitempty"`
+	}
+
+	if err := common.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*r = GeminiChatResponse(aux.Alias)
+
+	if aux.ModelVersionSnake != "" && r.ModelVersion == "" {
+		r.ModelVersion = aux.ModelVersionSnake
+	}
+
+	return nil
 }
 
 type GeminiUsageMetadata struct {

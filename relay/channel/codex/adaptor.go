@@ -99,12 +99,138 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if isCompact {
 		return request, nil
 	}
+	if info != nil {
+		if err := applyCodexImageGenerationBridgePolicy(&request, info.ChannelOtherSettings.CodexImageGenerationBridgePolicy); err != nil {
+			return nil, err
+		}
+	}
 	// codex: store must be false
 	request.Store = json.RawMessage("false")
 	// rm max_output_tokens
 	request.MaxOutputTokens = nil
 	request.Temperature = nil
 	return request, nil
+}
+
+const codexImageGenerationBridgeInstructions = "When the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. Do not claim image generation is unavailable only because a local Codex image tool is absent."
+
+func applyCodexImageGenerationBridgePolicy(request *dto.OpenAIResponsesRequest, policy string) error {
+	if request == nil {
+		return nil
+	}
+	switch dto.NormalizeCodexImageGenerationBridgePolicy(policy) {
+	case dto.CodexImageGenerationBridgePolicyEnabled:
+		if isCodexImageGenerationBridgeUnsupportedModel(request.Model) {
+			return nil
+		}
+		if err := ensureCodexImageGenerationTool(request); err != nil {
+			return err
+		}
+		return appendCodexImageGenerationBridgeInstructions(request)
+	case dto.CodexImageGenerationBridgePolicyDisabled:
+		return stripCodexImageGenerationTool(request)
+	}
+	return nil
+}
+
+func isCodexImageGenerationBridgeUnsupportedModel(modelName string) bool {
+	return strings.EqualFold(strings.TrimSpace(modelName), "gpt-5.3-codex-spark")
+}
+
+func ensureCodexImageGenerationTool(request *dto.OpenAIResponsesRequest) error {
+	var tools []map[string]any
+	if len(request.Tools) > 0 {
+		if err := common.Unmarshal(request.Tools, &tools); err != nil {
+			return err
+		}
+	}
+	for _, tool := range tools {
+		if isCodexImageGenerationTool(tool) {
+			return nil
+		}
+	}
+	tools = append(tools, map[string]any{
+		"type":          "image_generation",
+		"output_format": "png",
+	})
+	encoded, err := common.Marshal(tools)
+	if err != nil {
+		return err
+	}
+	request.Tools = encoded
+	return nil
+}
+
+func stripCodexImageGenerationTool(request *dto.OpenAIResponsesRequest) error {
+	var tools []map[string]any
+	if len(request.Tools) > 0 {
+		if err := common.Unmarshal(request.Tools, &tools); err != nil {
+			return err
+		}
+		remaining := make([]map[string]any, 0, len(tools))
+		for _, tool := range tools {
+			if !isCodexImageGenerationTool(tool) {
+				remaining = append(remaining, tool)
+			}
+		}
+		if len(remaining) == 0 {
+			request.Tools = nil
+		} else {
+			encoded, err := common.Marshal(remaining)
+			if err != nil {
+				return err
+			}
+			request.Tools = encoded
+		}
+	}
+	if isCodexImageGenerationToolChoice(request.ToolChoice) {
+		request.ToolChoice = nil
+	}
+	return nil
+}
+
+func isCodexImageGenerationTool(tool map[string]any) bool {
+	toolType, _ := tool["type"].(string)
+	return strings.EqualFold(strings.TrimSpace(toolType), "image_generation")
+}
+
+func isCodexImageGenerationToolChoice(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var choice string
+	if err := common.Unmarshal(raw, &choice); err == nil {
+		return strings.EqualFold(strings.TrimSpace(choice), "image_generation")
+	}
+	var choiceMap map[string]any
+	if err := common.Unmarshal(raw, &choiceMap); err != nil {
+		return false
+	}
+	choiceType, _ := choiceMap["type"].(string)
+	return strings.EqualFold(strings.TrimSpace(choiceType), "image_generation")
+}
+
+func appendCodexImageGenerationBridgeInstructions(request *dto.OpenAIResponsesRequest) error {
+	existing := ""
+	if len(request.Instructions) > 0 {
+		if err := common.Unmarshal(request.Instructions, &existing); err != nil {
+			return nil
+		}
+	}
+	existing = strings.TrimSpace(existing)
+	if strings.Contains(existing, codexImageGenerationBridgeInstructions) {
+		return nil
+	}
+	next := codexImageGenerationBridgeInstructions
+	if existing != "" {
+		next = existing + "\n\n" + codexImageGenerationBridgeInstructions
+	}
+	encoded, err := common.Marshal(next)
+	if err != nil {
+		return err
+	}
+	request.Instructions = encoded
+	return nil
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {

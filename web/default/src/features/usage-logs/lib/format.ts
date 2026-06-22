@@ -149,25 +149,50 @@ export function getResponseTimeColor(
   return getThroughputColor(completionTokens / seconds)
 }
 
+function trimModelAuditValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
 /**
  * Format model name with mapping indicator
  */
 export function formatModelName(log: UsageLog): {
   name: string
   isMapped: boolean
+  upstreamModel?: string
   actualModel?: string
+  actualResponseModel?: string
+  actualResponseModelSource?: string
+  secondaryActualModel?: string
 } {
   const other = parseLogOther(log.other)
+  const requestedModel = trimModelAuditValue(log.model_name) ?? log.model_name
+  const upstreamModel = trimModelAuditValue(other?.upstream_model_name)
+  const actualResponseModel = trimModelAuditValue(other?.actual_response_model)
+  const actualResponseModelSource = trimModelAuditValue(
+    other?.actual_response_model_source
+  )
   const isMapped = !!(
     other?.is_model_mapped &&
-    other?.upstream_model_name &&
-    other.upstream_model_name !== ''
+    upstreamModel &&
+    upstreamModel !== requestedModel
   )
+  const comparisonModel = upstreamModel || requestedModel
+  const secondaryActualModel =
+    actualResponseModel && actualResponseModel !== comparisonModel
+      ? actualResponseModel
+      : undefined
 
   return {
-    name: log.model_name,
+    name: requestedModel,
     isMapped,
-    actualModel: isMapped ? other.upstream_model_name : undefined,
+    upstreamModel,
+    actualModel: isMapped ? upstreamModel : undefined,
+    actualResponseModel,
+    actualResponseModelSource,
+    secondaryActualModel,
   }
 }
 

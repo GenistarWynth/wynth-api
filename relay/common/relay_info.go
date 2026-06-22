@@ -161,6 +161,11 @@ type RelayInfo struct {
 	// *bytes.Reader/Buffer/strings.Reader). 0 means "let net/http decide".
 	UpstreamRequestBodySize int64
 
+	// ActualResponseModel records the model name reported by the upstream response.
+	// It is audit-only in Phase 1 and must not affect billing or routing.
+	ActualResponseModel       string
+	ActualResponseModelSource ActualResponseModelSource
+
 	PriceData types.PriceData
 
 	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
@@ -337,6 +342,10 @@ var streamSupportedChannels = map[int]bool{
 	constant.ChannelTypeMiniMax:        true,
 	constant.ChannelTypeSiliconFlow:    true,
 	constant.ChannelTypeAdvancedCustom: true,
+}
+
+func SupportsStreamOptions(channelType int) bool {
+	return streamSupportedChannels[channelType]
 }
 
 func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {

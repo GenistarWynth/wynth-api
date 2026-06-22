@@ -172,7 +172,7 @@ export function ChannelsPrimaryButtons() {
               onClick={() => upstream.detectAllUpdates()}
               disabled={upstream.detectAllLoading}
             >
-              {t('Detect All Upstream Updates')}
+              {t('Detect All Model Updates')}
               <DropdownMenuShortcut>
                 <RefreshCw className='h-4 w-4' />
               </DropdownMenuShortcut>
@@ -182,7 +182,7 @@ export function ChannelsPrimaryButtons() {
               onClick={() => upstream.applyAllUpdates()}
               disabled={upstream.applyAllLoading}
             >
-              {t('Apply All Upstream Updates')}
+              {t('Apply All Model Updates')}
               <DropdownMenuShortcut>
                 <ArrowUpFromLine className='h-4 w-4' />
               </DropdownMenuShortcut>

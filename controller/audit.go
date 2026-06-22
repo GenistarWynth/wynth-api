@@ -45,6 +45,16 @@ var auditContentTemplates = map[string]string{
 	"channel.upstream_apply":     "Applied upstream model changes to channel (ID: ${id})",
 	"channel.upstream_apply_all": "Applied upstream model changes to ${count} channels",
 
+	"upstream_source.create":             "Created upstream source ${name} (ID: ${id})",
+	"upstream_source.update":             "Updated upstream source ${name} (ID: ${id})",
+	"upstream_source.delete":             "Deleted upstream source ${name} (ID: ${id})",
+	"upstream_source.credentials_update": "Updated upstream source credentials for ${name} (ID: ${id})",
+	"upstream_source.discover":           "Discovered upstream source ${name} (ID: ${id}, groups ${groups})",
+	"upstream_source.mapping_update":     "Updated upstream source mappings for ${name} (ID: ${id})",
+	"upstream_source.sync":               "Synced upstream source ${name} (ID: ${id}, created ${created}, updated ${updated}, failed ${failed})",
+	"upstream_source.channel_create":     "Created channel ${channelName} from upstream source ${name} (ID: ${id})",
+	"upstream_source.channel_update":     "Updated channel ${channelName} from upstream source ${name} (ID: ${id})",
+
 	"redemption.create": "Created ${count} redemption codes named ${name} (${quota} each)",
 }
 

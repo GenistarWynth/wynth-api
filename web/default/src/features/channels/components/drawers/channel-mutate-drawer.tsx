@@ -28,7 +28,6 @@ import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity,
   ArrowRight,
   HelpCircle,
   Loader2,
@@ -65,6 +64,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Select,
   SelectContent,
@@ -102,14 +102,9 @@ import {
 import { JsonEditor } from '@/components/json-editor'
 import { MultiSelect } from '@/components/multi-select'
 import {
-  StatusBadge,
-  type StatusBadgeProps,
-} from '@/components/status-badge'
-import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
-import { safeNumberFieldProps } from '@/features/system-settings/utils/numeric-field'
 import {
   fetchModels,
   getAllModels,
@@ -186,10 +181,6 @@ type ModelMappingGuardrail = {
   exposedTargetModels: string[]
 }
 
-type MonitorLatestStatus = NonNullable<
-  Channel['monitor_info']
->['latest_status']
-
 // Helper functions
 const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
   invalidJson: false,
@@ -224,6 +215,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.remark?.trim() ||
     values.priority ||
     values.weight ||
+    values.auto_retry_times !== undefined ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
@@ -231,7 +223,6 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
     values.claude_beta_query ||
-    values.channel_monitor_enabled ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
     values.upstream_model_update_ignored_models?.trim()
@@ -257,24 +248,6 @@ function formatUnixTime(timestamp: unknown): string {
   const seconds = Number(timestamp)
   if (!Number.isFinite(seconds) || seconds <= 0) return '-'
   return new Date(seconds * 1000).toLocaleString()
-}
-
-function getMonitorStatusVariant(
-  status: MonitorLatestStatus
-): StatusBadgeProps['variant'] {
-  if (status === 'success') return 'success'
-  if (status === 'failed' || status === 'error') return 'danger'
-  return 'warning'
-}
-
-function formatMonitorAvailability(
-  availability: number | null | undefined,
-  noDataLabel: string
-): string {
-  if (typeof availability !== 'number' || !Number.isFinite(availability)) {
-    return noDataLabel
-  }
-  return `${Math.round(availability * 100)}%`
 }
 
 function CardHeading({ title, icon }: { title: string; icon?: ReactNode }) {
@@ -409,7 +382,6 @@ export function ChannelMutateDrawer({
   const upstreamModelUpdateCheckEnabled = form.watch(
     'upstream_model_update_check_enabled'
   )
-  const channelMonitorEnabled = form.watch('channel_monitor_enabled')
   const currentSettings = form.watch('settings')
   const currentAdvancedCustom = form.watch('advanced_custom')
   const {
@@ -625,15 +597,6 @@ export function ChannelMutateDrawer({
   const upstreamDetectedModelsOmittedCount =
     upstreamUpdateMeta.detectedModels.length -
     upstreamDetectedModelsPreview.length
-  const monitorInfo = channelData?.data?.monitor_info ?? currentRow?.monitor_info
-  const monitorStatusLabel = monitorInfo?.latest_status
-    ? t(monitorInfo.latest_status)
-    : t('Not monitored yet')
-  const monitorAvailabilityLabel = formatMonitorAvailability(
-    monitorInfo?.seven_day_availability,
-    t('No data')
-  )
-
   // Load channel data into form when editing
   useEffect(() => {
     if (isEditing && channelData?.data) {
@@ -2140,6 +2103,70 @@ export function ChannelMutateDrawer({
                               )}
                             </AlertDescription>
                           </Alert>
+
+                          <FormField
+                            control={form.control}
+                            name='codex_image_generation_bridge_policy'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>
+                                  {t('Codex image generation bridge')}
+                                </FormLabel>
+                                <FormControl>
+                                  <RadioGroup
+                                    value={field.value || 'follow'}
+                                    onValueChange={field.onChange}
+                                    className='grid gap-2 sm:grid-cols-3'
+                                  >
+                                    {[
+                                      {
+                                        value: 'follow',
+                                        label: t('Follow channel'),
+                                        description: t(
+                                          'Do not override image tool injection.'
+                                        ),
+                                      },
+                                      {
+                                        value: 'enabled',
+                                        label: t('Force enable'),
+                                        description: t(
+                                          'Inject the Responses image_generation tool for Codex text requests.'
+                                        ),
+                                      },
+                                      {
+                                        value: 'disabled',
+                                        label: t('Force disable'),
+                                        description: t(
+                                          'Remove the Responses image_generation tool from Codex text requests.'
+                                        ),
+                                      },
+                                    ].map((option) => (
+                                      <label
+                                        key={option.value}
+                                        htmlFor={`codex-image-bridge-${option.value}`}
+                                        className='border-border hover:bg-accent has-data-[checked]:border-primary has-data-[checked]:bg-primary/5 flex cursor-pointer gap-3 rounded-md border p-3'
+                                      >
+                                        <RadioGroupItem
+                                          id={`codex-image-bridge-${option.value}`}
+                                          value={option.value}
+                                          className='mt-0.5'
+                                        />
+                                        <span className='space-y-1'>
+                                          <span className='block text-sm font-medium'>
+                                            {option.label}
+                                          </span>
+                                          <span className='text-muted-foreground block text-xs leading-relaxed'>
+                                            {option.description}
+                                          </span>
+                                        </span>
+                                      </label>
+                                    ))}
+                                  </RadioGroup>
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
                         </div>
                       )}
 
@@ -2605,7 +2632,7 @@ export function ChannelMutateDrawer({
                           title={t('Routing Strategy')}
                           icon={<Route className='h-3.5 w-3.5' />}
                         />
-                        <div className='grid gap-4 sm:grid-cols-2'>
+                        <div className='grid gap-4 sm:grid-cols-3'>
                           <FormField
                             control={form.control}
                             name='priority'
@@ -2648,6 +2675,40 @@ export function ChannelMutateDrawer({
                                 </FormControl>
                                 <FormDescription>
                                   {t(FIELD_DESCRIPTIONS.WEIGHT)}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          <FormField
+                            control={form.control}
+                            name='auto_retry_times'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Auto Retry Times')}</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type='number'
+                                    min={0}
+                                    max={10}
+                                    inputMode='numeric'
+                                    placeholder={t(
+                                      FIELD_PLACEHOLDERS.AUTO_RETRY_TIMES
+                                    )}
+                                    value={field.value ?? ''}
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      field.onChange(
+                                        value === ''
+                                          ? undefined
+                                          : Number(value)
+                                      )
+                                    }}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  {t(FIELD_DESCRIPTIONS.AUTO_RETRY_TIMES)}
                                 </FormDescription>
                                 <FormMessage />
                               </FormItem>
@@ -3358,138 +3419,6 @@ export function ChannelMutateDrawer({
                           </FormItem>
                         )}
                       />
-
-                      <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
-                        <SubHeading
-                          title={t('Channel Monitoring')}
-                          icon={<Activity className='h-3.5 w-3.5' />}
-                        />
-                        <div className='divide-border divide-y border-y'>
-                          <FormField
-                            control={form.control}
-                            name='channel_monitor_enabled'
-                            render={({ field }) => (
-                              <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
-                                <div className='flex min-w-0 flex-col gap-0.5'>
-                                  <FormLabel>
-                                    {t('Enable channel monitoring')}
-                                  </FormLabel>
-                                  <FormDescription>
-                                    {t(
-                                      'Probe this channel on its own schedule and record availability.'
-                                    )}
-                                  </FormDescription>
-                                </div>
-                                <FormControl>
-                                  <Switch
-                                    checked={field.value}
-                                    onCheckedChange={(checked) => {
-                                      field.onChange(checked)
-                                      const interval = form.getValues(
-                                        'channel_monitor_interval_minutes'
-                                      )
-                                      if (
-                                        checked &&
-                                        (!Number.isInteger(interval) ||
-                                          interval === undefined ||
-                                          interval < 1)
-                                      ) {
-                                        form.setValue(
-                                          'channel_monitor_interval_minutes',
-                                          10,
-                                          { shouldDirty: true }
-                                        )
-                                      }
-                                    }}
-                                  />
-                                </FormControl>
-                              </FormItem>
-                            )}
-                          />
-
-                          <FormField
-                            control={form.control}
-                            name='channel_monitor_interval_minutes'
-                            render={({ field }) => {
-                              const numberFieldProps =
-                                safeNumberFieldProps(field)
-
-                              return (
-                                <FormItem className='flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
-                                  <div className='flex min-w-0 flex-col gap-0.5'>
-                                    <FormLabel>
-                                      {t('Monitoring interval')}
-                                    </FormLabel>
-                                    <FormDescription>
-                                      {t(
-                                        'Interval in minutes for automatic probes.'
-                                      )}
-                                    </FormDescription>
-                                  </div>
-                                  <FormControl>
-                                    <Input
-                                      type='number'
-                                      min={1}
-                                      step={1}
-                                      className='w-full sm:w-28'
-                                      disabled={!channelMonitorEnabled}
-                                      {...numberFieldProps}
-                                      onBlur={() => {
-                                        numberFieldProps.onBlur()
-                                        const interval = form.getValues(
-                                          'channel_monitor_interval_minutes'
-                                        )
-                                        if (
-                                          channelMonitorEnabled &&
-                                          (!Number.isInteger(interval) ||
-                                            interval === undefined ||
-                                            interval < 1)
-                                        ) {
-                                          field.onChange(1)
-                                        }
-                                      }}
-                                    />
-                                  </FormControl>
-                                  <FormMessage />
-                                </FormItem>
-                              )
-                            }}
-                          />
-
-                          <div className='text-muted-foreground grid gap-2 px-4 py-3 text-xs sm:grid-cols-2'>
-                            <div className='flex min-w-0 items-center justify-between gap-2'>
-                              <span className='text-foreground font-medium'>
-                                {t('Latest monitor status')}
-                              </span>
-                              <StatusBadge
-                                label={monitorStatusLabel}
-                                variant={getMonitorStatusVariant(
-                                  monitorInfo?.latest_status
-                                )}
-                                size='sm'
-                                copyable={false}
-                                className='max-w-[9rem]'
-                              />
-                            </div>
-                            <div className='flex min-w-0 items-center justify-between gap-2'>
-                              <span className='text-foreground font-medium'>
-                                {t('7-day availability')}
-                              </span>
-                              <StatusBadge
-                                label={monitorAvailabilityLabel}
-                                variant={
-                                  monitorInfo?.seven_day_availability == null
-                                    ? 'warning'
-                                    : 'neutral'
-                                }
-                                size='sm'
-                                copyable={false}
-                                className='max-w-[6rem]'
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
 
                       {MODEL_FETCHABLE_TYPES.has(currentType) && (
                         <div className='border-border/60 flex flex-col gap-3 border-y py-4'>

@@ -13,7 +13,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
-	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/service"
@@ -192,33 +191,6 @@ func GetAllChannels(c *gin.Context) {
 	return
 }
 
-func buildFetchModelsHeaders(channel *model.Channel, key string) (http.Header, error) {
-	var headers http.Header
-	switch channel.Type {
-	case constant.ChannelTypeAnthropic:
-		headers = GetClaudeAuthHeader(key)
-	default:
-		headers = GetAuthHeader(key)
-	}
-
-	headerOverride := channel.GetHeaderOverride()
-	for k, v := range headerOverride {
-		if relaychannel.IsHeaderPassthroughRuleKey(k) {
-			continue
-		}
-		str, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid header override for key %s", k)
-		}
-		if strings.Contains(str, "{api_key}") {
-			str = strings.ReplaceAll(str, "{api_key}", key)
-		}
-		headers.Set(k, str)
-	}
-
-	return headers, nil
-}
-
 func FetchUpstreamModels(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -232,7 +204,7 @@ func FetchUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	ids, err := fetchChannelUpstreamModelIDs(channel)
+	ids, err := service.FetchChannelUpstreamModelIDs(channel)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -406,6 +378,30 @@ func GetChannel(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data":    channel,
+	})
+	return
+}
+
+func GetChannelMonitorDetail(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	channel, err := model.GetChannelById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	detail, err := model.GetChannelMonitorDetail(channel, common.GetTimestamp(), 60)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    detail,
 	})
 	return
 }
@@ -612,7 +608,9 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
-	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
+	now := common.GetTimestamp()
+	addChannelRequest.Channel.CreatedTime = now
+	addChannelRequest.Channel.UpdatedTime = now
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
@@ -743,15 +741,67 @@ func DeleteDisabledChannel(c *gin.Context) {
 }
 
 type ChannelTag struct {
-	Tag            string  `json:"tag"`
-	NewTag         *string `json:"new_tag"`
-	Priority       *int64  `json:"priority"`
-	Weight         *uint   `json:"weight"`
-	ModelMapping   *string `json:"model_mapping"`
-	Models         *string `json:"models"`
-	Groups         *string `json:"groups"`
-	ParamOverride  *string `json:"param_override"`
-	HeaderOverride *string `json:"header_override"`
+	Tag            string    `json:"tag"`
+	NewTag         *string   `json:"new_tag"`
+	Priority       *int64    `json:"priority"`
+	Weight         *uint     `json:"weight"`
+	ModelMapping   *string   `json:"model_mapping"`
+	Models         *string   `json:"models"`
+	Groups         *string   `json:"groups"`
+	ParamOverride  *string   `json:"param_override"`
+	HeaderOverride *string   `json:"header_override"`
+	Fields         *[]string `json:"fields"`
+}
+
+func (channelTag *ChannelTag) applySelectedFields() {
+	if channelTag == nil || channelTag.Fields == nil {
+		return
+	}
+	selected := make(map[string]struct{}, len(*channelTag.Fields))
+	for _, field := range *channelTag.Fields {
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "tag", "new_tag":
+			selected["new_tag"] = struct{}{}
+		case "priority":
+			selected["priority"] = struct{}{}
+		case "weight":
+			selected["weight"] = struct{}{}
+		case "model_mapping":
+			selected["model_mapping"] = struct{}{}
+		case "models":
+			selected["models"] = struct{}{}
+		case "group", "groups":
+			selected["groups"] = struct{}{}
+		case "param_override":
+			selected["param_override"] = struct{}{}
+		case "header_override":
+			selected["header_override"] = struct{}{}
+		}
+	}
+	if _, ok := selected["new_tag"]; !ok {
+		channelTag.NewTag = nil
+	}
+	if _, ok := selected["priority"]; !ok {
+		channelTag.Priority = nil
+	}
+	if _, ok := selected["weight"]; !ok {
+		channelTag.Weight = nil
+	}
+	if _, ok := selected["model_mapping"]; !ok {
+		channelTag.ModelMapping = nil
+	}
+	if _, ok := selected["models"]; !ok {
+		channelTag.Models = nil
+	}
+	if _, ok := selected["groups"]; !ok {
+		channelTag.Groups = nil
+	}
+	if _, ok := selected["param_override"]; !ok {
+		channelTag.ParamOverride = nil
+	}
+	if _, ok := selected["header_override"]; !ok {
+		channelTag.HeaderOverride = nil
+	}
 }
 
 func DisableTagChannels(c *gin.Context) {
@@ -823,6 +873,7 @@ func EditTagChannels(c *gin.Context) {
 		})
 		return
 	}
+	channelTag.applySelectedFields()
 	if channelTag.ParamOverride != nil {
 		trimmed := strings.TrimSpace(*channelTag.ParamOverride)
 		if trimmed != "" && !json.Valid([]byte(trimmed)) {
@@ -1286,7 +1337,10 @@ func CopyChannel(c *gin.Context) {
 	// clone channel
 	clone := *origin // shallow copy is sufficient as we will overwrite primitives
 	clone.Id = 0     // let DB auto-generate
-	clone.CreatedTime = common.GetTimestamp()
+	now := common.GetTimestamp()
+	clone.CreatedTime = now
+	clone.UpdatedTime = now
+	clone.LastSyncTime = 0
 	clone.Name = origin.Name + suffix
 	clone.TestTime = 0
 	clone.ResponseTime = 0

@@ -33,6 +33,28 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 	}
 }
 
+func appendModelAuditInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil {
+		return
+	}
+	if relayInfo.ChannelMeta != nil {
+		upstreamModel := strings.TrimSpace(relayInfo.UpstreamModelName)
+		if upstreamModel != "" {
+			other["upstream_model_name"] = upstreamModel
+		}
+	}
+	if relayInfo.IsModelMapped {
+		other["is_model_mapped"] = true
+	}
+
+	actualModel := strings.TrimSpace(relayInfo.ActualResponseModel)
+	if actualModel == "" || relayInfo.ActualResponseModelSource == "" {
+		return
+	}
+	other["actual_response_model"] = actualModel
+	other["actual_response_model_source"] = string(relayInfo.ActualResponseModelSource)
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -47,10 +69,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
 	}
-	if relayInfo.IsModelMapped {
-		other["is_model_mapped"] = true
-		other["upstream_model_name"] = relayInfo.UpstreamModelName
-	}
+	appendModelAuditInfo(relayInfo, other)
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {
