@@ -163,6 +163,7 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 		"default_monitor_enabled": params.DefaultMonitorEnabled,
 		"default_schedule_policy": params.DefaultSchedulePolicy,
 		"remark":                  params.Remark,
+		"updated_time":            common.GetTimestamp(),
 	}).Error
 	if err != nil {
 		return model.AccountPool{}, err
@@ -411,14 +412,6 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 			return AccountPoolAccountView{}, err
 		}
 	}
-	credentialConfig, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
-	if err != nil {
-		return AccountPoolAccountView{}, err
-	}
-	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
-	if err != nil {
-		return AccountPoolAccountView{}, err
-	}
 	return AccountPoolAccountView{
 		Id:                 account.Id,
 		PoolID:             account.PoolID,
@@ -436,8 +429,8 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		TempDisabledUntil:  account.TempDisabledUntil,
 		TempDisabledReason: account.TempDisabledReason,
 		LastError:          account.LastError,
-		HasCredential:      accountPoolCredentialHasSecret(credentialConfig),
-		HasToken:           tokenState.AccessToken != "" || tokenState.RefreshToken != "",
+		HasCredential:      strings.TrimSpace(account.CredentialConfig) != "",
+		HasToken:           strings.TrimSpace(account.TokenState) != "",
 		CreatedTime:        account.CreatedTime,
 		UpdatedTime:        account.UpdatedTime,
 	}, nil
@@ -461,10 +454,6 @@ func buildAccountPoolBindingView(binding model.AccountPoolChannelBinding, channe
 }
 
 func buildAccountPoolProxyView(proxy model.AccountPoolProxy) (AccountPoolProxyView, error) {
-	authConfig, err := DecryptAccountPoolProxyAuthConfig(proxy.Password)
-	if err != nil {
-		return AccountPoolProxyView{}, err
-	}
 	return AccountPoolProxyView{
 		Id:              proxy.Id,
 		Name:            proxy.Name,
@@ -474,14 +463,14 @@ func buildAccountPoolProxyView(proxy model.AccountPoolProxy) (AccountPoolProxyVi
 		Username:        proxy.Username,
 		Status:          proxy.Status,
 		FallbackProxyID: proxy.FallbackProxyID,
-		HasPassword:     strings.TrimSpace(authConfig.Password) != "",
+		HasPassword:     strings.TrimSpace(proxy.Password) != "",
 		CreatedTime:     proxy.CreatedTime,
 		UpdatedTime:     proxy.UpdatedTime,
 	}, nil
 }
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
-	return config.APIKey != "" || config.RefreshToken != "" || config.Email != ""
+	return strings.TrimSpace(config.APIKey) != "" || strings.TrimSpace(config.RefreshToken) != "" || strings.TrimSpace(config.Email) != ""
 }
 
 func marshalAccountPoolOptionalJSON(value any) (string, error) {

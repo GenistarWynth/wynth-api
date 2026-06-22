@@ -28,6 +28,8 @@ const (
 	AccountPoolBindingStatusDisabled = "disabled"
 )
 
+var ErrAccountPoolBoundChannelEnable = errors.New("account pool bound channel cannot be enabled in phase 1")
+
 type AccountPool struct {
 	Id                    int    `json:"id"`
 	Name                  string `json:"name" gorm:"type:varchar(191);not null;index"`
@@ -208,4 +210,43 @@ func (b *AccountPoolChannelBinding) BeforeCreate(tx *gorm.DB) error {
 func (b *AccountPoolChannelBinding) BeforeUpdate(tx *gorm.DB) error {
 	b.UpdatedTime = common.GetTimestamp()
 	return nil
+}
+
+func RejectAccountPoolBoundChannelEnable(channelID int, status int) error {
+	if status != common.ChannelStatusEnabled || channelID <= 0 || DB == nil {
+		return nil
+	}
+	bound, err := HasDraftAccountPoolChannelBinding(channelID)
+	if err != nil {
+		return err
+	}
+	if bound {
+		return ErrAccountPoolBoundChannelEnable
+	}
+	return nil
+}
+
+func HasDraftAccountPoolChannelBinding(channelID int) (bool, error) {
+	if channelID <= 0 || DB == nil {
+		return false, nil
+	}
+	if !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
+		return false, nil
+	}
+	var count int64
+	err := DB.Model(&AccountPoolChannelBinding{}).
+		Where("channel_id = ? AND status = ?", channelID, AccountPoolBindingStatusDraft).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func DraftAccountPoolBoundChannelIDs() ([]int, error) {
+	if DB == nil || !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
+		return nil, nil
+	}
+	var channelIDs []int
+	err := DB.Model(&AccountPoolChannelBinding{}).
+		Where("status = ?", AccountPoolBindingStatusDraft).
+		Pluck("channel_id", &channelIDs).Error
+	return channelIDs, err
 }

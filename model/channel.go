@@ -348,12 +348,18 @@ func (channel *Channel) GetAutoBan() bool {
 }
 
 func (channel *Channel) Save() error {
+	if err := RejectAccountPoolBoundChannelEnable(channel.Id, channel.Status); err != nil {
+		return err
+	}
 	return DB.Save(channel).Error
 }
 
 func (channel *Channel) SaveWithoutKey() error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
+	}
+	if err := RejectAccountPoolBoundChannelEnable(channel.Id, channel.Status); err != nil {
+		return err
 	}
 	channel.UpdatedTime = common.GetTimestamp()
 	return DB.Omit("key").Save(channel).Error
@@ -538,6 +544,9 @@ func (channel *Channel) Insert() error {
 
 func (channel *Channel) Update() error {
 	channel.UpdatedTime = common.GetTimestamp()
+	if err := RejectAccountPoolBoundChannelEnable(channel.Id, channel.Status); err != nil {
+		return err
+	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -718,6 +727,10 @@ func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
+	if err := RejectAccountPoolBoundChannelEnable(channelId, status); err != nil {
+		common.SysLog(fmt.Sprintf("blocked account pool bound channel status update: channel_id=%d, status=%d, error=%v", channelId, status, err))
+		return false
+	}
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -793,7 +806,15 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+	boundChannelIDs, err := DraftAccountPoolBoundChannelIDs()
+	if err != nil {
+		return err
+	}
+	query := DB.Model(&Channel{}).Where("tag = ?", tag)
+	if len(boundChannelIDs) > 0 {
+		query = query.Where("id NOT IN ?", boundChannelIDs)
+	}
+	err = query.Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
 	}

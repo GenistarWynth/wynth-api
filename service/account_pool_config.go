@@ -45,6 +45,9 @@ func (s AccountPoolTokenState) NextVersion() AccountPoolTokenState {
 }
 
 func EncryptAccountPoolCredentialConfig(config AccountPoolCredentialConfig) (string, error) {
+	if !accountPoolCredentialHasSecret(config) {
+		return "", nil
+	}
 	data, err := common.Marshal(config)
 	if err != nil {
 		return "", err
@@ -68,6 +71,9 @@ func DecryptAccountPoolCredentialConfig(encrypted string) (AccountPoolCredential
 }
 
 func EncryptAccountPoolTokenState(state AccountPoolTokenState) (string, error) {
+	if !accountPoolTokenStateHasSecret(state) {
+		return "", nil
+	}
 	data, err := common.Marshal(state)
 	if err != nil {
 		return "", err
@@ -91,6 +97,9 @@ func DecryptAccountPoolTokenState(encrypted string) (AccountPoolTokenState, erro
 }
 
 func EncryptAccountPoolProxyAuthConfig(config AccountPoolProxyAuthConfig) (string, error) {
+	if strings.TrimSpace(config.Password) == "" {
+		return "", nil
+	}
 	data, err := common.Marshal(config)
 	if err != nil {
 		return "", err
@@ -122,4 +131,8 @@ func MaskAccountPoolSecretValue(value string) string {
 		return "***"
 	}
 	return value[:4] + "..." + value[len(value)-4:]
+}
+
+func accountPoolTokenStateHasSecret(state AccountPoolTokenState) bool {
+	return strings.TrimSpace(state.AccessToken) != "" || strings.TrimSpace(state.RefreshToken) != ""
 }

@@ -133,6 +133,47 @@ func TestAccountPoolServiceProxyCreateListRedactsPassword(t *testing.T) {
 	assert.Equal(t, "proxy-user", proxies[0].Username)
 }
 
+func TestAccountPoolServiceListPresenceFlagsDoNotDecryptSecrets(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "credentialed-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-list-presence-secret",
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "access-token-secret",
+		},
+	})
+	require.NoError(t, err)
+	_, err = service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "credentialed-proxy",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Password: "proxy-password-secret",
+	})
+	require.NoError(t, err)
+
+	common.CryptoSecret = "rotated-or-missing-secret"
+	common.CryptoSecretStable = false
+
+	accounts, err := service.ListAccounts(pool.Id)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	assert.True(t, accounts[0].HasCredential)
+	assert.True(t, accounts[0].HasToken)
+
+	proxies, err := service.ListProxies()
+	require.NoError(t, err)
+	require.Len(t, proxies, 1)
+	assert.True(t, proxies[0].HasPassword)
+}
+
 func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -198,6 +239,9 @@ func TestAccountPoolServicePoolCRUDSoftDeletesAndUpdatesZeroValues(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, "shared pool", pool.Name)
 	assert.Equal(t, model.AccountPoolPlatformOpenAI, pool.Platform)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).
+		Where("id = ?", pool.Id).
+		Update("updated_time", int64(100)).Error)
 
 	updated, err := service.UpdatePool(pool.Id, AccountPoolCreateParams{
 		Name:                  "shared pool updated",
@@ -210,6 +254,7 @@ func TestAccountPoolServicePoolCRUDSoftDeletesAndUpdatesZeroValues(t *testing.T)
 	assert.Zero(t, updated.DefaultProxyID)
 	assert.False(t, updated.DefaultMonitorEnabled)
 	assert.Equal(t, "updated", updated.Remark)
+	assert.Greater(t, updated.UpdatedTime, int64(100))
 
 	found, err := service.GetPool(pool.Id)
 	require.NoError(t, err)
@@ -235,6 +280,39 @@ func TestAccountPoolServicePoolCRUDSoftDeletesAndUpdatesZeroValues(t *testing.T)
 	assert.Equal(t, model.AccountPoolStatusDeleted, deleted.Status)
 }
 
+func TestAccountPoolServiceDraftBindingBlocksChannelEnable(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	tag := "account-pool-bound"
+	channel.Tag = &tag
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", channel.Id).
+		Update("tag", tag).Error)
+	_, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	channel.Status = common.ChannelStatusEnabled
+	err = channel.Update()
+	require.ErrorContains(t, err, "account pool bound channel cannot be enabled in phase 1")
+
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+
+	assert.False(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "manual restore"))
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+
+	require.NoError(t, model.EnableChannelByTag(tag))
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+}
+
 func setupAccountPoolServiceTestDB(t *testing.T) {
 	t.Helper()
 
@@ -253,6 +331,7 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},
+		&model.Ability{},
 		&model.AccountPool{},
 		&model.AccountPoolAccount{},
 		&model.AccountPoolProxy{},
