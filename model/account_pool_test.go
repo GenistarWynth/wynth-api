@@ -83,6 +83,69 @@ func TestAccountPoolModelDefaults(t *testing.T) {
 	assert.NotZero(t, binding.UpdatedTime)
 }
 
+func TestAccountPoolUpdatePreservesExistingStatus(t *testing.T) {
+	setupAccountPoolTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolAccount{}, &AccountPoolProxy{}, &AccountPoolChannelBinding{}))
+
+	pool := AccountPool{
+		Name:     "pool-a",
+		Platform: AccountPoolPlatformOpenAI,
+		Status:   AccountPoolStatusDisabled,
+	}
+	require.NoError(t, DB.Create(&pool).Error)
+	require.NoError(t, DB.Model(&AccountPool{Id: pool.Id}).Updates(AccountPool{
+		Name:   "pool-renamed",
+		Remark: "updated",
+	}).Error)
+	var reloadedPool AccountPool
+	require.NoError(t, DB.First(&reloadedPool, pool.Id).Error)
+	assert.Equal(t, AccountPoolStatusDisabled, reloadedPool.Status)
+
+	account := AccountPoolAccount{
+		PoolID: pool.Id,
+		Name:   "account-a",
+		Status: AccountPoolAccountStatusDisabled,
+	}
+	require.NoError(t, DB.Create(&account).Error)
+	require.NoError(t, DB.Model(&AccountPoolAccount{Id: account.Id}).Updates(AccountPoolAccount{
+		Name:      "account-renamed",
+		LastError: "updated",
+	}).Error)
+	var reloadedAccount AccountPoolAccount
+	require.NoError(t, DB.First(&reloadedAccount, account.Id).Error)
+	assert.Equal(t, AccountPoolAccountStatusDisabled, reloadedAccount.Status)
+
+	proxy := AccountPoolProxy{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Status:   AccountPoolProxyStatusDisabled,
+	}
+	require.NoError(t, DB.Create(&proxy).Error)
+	require.NoError(t, DB.Model(&AccountPoolProxy{Id: proxy.Id}).Updates(AccountPoolProxy{
+		Name: "proxy-renamed",
+		Host: "127.0.0.2",
+	}).Error)
+	var reloadedProxy AccountPoolProxy
+	require.NoError(t, DB.First(&reloadedProxy, proxy.Id).Error)
+	assert.Equal(t, AccountPoolProxyStatusDisabled, reloadedProxy.Status)
+
+	binding := AccountPoolChannelBinding{
+		PoolID:    pool.Id,
+		ChannelID: 1,
+		Status:    AccountPoolBindingStatusDisabled,
+	}
+	require.NoError(t, DB.Create(&binding).Error)
+	require.NoError(t, DB.Model(&AccountPoolChannelBinding{Id: binding.Id}).Updates(AccountPoolChannelBinding{
+		AccountRetryTimes: 2,
+		SchedulePolicy:    `{"policy":"updated"}`,
+	}).Error)
+	var reloadedBinding AccountPoolChannelBinding
+	require.NoError(t, DB.First(&reloadedBinding, binding.Id).Error)
+	assert.Equal(t, AccountPoolBindingStatusDisabled, reloadedBinding.Status)
+}
+
 func TestAccountPoolBindingChannelIsUnique(t *testing.T) {
 	setupAccountPoolTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&Channel{}, &AccountPool{}, &AccountPoolChannelBinding{}))

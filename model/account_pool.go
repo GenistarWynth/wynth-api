@@ -57,9 +57,6 @@ func (p *AccountPool) BeforeCreate(tx *gorm.DB) error {
 
 func (p *AccountPool) BeforeUpdate(tx *gorm.DB) error {
 	p.UpdatedTime = common.GetTimestamp()
-	if p.Status == "" {
-		p.Status = AccountPoolStatusEnabled
-	}
 	return nil
 }
 
@@ -105,9 +102,6 @@ func (a *AccountPoolAccount) BeforeCreate(tx *gorm.DB) error {
 
 func (a *AccountPoolAccount) BeforeUpdate(tx *gorm.DB) error {
 	a.UpdatedTime = common.GetTimestamp()
-	if a.Status == "" {
-		a.Status = AccountPoolAccountStatusEnabled
-	}
 	return nil
 }
 
@@ -161,9 +155,6 @@ func (p *AccountPoolProxy) BeforeCreate(tx *gorm.DB) error {
 
 func (p *AccountPoolProxy) BeforeUpdate(tx *gorm.DB) error {
 	p.UpdatedTime = common.GetTimestamp()
-	if p.Status == "" {
-		p.Status = AccountPoolProxyStatusEnabled
-	}
 	return nil
 }
 
@@ -196,8 +187,5 @@ func (b *AccountPoolChannelBinding) BeforeCreate(tx *gorm.DB) error {
 
 func (b *AccountPoolChannelBinding) BeforeUpdate(tx *gorm.DB) error {
 	b.UpdatedTime = common.GetTimestamp()
-	if b.Status == "" {
-		b.Status = AccountPoolBindingStatusDraft
-	}
 	return nil
 }
