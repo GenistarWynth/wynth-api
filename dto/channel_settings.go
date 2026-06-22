@@ -58,8 +58,11 @@ type ChannelOtherSettings struct {
 	GeneratedByUpstreamSourceID           int                       `json:"generated_by_upstream_source_id,omitempty"`
 	GeneratedByUpstreamMappingID          int                       `json:"generated_by_upstream_mapping_id,omitempty"`
 	CodexImageGenerationBridgePolicy      string                    `json:"codex_image_generation_bridge_policy,omitempty"`
+	AutoRetryTimes                        *int                      `json:"auto_retry_times,omitempty"`
 	AdvancedCustom                        *AdvancedCustomConfig     `json:"advanced_custom,omitempty"`
 }
+
+const ChannelAutoRetryTimesMax = 10
 
 const (
 	CodexImageGenerationBridgePolicyFollow   = "follow"

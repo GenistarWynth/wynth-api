@@ -168,6 +168,7 @@ export interface ChannelOtherSettings {
   generated_by_upstream_source_id?: number
   generated_by_upstream_mapping_id?: number
   codex_image_generation_bridge_policy?: 'follow' | 'enabled' | 'disabled'
+  auto_retry_times?: number
   advanced_custom?: AdvancedCustomConfig
 }
 

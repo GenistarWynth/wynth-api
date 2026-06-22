@@ -215,6 +215,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.remark?.trim() ||
     values.priority ||
     values.weight ||
+    values.auto_retry_times !== undefined ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
@@ -2631,7 +2632,7 @@ export function ChannelMutateDrawer({
                           title={t('Routing Strategy')}
                           icon={<Route className='h-3.5 w-3.5' />}
                         />
-                        <div className='grid gap-4 sm:grid-cols-2'>
+                        <div className='grid gap-4 sm:grid-cols-3'>
                           <FormField
                             control={form.control}
                             name='priority'
@@ -2674,6 +2675,40 @@ export function ChannelMutateDrawer({
                                 </FormControl>
                                 <FormDescription>
                                   {t(FIELD_DESCRIPTIONS.WEIGHT)}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+
+                          <FormField
+                            control={form.control}
+                            name='auto_retry_times'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Auto Retry Times')}</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    type='number'
+                                    min={0}
+                                    max={10}
+                                    inputMode='numeric'
+                                    placeholder={t(
+                                      FIELD_PLACEHOLDERS.AUTO_RETRY_TIMES
+                                    )}
+                                    value={field.value ?? ''}
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      field.onChange(
+                                        value === ''
+                                          ? undefined
+                                          : Number(value)
+                                      )
+                                    }}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  {t(FIELD_DESCRIPTIONS.AUTO_RETRY_TIMES)}
                                 </FormDescription>
                                 <FormMessage />
                               </FormItem>

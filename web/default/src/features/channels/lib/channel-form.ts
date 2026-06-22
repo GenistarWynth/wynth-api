@@ -214,6 +214,7 @@ export const channelFormSchema = z
     codex_image_generation_bridge_policy: z
       .enum(['follow', 'enabled', 'disabled'])
       .optional(),
+    auto_retry_times: z.number().int().min(0).max(10).optional(),
   })
   .superRefine((data, ctx) => {
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
@@ -366,6 +367,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   channel_monitor_enabled: false,
   channel_monitor_interval_minutes: 10,
   codex_image_generation_bridge_policy: 'follow',
+  auto_retry_times: undefined,
   advanced_custom: '',
 }
 
@@ -425,6 +427,7 @@ export function transformChannelToFormDefaults(
   let channelMonitorIntervalMinutes = 10
   let codexImageGenerationBridgePolicy: 'follow' | 'enabled' | 'disabled' =
     'follow'
+  let autoRetryTimes: number | undefined
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -457,6 +460,7 @@ export function transformChannelToFormDefaults(
       )
       codexImageGenerationBridgePolicy =
         normalizeCodexImageGenerationBridgePolicy(parsed)
+      autoRetryTimes = normalizeAutoRetryTimes(parsed.auto_retry_times)
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -512,6 +516,7 @@ export function transformChannelToFormDefaults(
     channel_monitor_enabled: channelMonitorEnabled,
     channel_monitor_interval_minutes: channelMonitorIntervalMinutes,
     codex_image_generation_bridge_policy: codexImageGenerationBridgePolicy,
+    auto_retry_times: autoRetryTimes,
     advanced_custom: advancedCustom,
   }
 }
@@ -535,6 +540,15 @@ function normalizeMonitorInterval(value: unknown, fallback = 10): number {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return fallback
   return Math.max(1, Math.trunc(numeric))
+}
+
+function normalizeAutoRetryTimes(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return undefined
+  const retryTimes = Math.trunc(numeric)
+  if (retryTimes < 0 || retryTimes > 10) return undefined
+  return retryTimes
 }
 
 function normalizeCodexImageGenerationBridgePolicy(
@@ -694,6 +708,13 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     )
   } else if ('channel_monitor_interval_minutes' in settingsObj) {
     delete settingsObj.channel_monitor_interval_minutes
+  }
+
+  const autoRetryTimes = normalizeAutoRetryTimes(formData.auto_retry_times)
+  if (autoRetryTimes !== undefined) {
+    settingsObj.auto_retry_times = autoRetryTimes
+  } else {
+    delete settingsObj.auto_retry_times
   }
 
   return JSON.stringify(settingsObj)

@@ -966,6 +966,12 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if channelOtherSettings.AutoRetryTimes != nil {
+		autoRetryTimes := *channelOtherSettings.AutoRetryTimes
+		if autoRetryTimes < 0 || autoRetryTimes > dto.ChannelAutoRetryTimesMax {
+			return fmt.Errorf("settings.auto_retry_times must be between 0 and %d", dto.ChannelAutoRetryTimesMax)
+		}
+	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		if channelOtherSettings.AdvancedCustom == nil {
 			return fmt.Errorf("advanced_custom is required")
