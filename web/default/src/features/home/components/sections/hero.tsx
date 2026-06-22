@@ -67,7 +67,7 @@ export function Hero(props: HeroProps) {
   return (
     <section
       className={cn(
-        'bg-background relative z-10 flex min-h-[calc(100svh-4.5rem)] overflow-hidden px-6 pt-8 pb-4 sm:min-h-svh sm:pt-20 sm:pb-6 lg:px-10',
+        'bg-background relative z-10 flex min-h-[calc(100svh-4.5rem)] overflow-hidden px-0 pt-8 pb-4 sm:min-h-svh sm:pt-20 sm:pb-6',
         props.className
       )}
     >
@@ -84,9 +84,16 @@ export function Hero(props: HeroProps) {
         className='pointer-events-none absolute inset-y-0 right-0 -z-10 w-3/5 bg-[radial-gradient(circle_at_68%_36%,color-mix(in_oklch,var(--muted)_70%,transparent)_0%,transparent_46%)]'
       />
 
-      <div className='mx-auto flex w-full max-w-[88rem] flex-col justify-between'>
-        <div className='grid flex-1 items-center gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-8 xl:gap-14'>
-          <div className='relative z-10 max-w-2xl text-left'>
+      <div className='relative flex w-full flex-1 flex-col justify-between'>
+        <div
+          className='landing-animate-fade-up pointer-events-none absolute inset-y-0 right-[clamp(1rem,4vw,4rem)] z-0 hidden items-center justify-end opacity-0 xl:flex 2xl:right-[clamp(2rem,3vw,5rem)]'
+          style={{ animationDelay: '240ms' }}
+        >
+          <HeroGlobe className='w-[min(58vw,calc(100svh-6rem),54rem)] 2xl:w-[min(60vw,calc(100svh-6rem),58rem)]' />
+        </div>
+
+        <div className='relative z-10 flex flex-1 items-center px-6 sm:px-10 lg:px-[clamp(3rem,7vw,10rem)] xl:pr-[52vw]'>
+          <div className='max-w-2xl text-left'>
             <div className='landing-animate-fade-up bg-primary/5 text-primary mb-4 inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase opacity-0 sm:mb-5'>
               {t('UNIFIED AI GATEWAY')}
             </div>
@@ -140,17 +147,17 @@ export function Hero(props: HeroProps) {
                 </>
               )}
             </div>
-          </div>
 
-          <div
-            className='landing-animate-fade-up relative flex min-h-[17rem] items-center justify-center opacity-0 sm:min-h-[26rem] lg:min-h-[34rem] lg:justify-center'
-            style={{ animationDelay: '240ms' }}
-          >
-            <HeroGlobe className='w-[min(86vw,24rem)] sm:w-[min(76vw,36rem)] lg:w-[min(50vw,42rem)] xl:w-[min(47vw,45rem)]' />
+            <div
+              className='landing-animate-fade-up relative mt-8 flex min-h-[17rem] items-center justify-center opacity-0 sm:min-h-[26rem] xl:hidden'
+              style={{ animationDelay: '240ms' }}
+            >
+              <HeroGlobe className='w-[min(86vw,24rem)] sm:w-[min(76vw,36rem)] lg:w-[min(56vw,40rem)]' />
+            </div>
           </div>
         </div>
 
-        <div className='text-muted-foreground/60 mt-6 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs'>
+        <div className='text-muted-foreground/60 relative z-10 mt-6 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 px-6 text-xs sm:px-10'>
           <span>&copy; {currentYear} Wynth API.</span>
           <span>{t('Project attribution')}:</span>
           <a

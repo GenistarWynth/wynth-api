@@ -77,7 +77,7 @@ export function HeroGlobe(props: HeroGlobeProps) {
   const { t } = useTranslation()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
-  const [size, setSize] = useState(560)
+  const [size, setSize] = useState(0)
 
   useEffect(() => {
     const stage = stageRef.current
@@ -87,6 +87,10 @@ export function HeroGlobe(props: HeroGlobeProps) {
 
     const updateSize = () => {
       const rect = stage.getBoundingClientRect()
+      if (rect.width < 1 || rect.height < 1) {
+        setSize(0)
+        return
+      }
       setSize(Math.max(280, Math.round(Math.min(rect.width, rect.height))))
     }
 
@@ -99,7 +103,7 @@ export function HeroGlobe(props: HeroGlobeProps) {
 
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) {
+    if (!canvas || size <= 0) {
       return
     }
 
@@ -159,8 +163,8 @@ export function HeroGlobe(props: HeroGlobeProps) {
       <canvas
         ref={canvasRef}
         className='hero-globe-canvas'
-        width={size}
-        height={size}
+        width={Math.max(size, 1)}
+        height={Math.max(size, 1)}
       />
       <div className='hero-globe-label hero-globe-label-model hero-globe-label-codex'>
         Codex
