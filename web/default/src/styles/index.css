@@ -783,6 +783,183 @@ For commercial licensing, please contact support@quantumnous.com
   }
 }
 
+/* Public home COBE globe */
+.hero-globe-stage {
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 1;
+  color: #9c3f00;
+  perspective: none;
+  transform-style: flat;
+}
+
+.hero-globe-stage::before,
+.hero-globe-stage::after {
+  position: absolute;
+  content: '';
+  border-radius: 9999px;
+  pointer-events: none;
+}
+
+.hero-globe-stage::before {
+  inset: 2.5%;
+  z-index: -2;
+  background:
+    radial-gradient(
+      circle at 34% 34%,
+      rgb(255 255 255 / 0.96),
+      rgb(251 247 241 / 0.82) 38%,
+      transparent 69%
+    ),
+    radial-gradient(circle at 50% 52%, rgb(156 63 0 / 0.08), transparent 64%);
+  box-shadow:
+    0 2.4rem 6rem rgb(116 85 56 / 0.14),
+    inset 0 0 0 1px rgb(156 63 0 / 0.08);
+}
+
+.hero-globe-stage::after {
+  inset: 5%;
+  z-index: 1;
+  border: 1px solid rgb(156 63 0 / 0.08);
+  background:
+    radial-gradient(
+      circle at 33% 29%,
+      rgb(255 255 255 / 0.42),
+      transparent 22%
+    ),
+    linear-gradient(145deg, rgb(255 255 255 / 0.2), transparent 40%);
+  mix-blend-mode: screen;
+}
+
+.dark .hero-globe-stage {
+  color: #f0a257;
+}
+
+.dark .hero-globe-stage::before {
+  background:
+    radial-gradient(
+      circle at 34% 34%,
+      rgb(255 255 255 / 0.12),
+      rgb(245 158 11 / 0.1) 38%,
+      transparent 70%
+    ),
+    radial-gradient(circle at 50% 52%, rgb(251 191 36 / 0.12), transparent 64%);
+  box-shadow:
+    0 2.4rem 6rem rgb(0 0 0 / 0.28),
+    inset 0 0 0 1px rgb(251 191 36 / 0.12);
+}
+
+.dark .hero-globe-stage::after {
+  border-color: rgb(251 191 36 / 0.12);
+  background:
+    radial-gradient(
+      circle at 33% 29%,
+      rgb(255 255 255 / 0.18),
+      transparent 22%
+    ),
+    linear-gradient(145deg, rgb(255 255 255 / 0.08), transparent 42%);
+}
+
+.hero-globe-canvas {
+  position: relative;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-globe-label {
+  position: absolute;
+  z-index: 3;
+  top: anchor(top);
+  left: anchor(center);
+  transform: translate(-50%, -116%);
+  border-radius: 9999px;
+  padding: 0.32rem 0.62rem;
+  background: rgb(255 252 248 / 0.92);
+  color: rgb(88 74 64);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 0.65rem 1.75rem rgb(170 156 144 / 0.12);
+  backdrop-filter: blur(10px);
+  transition:
+    opacity 240ms ease,
+    filter 240ms ease,
+    transform 240ms ease;
+}
+
+.dark .hero-globe-label {
+  background: rgb(24 18 14 / 0.78);
+  color: rgb(255 238 219);
+  box-shadow: 0 0.65rem 1.75rem rgb(0 0 0 / 0.22);
+}
+
+.hero-globe-label-model {
+  border: 1px solid rgb(156 63 0 / 0.09);
+}
+
+.hero-globe-label-hub {
+  top: anchor(center);
+  left: anchor(left);
+  transform: translate(-104%, -50%);
+  padding-inline: 0.72rem;
+  background: rgb(118 98 84 / 0.88);
+  color: white;
+}
+
+.dark .hero-globe-label-hub {
+  background: rgb(240 162 87 / 0.9);
+  color: rgb(24 12 4);
+}
+
+.hero-globe-label-codex {
+  position-anchor: --cobe-model-codex;
+  opacity: var(--cobe-visible-model-codex, 0);
+}
+
+.hero-globe-label-claude {
+  position-anchor: --cobe-model-claude;
+  opacity: var(--cobe-visible-model-claude, 0);
+}
+
+.hero-globe-label-gemini {
+  position-anchor: --cobe-model-gemini;
+  opacity: var(--cobe-visible-model-gemini, 0);
+}
+
+.hero-globe-label-wynth {
+  position-anchor: --cobe-hub-wynth;
+  opacity: var(--cobe-visible-hub-wynth, 0);
+}
+
+@supports not (position-anchor: --cobe-model-codex) {
+  .hero-globe-label-codex {
+    top: 22%;
+    left: 60%;
+    opacity: 1;
+  }
+
+  .hero-globe-label-claude {
+    top: 30%;
+    left: 65%;
+    opacity: 1;
+  }
+
+  .hero-globe-label-gemini {
+    top: 39%;
+    left: 64%;
+    opacity: 1;
+  }
+
+  .hero-globe-label-wynth {
+    top: 47%;
+    left: 26%;
+    opacity: 1;
+  }
+}
+
 /* Micro-interactions — Vercel-style subtle hover/active feedback */
 @media (prefers-reduced-motion: no-preference) {
   [data-slot='card']:not([data-card-hover='false']) {

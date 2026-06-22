@@ -67,26 +67,26 @@ export function Hero(props: HeroProps) {
   return (
     <section
       className={cn(
-        'bg-background relative z-10 flex min-h-[calc(100svh-4.5rem)] overflow-hidden px-6 pt-8 pb-4 sm:min-h-svh sm:pt-24 sm:pb-6',
+        'bg-background relative z-10 flex min-h-[calc(100svh-4.5rem)] overflow-hidden px-6 pt-8 pb-4 sm:min-h-svh sm:pt-20 sm:pb-6 lg:px-10',
         props.className
       )}
     >
       <div
         aria-hidden
-        className='pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(to_right,color-mix(in_oklch,var(--border)_55%,transparent)_1px,transparent_1px),linear-gradient(to_bottom,color-mix(in_oklch,var(--border)_55%,transparent)_1px,transparent_1px)] bg-[size:4.5rem_4.5rem] opacity-45'
+        className='pointer-events-none absolute inset-0 -z-10 bg-[linear-gradient(to_right,color-mix(in_oklch,var(--border)_36%,transparent)_1px,transparent_1px),linear-gradient(to_bottom,color-mix(in_oklch,var(--border)_36%,transparent)_1px,transparent_1px)] bg-[size:4.5rem_4.5rem] opacity-20'
       />
       <div
         aria-hidden
-        className='pointer-events-none absolute inset-y-0 left-0 -z-10 w-1/2 bg-[radial-gradient(circle_at_20%_78%,color-mix(in_oklch,var(--warning)_30%,transparent)_0%,transparent_44%)]'
+        className='pointer-events-none absolute inset-y-0 left-0 -z-10 w-3/5 bg-[radial-gradient(circle_at_16%_82%,color-mix(in_oklch,var(--warning)_26%,transparent)_0%,transparent_42%)]'
       />
       <div
         aria-hidden
-        className='pointer-events-none absolute inset-y-0 right-0 -z-10 w-1/2 bg-[radial-gradient(circle_at_70%_22%,color-mix(in_oklch,var(--info)_25%,transparent)_0%,transparent_48%)]'
+        className='pointer-events-none absolute inset-y-0 right-0 -z-10 w-3/5 bg-[radial-gradient(circle_at_68%_36%,color-mix(in_oklch,var(--muted)_70%,transparent)_0%,transparent_46%)]'
       />
 
-      <div className='mx-auto flex w-full max-w-6xl flex-col justify-between'>
-        <div className='grid flex-1 items-center gap-6 lg:grid-cols-[0.82fr_1.18fr] lg:gap-10'>
-          <div className='max-w-2xl text-left'>
+      <div className='mx-auto flex w-full max-w-[88rem] flex-col justify-between'>
+        <div className='grid flex-1 items-center gap-8 lg:grid-cols-[0.9fr_1.1fr] lg:gap-8 xl:gap-14'>
+          <div className='relative z-10 max-w-2xl text-left'>
             <div className='landing-animate-fade-up bg-primary/5 text-primary mb-4 inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase opacity-0 sm:mb-5'>
               {t('UNIFIED AI GATEWAY')}
             </div>
@@ -143,10 +143,10 @@ export function Hero(props: HeroProps) {
           </div>
 
           <div
-            className='landing-animate-fade-up flex items-center justify-center opacity-0 lg:justify-end'
+            className='landing-animate-fade-up relative flex min-h-[17rem] items-center justify-center opacity-0 sm:min-h-[26rem] lg:min-h-[34rem] lg:justify-center'
             style={{ animationDelay: '240ms' }}
           >
-            <HeroGlobe className='max-w-[15rem] sm:max-w-[25rem] lg:max-w-[42rem]' />
+            <HeroGlobe className='w-[min(86vw,24rem)] sm:w-[min(76vw,36rem)] lg:w-[min(50vw,42rem)] xl:w-[min(47vw,45rem)]' />
           </div>
         </div>
 

@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type CSSProperties, useId } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import createGlobe, { type Arc, type Marker } from 'cobe'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
@@ -24,120 +25,154 @@ type HeroGlobeProps = {
   className?: string
 }
 
-const globeDots = [-66, -50, -34, -18, -2, 14, 30, 46, 62].flatMap(
-  (latitude, rowIndex) => {
-    const count = Math.round(
-      18 + Math.cos((Math.abs(latitude) * Math.PI) / 180) * 26
-    )
-    return Array.from({ length: count }, (_, dotIndex) => ({
-      latitude,
-      longitude:
-        (360 / count) * dotIndex + (rowIndex % 2 === 0 ? 0 : 360 / count / 2),
-      key: `${latitude}-${dotIndex}`,
-    }))
-  }
-)
+const markers: Marker[] = [
+  {
+    id: 'hub-wynth',
+    location: [37.7749, -122.4194],
+    size: 0.075,
+    color: [0.63, 0.25, 0.02],
+  },
+  {
+    id: 'model-codex',
+    location: [40.7128, -74.006],
+    size: 0.035,
+    color: [0.72, 0.35, 0.13],
+  },
+  {
+    id: 'model-claude',
+    location: [51.5072, -0.1276],
+    size: 0.034,
+    color: [0.72, 0.35, 0.13],
+  },
+  {
+    id: 'model-gemini',
+    location: [35.6762, 139.6503],
+    size: 0.034,
+    color: [0.72, 0.35, 0.13],
+  },
+]
 
-const meridians = [-75, -50, -25, 0, 25, 50, 75]
-const latitudes = [-56, -34, -12, 12, 34, 56]
-
-const routes = [
-  'M24 53 C36 32 59 31 75 45',
-  'M28 67 C41 51 53 50 70 61',
-  'M35 38 C45 45 54 51 63 35',
+const arcs: Arc[] = [
+  {
+    id: 'wynth-codex',
+    from: [37.7749, -122.4194],
+    to: [40.7128, -74.006],
+    color: [0.72, 0.35, 0.13],
+  },
+  {
+    id: 'wynth-claude',
+    from: [37.7749, -122.4194],
+    to: [51.5072, -0.1276],
+    color: [0.72, 0.35, 0.13],
+  },
+  {
+    id: 'wynth-gemini',
+    from: [37.7749, -122.4194],
+    to: [35.6762, 139.6503],
+    color: [0.72, 0.35, 0.13],
+  },
 ]
 
 export function HeroGlobe(props: HeroGlobeProps) {
   const { t } = useTranslation()
-  const gradientId = useId()
-  const glowId = useId()
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState(560)
+
+  useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) {
+      return
+    }
+
+    const updateSize = () => {
+      const rect = stage.getBoundingClientRect()
+      setSize(Math.max(280, Math.round(Math.min(rect.width, rect.height))))
+    }
+
+    updateSize()
+    const observer = new ResizeObserver(updateSize)
+    observer.observe(stage)
+
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) {
+      return
+    }
+
+    const reduceMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)'
+    ).matches
+    let phi = 4.25
+    let frame = 0
+
+    const globe = createGlobe(canvas, {
+      width: size,
+      height: size,
+      phi,
+      theta: 0.22,
+      dark: 0,
+      diffuse: 1.18,
+      mapSamples: 22_000,
+      mapBrightness: 6.8,
+      mapBaseBrightness: 0.01,
+      baseColor: [0.98, 0.955, 0.91],
+      markerColor: [0.68, 0.28, 0.04],
+      glowColor: [1, 0.965, 0.91],
+      arcColor: [0.72, 0.35, 0.13],
+      arcWidth: 0.42,
+      arcHeight: 0.22,
+      markerElevation: 0.024,
+      markers,
+      arcs,
+      opacity: 0.98,
+      scale: 1,
+      devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+    })
+
+    const tick = () => {
+      if (!reduceMotion) {
+        phi += 0.0022
+      }
+      globe.update({ phi })
+      frame = window.requestAnimationFrame(tick)
+    }
+
+    tick()
+
+    return () => {
+      window.cancelAnimationFrame(frame)
+      globe.destroy()
+    }
+  }, [size])
 
   return (
     <div
-      className={cn(
-        'hero-globe-stage relative mx-auto aspect-square w-full max-w-[42rem]',
-        props.className
-      )}
+      ref={stageRef}
+      className={cn('hero-globe-stage', props.className)}
       role='img'
       aria-label={t('Global upstream routing illustration')}
     >
-      <div aria-hidden className='hero-globe-halo' />
-      <div aria-hidden className='hero-globe-shell'>
-        <div className='hero-globe-sphere'>
-          {meridians.map((angle) => (
-            <span
-              key={`meridian-${angle}`}
-              className='hero-globe-ring hero-globe-meridian'
-              style={
-                {
-                  '--globe-ring-transform': `translate(-50%, -50%) rotateY(${angle}deg)`,
-                } as CSSProperties
-              }
-            />
-          ))}
-          {latitudes.map((latitude) => (
-            <span
-              key={`latitude-${latitude}`}
-              className='hero-globe-ring hero-globe-latitude'
-              style={
-                {
-                  '--globe-ring-transform': `translate(-50%, -50%) translateY(${(Math.sin((latitude * Math.PI) / 180) * 42).toFixed(1)}%) rotateX(78deg) scale(${Math.cos((Math.abs(latitude) * Math.PI) / 180).toFixed(2)})`,
-                } as CSSProperties
-              }
-            />
-          ))}
-          {globeDots.map((dot) => (
-            <span
-              key={dot.key}
-              className='hero-globe-dot'
-              style={
-                {
-                  '--globe-dot-transform': `translate(-50%, -50%) rotateY(${dot.longitude}deg) rotateX(${dot.latitude}deg) translateZ(var(--globe-radius))`,
-                } as CSSProperties
-              }
-            />
-          ))}
-        </div>
-
-        <svg className='hero-globe-routes' viewBox='0 0 100 100'>
-          <defs>
-            <linearGradient id={gradientId} x1='0%' y1='0%' x2='100%' y2='0%'>
-              <stop offset='0%' stopColor='currentColor' stopOpacity='0' />
-              <stop offset='46%' stopColor='currentColor' stopOpacity='0.85' />
-              <stop offset='100%' stopColor='currentColor' stopOpacity='0' />
-            </linearGradient>
-            <filter id={glowId} x='-30%' y='-30%' width='160%' height='160%'>
-              <feGaussianBlur stdDeviation='1.2' result='blur' />
-              <feMerge>
-                <feMergeNode in='blur' />
-                <feMergeNode in='SourceGraphic' />
-              </feMerge>
-            </filter>
-          </defs>
-          {routes.map((route, index) => (
-            <path
-              key={route}
-              d={route}
-              fill='none'
-              stroke={`url(#${gradientId})`}
-              strokeLinecap='round'
-              strokeWidth='0.85'
-              filter={`url(#${glowId})`}
-              className='hero-globe-route'
-              style={{ animationDelay: `${index * 1.2}s` }}
-            />
-          ))}
-        </svg>
-
-        <div className='hero-globe-orbit hero-globe-orbit-a'>
-          <span />
-        </div>
-        <div className='hero-globe-orbit hero-globe-orbit-b'>
-          <span />
-        </div>
-        <div className='hero-globe-orbit hero-globe-orbit-c'>
-          <span />
-        </div>
+      <canvas
+        ref={canvasRef}
+        className='hero-globe-canvas'
+        width={size}
+        height={size}
+      />
+      <div className='hero-globe-label hero-globe-label-model hero-globe-label-codex'>
+        Codex
+      </div>
+      <div className='hero-globe-label hero-globe-label-model hero-globe-label-claude'>
+        Claude
+      </div>
+      <div className='hero-globe-label hero-globe-label-model hero-globe-label-gemini'>
+        Gemini
+      </div>
+      <div className='hero-globe-label hero-globe-label-hub hero-globe-label-wynth'>
+        Wynth API
       </div>
     </div>
   )
