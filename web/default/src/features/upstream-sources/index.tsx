@@ -32,6 +32,7 @@ import {
 } from '@tanstack/react-table'
 import { useMediaQuery } from '@/hooks'
 import {
+  ChevronDown,
   KeyRound,
   Loader2,
   MoreHorizontal,
@@ -51,6 +52,11 @@ import { formatTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Combobox } from '@/components/ui/combobox'
 import {
   DropdownMenu,
@@ -137,7 +143,9 @@ import {
   normalizeCodexImageGenerationBridgePolicy,
   normalizeModelList,
   normalizeModelStrategy,
+  resolveLocalGroupRuleStrategy,
   normalizeSyncRules,
+  type LocalGroupRuleStrategyResolution,
   UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
   UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED,
 } from './rules'
@@ -599,6 +607,101 @@ function SourceSettingBadges(props: { source: UpstreamSource }) {
   )
 }
 
+function ruleStrategyOverrideLabel(
+  key: LocalGroupRuleStrategyResolution['override_keys'][number]
+) {
+  switch (key) {
+    case 'monitor':
+      return 'Monitor'
+    case 'auto_sync':
+      return 'Auto Sync'
+    case 'auto_priority':
+      return 'Auto Priority'
+    case 'codex_image_generation_bridge':
+      return 'Codex image generation bridge'
+    case 'model_strategy':
+      return 'Model strategy'
+  }
+  const exhaustive: never = key
+  return exhaustive
+}
+
+function RuleStrategySummary(props: {
+  resolution: LocalGroupRuleStrategyResolution
+}) {
+  const { t } = useTranslation()
+  const resolution = props.resolution
+  const modelLabel =
+    resolution.model.strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+      ? `${t('Fixed models')} / ${resolution.model.fixed_models.length}`
+      : t('All upstream models')
+  const overrideLabel = resolution.override_keys
+    .map((key) => t(ruleStrategyOverrideLabel(key)))
+    .join(', ')
+
+  return (
+    <div className='flex flex-col gap-2'>
+      <div className='flex flex-wrap gap-1'>
+        <StatusBadge
+          label={
+            resolution.has_overrides
+              ? t('Custom strategy')
+              : t('Inherit defaults')
+          }
+          variant={resolution.has_overrides ? 'warning' : 'neutral'}
+          copyable={false}
+        />
+        {resolution.has_overrides && (
+          <StatusBadge
+            label={`${t('Overrides')}: ${overrideLabel}`}
+            variant='warning'
+            copyable={false}
+          />
+        )}
+      </div>
+      <div className='flex flex-wrap gap-1'>
+        <StatusBadge
+          label={`${t('Monitor')}: ${
+            resolution.monitor.enabled ? t('Enabled') : t('Disabled')
+          } / ${resolution.monitor.interval_minutes}m`}
+          variant={resolution.monitor.enabled ? 'success' : 'neutral'}
+          copyable={false}
+        />
+        <StatusBadge
+          label={`${t('Auto Sync')}: ${
+            resolution.auto_sync.enabled ? t('Enabled') : t('Disabled')
+          } / ${resolution.auto_sync.interval_minutes}m`}
+          variant={resolution.auto_sync.enabled ? 'success' : 'neutral'}
+          copyable={false}
+        />
+        <StatusBadge
+          label={`${t('Auto Priority')}: ${
+            resolution.auto_priority.enabled ? t('Enabled') : t('Disabled')
+          } / ${resolution.auto_priority.interval_minutes}m / ${
+            resolution.auto_priority.window_hours
+          }h`}
+          variant={resolution.auto_priority.enabled ? 'success' : 'neutral'}
+          copyable={false}
+        />
+        <StatusBadge label={modelLabel} variant='neutral' copyable={false} />
+        <StatusBadge
+          label={`${t('Codex image generation bridge')}: ${t(
+            codexImageGenerationBridgePolicyLabel(
+              resolution.codex_image_generation_bridge_policy.value
+            )
+          )}`}
+          variant={
+            resolution.codex_image_generation_bridge_policy.value === 'disabled'
+              ? 'warning'
+              : 'neutral'
+          }
+          copyable={false}
+        />
+      </div>
+    </div>
+  )
+}
+
 function useUpstreamSourceColumns(props: {
   onEdit: (source: UpstreamSource) => void
   onCredentials: (source: UpstreamSource) => void
@@ -1053,6 +1156,39 @@ function SourceFormSheet(props: {
     () => modelOptions.map((model) => ({ value: model, label: model })),
     [modelOptions]
   )
+  const ruleStrategyDefaults = useMemo(
+    () => ({
+      monitor: {
+        enabled: form.enable_monitor,
+        interval_minutes: form.monitor_interval_minutes,
+      },
+      autoSync: {
+        enabled: form.auto_sync_enabled,
+        interval_minutes: form.auto_sync_interval_minutes,
+      },
+      autoPriority: {
+        enabled: form.auto_priority_enabled,
+        interval_minutes: form.auto_priority_interval_minutes,
+        window_hours: form.auto_priority_window_hours,
+      },
+      codexImageGenerationBridgePolicy:
+        form.codex_image_generation_bridge_policy,
+      modelStrategy: form.model_strategy,
+      fixedModels: form.fixed_models,
+    }),
+    [
+      form.auto_priority_enabled,
+      form.auto_priority_interval_minutes,
+      form.auto_priority_window_hours,
+      form.auto_sync_enabled,
+      form.auto_sync_interval_minutes,
+      form.codex_image_generation_bridge_policy,
+      form.enable_monitor,
+      form.fixed_models,
+      form.model_strategy,
+      form.monitor_interval_minutes,
+    ]
+  )
 
   useEffect(() => {
     if (!props.open || typeof window === 'undefined') {
@@ -1349,6 +1485,13 @@ function SourceFormSheet(props: {
                 />
               </FieldBlock>
             </div>
+            <SwitchRow
+              label={t('Allow Private IP / Fake IP')}
+              checked={form.allow_private_ip}
+              onCheckedChange={(checked) =>
+                setField('allow_private_ip', checked)
+              }
+            />
           </SideDrawerSection>
 
           {!isUpdate && (
@@ -1375,7 +1518,7 @@ function SourceFormSheet(props: {
           )}
 
           <SideDrawerSection>
-            <SideDrawerSectionHeader title={t('Generated Channels')} />
+            <SideDrawerSectionHeader title={t('Default Strategy')} />
             <div className='grid gap-4 sm:grid-cols-2'>
               <FieldBlock
                 label={t('Default Local Group')}
@@ -1506,17 +1649,7 @@ function SourceFormSheet(props: {
                 />
               </FieldBlock>
             )}
-            <SwitchRow
-              label={t('Allow Private IP / Fake IP')}
-              checked={form.allow_private_ip}
-              onCheckedChange={(checked) =>
-                setField('allow_private_ip', checked)
-              }
-            />
-          </SideDrawerSection>
-
-          <SideDrawerSection>
-            <SideDrawerSectionHeader title={t('Sync Schedule')} />
+            <SideDrawerSectionHeader title={t('Default Sync Schedule')} />
             <SwitchRow
               label={t('Enable Auto Sync')}
               checked={form.auto_sync_enabled}
@@ -1558,10 +1691,7 @@ function SourceFormSheet(props: {
                 }
               />
             </FieldBlock>
-          </SideDrawerSection>
-
-          <SideDrawerSection>
-            <SideDrawerSectionHeader title={t('Priority Adjustment')} />
+            <SideDrawerSectionHeader title={t('Default Priority Adjustment')} />
             <SwitchRow
               label={t('Enable Auto Priority')}
               checked={form.auto_priority_enabled}
@@ -1717,6 +1847,12 @@ function SourceFormSheet(props: {
                       </Button>
                     </div>
                   </div>
+                  <RuleStrategySummary
+                    resolution={resolveLocalGroupRuleStrategy(
+                      rule,
+                      ruleStrategyDefaults
+                    )}
+                  />
                   <div className='grid gap-3 sm:grid-cols-2'>
                     <FieldBlock
                       label={t('Rule Name')}
@@ -1822,144 +1958,134 @@ function SourceFormSheet(props: {
                       }
                     />
                   </FieldBlock>
-                  <div className='grid gap-3 lg:grid-cols-3'>
-                    <div className='grid gap-3'>
-                      <SwitchRow
-                        label={t('Monitor')}
-                        checked={rule.monitor?.enabled ?? form.enable_monitor}
-                        onCheckedChange={(checked) =>
-                          setLocalGroupRule(index, {
-                            ...rule,
-                            monitor: {
-                              enabled: checked,
-                              interval_minutes: monitorIntervalDisplayValue(
+                  <Collapsible defaultOpen={false} className='grid gap-3'>
+                    <div className='flex items-center justify-between gap-3'>
+                      <div className='min-w-0'>
+                        <p className='text-sm font-medium'>
+                          {t('Strategy overrides')}
+                        </p>
+                      </div>
+                      <CollapsibleTrigger
+                        render={
+                          <Button type='button' variant='outline' size='sm' />
+                        }
+                      >
+                        <Settings2 data-icon='inline-start' />
+                        {t('Advanced strategy overrides')}
+                        <ChevronDown data-icon='inline-end' />
+                      </CollapsibleTrigger>
+                    </div>
+                    <CollapsibleContent className='border-border bg-muted/20 grid gap-3 rounded-md border p-3'>
+                      <div className='grid gap-3 lg:grid-cols-3'>
+                        <div className='grid gap-3'>
+                          <SwitchRow
+                            label={t('Monitor')}
+                            checked={
+                              rule.monitor?.enabled ?? form.enable_monitor
+                            }
+                            onCheckedChange={(checked) =>
+                              setLocalGroupRule(index, {
+                                ...rule,
+                                monitor: {
+                                  enabled: checked,
+                                  interval_minutes: monitorIntervalDisplayValue(
+                                    rule.monitor?.interval_minutes,
+                                    form.monitor_interval_minutes
+                                  ),
+                                },
+                              })
+                            }
+                          />
+                          <FieldBlock
+                            label={t('Monitor Interval Minutes')}
+                            htmlFor={`source-rule-monitor-interval-${index}`}
+                          >
+                            <Input
+                              id={`source-rule-monitor-interval-${index}`}
+                              type='number'
+                              min={5}
+                              value={monitorIntervalDisplayValue(
                                 rule.monitor?.interval_minutes,
                                 form.monitor_interval_minutes
-                              ),
-                            },
-                          })
-                        }
-                      />
-                      <FieldBlock
-                        label={t('Monitor Interval Minutes')}
-                        htmlFor={`source-rule-monitor-interval-${index}`}
-                      >
-                        <Input
-                          id={`source-rule-monitor-interval-${index}`}
-                          type='number'
-                          min={5}
-                          value={monitorIntervalDisplayValue(
-                            rule.monitor?.interval_minutes,
-                            form.monitor_interval_minutes
-                          )}
-                          onChange={(event) =>
-                            setLocalGroupRule(index, {
-                              ...rule,
-                              monitor: {
-                                enabled:
-                                  rule.monitor?.enabled ?? form.enable_monitor,
-                                interval_minutes: parseIntegerInput(
-                                  event.target.value,
-                                  form.monitor_interval_minutes
-                                ),
-                              },
-                            })
-                          }
-                        />
-                      </FieldBlock>
-                    </div>
-                    <div className='grid gap-3'>
-                      <SwitchRow
-                        label={t('Auto Sync')}
-                        checked={
-                          rule.auto_sync?.enabled ?? form.auto_sync_enabled
-                        }
-                        onCheckedChange={(checked) =>
-                          setLocalGroupRule(index, {
-                            ...rule,
-                            auto_sync: {
-                              enabled: checked,
-                              interval_minutes:
+                              )}
+                              onChange={(event) =>
+                                setLocalGroupRule(index, {
+                                  ...rule,
+                                  monitor: {
+                                    enabled:
+                                      rule.monitor?.enabled ??
+                                      form.enable_monitor,
+                                    interval_minutes: parseIntegerInput(
+                                      event.target.value,
+                                      form.monitor_interval_minutes
+                                    ),
+                                  },
+                                })
+                              }
+                            />
+                          </FieldBlock>
+                        </div>
+                        <div className='grid gap-3'>
+                          <SwitchRow
+                            label={t('Auto Sync')}
+                            checked={
+                              rule.auto_sync?.enabled ?? form.auto_sync_enabled
+                            }
+                            onCheckedChange={(checked) =>
+                              setLocalGroupRule(index, {
+                                ...rule,
+                                auto_sync: {
+                                  enabled: checked,
+                                  interval_minutes:
+                                    rule.auto_sync?.interval_minutes ??
+                                    form.auto_sync_interval_minutes,
+                                },
+                              })
+                            }
+                          />
+                          <FieldBlock
+                            label={t('Auto Sync Interval Minutes')}
+                            htmlFor={`source-rule-auto-sync-interval-${index}`}
+                          >
+                            <Input
+                              id={`source-rule-auto-sync-interval-${index}`}
+                              type='number'
+                              min={0}
+                              value={
                                 rule.auto_sync?.interval_minutes ??
-                                form.auto_sync_interval_minutes,
-                            },
-                          })
-                        }
-                      />
-                      <FieldBlock
-                        label={t('Auto Sync Interval Minutes')}
-                        htmlFor={`source-rule-auto-sync-interval-${index}`}
-                      >
-                        <Input
-                          id={`source-rule-auto-sync-interval-${index}`}
-                          type='number'
-                          min={0}
-                          value={
-                            rule.auto_sync?.interval_minutes ??
-                            form.auto_sync_interval_minutes
-                          }
-                          onChange={(event) =>
-                            setLocalGroupRule(index, {
-                              ...rule,
-                              auto_sync: {
-                                enabled:
-                                  rule.auto_sync?.enabled ??
-                                  form.auto_sync_enabled,
-                                interval_minutes: parseIntegerInput(
-                                  event.target.value,
-                                  form.auto_sync_interval_minutes
-                                ),
-                              },
-                            })
-                          }
-                        />
-                      </FieldBlock>
-                    </div>
-                    <div className='grid gap-3'>
-                      <SwitchRow
-                        label={t('Auto Priority')}
-                        checked={
-                          rule.auto_priority?.enabled ??
-                          form.auto_priority_enabled
-                        }
-                        onCheckedChange={(checked) =>
-                          setLocalGroupRule(index, {
-                            ...rule,
-                            auto_priority: {
-                              enabled: checked,
-                              interval_minutes: intervalDisplayValue(
-                                rule.auto_priority?.interval_minutes,
-                                form.auto_priority_interval_minutes
-                              ),
-                              window_hours:
-                                rule.auto_priority?.window_hours ??
-                                form.auto_priority_window_hours,
-                            },
-                          })
-                        }
-                      />
-                      <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-1'>
-                        <FieldBlock
-                          label={t('Auto Priority Interval Minutes')}
-                          htmlFor={`source-rule-auto-priority-interval-${index}`}
-                        >
-                          <Input
-                            id={`source-rule-auto-priority-interval-${index}`}
-                            type='number'
-                            min={0}
-                            value={intervalDisplayValue(
-                              rule.auto_priority?.interval_minutes,
-                              form.auto_priority_interval_minutes
-                            )}
-                            onChange={(event) =>
+                                form.auto_sync_interval_minutes
+                              }
+                              onChange={(event) =>
+                                setLocalGroupRule(index, {
+                                  ...rule,
+                                  auto_sync: {
+                                    enabled:
+                                      rule.auto_sync?.enabled ??
+                                      form.auto_sync_enabled,
+                                    interval_minutes: parseIntegerInput(
+                                      event.target.value,
+                                      form.auto_sync_interval_minutes
+                                    ),
+                                  },
+                                })
+                              }
+                            />
+                          </FieldBlock>
+                        </div>
+                        <div className='grid gap-3'>
+                          <SwitchRow
+                            label={t('Auto Priority')}
+                            checked={
+                              rule.auto_priority?.enabled ??
+                              form.auto_priority_enabled
+                            }
+                            onCheckedChange={(checked) =>
                               setLocalGroupRule(index, {
                                 ...rule,
                                 auto_priority: {
-                                  enabled:
-                                    rule.auto_priority?.enabled ??
-                                    form.auto_priority_enabled,
-                                  interval_minutes: parseIntegerInput(
-                                    event.target.value,
+                                  enabled: checked,
+                                  interval_minutes: intervalDisplayValue(
+                                    rule.auto_priority?.interval_minutes,
                                     form.auto_priority_interval_minutes
                                   ),
                                   window_hours:
@@ -1969,113 +2095,152 @@ function SourceFormSheet(props: {
                               })
                             }
                           />
-                        </FieldBlock>
-                        <FieldBlock
-                          label={t('Metrics Window Hours')}
-                          htmlFor={`source-rule-auto-priority-window-${index}`}
-                        >
-                          <Input
-                            id={`source-rule-auto-priority-window-${index}`}
-                            type='number'
-                            min={1}
-                            max={168}
-                            value={
-                              rule.auto_priority?.window_hours ??
-                              form.auto_priority_window_hours
+                          <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-1'>
+                            <FieldBlock
+                              label={t('Auto Priority Interval Minutes')}
+                              htmlFor={`source-rule-auto-priority-interval-${index}`}
+                            >
+                              <Input
+                                id={`source-rule-auto-priority-interval-${index}`}
+                                type='number'
+                                min={0}
+                                value={intervalDisplayValue(
+                                  rule.auto_priority?.interval_minutes,
+                                  form.auto_priority_interval_minutes
+                                )}
+                                onChange={(event) =>
+                                  setLocalGroupRule(index, {
+                                    ...rule,
+                                    auto_priority: {
+                                      enabled:
+                                        rule.auto_priority?.enabled ??
+                                        form.auto_priority_enabled,
+                                      interval_minutes: parseIntegerInput(
+                                        event.target.value,
+                                        form.auto_priority_interval_minutes
+                                      ),
+                                      window_hours:
+                                        rule.auto_priority?.window_hours ??
+                                        form.auto_priority_window_hours,
+                                    },
+                                  })
+                                }
+                              />
+                            </FieldBlock>
+                            <FieldBlock
+                              label={t('Metrics Window Hours')}
+                              htmlFor={`source-rule-auto-priority-window-${index}`}
+                            >
+                              <Input
+                                id={`source-rule-auto-priority-window-${index}`}
+                                type='number'
+                                min={1}
+                                max={168}
+                                value={
+                                  rule.auto_priority?.window_hours ??
+                                  form.auto_priority_window_hours
+                                }
+                                onChange={(event) =>
+                                  setLocalGroupRule(index, {
+                                    ...rule,
+                                    auto_priority: {
+                                      enabled:
+                                        rule.auto_priority?.enabled ??
+                                        form.auto_priority_enabled,
+                                      interval_minutes: intervalDisplayValue(
+                                        rule.auto_priority?.interval_minutes,
+                                        form.auto_priority_interval_minutes
+                                      ),
+                                      window_hours: parseIntegerInput(
+                                        event.target.value,
+                                        form.auto_priority_window_hours
+                                      ),
+                                    },
+                                  })
+                                }
+                              />
+                            </FieldBlock>
+                          </div>
+                        </div>
+                      </div>
+                      <FieldBlock
+                        label={t('Codex image generation bridge')}
+                        htmlFor={`source-rule-codex-image-generation-bridge-${index}`}
+                      >
+                        <CodexImageGenerationBridgePolicySelect
+                          triggerId={`source-rule-codex-image-generation-bridge-${index}`}
+                          includeInherit
+                          value={
+                            rule.codex_image_generation_bridge_policy ??
+                            'inherit'
+                          }
+                          onChange={(value) => {
+                            const nextRule = { ...rule }
+                            if (value === 'inherit') {
+                              delete nextRule.codex_image_generation_bridge_policy
+                            } else {
+                              nextRule.codex_image_generation_bridge_policy =
+                                value
                             }
-                            onChange={(event) =>
+                            setLocalGroupRule(index, nextRule)
+                          }}
+                        />
+                      </FieldBlock>
+                      <FieldBlock
+                        label={t('Model strategy')}
+                        htmlFor={`source-rule-model-strategy-${index}`}
+                      >
+                        <Select
+                          value={rule.model_strategy}
+                          onValueChange={(value) =>
+                            setLocalGroupRule(index, {
+                              ...rule,
+                              model_strategy: normalizeModelStrategy(value),
+                            })
+                          }
+                        >
+                          <SelectTrigger
+                            id={`source-rule-model-strategy-${index}`}
+                          >
+                            <SelectValue>
+                              {t(
+                                modelStrategyDisplayLabel(rule.model_strategy)
+                              )}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              <SelectItem
+                                value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}
+                              >
+                                {t('All upstream models')}
+                              </SelectItem>
+                              <SelectItem
+                                value={UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED}
+                              >
+                                {t('Fixed models')}
+                              </SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </FieldBlock>
+                      {rule.model_strategy ===
+                        UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
+                        <FieldBlock label={t('Fixed Models')}>
+                          <FixedModelSelect
+                            values={rule.fixed_models}
+                            options={modelSelectOptions}
+                            onChange={(values) =>
                               setLocalGroupRule(index, {
                                 ...rule,
-                                auto_priority: {
-                                  enabled:
-                                    rule.auto_priority?.enabled ??
-                                    form.auto_priority_enabled,
-                                  interval_minutes: intervalDisplayValue(
-                                    rule.auto_priority?.interval_minutes,
-                                    form.auto_priority_interval_minutes
-                                  ),
-                                  window_hours: parseIntegerInput(
-                                    event.target.value,
-                                    form.auto_priority_window_hours
-                                  ),
-                                },
+                                fixed_models: values,
                               })
                             }
                           />
                         </FieldBlock>
-                      </div>
-                    </div>
-                  </div>
-                  <FieldBlock
-                    label={t('Codex image generation bridge')}
-                    htmlFor={`source-rule-codex-image-generation-bridge-${index}`}
-                  >
-                    <CodexImageGenerationBridgePolicySelect
-                      triggerId={`source-rule-codex-image-generation-bridge-${index}`}
-                      includeInherit
-                      value={
-                        rule.codex_image_generation_bridge_policy ?? 'inherit'
-                      }
-                      onChange={(value) => {
-                        const nextRule = { ...rule }
-                        if (value === 'inherit') {
-                          delete nextRule.codex_image_generation_bridge_policy
-                        } else {
-                          nextRule.codex_image_generation_bridge_policy = value
-                        }
-                        setLocalGroupRule(index, nextRule)
-                      }}
-                    />
-                  </FieldBlock>
-                  <FieldBlock
-                    label={t('Model strategy')}
-                    htmlFor={`source-rule-model-strategy-${index}`}
-                  >
-                    <Select
-                      value={rule.model_strategy}
-                      onValueChange={(value) =>
-                        setLocalGroupRule(index, {
-                          ...rule,
-                          model_strategy: normalizeModelStrategy(value),
-                        })
-                      }
-                    >
-                      <SelectTrigger id={`source-rule-model-strategy-${index}`}>
-                        <SelectValue>
-                          {t(modelStrategyDisplayLabel(rule.model_strategy))}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent alignItemWithTrigger={false}>
-                        <SelectGroup>
-                          <SelectItem
-                            value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}
-                          >
-                            {t('All upstream models')}
-                          </SelectItem>
-                          <SelectItem
-                            value={UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED}
-                          >
-                            {t('Fixed models')}
-                          </SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </FieldBlock>
-                  {rule.model_strategy ===
-                    UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
-                    <FieldBlock label={t('Fixed Models')}>
-                      <FixedModelSelect
-                        values={rule.fixed_models}
-                        options={modelSelectOptions}
-                        onChange={(values) =>
-                          setLocalGroupRule(index, {
-                            ...rule,
-                            fixed_models: values,
-                          })
-                        }
-                      />
-                    </FieldBlock>
-                  )}
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
               ))}
             </div>

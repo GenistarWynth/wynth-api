@@ -24,6 +24,74 @@ type LocalGroupRuleTemplateDefaults = {
   fixedModels?: string[]
 }
 
+export type LocalGroupRuleStrategyOrigin = 'inherit' | 'override'
+
+export type LocalGroupRuleStrategyOverrideKey =
+  | 'monitor'
+  | 'auto_sync'
+  | 'auto_priority'
+  | 'codex_image_generation_bridge'
+  | 'model_strategy'
+
+export type LocalGroupRuleStrategyDefaults = {
+  monitor: {
+    enabled: boolean
+    interval_minutes: number
+  }
+  autoSync: {
+    enabled: boolean
+    interval_minutes: number
+  }
+  autoPriority: {
+    enabled: boolean
+    interval_minutes: number
+    window_hours: number
+  }
+  codexImageGenerationBridgePolicy: CodexImageGenerationBridgePolicy
+  modelStrategy: UpstreamSourceModelStrategy
+  fixedModels: string[]
+}
+
+type ResolvedMonitorStrategy = {
+  origin: LocalGroupRuleStrategyOrigin
+  enabled: boolean
+  interval_minutes: number
+}
+
+type ResolvedAutoSyncStrategy = {
+  origin: LocalGroupRuleStrategyOrigin
+  enabled: boolean
+  interval_minutes: number
+}
+
+type ResolvedAutoPriorityStrategy = {
+  origin: LocalGroupRuleStrategyOrigin
+  enabled: boolean
+  interval_minutes: number
+  window_hours: number
+}
+
+type ResolvedCodexImageGenerationBridgeStrategy = {
+  origin: LocalGroupRuleStrategyOrigin
+  value: CodexImageGenerationBridgePolicy
+}
+
+type ResolvedModelStrategy = {
+  origin: LocalGroupRuleStrategyOrigin
+  strategy: UpstreamSourceModelStrategy
+  fixed_models: string[]
+}
+
+export type LocalGroupRuleStrategyResolution = {
+  has_overrides: boolean
+  override_keys: LocalGroupRuleStrategyOverrideKey[]
+  monitor: ResolvedMonitorStrategy
+  auto_sync: ResolvedAutoSyncStrategy
+  auto_priority: ResolvedAutoPriorityStrategy
+  codex_image_generation_bridge_policy: ResolvedCodexImageGenerationBridgeStrategy
+  model: ResolvedModelStrategy
+}
+
 export type LocalGroupRuleUserTemplate = {
   id: string
   name: string
@@ -109,6 +177,130 @@ export function normalizeCodexImageGenerationBridgePolicy(
 
 function hasCodexImageGenerationBridgePolicy(value?: string | null): boolean {
   return typeof value === 'string' && value.trim() !== ''
+}
+
+function sameStringList(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false
+  }
+  return left.every((value, index) => value === right[index])
+}
+
+function strategyOrigin(isOverride: boolean): LocalGroupRuleStrategyOrigin {
+  return isOverride ? 'override' : 'inherit'
+}
+
+export function resolveLocalGroupRuleStrategy(
+  rule: UpstreamSourceLocalGroupRule,
+  defaults: LocalGroupRuleStrategyDefaults
+): LocalGroupRuleStrategyResolution {
+  const defaultModelStrategy = normalizeModelStrategy(defaults.modelStrategy)
+  const defaultFixedModels =
+    defaultModelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+      ? normalizeModelList(defaults.fixedModels)
+      : []
+  const monitorEnabled = rule.monitor?.enabled ?? defaults.monitor.enabled
+  const monitorInterval =
+    typeof rule.monitor?.interval_minutes === 'number'
+      ? rule.monitor.interval_minutes
+      : defaults.monitor.interval_minutes
+  const autoSyncEnabled = rule.auto_sync?.enabled ?? defaults.autoSync.enabled
+  const autoSyncInterval =
+    typeof rule.auto_sync?.interval_minutes === 'number'
+      ? rule.auto_sync.interval_minutes
+      : defaults.autoSync.interval_minutes
+  const autoPriorityEnabled =
+    rule.auto_priority?.enabled ?? defaults.autoPriority.enabled
+  const autoPriorityInterval =
+    typeof rule.auto_priority?.interval_minutes === 'number'
+      ? rule.auto_priority.interval_minutes
+      : defaults.autoPriority.interval_minutes
+  const autoPriorityWindow =
+    typeof rule.auto_priority?.window_hours === 'number'
+      ? rule.auto_priority.window_hours
+      : defaults.autoPriority.window_hours
+  const defaultBridgePolicy = normalizeCodexImageGenerationBridgePolicy(
+    defaults.codexImageGenerationBridgePolicy
+  )
+  const hasBridgePolicy = hasCodexImageGenerationBridgePolicy(
+    rule.codex_image_generation_bridge_policy
+  )
+  const bridgePolicy = hasBridgePolicy
+    ? normalizeCodexImageGenerationBridgePolicy(
+        rule.codex_image_generation_bridge_policy
+      )
+    : defaultBridgePolicy
+  const hasRuleModelStrategy =
+    typeof rule.model_strategy === 'string' && rule.model_strategy.trim() !== ''
+  const modelStrategy = hasRuleModelStrategy
+    ? normalizeModelStrategy(rule.model_strategy)
+    : defaultModelStrategy
+  const fixedModels =
+    modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+      ? normalizeModelList(rule.fixed_models ?? [])
+      : []
+
+  const monitorOverride =
+    monitorEnabled !== defaults.monitor.enabled ||
+    monitorInterval !== defaults.monitor.interval_minutes
+  const autoSyncOverride =
+    autoSyncEnabled !== defaults.autoSync.enabled ||
+    autoSyncInterval !== defaults.autoSync.interval_minutes
+  const autoPriorityOverride =
+    autoPriorityEnabled !== defaults.autoPriority.enabled ||
+    autoPriorityInterval !== defaults.autoPriority.interval_minutes ||
+    autoPriorityWindow !== defaults.autoPriority.window_hours
+  const bridgeOverride = hasBridgePolicy && bridgePolicy !== defaultBridgePolicy
+  const modelOverride =
+    modelStrategy !== defaultModelStrategy ||
+    !sameStringList(fixedModels, defaultFixedModels)
+  const overrideKeys: LocalGroupRuleStrategyOverrideKey[] = []
+
+  if (monitorOverride) {
+    overrideKeys.push('monitor')
+  }
+  if (autoSyncOverride) {
+    overrideKeys.push('auto_sync')
+  }
+  if (autoPriorityOverride) {
+    overrideKeys.push('auto_priority')
+  }
+  if (bridgeOverride) {
+    overrideKeys.push('codex_image_generation_bridge')
+  }
+  if (modelOverride) {
+    overrideKeys.push('model_strategy')
+  }
+
+  return {
+    has_overrides: overrideKeys.length > 0,
+    override_keys: overrideKeys,
+    monitor: {
+      origin: strategyOrigin(monitorOverride),
+      enabled: monitorEnabled,
+      interval_minutes: monitorInterval,
+    },
+    auto_sync: {
+      origin: strategyOrigin(autoSyncOverride),
+      enabled: autoSyncEnabled,
+      interval_minutes: autoSyncInterval,
+    },
+    auto_priority: {
+      origin: strategyOrigin(autoPriorityOverride),
+      enabled: autoPriorityEnabled,
+      interval_minutes: autoPriorityInterval,
+      window_hours: autoPriorityWindow,
+    },
+    codex_image_generation_bridge_policy: {
+      origin: strategyOrigin(bridgeOverride),
+      value: bridgePolicy,
+    },
+    model: {
+      origin: strategyOrigin(modelOverride),
+      strategy: modelStrategy,
+      fixed_models: fixedModels,
+    },
+  }
 }
 
 export function buildLocalGroupRuleTemplate(

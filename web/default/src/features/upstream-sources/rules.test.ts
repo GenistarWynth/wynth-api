@@ -7,6 +7,7 @@ import {
   normalizeKeywordList,
   normalizeModelList,
   parseLocalGroupRuleUserTemplates,
+  resolveLocalGroupRuleStrategy,
   normalizeSyncRules,
   serializeLocalGroupRuleUserTemplates,
 } from './rules'
@@ -254,5 +255,86 @@ describe('upstream source rule normalization', () => {
     )
 
     assert.deepEqual(parseLocalGroupRuleUserTemplates('{bad json'), [])
+  })
+
+  test('resolves rule strategy inheritance and custom overrides for display', () => {
+    const inherited = resolveLocalGroupRuleStrategy(
+      {
+        name: 'OpenAI',
+        local_group: 'OpenAI',
+        platforms: ['openai'],
+        name_contains: [],
+        description_contains: [],
+        exclude_keywords: [],
+        model_strategy: 'all_upstream',
+        fixed_models: [],
+      },
+      {
+        monitor: { enabled: true, interval_minutes: 10 },
+        autoSync: { enabled: true, interval_minutes: 0 },
+        autoPriority: {
+          enabled: false,
+          interval_minutes: 30,
+          window_hours: 24,
+        },
+        codexImageGenerationBridgePolicy: 'follow',
+        modelStrategy: 'all_upstream',
+        fixedModels: [],
+      }
+    )
+
+    assert.equal(inherited.has_overrides, false)
+    assert.deepEqual(inherited.override_keys, [])
+    assert.equal(inherited.monitor.origin, 'inherit')
+    assert.equal(inherited.monitor.enabled, true)
+    assert.equal(inherited.auto_sync.interval_minutes, 0)
+
+    const customized = resolveLocalGroupRuleStrategy(
+      {
+        name: 'OpenAI Pro',
+        local_group: 'OpenAI-Pro',
+        platforms: ['openai'],
+        name_contains: ['pro'],
+        description_contains: [],
+        exclude_keywords: [],
+        auto_sync: { enabled: false, interval_minutes: 5 },
+        auto_priority: {
+          enabled: true,
+          interval_minutes: 15,
+          window_hours: 48,
+        },
+        codex_image_generation_bridge_policy: 'disabled',
+        model_strategy: 'fixed',
+        fixed_models: ['gpt-5', 'gpt-4o'],
+      },
+      {
+        monitor: { enabled: true, interval_minutes: 10 },
+        autoSync: { enabled: true, interval_minutes: 0 },
+        autoPriority: {
+          enabled: false,
+          interval_minutes: 30,
+          window_hours: 24,
+        },
+        codexImageGenerationBridgePolicy: 'follow',
+        modelStrategy: 'all_upstream',
+        fixedModels: [],
+      }
+    )
+
+    assert.equal(customized.has_overrides, true)
+    assert.deepEqual(customized.override_keys, [
+      'auto_sync',
+      'auto_priority',
+      'codex_image_generation_bridge',
+      'model_strategy',
+    ])
+    assert.equal(customized.auto_sync.origin, 'override')
+    assert.equal(customized.auto_sync.enabled, false)
+    assert.equal(customized.auto_priority.window_hours, 48)
+    assert.equal(
+      customized.codex_image_generation_bridge_policy.value,
+      'disabled'
+    )
+    assert.deepEqual(customized.model.fixed_models, ['gpt-5', 'gpt-4o'])
   })
 })
