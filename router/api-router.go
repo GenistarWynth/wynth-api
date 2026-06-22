@@ -241,6 +241,21 @@ func SetApiRouter(router *gin.Engine) {
 			upstreamSourceRoute.GET("/:id/sync_result", controller.GetUpstreamSourceSyncResult)
 			upstreamSourceRoute.POST("/:id/auto_priority/run", controller.RunUpstreamSourceAutoPriority)
 		}
+		accountPoolRoute := apiRouter.Group("/account_pools")
+		accountPoolRoute.Use(middleware.AdminAuth())
+		{
+			accountPoolRoute.GET("", controller.ListAccountPools)
+			accountPoolRoute.POST("", controller.CreateAccountPool)
+			accountPoolRoute.GET("/proxies", controller.ListAccountPoolProxies)
+			accountPoolRoute.POST("/proxies", controller.CreateAccountPoolProxy)
+			accountPoolRoute.GET("/:id", controller.GetAccountPool)
+			accountPoolRoute.PUT("/:id", controller.UpdateAccountPool)
+			accountPoolRoute.DELETE("/:id", controller.DeleteAccountPool)
+			accountPoolRoute.GET("/:id/accounts", controller.ListAccountPoolAccounts)
+			accountPoolRoute.POST("/:id/accounts", controller.CreateAccountPoolAccount)
+			accountPoolRoute.GET("/:id/bindings", controller.ListAccountPoolBindings)
+			accountPoolRoute.POST("/:id/bindings", controller.CreateAccountPoolBinding)
+		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())
 		{

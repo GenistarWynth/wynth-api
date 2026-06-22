@@ -70,6 +70,33 @@ func TestAccountPoolServiceCreatesDraftBindingForDisabledChannel(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 }
 
+func TestAccountPoolServiceProxyCreateListRedactsPassword(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+
+	proxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Username: "proxy-user",
+		Password: "proxy-password-secret",
+	})
+	require.NoError(t, err)
+	assert.True(t, proxy.HasPassword)
+
+	var stored model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&stored, proxy.Id).Error)
+	assert.NotContains(t, stored.Password, "proxy-password-secret")
+	assert.NotContains(t, stored.Password, "proxy-user")
+
+	proxies, err := service.ListProxies()
+	require.NoError(t, err)
+	require.Len(t, proxies, 1)
+	assert.True(t, proxies[0].HasPassword)
+	assert.Equal(t, "proxy-user", proxies[0].Username)
+}
+
 func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

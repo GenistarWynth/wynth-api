@@ -48,6 +48,17 @@ type AccountPoolBindingCreateParams struct {
 	AccountRetryTimes   int
 }
 
+type AccountPoolProxyCreateParams struct {
+	Name            string
+	Protocol        string
+	Host            string
+	Port            int
+	Username        string
+	Password        string
+	Status          string
+	FallbackProxyID int
+}
+
 type AccountPoolAccountView struct {
 	Id                 int               `json:"id"`
 	PoolID             int               `json:"pool_id"`
@@ -85,6 +96,20 @@ type AccountPoolBindingView struct {
 	Status              string `json:"status"`
 	CreatedTime         int64  `json:"created_time"`
 	UpdatedTime         int64  `json:"updated_time"`
+}
+
+type AccountPoolProxyView struct {
+	Id              int    `json:"id"`
+	Name            string `json:"name"`
+	Protocol        string `json:"protocol"`
+	Host            string `json:"host"`
+	Port            int    `json:"port"`
+	Username        string `json:"username"`
+	Status          string `json:"status"`
+	FallbackProxyID int    `json:"fallback_proxy_id"`
+	HasPassword     bool   `json:"has_password"`
+	CreatedTime     int64  `json:"created_time"`
+	UpdatedTime     int64  `json:"updated_time"`
 }
 
 func (s AccountPoolService) CreatePool(params AccountPoolCreateParams) (model.AccountPool, error) {
@@ -250,6 +275,61 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	return buildAccountPoolBindingView(binding, channel), nil
 }
 
+func (s AccountPoolService) CreateProxy(params AccountPoolProxyCreateParams) (AccountPoolProxyView, error) {
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return AccountPoolProxyView{}, errors.New("account pool proxy name is required")
+	}
+	protocol := strings.TrimSpace(params.Protocol)
+	if protocol == "" {
+		return AccountPoolProxyView{}, errors.New("account pool proxy protocol is required")
+	}
+	host := strings.TrimSpace(params.Host)
+	if host == "" {
+		return AccountPoolProxyView{}, errors.New("account pool proxy host is required")
+	}
+	if params.Port <= 0 {
+		return AccountPoolProxyView{}, errors.New("account pool proxy port is required")
+	}
+	authConfig, err := EncryptAccountPoolProxyAuthConfig(AccountPoolProxyAuthConfig{
+		Username: strings.TrimSpace(params.Username),
+		Password: params.Password,
+	})
+	if err != nil {
+		return AccountPoolProxyView{}, err
+	}
+	proxy := model.AccountPoolProxy{
+		Name:            name,
+		Protocol:        protocol,
+		Host:            host,
+		Port:            params.Port,
+		Username:        strings.TrimSpace(params.Username),
+		Password:        authConfig,
+		Status:          strings.TrimSpace(params.Status),
+		FallbackProxyID: params.FallbackProxyID,
+	}
+	if err := model.DB.Create(&proxy).Error; err != nil {
+		return AccountPoolProxyView{}, err
+	}
+	return buildAccountPoolProxyView(proxy)
+}
+
+func (s AccountPoolService) ListProxies() ([]AccountPoolProxyView, error) {
+	var proxies []model.AccountPoolProxy
+	if err := model.DB.Where("status <> ?", model.AccountPoolProxyStatusDeleted).Order("id asc").Find(&proxies).Error; err != nil {
+		return nil, err
+	}
+	views := make([]AccountPoolProxyView, 0, len(proxies))
+	for _, proxy := range proxies {
+		view, err := buildAccountPoolProxyView(proxy)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
 func (s AccountPoolService) ListBindings(poolID int) ([]AccountPoolBindingView, error) {
 	if _, err := getAccountPoolExistingPool(poolID); err != nil {
 		return nil, err
@@ -347,6 +427,26 @@ func buildAccountPoolBindingView(binding model.AccountPoolChannelBinding, channe
 		CreatedTime:         binding.CreatedTime,
 		UpdatedTime:         binding.UpdatedTime,
 	}
+}
+
+func buildAccountPoolProxyView(proxy model.AccountPoolProxy) (AccountPoolProxyView, error) {
+	authConfig, err := DecryptAccountPoolProxyAuthConfig(proxy.Password)
+	if err != nil {
+		return AccountPoolProxyView{}, err
+	}
+	return AccountPoolProxyView{
+		Id:              proxy.Id,
+		Name:            proxy.Name,
+		Protocol:        proxy.Protocol,
+		Host:            proxy.Host,
+		Port:            proxy.Port,
+		Username:        proxy.Username,
+		Status:          proxy.Status,
+		FallbackProxyID: proxy.FallbackProxyID,
+		HasPassword:     strings.TrimSpace(authConfig.Password) != "",
+		CreatedTime:     proxy.CreatedTime,
+		UpdatedTime:     proxy.UpdatedTime,
+	}, nil
 }
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
