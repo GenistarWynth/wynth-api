@@ -23,7 +23,7 @@ type AccountPoolAccountCreateParams struct {
 	PoolID             int
 	Name               string
 	AccountIdentifier  string
-	CredentialConfig   AccountPoolCredentialConfig
+	Credential         AccountPoolCredentialConfig
 	TokenState         AccountPoolTokenState
 	Status             string
 	Priority           int64
@@ -158,7 +158,7 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 	if name == "" {
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
 	}
-	credentialConfig, err := EncryptAccountPoolCredentialConfig(params.CredentialConfig)
+	credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
 	if err != nil {
 		return AccountPoolAccountView{}, err
 	}

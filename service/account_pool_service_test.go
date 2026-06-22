@@ -19,7 +19,7 @@ func TestAccountPoolServiceStoresAccountSecretsEncrypted(t *testing.T) {
 	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
 		PoolID: pool.Id,
 		Name:   "primary-key",
-		CredentialConfig: AccountPoolCredentialConfig{
+		Credential: AccountPoolCredentialConfig{
 			Type:   AccountPoolCredentialTypeAPIKey,
 			APIKey: "sk-secret",
 		},
@@ -79,7 +79,7 @@ func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 	createdAccount, err := service.CreateAccount(AccountPoolAccountCreateParams{
 		PoolID: pool.Id,
 		Name:   "model-scoped-key",
-		CredentialConfig: AccountPoolCredentialConfig{
+		Credential: AccountPoolCredentialConfig{
 			Type:   AccountPoolCredentialTypeAPIKey,
 			APIKey: "sk-list-secret",
 		},
