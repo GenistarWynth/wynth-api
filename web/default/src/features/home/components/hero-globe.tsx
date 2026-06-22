@@ -47,9 +47,9 @@ export function HeroGlobe(props: HeroGlobeProps) {
       aria-label={t('Global upstream routing illustration')}
     >
       <div className='absolute inset-[8%] rounded-full bg-[radial-gradient(circle_at_35%_35%,var(--card)_0%,var(--muted)_42%,transparent_72%)] shadow-[inset_-24px_-28px_56px_rgba(15,23,42,0.08),0_28px_80px_rgba(15,23,42,0.08)] dark:shadow-[inset_-24px_-28px_56px_rgba(0,0,0,0.28),0_28px_80px_rgba(0,0,0,0.22)]' />
-      <div className='absolute inset-[13%] rounded-full border border-primary/10 bg-[linear-gradient(135deg,var(--background)_0%,transparent_52%)] opacity-80' />
+      <div className='border-primary/10 absolute inset-[13%] rounded-full border bg-[linear-gradient(135deg,var(--background)_0%,transparent_52%)] opacity-80' />
       <svg
-        className='absolute inset-0 size-full text-primary/45 dark:text-primary/35'
+        className='text-primary/45 dark:text-primary/35 absolute inset-0 size-full'
         viewBox='0 0 100 100'
         aria-hidden='true'
       >
@@ -127,13 +127,13 @@ export function HeroGlobe(props: HeroGlobeProps) {
         />
         <circle cx='50' cy='50' r='2.8' fill='currentColor' opacity='0.22' />
       </svg>
-      <div className='absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center rounded-full border border-primary/20 bg-background/85 px-3 py-1 text-xs font-semibold text-primary shadow-sm backdrop-blur'>
-        {t('Wynth API')}
+      <div className='border-primary/20 bg-background/85 text-primary absolute top-1/2 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center rounded-full border px-3 py-1 text-xs font-semibold shadow-sm backdrop-blur'>
+        Wynth API
       </div>
       {nodes.map((node) => (
         <div
           key={node.label}
-          className='absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/70 bg-background/90 px-2.5 py-1 text-[11px] font-medium text-foreground shadow-sm backdrop-blur'
+          className='border-border/70 bg-background/90 text-foreground absolute -translate-x-1/2 -translate-y-1/2 rounded-full border px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur'
           style={{ left: `${node.x}%`, top: `${node.y}%` }}
         >
           {t(node.label)}
