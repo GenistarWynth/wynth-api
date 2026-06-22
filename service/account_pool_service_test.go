@@ -30,8 +30,6 @@ func TestAccountPoolServiceStoresAccountSecretsEncrypted(t *testing.T) {
 	require.NoError(t, model.DB.First(&stored, account.Id).Error)
 	assert.NotContains(t, stored.CredentialConfig, "sk-secret")
 	assert.True(t, account.HasCredential)
-	assert.NotContains(t, account.CredentialPreview, "sk-secret")
-	assert.Equal(t, MaskAccountPoolSecretValue("sk-secret"), account.CredentialPreview)
 	assert.False(t, account.HasToken)
 }
 
@@ -137,7 +135,6 @@ func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 	assert.Equal(t, map[string]string{"gpt-4o": "upstream-gpt-4o"}, accounts[0].ModelMapping)
 	assert.True(t, accounts[0].HasCredential)
 	assert.True(t, accounts[0].HasToken)
-	assert.NotContains(t, accounts[0].CredentialPreview, "sk-list-secret")
 	assert.Equal(t, int64(10), accounts[0].Priority)
 	assert.Equal(t, uint(20), accounts[0].Weight)
 

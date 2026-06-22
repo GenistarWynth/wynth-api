@@ -78,7 +78,6 @@ type AccountPoolAccountView struct {
 	LastError          string            `json:"last_error"`
 	HasCredential      bool              `json:"has_credential"`
 	HasToken           bool              `json:"has_token"`
-	CredentialPreview  string            `json:"credential_preview"`
 	CreatedTime        int64             `json:"created_time"`
 	UpdatedTime        int64             `json:"updated_time"`
 }
@@ -406,7 +405,6 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		LastError:          account.LastError,
 		HasCredential:      accountPoolCredentialHasSecret(credentialConfig),
 		HasToken:           tokenState.AccessToken != "" || tokenState.RefreshToken != "",
-		CredentialPreview:  accountPoolCredentialPreview(credentialConfig),
 		CreatedTime:        account.CreatedTime,
 		UpdatedTime:        account.UpdatedTime,
 	}, nil
@@ -451,19 +449,6 @@ func buildAccountPoolProxyView(proxy model.AccountPoolProxy) (AccountPoolProxyVi
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
 	return config.APIKey != "" || config.RefreshToken != "" || config.Email != ""
-}
-
-func accountPoolCredentialPreview(config AccountPoolCredentialConfig) string {
-	switch {
-	case config.APIKey != "":
-		return MaskAccountPoolSecretValue(config.APIKey)
-	case config.RefreshToken != "":
-		return MaskAccountPoolSecretValue(config.RefreshToken)
-	case config.Email != "":
-		return MaskAccountPoolSecretValue(config.Email)
-	default:
-		return ""
-	}
 }
 
 func marshalAccountPoolOptionalJSON(value any) (string, error) {

@@ -76,7 +76,6 @@ type AccountPoolAccountResponse struct {
 	LastError          string            `json:"last_error"`
 	HasCredential      bool              `json:"has_credential"`
 	HasToken           bool              `json:"has_token"`
-	CredentialPreview  string            `json:"credential_preview"`
 	CreatedTime        int64             `json:"created_time"`
 	UpdatedTime        int64             `json:"updated_time"`
 }

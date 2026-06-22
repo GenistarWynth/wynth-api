@@ -182,10 +182,9 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 	require.True(t, listResult.Response.Success, listResult.Response.Message)
 	require.Len(t, listResult.Response.Data, 1)
 	assert.True(t, listResult.Response.Data[0].HasCredential)
-	assert.NotEmpty(t, listResult.Response.Data[0].CredentialPreview)
 	raw := string(listResult.Raw)
 	assert.NotContains(t, raw, "sk-account-secret")
-	assert.Contains(t, raw, "credential_preview")
+	assert.NotContains(t, raw, "credential_preview")
 }
 
 func TestAccountPoolAPIBindingRejectsEnabledChannel(t *testing.T) {

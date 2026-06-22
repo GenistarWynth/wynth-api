@@ -318,7 +318,6 @@ func accountPoolAccountResponse(account service.AccountPoolAccountView) dto.Acco
 		LastError:          account.LastError,
 		HasCredential:      account.HasCredential,
 		HasToken:           account.HasToken,
-		CredentialPreview:  account.CredentialPreview,
 		CreatedTime:        account.CreatedTime,
 		UpdatedTime:        account.UpdatedTime,
 	}
