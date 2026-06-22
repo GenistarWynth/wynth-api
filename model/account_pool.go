@@ -136,6 +136,26 @@ func (p *AccountPoolProxy) BeforeSave(tx *gorm.DB) error {
 	if p.Id != 0 && p.FallbackProxyID == p.Id {
 		return errors.New("fallback proxy cannot reference itself")
 	}
+	return validateAccountPoolProxyFallbackChain(tx, p.Id, p.FallbackProxyID)
+}
+
+func validateAccountPoolProxyFallbackChain(tx *gorm.DB, proxyID int, fallbackProxyID int) error {
+	visited := make(map[int]struct{})
+	for fallbackProxyID != 0 {
+		if proxyID != 0 && fallbackProxyID == proxyID {
+			return errors.New("fallback proxy cannot form a cycle")
+		}
+		if _, ok := visited[fallbackProxyID]; ok {
+			return errors.New("fallback proxy cannot form a cycle")
+		}
+		visited[fallbackProxyID] = struct{}{}
+
+		var fallback AccountPoolProxy
+		if err := tx.Select("id", "fallback_proxy_id").First(&fallback, fallbackProxyID).Error; err != nil {
+			return err
+		}
+		fallbackProxyID = fallback.FallbackProxyID
+	}
 	return nil
 }
 

@@ -206,3 +206,19 @@ func TestAccountPoolProxyRejectsSelfFallback(t *testing.T) {
 	proxy.FallbackProxyID = proxy.Id
 	assert.ErrorContains(t, DB.Save(&proxy).Error, "fallback proxy cannot reference itself")
 }
+
+func TestAccountPoolProxyRejectsFallbackCycle(t *testing.T) {
+	setupAccountPoolTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&AccountPoolProxy{}))
+
+	proxyA := AccountPoolProxy{Name: "proxy-a", Protocol: "http", Host: "127.0.0.1", Port: 8080}
+	proxyB := AccountPoolProxy{Name: "proxy-b", Protocol: "http", Host: "127.0.0.2", Port: 8081}
+	require.NoError(t, DB.Create(&proxyA).Error)
+	require.NoError(t, DB.Create(&proxyB).Error)
+
+	proxyB.FallbackProxyID = proxyA.Id
+	require.NoError(t, DB.Save(&proxyB).Error)
+
+	proxyA.FallbackProxyID = proxyB.Id
+	assert.ErrorContains(t, DB.Save(&proxyA).Error, "fallback proxy cannot form a cycle")
+}
