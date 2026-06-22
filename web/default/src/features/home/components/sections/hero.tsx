@@ -17,12 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link } from '@tanstack/react-router'
-import {
-  ArrowRight,
-  BookOpen,
-  CircleDollarSign,
-  RefreshCcw,
-} from 'lucide-react'
+import { ArrowRight, BookOpen } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
@@ -40,31 +35,6 @@ export function Hero(props: HeroProps) {
   const docsUrl =
     (status?.docs_link as string | undefined) || 'https://docs.newapi.pro'
   const currentYear = new Date().getFullYear()
-
-  const capabilities = [
-    {
-      icon: <CircleDollarSign className='size-5' />,
-      title: t('Cost-aware routing'),
-      description: t(
-        'Channel ratios, priority tiers, and monitoring signals stay visible before traffic reaches expensive upstreams.'
-      ),
-    },
-    {
-      icon: <RefreshCcw className='size-5' />,
-      title: t('Stable fallback'),
-      description: t(
-        'Retry within the current priority tier first, then fall back only when that tier is exhausted.'
-      ),
-    },
-  ]
-
-  const providerPills = [
-    { initial: 'O', name: 'OpenAI', status: t('Supported') },
-    { initial: 'C', name: 'Claude', status: t('Soon') },
-    { initial: 'G', name: 'Gemini', status: t('Soon') },
-    { initial: 'X', name: 'Codex', status: t('Supported') },
-    { initial: '+', name: t('More'), status: t('Soon') },
-  ]
 
   const renderDocsButton = () => {
     const isExternal = docsUrl.startsWith('http')
@@ -115,7 +85,7 @@ export function Hero(props: HeroProps) {
       />
 
       <div className='mx-auto flex w-full max-w-6xl flex-col justify-between'>
-        <div className='grid flex-1 items-center gap-6 lg:grid-cols-[0.95fr_1.05fr] lg:gap-14'>
+        <div className='grid flex-1 items-center gap-6 lg:grid-cols-[0.82fr_1.18fr] lg:gap-10'>
           <div className='max-w-2xl text-left'>
             <div className='landing-animate-fade-up bg-primary/5 text-primary mb-4 inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase opacity-0 sm:mb-5'>
               {t('UNIFIED AI GATEWAY')}
@@ -173,79 +143,11 @@ export function Hero(props: HeroProps) {
           </div>
 
           <div
-            className='landing-animate-fade-up grid gap-4 opacity-0 lg:grid-cols-[0.95fr_1.05fr] lg:gap-5'
+            className='landing-animate-fade-up flex items-center justify-center opacity-0 lg:justify-end'
             style={{ animationDelay: '240ms' }}
           >
-            <div className='flex items-center justify-center lg:justify-end'>
-              <HeroGlobe className='max-w-[14.5rem] sm:max-w-[22rem] lg:max-w-[26rem]' />
-            </div>
-
-            <div className='hidden flex-col justify-center gap-4 md:flex'>
-              <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-1'>
-                {capabilities.map((item) => (
-                  <div
-                    key={item.title}
-                    className='border-border/70 bg-card/80 rounded-2xl border p-5 shadow-[0_18px_50px_rgba(15,23,42,0.06)] backdrop-blur dark:shadow-[0_18px_50px_rgba(0,0,0,0.24)]'
-                  >
-                    <div className='bg-primary text-primary-foreground mb-4 flex size-11 items-center justify-center rounded-xl'>
-                      {item.icon}
-                    </div>
-                    <h3 className='text-lg font-semibold'>{item.title}</h3>
-                    <p className='text-muted-foreground mt-2 text-sm leading-6'>
-                      {item.description}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              <div className='border-border/80 overflow-hidden rounded-2xl border bg-slate-950 text-slate-100 shadow-[0_22px_70px_rgba(15,23,42,0.22)]'>
-                <div className='flex h-10 items-center gap-2 border-b border-white/10 px-4'>
-                  <span className='size-3 rounded-full bg-red-400' />
-                  <span className='size-3 rounded-full bg-amber-300' />
-                  <span className='size-3 rounded-full bg-emerald-400' />
-                  <span className='ml-auto font-mono text-xs text-slate-500'>
-                    {t('terminal')}
-                  </span>
-                </div>
-                <div className='space-y-2 px-5 py-4 font-mono text-xs leading-6'>
-                  <p>
-                    <span className='text-emerald-400'>$ </span>
-                    <span className='text-cyan-300'>
-                      {
-                        'curl -X POST https://your-domain.example/v1/chat/completions'
-                      }
-                    </span>
-                  </p>
-                  <p className='text-slate-500'>{t('# Wynth API routing')}</p>
-                  <p>
-                    <span className='rounded bg-emerald-500/15 px-2 py-1 text-emerald-300'>
-                      {t('200 OK')}
-                    </span>
-                    <span className='ml-2 text-amber-200'>
-                      {'{ "route": "best healthy upstream" }'}
-                    </span>
-                  </p>
-                </div>
-              </div>
-            </div>
+            <HeroGlobe className='max-w-[15rem] sm:max-w-[25rem] lg:max-w-[42rem]' />
           </div>
-        </div>
-
-        <div className='landing-animate-fade-up mt-8 hidden flex-wrap items-center justify-center gap-3 opacity-0 md:flex lg:mt-0'>
-          {providerPills.map((provider) => (
-            <div
-              key={provider.name}
-              className='border-border/70 bg-background/80 flex min-h-12 items-center gap-3 rounded-2xl border px-4 py-2 shadow-sm backdrop-blur'
-            >
-              <span className='bg-primary text-primary-foreground flex size-8 items-center justify-center rounded-lg text-sm font-semibold'>
-                {provider.initial}
-              </span>
-              <span className='text-sm font-medium'>{provider.name}</span>
-              <span className='bg-primary/10 text-primary rounded-md px-2 py-0.5 text-[11px]'>
-                {provider.status}
-              </span>
-            </div>
-          ))}
         </div>
 
         <div className='text-muted-foreground/60 mt-6 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs'>
