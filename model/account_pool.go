@@ -1,0 +1,200 @@
+package model
+
+import (
+	"errors"
+
+	"github.com/QuantumNous/new-api/common"
+
+	"gorm.io/gorm"
+)
+
+const (
+	AccountPoolPlatformOpenAI = "openai"
+
+	AccountPoolStatusEnabled  = "enabled"
+	AccountPoolStatusDisabled = "disabled"
+	AccountPoolStatusDeleted  = "deleted"
+
+	AccountPoolAccountStatusEnabled  = "enabled"
+	AccountPoolAccountStatusDisabled = "disabled"
+	AccountPoolAccountStatusExpired  = "expired"
+	AccountPoolAccountStatusDeleted  = "deleted"
+
+	AccountPoolProxyStatusEnabled  = "enabled"
+	AccountPoolProxyStatusDisabled = "disabled"
+	AccountPoolProxyStatusDeleted  = "deleted"
+
+	AccountPoolBindingStatusDraft    = "draft"
+	AccountPoolBindingStatusDisabled = "disabled"
+)
+
+type AccountPool struct {
+	Id                    int    `json:"id"`
+	Name                  string `json:"name" gorm:"type:varchar(191);not null;index"`
+	Platform              string `json:"platform" gorm:"type:varchar(64);not null;index"`
+	Status                string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
+	DefaultProxyID        int    `json:"default_proxy_id" gorm:"index"`
+	DefaultMonitorEnabled bool   `json:"default_monitor_enabled" gorm:"not null;default:false"`
+	DefaultSchedulePolicy string `json:"default_schedule_policy" gorm:"type:text"`
+	Remark                string `json:"remark" gorm:"type:varchar(1024)"`
+	CreatedTime           int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime           int64  `json:"updated_time" gorm:"bigint"`
+}
+
+func (p *AccountPool) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if p.CreatedTime == 0 {
+		p.CreatedTime = now
+	}
+	if p.UpdatedTime == 0 {
+		p.UpdatedTime = now
+	}
+	if p.Status == "" {
+		p.Status = AccountPoolStatusEnabled
+	}
+	return nil
+}
+
+func (p *AccountPool) BeforeUpdate(tx *gorm.DB) error {
+	p.UpdatedTime = common.GetTimestamp()
+	if p.Status == "" {
+		p.Status = AccountPoolStatusEnabled
+	}
+	return nil
+}
+
+type AccountPoolAccount struct {
+	Id                 int    `json:"id"`
+	PoolID             int    `json:"pool_id" gorm:"not null;index"`
+	Name               string `json:"name" gorm:"type:varchar(191);not null;index"`
+	AccountIdentifier  string `json:"account_identifier" gorm:"type:varchar(191);index"`
+	CredentialConfig   string `json:"-" gorm:"type:text"`
+	TokenState         string `json:"-" gorm:"type:text"`
+	Status             string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
+	Priority           int    `json:"priority" gorm:"not null;default:0;index"`
+	Weight             int    `json:"weight" gorm:"not null;default:0"`
+	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null;default:0"`
+	ProxyID            int    `json:"proxy_id" gorm:"index"`
+	SupportedModels    string `json:"supported_models" gorm:"type:text"`
+	ModelMapping       string `json:"model_mapping" gorm:"type:text"`
+	LastUsedAt         int64  `json:"last_used_at" gorm:"bigint;index"`
+	RateLimitedUntil   int64  `json:"rate_limited_until" gorm:"bigint;index"`
+	TempDisabledUntil  int64  `json:"temp_disabled_until" gorm:"bigint;index"`
+	TempDisabledReason string `json:"temp_disabled_reason" gorm:"type:varchar(1024)"`
+	LastError          string `json:"last_error" gorm:"type:varchar(1024)"`
+	CreatedTime        int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime        int64  `json:"updated_time" gorm:"bigint"`
+}
+
+func (a *AccountPoolAccount) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if a.CreatedTime == 0 {
+		a.CreatedTime = now
+	}
+	if a.UpdatedTime == 0 {
+		a.UpdatedTime = now
+	}
+	if a.Status == "" {
+		a.Status = AccountPoolAccountStatusEnabled
+	}
+	return nil
+}
+
+func (a *AccountPoolAccount) BeforeUpdate(tx *gorm.DB) error {
+	a.UpdatedTime = common.GetTimestamp()
+	if a.Status == "" {
+		a.Status = AccountPoolAccountStatusEnabled
+	}
+	return nil
+}
+
+func (a AccountPoolAccount) IsSchedulableAt(now int64) bool {
+	if a.Status != AccountPoolAccountStatusEnabled {
+		return false
+	}
+	if a.RateLimitedUntil > now {
+		return false
+	}
+	if a.TempDisabledUntil > now {
+		return false
+	}
+	return true
+}
+
+type AccountPoolProxy struct {
+	Id              int    `json:"id"`
+	Name            string `json:"name" gorm:"type:varchar(191);not null;index"`
+	Protocol        string `json:"protocol" gorm:"type:varchar(32);not null"`
+	Host            string `json:"host" gorm:"type:varchar(512);not null"`
+	Port            int    `json:"port" gorm:"not null;default:0"`
+	Username        string `json:"username" gorm:"type:varchar(191)"`
+	Password        string `json:"-" gorm:"type:varchar(512)"`
+	Status          string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
+	FallbackProxyID int    `json:"fallback_proxy_id" gorm:"index"`
+	CreatedTime     int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime     int64  `json:"updated_time" gorm:"bigint"`
+}
+
+func (p *AccountPoolProxy) BeforeSave(tx *gorm.DB) error {
+	if p.Id != 0 && p.FallbackProxyID == p.Id {
+		return errors.New("fallback proxy cannot reference itself")
+	}
+	return nil
+}
+
+func (p *AccountPoolProxy) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if p.CreatedTime == 0 {
+		p.CreatedTime = now
+	}
+	if p.UpdatedTime == 0 {
+		p.UpdatedTime = now
+	}
+	if p.Status == "" {
+		p.Status = AccountPoolProxyStatusEnabled
+	}
+	return nil
+}
+
+func (p *AccountPoolProxy) BeforeUpdate(tx *gorm.DB) error {
+	p.UpdatedTime = common.GetTimestamp()
+	if p.Status == "" {
+		p.Status = AccountPoolProxyStatusEnabled
+	}
+	return nil
+}
+
+type AccountPoolChannelBinding struct {
+	Id                  int    `json:"id"`
+	PoolID              int    `json:"pool_id" gorm:"not null;index"`
+	ChannelID           int    `json:"channel_id" gorm:"not null;uniqueIndex"`
+	AccountFilterConfig string `json:"account_filter_config" gorm:"type:text"`
+	ModelPolicy         string `json:"model_policy" gorm:"type:text"`
+	SchedulePolicy      string `json:"schedule_policy" gorm:"type:text"`
+	AccountRetryTimes   int    `json:"account_retry_times" gorm:"not null;default:0"`
+	Status              string `json:"status" gorm:"type:varchar(32);not null;default:'draft';index"`
+	CreatedTime         int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime         int64  `json:"updated_time" gorm:"bigint"`
+}
+
+func (b *AccountPoolChannelBinding) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if b.CreatedTime == 0 {
+		b.CreatedTime = now
+	}
+	if b.UpdatedTime == 0 {
+		b.UpdatedTime = now
+	}
+	if b.Status == "" {
+		b.Status = AccountPoolBindingStatusDraft
+	}
+	return nil
+}
+
+func (b *AccountPoolChannelBinding) BeforeUpdate(tx *gorm.DB) error {
+	b.UpdatedTime = common.GetTimestamp()
+	if b.Status == "" {
+		b.Status = AccountPoolBindingStatusDraft
+	}
+	return nil
+}
