@@ -162,8 +162,14 @@ func TestAccountPoolServicePoolCRUDSoftDeletesAndUpdatesZeroValues(t *testing.T)
 	require.NoError(t, err)
 	assert.Empty(t, pools)
 
-	deleted, err := service.GetPool(pool.Id)
-	require.NoError(t, err)
+	_, err = service.GetPool(pool.Id)
+	require.Error(t, err)
+
+	_, err = service.UpdatePool(pool.Id, AccountPoolCreateParams{Name: "should not update"})
+	require.Error(t, err)
+
+	var deleted model.AccountPool
+	require.NoError(t, model.DB.First(&deleted, pool.Id).Error)
 	assert.Equal(t, model.AccountPoolStatusDeleted, deleted.Status)
 }
 

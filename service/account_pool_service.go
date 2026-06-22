@@ -114,9 +114,7 @@ func (s AccountPoolService) ListPools() ([]model.AccountPool, error) {
 }
 
 func (s AccountPoolService) GetPool(id int) (model.AccountPool, error) {
-	var pool model.AccountPool
-	err := model.DB.First(&pool, id).Error
-	return pool, err
+	return getAccountPoolExistingPool(id)
 }
 
 func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (model.AccountPool, error) {
@@ -128,8 +126,8 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 	if err != nil {
 		return model.AccountPool{}, err
 	}
-	var pool model.AccountPool
-	if err := model.DB.First(&pool, id).Error; err != nil {
+	pool, err := getAccountPoolExistingPool(id)
+	if err != nil {
 		return model.AccountPool{}, err
 	}
 	err = model.DB.Model(&pool).Updates(map[string]any{
