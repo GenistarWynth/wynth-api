@@ -40,7 +40,7 @@ func TestAccountPoolAutoMigrateSQLite(t *testing.T) {
 
 func TestAccountPoolModelDefaults(t *testing.T) {
 	setupAccountPoolTestDB(t)
-	require.NoError(t, DB.AutoMigrate(&AccountPool{}))
+	require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolAccount{}, &AccountPoolProxy{}, &AccountPoolChannelBinding{}))
 
 	pool := AccountPool{
 		Name:     "self-hosted",
@@ -51,6 +51,36 @@ func TestAccountPoolModelDefaults(t *testing.T) {
 	assert.Equal(t, AccountPoolStatusEnabled, pool.Status)
 	assert.NotZero(t, pool.CreatedTime)
 	assert.NotZero(t, pool.UpdatedTime)
+
+	account := AccountPoolAccount{
+		PoolID: pool.Id,
+		Name:   "account-a",
+	}
+	require.NoError(t, DB.Create(&account).Error)
+	assert.Equal(t, AccountPoolAccountStatusEnabled, account.Status)
+	assert.Equal(t, 1, account.MaxConcurrency)
+	assert.NotZero(t, account.CreatedTime)
+	assert.NotZero(t, account.UpdatedTime)
+
+	proxy := AccountPoolProxy{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+	}
+	require.NoError(t, DB.Create(&proxy).Error)
+	assert.Equal(t, AccountPoolProxyStatusEnabled, proxy.Status)
+	assert.NotZero(t, proxy.CreatedTime)
+	assert.NotZero(t, proxy.UpdatedTime)
+
+	binding := AccountPoolChannelBinding{
+		PoolID:    pool.Id,
+		ChannelID: 1,
+	}
+	require.NoError(t, DB.Create(&binding).Error)
+	assert.Equal(t, AccountPoolBindingStatusDraft, binding.Status)
+	assert.NotZero(t, binding.CreatedTime)
+	assert.NotZero(t, binding.UpdatedTime)
 }
 
 func TestAccountPoolBindingChannelIsUnique(t *testing.T) {
@@ -89,6 +119,10 @@ func TestAccountPoolAccountSchedulabilityDerivesTransientState(t *testing.T) {
 	assert.False(t, account.IsSchedulableAt(now))
 	assert.True(t, account.IsSchedulableAt(now+61))
 
+	account.TempDisabledUntil = now + 120
+	assert.False(t, account.IsSchedulableAt(now+61))
+
+	account.TempDisabledUntil = 0
 	account.Status = AccountPoolAccountStatusDisabled
 	assert.False(t, account.IsSchedulableAt(now+61))
 }

@@ -31,7 +31,7 @@ const (
 type AccountPool struct {
 	Id                    int    `json:"id"`
 	Name                  string `json:"name" gorm:"type:varchar(191);not null;index"`
-	Platform              string `json:"platform" gorm:"type:varchar(64);not null;index"`
+	Platform              string `json:"platform" gorm:"type:varchar(32);not null;index"`
 	Status                string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
 	DefaultProxyID        int    `json:"default_proxy_id" gorm:"index"`
 	DefaultMonitorEnabled bool   `json:"default_monitor_enabled" gorm:"not null;default:false"`
@@ -71,16 +71,16 @@ type AccountPoolAccount struct {
 	CredentialConfig   string `json:"-" gorm:"type:text"`
 	TokenState         string `json:"-" gorm:"type:text"`
 	Status             string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
-	Priority           int    `json:"priority" gorm:"not null;default:0;index"`
-	Weight             int    `json:"weight" gorm:"not null;default:0"`
-	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null;default:0"`
+	Priority           int64  `json:"priority" gorm:"bigint;not null;default:0;index"`
+	Weight             uint   `json:"weight" gorm:"not null;default:0"`
+	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null;default:1"`
 	ProxyID            int    `json:"proxy_id" gorm:"index"`
 	SupportedModels    string `json:"supported_models" gorm:"type:text"`
 	ModelMapping       string `json:"model_mapping" gorm:"type:text"`
 	LastUsedAt         int64  `json:"last_used_at" gorm:"bigint;index"`
 	RateLimitedUntil   int64  `json:"rate_limited_until" gorm:"bigint;index"`
 	TempDisabledUntil  int64  `json:"temp_disabled_until" gorm:"bigint;index"`
-	TempDisabledReason string `json:"temp_disabled_reason" gorm:"type:varchar(1024)"`
+	TempDisabledReason string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
 	LastError          string `json:"last_error" gorm:"type:varchar(1024)"`
 	CreatedTime        int64  `json:"created_time" gorm:"bigint"`
 	UpdatedTime        int64  `json:"updated_time" gorm:"bigint"`
@@ -96,6 +96,9 @@ func (a *AccountPoolAccount) BeforeCreate(tx *gorm.DB) error {
 	}
 	if a.Status == "" {
 		a.Status = AccountPoolAccountStatusEnabled
+	}
+	if a.MaxConcurrency == 0 {
+		a.MaxConcurrency = 1
 	}
 	return nil
 }
@@ -124,11 +127,11 @@ func (a AccountPoolAccount) IsSchedulableAt(now int64) bool {
 type AccountPoolProxy struct {
 	Id              int    `json:"id"`
 	Name            string `json:"name" gorm:"type:varchar(191);not null;index"`
-	Protocol        string `json:"protocol" gorm:"type:varchar(32);not null"`
-	Host            string `json:"host" gorm:"type:varchar(512);not null"`
-	Port            int    `json:"port" gorm:"not null;default:0"`
+	Protocol        string `json:"protocol" gorm:"type:varchar(16);not null"`
+	Host            string `json:"host" gorm:"type:varchar(255);not null"`
+	Port            int    `json:"port" gorm:"not null"`
 	Username        string `json:"username" gorm:"type:varchar(191)"`
-	Password        string `json:"-" gorm:"type:varchar(512)"`
+	Password        string `json:"-" gorm:"type:text"`
 	Status          string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
 	FallbackProxyID int    `json:"fallback_proxy_id" gorm:"index"`
 	CreatedTime     int64  `json:"created_time" gorm:"bigint"`
