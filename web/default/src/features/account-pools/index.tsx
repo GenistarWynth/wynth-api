@@ -176,6 +176,16 @@ const SCHEDULE_POLICY_OPTIONS = [
   { value: 'random', label: 'Random' },
 ]
 
+function translateOptions(
+  options: Array<{ value: string; label: string }>,
+  t: (key: string) => string
+) {
+  return options.map((option) => ({
+    ...option,
+    label: t(option.label),
+  }))
+}
+
 function emptyBindingForm(): BindingFormValues {
   return {
     channel_id: 0,
@@ -193,6 +203,18 @@ function formatOptionalTimestamp(value: number) {
 
 function apiErrorMessage<T>(result: ApiResponse<T>, fallback: string) {
   return result.message || fallback
+}
+
+function queryErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function useQueryErrorToast(error: unknown) {
+  useEffect(() => {
+    if (error) {
+      toast.error(queryErrorMessage(error))
+    }
+  }, [error])
 }
 
 function statusLabel(status?: string) {
@@ -440,6 +462,7 @@ export function AccountPools() {
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
     Record<number, AccountPoolAccount[] | undefined>
   >({})
+  const [bindingFormResetVersion, setBindingFormResetVersion] = useState(0)
 
   const poolsQuery = useQuery({
     queryKey: accountPoolsQueryKeys.list(),
@@ -505,23 +528,10 @@ export function AccountPools() {
     }
   }, [accountsQuery.data, selectedPoolID])
 
-  useEffect(() => {
-    for (const error of [
-      poolsQuery.error,
-      accountsQuery.error,
-      bindingsQuery.error,
-      proxiesQuery.error,
-    ]) {
-      if (error) {
-        toast.error(error.message)
-      }
-    }
-  }, [
-    accountsQuery.error,
-    bindingsQuery.error,
-    poolsQuery.error,
-    proxiesQuery.error,
-  ])
+  useQueryErrorToast(poolsQuery.error)
+  useQueryErrorToast(accountsQuery.error)
+  useQueryErrorToast(bindingsQuery.error)
+  useQueryErrorToast(proxiesQuery.error)
 
   const invalidatePools = () => {
     queryClient.invalidateQueries({ queryKey: accountPoolsQueryKeys.all })
@@ -603,6 +613,7 @@ export function AccountPools() {
         return
       }
       toast.success(t('Binding created'))
+      setBindingFormResetVersion((version) => version + 1)
       invalidatePools()
     },
     onError: (error) => {
@@ -697,6 +708,7 @@ export function AccountPools() {
         accountsLoading={accountsQuery.isLoading}
         bindingsLoading={bindingsQuery.isLoading}
         proxiesLoading={proxiesQuery.isLoading}
+        bindingFormResetVersion={bindingFormResetVersion}
         bindingSubmitting={createBindingMutation.isPending}
         onOpenChange={(open) => !open && setSelectedPool(undefined)}
         onCreateAccount={() => setAccountSheetOpen(true)}
@@ -745,6 +757,14 @@ function PoolFormSheet(props: {
 }) {
   const { t } = useTranslation()
   const [form, setForm] = useState<AccountPoolFormValues>(emptyPoolForm())
+  const platformOptions = useMemo(
+    () => translateOptions(POOL_PLATFORM_OPTIONS, t),
+    [t]
+  )
+  const schedulePolicyOptions = useMemo(
+    () => translateOptions(SCHEDULE_POLICY_OPTIONS, t),
+    [t]
+  )
 
   useEffect(() => {
     if (props.open) {
@@ -788,7 +808,7 @@ function PoolFormSheet(props: {
             </FieldBlock>
             <FieldBlock label={t('Platform')} htmlFor='account-pool-platform'>
               <Select
-                items={POOL_PLATFORM_OPTIONS}
+                items={platformOptions}
                 value={form.platform}
                 onValueChange={(value) => value && setField('platform', value)}
               >
@@ -797,7 +817,7 @@ function PoolFormSheet(props: {
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
-                    {POOL_PLATFORM_OPTIONS.map((option) => (
+                    {platformOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>
@@ -825,7 +845,7 @@ function PoolFormSheet(props: {
               htmlFor='account-pool-schedule-policy'
             >
               <Select
-                items={SCHEDULE_POLICY_OPTIONS}
+                items={schedulePolicyOptions}
                 value={form.default_schedule_policy || 'round_robin'}
                 onValueChange={(value) =>
                   value && setField('default_schedule_policy', value)
@@ -836,9 +856,9 @@ function PoolFormSheet(props: {
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
-                    {SCHEDULE_POLICY_OPTIONS.map((option) => (
+                    {schedulePolicyOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
-                        {t(option.label)}
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -902,6 +922,7 @@ function PoolDetailsSheet(props: {
   accountsLoading: boolean
   bindingsLoading: boolean
   proxiesLoading: boolean
+  bindingFormResetVersion: number
   bindingSubmitting: boolean
   onOpenChange: (open: boolean) => void
   onCreateAccount: () => void
@@ -960,6 +981,7 @@ function PoolDetailsSheet(props: {
                 accounts={props.accounts}
                 bindings={props.bindings}
                 loading={props.bindingsLoading}
+                resetVersion={props.bindingFormResetVersion}
                 submitting={props.bindingSubmitting}
                 onCreateBinding={props.onCreateBinding}
               />
@@ -1085,6 +1107,7 @@ function BindingSection(props: {
   accounts: AccountPoolAccount[]
   bindings: AccountPoolBinding[]
   loading: boolean
+  resetVersion: number
   submitting: boolean
   onCreateBinding: (values: BindingFormValues) => void
 }) {
@@ -1144,6 +1167,8 @@ function BindingSection(props: {
       </SideDrawerSection>
       <BindingForm
         accounts={props.accounts}
+        bindings={props.bindings}
+        resetVersion={props.resetVersion}
         submitting={props.submitting}
         onSubmit={props.onCreateBinding}
       />
@@ -1153,11 +1178,21 @@ function BindingSection(props: {
 
 function BindingForm(props: {
   accounts: AccountPoolAccount[]
+  bindings: AccountPoolBinding[]
+  resetVersion: number
   submitting: boolean
   onSubmit: (values: BindingFormValues) => void
 }) {
   const { t } = useTranslation()
   const [form, setForm] = useState<BindingFormValues>(emptyBindingForm())
+  const modelStrategyOptions = useMemo(
+    () => translateOptions(MODEL_STRATEGY_OPTIONS, t),
+    [t]
+  )
+  const schedulePolicyOptions = useMemo(
+    () => translateOptions(SCHEDULE_POLICY_OPTIONS, t),
+    [t]
+  )
   const disabledChannelsQuery = useQuery({
     queryKey: ['channels', 'disabled', 'account-pool-bindings'],
     queryFn: async () => {
@@ -1169,12 +1204,24 @@ function BindingForm(props: {
     },
   })
   const disabledChannels = disabledChannelsQuery.data ?? EMPTY_CHANNELS
+  const boundChannelIDs = useMemo(
+    () => new Set(props.bindings.map((binding) => binding.channel_id)),
+    [props.bindings]
+  )
+  const availableDisabledChannels = useMemo(
+    () => disabledChannels.filter((channel) => !boundChannelIDs.has(channel.id)),
+    [boundChannelIDs, disabledChannels]
+  )
 
   useEffect(() => {
     if (disabledChannelsQuery.error) {
       toast.error(disabledChannelsQuery.error.message)
     }
   }, [disabledChannelsQuery.error])
+
+  useEffect(() => {
+    setForm(emptyBindingForm())
+  }, [props.resetVersion])
 
   const setField = <K extends keyof BindingFormValues>(
     key: K,
@@ -1210,7 +1257,7 @@ function BindingForm(props: {
             description={t('Only disabled channels are available for binding.')}
           >
             <Select
-              items={disabledChannels.map((channel) => ({
+              items={availableDisabledChannels.map((channel) => ({
                 value: String(channel.id),
                 label: channel.name,
               }))}
@@ -1225,7 +1272,7 @@ function BindingForm(props: {
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
-                  {disabledChannels.map((channel) => (
+                  {availableDisabledChannels.map((channel) => (
                     <SelectItem key={channel.id} value={String(channel.id)}>
                       #{channel.id} {channel.name}
                     </SelectItem>
@@ -1239,7 +1286,7 @@ function BindingForm(props: {
             htmlFor='account-pool-binding-model-strategy'
           >
             <Select
-              items={MODEL_STRATEGY_OPTIONS}
+              items={modelStrategyOptions}
               value={form.model_strategy}
               onValueChange={(value) =>
                 value && setField('model_strategy', value)
@@ -1250,9 +1297,9 @@ function BindingForm(props: {
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
-                  {MODEL_STRATEGY_OPTIONS.map((option) => (
+                  {modelStrategyOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
-                      {t(option.label)}
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -1277,7 +1324,7 @@ function BindingForm(props: {
             htmlFor='account-pool-binding-schedule-policy'
           >
             <Select
-              items={SCHEDULE_POLICY_OPTIONS}
+              items={schedulePolicyOptions}
               value={form.schedule_policy}
               onValueChange={(value) =>
                 value && setField('schedule_policy', value)
@@ -1288,9 +1335,9 @@ function BindingForm(props: {
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
-                  {SCHEDULE_POLICY_OPTIONS.map((option) => (
+                  {schedulePolicyOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
-                      {t(option.label)}
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -1427,6 +1474,27 @@ function AccountFormSheet(props: {
   const { t } = useTranslation()
   const [form, setForm] =
     useState<AccountPoolAccountFormValues>(emptyAccountForm())
+  const accountStatusOptions = useMemo(
+    () => translateOptions(ACCOUNT_STATUS_OPTIONS, t),
+    [t]
+  )
+  const credentialTypeOptions = useMemo(
+    () => [
+      { value: 'api_key', label: t('API Key') },
+      { value: 'oauth', label: t('OAuth') },
+    ],
+    [t]
+  )
+  const proxyOptions = useMemo(
+    () => [
+      { value: '0', label: t('No Proxy') },
+      ...props.proxies.map((proxy) => ({
+        value: String(proxy.id),
+        label: proxy.name,
+      })),
+    ],
+    [props.proxies, t]
+  )
 
   useEffect(() => {
     if (props.open) {
@@ -1487,7 +1555,7 @@ function AccountFormSheet(props: {
                 htmlFor='account-pool-account-status'
               >
                 <Select
-                  items={ACCOUNT_STATUS_OPTIONS}
+                  items={accountStatusOptions}
                   value={form.status}
                   onValueChange={(value) => value && setField('status', value)}
                 >
@@ -1496,9 +1564,9 @@ function AccountFormSheet(props: {
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
                     <SelectGroup>
-                      {ACCOUNT_STATUS_OPTIONS.map((option) => (
+                      {accountStatusOptions.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
-                          {t(option.label)}
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectGroup>
@@ -1510,13 +1578,7 @@ function AccountFormSheet(props: {
                 htmlFor='account-pool-account-proxy'
               >
                 <Select
-                  items={[
-                    { value: '0', label: t('No Proxy') },
-                    ...props.proxies.map((proxy) => ({
-                      value: String(proxy.id),
-                      label: proxy.name,
-                    })),
-                  ]}
+                  items={proxyOptions}
                   value={String(form.proxy_id)}
                   onValueChange={(value) =>
                     setField('proxy_id', value ? Number(value) : 0)
@@ -1527,10 +1589,9 @@ function AccountFormSheet(props: {
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
                     <SelectGroup>
-                      <SelectItem value='0'>{t('No Proxy')}</SelectItem>
-                      {props.proxies.map((proxy) => (
-                        <SelectItem key={proxy.id} value={String(proxy.id)}>
-                          {proxy.name}
+                      {proxyOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectGroup>
@@ -1566,10 +1627,7 @@ function AccountFormSheet(props: {
                 htmlFor='account-pool-account-credential-type'
               >
                 <Select
-                  items={[
-                    { value: 'api_key', label: 'API Key' },
-                    { value: 'oauth', label: 'OAuth' },
-                  ]}
+                  items={credentialTypeOptions}
                   value={form.credential_type}
                   onValueChange={(value) =>
                     value && setField('credential_type', value)
@@ -1580,8 +1638,11 @@ function AccountFormSheet(props: {
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
                     <SelectGroup>
-                      <SelectItem value='api_key'>{t('API Key')}</SelectItem>
-                      <SelectItem value='oauth'>{t('OAuth')}</SelectItem>
+                      {credentialTypeOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -1718,6 +1779,24 @@ function ProxyFormSheet(props: {
   const { t } = useTranslation()
   const [form, setForm] =
     useState<AccountPoolProxyFormValues>(emptyProxyForm())
+  const protocolOptions = useMemo(
+    () => translateOptions(PROXY_PROTOCOL_OPTIONS, t),
+    [t]
+  )
+  const statusOptions = useMemo(
+    () => translateOptions(STATUS_OPTIONS, t),
+    [t]
+  )
+  const fallbackProxyOptions = useMemo(
+    () => [
+      { value: '0', label: t('No Fallback Proxy') },
+      ...props.proxies.map((proxy) => ({
+        value: String(proxy.id),
+        label: proxy.name,
+      })),
+    ],
+    [props.proxies, t]
+  )
 
   useEffect(() => {
     if (props.open) {
@@ -1768,7 +1847,7 @@ function ProxyFormSheet(props: {
               htmlFor='account-pool-proxy-protocol'
             >
               <Select
-                items={PROXY_PROTOCOL_OPTIONS}
+                items={protocolOptions}
                 value={form.protocol}
                 onValueChange={(value) => value && setField('protocol', value)}
               >
@@ -1777,7 +1856,7 @@ function ProxyFormSheet(props: {
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
-                    {PROXY_PROTOCOL_OPTIONS.map((option) => (
+                    {protocolOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>
@@ -1823,7 +1902,7 @@ function ProxyFormSheet(props: {
             </FieldBlock>
             <FieldBlock label={t('Status')} htmlFor='account-pool-proxy-status'>
               <Select
-                items={STATUS_OPTIONS}
+                items={statusOptions}
                 value={form.status}
                 onValueChange={(value) => value && setField('status', value)}
               >
@@ -1832,9 +1911,9 @@ function ProxyFormSheet(props: {
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
-                    {STATUS_OPTIONS.map((option) => (
+                    {statusOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>
-                        {t(option.label)}
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectGroup>
@@ -1846,13 +1925,7 @@ function ProxyFormSheet(props: {
               htmlFor='account-pool-proxy-fallback'
             >
               <Select
-                items={[
-                  { value: '0', label: t('No Fallback Proxy') },
-                  ...props.proxies.map((proxy) => ({
-                    value: String(proxy.id),
-                    label: proxy.name,
-                  })),
-                ]}
+                items={fallbackProxyOptions}
                 value={String(form.fallback_proxy_id)}
                 onValueChange={(value) =>
                   setField('fallback_proxy_id', value ? Number(value) : 0)
@@ -1863,10 +1936,9 @@ function ProxyFormSheet(props: {
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
-                    <SelectItem value='0'>{t('No Fallback Proxy')}</SelectItem>
-                    {props.proxies.map((proxy) => (
-                      <SelectItem key={proxy.id} value={String(proxy.id)}>
-                        {proxy.name}
+                    {fallbackProxyOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
                       </SelectItem>
                     ))}
                   </SelectGroup>
