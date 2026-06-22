@@ -30,7 +30,7 @@ The reference page uses:
 
 - Light canvas with restrained blue/cyan accents.
 - Fixed transparent header that becomes a compact glass bar when scrolled.
-- Hero with a small uppercase badge, large centered headline, short value statement, and two primary CTAs.
+- Hero with a small uppercase badge, large headline, short value statement, two primary CTAs, and a right-side dotted globe/network visual.
 - Sections with short eyebrow labels, direct headings, and rounded cards.
 - Product/tool cards, ecosystem cards, pricing cards, value cards, FAQ accordion, and footer CTA.
 - Mobile layout that stacks cleanly without oversized decorative elements.
@@ -50,7 +50,8 @@ Default section order:
    - CTAs:
      - Authenticated users: `Go to Dashboard`, `Docs`.
      - Anonymous users: `Get Started`, `View Pricing`, `Docs`.
-   - Replace the current split terminal-heavy composition with a more centered, service-home composition. The existing `HeroTerminalDemo` should not stay as the dominant half-screen element. Either compress it into a short capability/code preview with a bounded height, or replace it with static product capability cards.
+   - Replace the current split terminal-heavy composition with a product hero anchored by a globe/network illustration. The globe is the primary reference element from `c-api.cc`: a light dotted sphere, small provider/client labels, and a few route lines converging toward the gateway. It should be CSS/SVG/HTML-based local UI, not copied from the reference image and not loaded from a remote asset.
+   - The existing `HeroTerminalDemo` should not stay as the dominant half-screen element. Remove it from the first viewport or compress any code preview into a small supporting card below the globe.
 
 2. `Open Source / Tools`
    - Two to three cards that explain practical value:
@@ -123,6 +124,7 @@ Layout:
 
 - Max content width around current `max-w-6xl` / `max-w-7xl`.
 - Mobile first. Cards stack cleanly at small widths.
+- The globe visual should sit to the right of hero copy on desktop and below the copy on mobile. It must fit within the first viewport and must not overlap nav or CTA text.
 - Avoid nested cards.
 - Avoid decorative orbs/bokeh backgrounds.
 
