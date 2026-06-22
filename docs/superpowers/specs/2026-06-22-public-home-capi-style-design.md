@@ -1,8 +1,8 @@
-# Public Home Page C-API Style Redesign
+# Public Home Single-Screen Redesign
 
 ## Goal
 
-Redesign only the public default home page (`/`) to borrow the visual structure of `https://c-api.cc/`: clean light-first marketing layout, centered hero, concise service positioning, card-based capability sections, pricing entry cards, FAQ, and final call to action.
+Redesign only the public default home page (`/`) as a single full-screen entry page. The page should combine the dotted globe/network visual direction from `https://c-api.cc/` with the compact one-viewport structure of `https://ikun.love/home`.
 
 This is a public landing-page update, not a dashboard/control-panel redesign.
 
@@ -11,9 +11,9 @@ This is a public landing-page update, not a dashboard/control-panel redesign.
 In scope:
 
 - Default home page shown when no custom home page content is configured.
-- Public header styling only where it affects the home page presentation.
-- Home page section content, spacing, card style, responsive layout, and i18n strings.
-- Visual QA across desktop and mobile.
+- Public home hero composition, visual hierarchy, responsive behavior, and i18n strings.
+- A compact footer/attribution area inside the first viewport.
+- Visual QA across desktop, mobile, and dark mode.
 
 Out of scope:
 
@@ -21,148 +21,110 @@ Out of scope:
 - Login/register pages.
 - Backend behavior.
 - Pricing route internals.
+- Long scrolling marketing sections.
 - Custom home page iframe/markdown override behavior.
 - Protected project identity, license headers, package metadata, and existing attribution.
 
 ## Reference Traits
 
-The reference page uses:
+Use `c-api.cc` for:
 
-- Light canvas with restrained blue/cyan accents.
-- Fixed transparent header that becomes a compact glass bar when scrolled.
-- Hero with a small uppercase badge, large headline, short value statement, two primary CTAs, and a right-side dotted globe/network visual.
-- Sections with short eyebrow labels, direct headings, and rounded cards.
-- Product/tool cards, ecosystem cards, pricing cards, value cards, FAQ accordion, and footer CTA.
-- Mobile layout that stacks cleanly without oversized decorative elements.
+- Dotted globe/network hero visual.
+- Small provider/client labels and route lines around a central gateway.
+- Clean light-first AI API positioning.
 
-We should capture these traits without copying text, brand, or assets.
+Use `ikun.love/home` for:
 
-## Proposed Page Structure
+- Single full-screen page instead of a long landing page.
+- Lightweight header, large title, short subtitle, one primary CTA group.
+- A few compact capability cards and a small terminal/status card inside the same viewport.
+- Provider/model pills near the bottom of the hero.
+- Footer text anchored in the first screen.
+
+Do not copy either site's brand, logo, mascot, text, or images.
+
+## Page Structure
 
 The default home page keeps `PublicLayout` and the custom-content branch in `features/home/index.tsx`.
 
-Default section order:
+Default public home composition:
 
 1. `Hero`
-   - Badge: AI API Gateway / multi-upstream aggregation positioning.
-   - H1 focused on Wynth API as a unified AI gateway.
-   - Short copy describing multi-upstream routing, monitoring, scheduling, and unified API compatibility.
-   - CTAs:
-     - Authenticated users: `Go to Dashboard`, `Docs`.
-     - Anonymous users: `Get Started`, `View Pricing`, `Docs`.
-   - Replace the current split terminal-heavy composition with a product hero anchored by a globe/network illustration. The globe is the primary reference element from `c-api.cc`: a light dotted sphere, small provider/client labels, and a few route lines converging toward the gateway. It should be CSS/SVG/HTML-based local UI, not copied from the reference image and not loaded from a remote asset.
-   - The existing `HeroTerminalDemo` should not stay as the dominant half-screen element. Remove it from the first viewport or compress any code preview into a small supporting card below the globe.
+   - Full viewport (`min-h-svh`) single page.
+   - Left/top copy:
+     - small uppercase badge,
+     - large H1 focused on Wynth API as a unified upstream gateway,
+     - short value statement,
+     - CTAs.
+   - Right/visual area:
+     - local dotted globe/network visual,
+     - a compact terminal/status card,
+     - two compact capability cards.
+   - Bottom row:
+     - provider/model pills such as OpenAI, Claude, Gemini, Codex, More.
+   - Bottom footer strip:
+     - compact system copyright and protected New API / QuantumNous project attribution.
 
-2. `Open Source / Tools`
-   - Two to three cards that explain practical value:
-     - Multi-upstream aggregation.
-     - Channel monitoring and sync.
-     - Priority/weight routing strategy.
-   - Cards should be concrete and operational, not generic marketing filler.
+2. No additional default landing sections below the first viewport.
 
-3. `Ecosystem`
-   - Cards for supported usage surfaces and protocols:
-     - OpenAI-compatible API.
-     - Anthropic/Claude-compatible flows.
-     - Gemini and other model providers.
-     - Codex / Claude Code / Cherry Studio style clients where appropriate.
-   - Use existing icon libraries when possible.
+Authenticated CTA behavior:
 
-4. `Pricing Preview`
-   - Entry cards that link to `/pricing`.
-   - Copy should frame pricing around upstream cost management, channel multipliers, and pay-as-you-go gateway usage.
-   - This is not a replacement for the pricing page.
-   - This section uses static landing-page copy only. It must not call pricing APIs or introduce backend data dependencies.
-
-5. `Value`
-   - Four concise value cards:
-     - Lower operational cost through channel selection.
-     - Availability monitoring.
-     - Strict priority and fallback behavior.
-     - Unified management for models, keys, and upstreams.
-
-6. `FAQ`
-   - Small accordion-style FAQ for common landing-page questions:
-     - Which upstreams are supported?
-     - Can I self-host?
-     - How are priorities and weights used?
-     - Can I use it with existing OpenAI-compatible clients?
-
-7. `CTA`
-   - Simple centered closing section with the same main CTA logic as hero.
-
-Existing section mapping:
-
-- `Stats` should be removed or folded into the new value/ecosystem copy. The new page should not keep a standalone animated statistics strip unless the numbers are still meaningful for the redesigned message.
-- `Features` becomes the practical tools/capabilities section.
-- `HowItWorks` becomes either the value section or is replaced by value cards.
-- `CTA` remains as the closing call to action, with updated copy and visual treatment.
+- Authenticated users see `Go to Dashboard` and `Docs`.
+- Anonymous users see `Get Started`, `View Pricing`, and `Docs`.
 
 ## Visual System
 
 Light mode:
 
-- Background remains mostly white or near-white.
-- Accent palette should use blue/cyan with small violet secondary accents.
-- Cards use subtle borders and shadows, not heavy gradients.
-- Use rounded cards, but keep operational pages unaffected.
-- `PublicHeader` already has the reference-like scroll-to-glass behavior. Implementation should tune it only if the home page requires minor spacing/token adjustments; do not rebuild the header interaction.
+- Mostly white/near-white canvas.
+- Subtle grid texture is allowed.
+- Restrained blue/cyan with a small warm accent is allowed.
+- No heavy gradients, bokeh, decorative orb fields, or remote imagery.
 
 Dark mode:
 
-- Preserve readable dark theme.
-- Avoid black-on-white mismatches introduced by home-specific styles.
-- Use token-based colors (`background`, `card`, `muted`, `border`, `primary`) rather than hard-coded one-off colors where practical.
+- Use token-based colors so the single-screen layout remains readable.
+- Globe labels, terminal card, and capability cards must not create black-on-white or white-on-white mismatches.
 
 Typography:
 
 - Use existing app font tokens.
-- Hero headline can be large, but section/card headings must stay proportional and not use hero-scale text.
-- No negative tracking unless existing local style already applies it.
+- H1 may be large, but all cards/pills use compact operational sizing.
+- Do not scale fonts with viewport width.
+- Letter spacing must be `0`, except existing global theme rules outside this feature.
 
 Layout:
 
-- Max content width around current `max-w-6xl` / `max-w-7xl`.
-- Mobile first. Cards stack cleanly at small widths.
-- The globe visual should sit to the right of hero copy on desktop and below the copy on mobile. It must fit within the first viewport and must not overlap nav or CTA text.
-- Avoid nested cards.
-- Avoid decorative orbs/bokeh backgrounds.
+- Desktop: copy and action area on the left, globe/terminal/cards on the right, provider pills near the bottom.
+- Mobile: content stacks in one column and may scroll slightly if necessary, but it should still feel like one page rather than multiple landing sections.
+- Text must not overlap header, cards, pills, or footer.
+- No cards inside cards.
 
 ## Component Boundaries
 
-Keep existing high-level modules:
+Primary files:
 
-- `features/home/index.tsx`
-- `features/home/components/sections/hero.tsx`
-- `features/home/components/sections/features.tsx`
-- `features/home/components/sections/how-it-works.tsx`
-- `features/home/components/sections/stats.tsx`
-- `features/home/components/sections/cta.tsx`
+- `features/home/index.tsx` keeps loading/custom-content behavior and renders only the single-screen default home.
+- `features/home/components/sections/hero.tsx` owns the complete default single-screen page.
+- `features/home/components/hero-globe.tsx` owns the local globe/network visual.
 
-Allowed additions:
+Existing `Stats`, `Features`, `HowItWorks`, and `CTA` files can remain in the repository but should not be rendered by the default public home in this iteration.
 
-- New section components if they keep files easier to read, for example:
-  - `ecosystem.tsx`
-  - `pricing-preview.tsx`
-  - `faq.tsx`
-- Small reusable presentational components inside `features/home/components`.
-
-Do not change public route contracts. `Home` must still show configured custom home content when present.
+Do not change public route contracts.
 
 ## Data and i18n
 
 - Text should use `useTranslation()` and `t('English source key')`.
 - Add all new keys to `web/default/src/i18n/locales/{en,zh,fr,ja,ru,vi}.json`.
-- Provide real Chinese translations for `zh`. Other locales should get reasonable initial translations, not empty strings or untranslated placeholders.
-- Run the existing i18n sync script.
-
-No backend data dependency is required for this iteration.
+- Provide real Chinese translations for `zh`.
+- Other locales should get reasonable initial translations, not empty strings or untranslated placeholders.
+- No backend data dependency is required.
 
 ## Error and Empty States
 
 - Keep the existing loading state for custom home page content.
-- Keep iframe/markdown fallback behavior unchanged.
-- External docs links should keep the current safe `target="_blank" rel="noopener noreferrer"` behavior.
+- Keep iframe/markdown custom home page behavior unchanged.
+- External docs links keep `target="_blank" rel="noopener noreferrer"`.
 
 ## Testing and Verification
 
@@ -176,19 +138,24 @@ Visual QA:
 
 - Start the frontend dev server.
 - Capture desktop and mobile screenshots for `/`.
+- Capture dark mode screenshot.
 - Verify:
   - no white screen,
+  - the page is single-screen on desktop,
+  - the globe is visible and framed,
   - header remains usable,
-  - first viewport clearly communicates the product,
-  - cards do not overlap,
-  - text fits on mobile,
-  - light and dark modes are coherent.
+  - CTA buttons fit,
+  - provider pills and footer fit,
+  - protected project attribution remains present,
+  - there are no text overlaps.
 
 ## Acceptance Criteria
 
-- Public default home page visually resembles the reference direction without copying the reference brand.
+- Default public home is a compact single-screen page, not a long scrolling landing page.
+- Globe/network visual is the main visual anchor.
 - Authenticated and unauthenticated CTA logic remains correct.
-- Custom home page content override still works.
+- Custom home page override still works.
 - Dashboard, login/register, backend, and pricing internals are untouched unless required by type errors.
+- Protected New API / QuantumNous attribution is preserved.
 - All new text is translated across supported frontend locales.
 - Build and typecheck pass.
