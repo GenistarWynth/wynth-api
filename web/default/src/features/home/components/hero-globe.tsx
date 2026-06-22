@@ -86,13 +86,13 @@ export function HeroGlobe(props: HeroGlobeProps) {
       isDark
         ? {
             dark: 1,
-            diffuse: 0.98,
+            diffuse: 0.82,
             mapBrightness: 2.1,
             mapBaseBrightness: 0,
-            baseColor: [0.32, 0.19, 0.11] as [number, number, number],
-            markerColor: [0.9, 0.42, 0.16] as [number, number, number],
-            glowColor: [0.72, 0.28, 0.1] as [number, number, number],
-            arcColor: [0.88, 0.36, 0.12] as [number, number, number],
+            baseColor: [0.15, 0.1, 0.06] as [number, number, number],
+            markerColor: [0.98, 0.55, 0.18] as [number, number, number],
+            glowColor: [0.9, 0.45, 0.12] as [number, number, number],
+            arcColor: [0.95, 0.5, 0.14] as [number, number, number],
             opacity: 0.88,
           }
         : {

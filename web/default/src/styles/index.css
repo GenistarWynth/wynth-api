@@ -832,32 +832,32 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .dark .hero-globe-stage {
-  color: #f59f5a;
-  filter: saturate(0.96) brightness(0.92);
+  color: #f6ad55;
+  filter: saturate(0.9) brightness(0.88);
 }
 
 .dark .hero-globe-stage::before {
   background:
     radial-gradient(
       circle at 52% 52%,
-      rgb(251 146 60 / 0.1),
-      rgb(120 53 15 / 0.06) 42%,
+      rgb(245 158 11 / 0.08),
+      rgb(92 51 23 / 0.05) 42%,
       transparent 70%
     ),
-    radial-gradient(circle at 50% 52%, rgb(251 146 60 / 0.08), transparent 64%);
+    radial-gradient(circle at 50% 52%, rgb(245 158 11 / 0.06), transparent 64%);
   box-shadow:
     0 2.4rem 5rem rgb(0 0 0 / 0.34),
-    inset 0 0 0 1px rgb(251 146 60 / 0.16);
+    inset 0 0 0 1px rgb(245 158 11 / 0.12);
 }
 
 .dark .hero-globe-stage::after {
-  border-color: rgb(251 146 60 / 0.16);
+  border-color: rgb(245 158 11 / 0.12);
   background:
-    radial-gradient(circle at 68% 42%, rgb(251 146 60 / 0.08), transparent 24%),
-    linear-gradient(145deg, rgb(251 146 60 / 0.05), transparent 42%);
+    radial-gradient(circle at 68% 42%, rgb(245 158 11 / 0.06), transparent 24%),
+    linear-gradient(145deg, rgb(245 158 11 / 0.04), transparent 42%);
   box-shadow:
-    inset 0 0 2.5rem rgb(251 146 60 / 0.06),
-    0 0 3rem rgb(194 65 12 / 0.12);
+    inset 0 0 2.5rem rgb(245 158 11 / 0.05),
+    0 0 3rem rgb(180 83 9 / 0.1);
 }
 
 .hero-globe-canvas {
