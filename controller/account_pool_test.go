@@ -248,6 +248,20 @@ func TestAccountPoolAPIProxyRedaction(t *testing.T) {
 	assert.NotContains(t, string(listResult.Raw), "proxy-password-secret")
 }
 
+func TestAccountPoolAPIRejectsMissingRequiredFields(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{})
+	require.False(t, poolResult.Response.Success)
+	assert.Contains(t, poolResult.Response.Message, "Name")
+
+	pool := createAccountPoolAPITestPool(t, router)
+	bindingResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{})
+	require.False(t, bindingResult.Response.Success)
+	assert.Contains(t, bindingResult.Response.Message, "ChannelID")
+}
+
 func createAccountPoolAPITestPool(t *testing.T, router *gin.Engine) dto.AccountPoolResponse {
 	t.Helper()
 

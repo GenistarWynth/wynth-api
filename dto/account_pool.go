@@ -1,7 +1,7 @@
 package dto
 
 type AccountPoolCreateRequest struct {
-	Name                  string `json:"name"`
+	Name                  string `json:"name" binding:"required"`
 	Platform              string `json:"platform"`
 	DefaultProxyID        int    `json:"default_proxy_id"`
 	DefaultMonitorEnabled bool   `json:"default_monitor_enabled"`
@@ -39,7 +39,7 @@ type AccountPoolTokenStateRequest struct {
 }
 
 type AccountPoolAccountCreateRequest struct {
-	Name               string                             `json:"name"`
+	Name               string                             `json:"name" binding:"required"`
 	AccountIdentifier  string                             `json:"account_identifier"`
 	Credential         AccountPoolCredentialConfigRequest `json:"credential"`
 	TokenState         AccountPoolTokenStateRequest       `json:"token_state"`
@@ -82,7 +82,7 @@ type AccountPoolAccountResponse struct {
 }
 
 type AccountPoolBindingCreateRequest struct {
-	ChannelID         int      `json:"channel_id"`
+	ChannelID         int      `json:"channel_id" binding:"required"`
 	AccountIDs        []int    `json:"account_ids"`
 	ModelStrategy     string   `json:"model_strategy"`
 	FixedModels       []string `json:"fixed_models"`
@@ -106,10 +106,10 @@ type AccountPoolBindingResponse struct {
 }
 
 type AccountPoolProxyCreateRequest struct {
-	Name            string `json:"name"`
-	Protocol        string `json:"protocol"`
-	Host            string `json:"host"`
-	Port            int    `json:"port"`
+	Name            string `json:"name" binding:"required"`
+	Protocol        string `json:"protocol" binding:"required"`
+	Host            string `json:"host" binding:"required"`
+	Port            int    `json:"port" binding:"required"`
 	Username        string `json:"username"`
 	Password        string `json:"password"`
 	Status          string `json:"status"`
