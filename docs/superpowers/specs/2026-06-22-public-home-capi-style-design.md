@@ -50,7 +50,7 @@ Default section order:
    - CTAs:
      - Authenticated users: `Go to Dashboard`, `Docs`.
      - Anonymous users: `Get Started`, `View Pricing`, `Docs`.
-   - Replace the current split terminal-heavy composition with a more centered, service-home composition. A compact right-side or below-hero capability preview may remain, but it should not dominate the first viewport.
+   - Replace the current split terminal-heavy composition with a more centered, service-home composition. The existing `HeroTerminalDemo` should not stay as the dominant half-screen element. Either compress it into a short capability/code preview with a bounded height, or replace it with static product capability cards.
 
 2. `Open Source / Tools`
    - Two to three cards that explain practical value:
@@ -71,6 +71,7 @@ Default section order:
    - Entry cards that link to `/pricing`.
    - Copy should frame pricing around upstream cost management, channel multipliers, and pay-as-you-go gateway usage.
    - This is not a replacement for the pricing page.
+   - This section uses static landing-page copy only. It must not call pricing APIs or introduce backend data dependencies.
 
 5. `Value`
    - Four concise value cards:
@@ -89,6 +90,13 @@ Default section order:
 7. `CTA`
    - Simple centered closing section with the same main CTA logic as hero.
 
+Existing section mapping:
+
+- `Stats` should be removed or folded into the new value/ecosystem copy. The new page should not keep a standalone animated statistics strip unless the numbers are still meaningful for the redesigned message.
+- `Features` becomes the practical tools/capabilities section.
+- `HowItWorks` becomes either the value section or is replaced by value cards.
+- `CTA` remains as the closing call to action, with updated copy and visual treatment.
+
 ## Visual System
 
 Light mode:
@@ -97,6 +105,7 @@ Light mode:
 - Accent palette should use blue/cyan with small violet secondary accents.
 - Cards use subtle borders and shadows, not heavy gradients.
 - Use rounded cards, but keep operational pages unaffected.
+- `PublicHeader` already has the reference-like scroll-to-glass behavior. Implementation should tune it only if the home page requires minor spacing/token adjustments; do not rebuild the header interaction.
 
 Dark mode:
 
@@ -142,6 +151,7 @@ Do not change public route contracts. `Home` must still show configured custom h
 
 - Text should use `useTranslation()` and `t('English source key')`.
 - Add all new keys to `web/default/src/i18n/locales/{en,zh,fr,ja,ru,vi}.json`.
+- Provide real Chinese translations for `zh`. Other locales should get reasonable initial translations, not empty strings or untranslated placeholders.
 - Run the existing i18n sync script.
 
 No backend data dependency is required for this iteration.
