@@ -21,6 +21,8 @@ For commercial licensing, please contact support@quantumnous.com
 // All label/name values are i18n keys; use t(value) when displaying.
 // ============================================================================
 
+export const CHANNEL_TYPE_CODEX = 57
+
 export const CHANNEL_TYPES = {
   0: 'Unknown',
   1: 'OpenAI',

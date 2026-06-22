@@ -50,6 +50,11 @@ export type UpstreamMappingSyncStatus =
 
 export type UpstreamSourceModelStrategy = 'all_upstream' | 'fixed'
 
+export type CodexImageGenerationBridgePolicy =
+  | 'follow'
+  | 'enabled'
+  | 'disabled'
+
 export type UpstreamSourceRuleMonitor = {
   enabled?: boolean
   interval_minutes?: number
@@ -87,6 +92,7 @@ export type UpstreamSource = {
   auto_priority_enabled: boolean
   auto_priority_interval_minutes: number
   auto_priority_window_hours: number
+  codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy
   default_local_group: string
   model_strategy: UpstreamSourceModelStrategy
   fixed_models: string[]
@@ -113,6 +119,7 @@ export type UpstreamSourceLocalGroupRule = {
   monitor?: UpstreamSourceRuleMonitor
   auto_sync?: UpstreamSourceRuleAutoSync
   auto_priority?: UpstreamSourceRuleAutoPriority
+  codex_image_generation_bridge_policy?: CodexImageGenerationBridgePolicy
   model_strategy: UpstreamSourceModelStrategy
   fixed_models: string[]
 }
@@ -144,6 +151,7 @@ export type UpstreamSourceMapping = {
   resolved_auto_priority_enabled: boolean
   resolved_auto_priority_interval_minutes: number
   resolved_auto_priority_window_hours: number
+  resolved_codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy
   resolved_model_strategy: UpstreamSourceModelStrategy
   resolved_fixed_models: string[]
   last_error: string
@@ -173,6 +181,7 @@ export type UpstreamSourceFormValues = {
   auto_priority_enabled: boolean
   auto_priority_interval_minutes: number
   auto_priority_window_hours: number
+  codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy
   default_local_group: string
   model_strategy: UpstreamSourceModelStrategy
   fixed_models: string[]

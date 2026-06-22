@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/stretchr/testify/assert"
@@ -168,6 +169,55 @@ func TestResolveUpstreamSourceRuleAutoPriorityPreservesExplicitZeroInterval(t *t
 	assert.True(t, resolution.AutoPriorityEnabled)
 	assert.Equal(t, 0, resolution.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 48, resolution.AutoPriorityWindowHours)
+}
+
+func TestResolveUpstreamSourceRuleImageBridgePolicyOverridesFallback(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyEnabled,
+		"local_group_rules": []map[string]any{
+			{
+				"name":                                 "OpenAI pro",
+				"local_group":                          "paid",
+				"platforms":                            []string{"openai"},
+				"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyDisabled,
+			},
+		},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:       true,
+		DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamPlatform:  "openai",
+		UpstreamGroupName: "ChatGPT Pro",
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.SyncEligible)
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, resolution.CodexImageGenerationBridgePolicy)
+}
+
+func TestResolveUpstreamSourceRuleImageBridgePolicyUsesFallbackForNewAPIGroup(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyDisabled,
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "New API OpenAI",
+				"local_group": "openai",
+				"platforms":   []string{"openai"},
+			},
+		},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:       true,
+		DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamPlatform:  "openai",
+		UpstreamGroupName: "ChatGPT",
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.SyncEligible)
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, resolution.CodexImageGenerationBridgePolicy)
 }
 
 func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {

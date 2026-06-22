@@ -167,6 +167,7 @@ export interface ChannelOtherSettings {
   channel_auto_priority_last_score?: ChannelAutoPriorityScore
   generated_by_upstream_source_id?: number
   generated_by_upstream_mapping_id?: number
+  codex_image_generation_bridge_policy?: 'follow' | 'enabled' | 'disabled'
   advanced_custom?: AdvancedCustomConfig
 }
 

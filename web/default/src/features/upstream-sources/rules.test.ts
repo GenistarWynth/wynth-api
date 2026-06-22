@@ -56,6 +56,37 @@ describe('upstream source rule normalization', () => {
     ])
   })
 
+  test('preserves explicit follow image bridge policy in sync rules', () => {
+    assert.deepEqual(
+      normalizeSyncRules([
+        {
+          name: 'OpenAI',
+          local_group: 'default',
+          platforms: ['openai'],
+          name_contains: [],
+          description_contains: [],
+          exclude_keywords: [],
+          codex_image_generation_bridge_policy: 'follow',
+          model_strategy: 'all_upstream',
+          fixed_models: [],
+        },
+      ]),
+      [
+        {
+          name: 'OpenAI',
+          local_group: 'default',
+          platforms: ['openai'],
+          name_contains: [],
+          description_contains: [],
+          exclude_keywords: [],
+          codex_image_generation_bridge_policy: 'follow',
+          model_strategy: 'all_upstream',
+          fixed_models: [],
+        },
+      ]
+    )
+  })
+
   test('detects rules that can be matched and saved as templates', () => {
     assert.equal(
       hasLocalGroupRuleMatcher({
@@ -95,6 +126,7 @@ describe('upstream source rule normalization', () => {
           interval_minutes: 0,
           window_hours: 48,
         },
+        codexImageGenerationBridgePolicy: 'disabled',
         modelStrategy: 'fixed',
         fixedModels: ['gpt-5', 'gpt-4o'],
       }),
@@ -112,6 +144,7 @@ describe('upstream source rule normalization', () => {
           interval_minutes: 0,
           window_hours: 48,
         },
+        codex_image_generation_bridge_policy: 'disabled',
         model_strategy: 'fixed',
         fixed_models: ['gpt-5', 'gpt-4o'],
       }
@@ -135,6 +168,7 @@ describe('upstream source rule normalization', () => {
           interval_minutes: 15,
           window_hours: 24,
         },
+        codex_image_generation_bridge_policy: 'enabled',
         model_strategy: 'fixed',
         fixed_models: [' gpt-4o ', 'gpt-5', 'gpt-4o'],
       },
@@ -159,6 +193,7 @@ describe('upstream source rule normalization', () => {
           interval_minutes: 15,
           window_hours: 24,
         },
+        codex_image_generation_bridge_policy: 'enabled',
         model_strategy: 'fixed',
         fixed_models: ['gpt-4o', 'gpt-5'],
       },

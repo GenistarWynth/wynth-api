@@ -32,23 +32,24 @@ const (
 // Defaults are seeded before unmarshaling so an absent auto_sync_models key
 // preserves the service default of true while explicit false still persists.
 type upstreamSourceControllerSyncConfig struct {
-	LocalGroup                  string                             `json:"local_group"`
-	ChannelType                 int                                `json:"channel_type"`
-	DefaultPriority             int64                              `json:"default_priority"`
-	DefaultWeight               uint                               `json:"default_weight"`
-	EnableMonitor               bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes      int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels              bool                               `json:"auto_sync_models"`
-	ModelStrategy               string                             `json:"model_strategy"`
-	FixedModels                 []string                           `json:"fixed_models"`
-	AllowPrivateIP              common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled             bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes     int                                `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled         bool                               `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes int                                `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours     int                                `json:"auto_priority_window_hours"`
-	DefaultLocalGroup           string                             `json:"default_local_group"`
-	LocalGroupRules             []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	LocalGroup                       string                             `json:"local_group"`
+	ChannelType                      int                                `json:"channel_type"`
+	DefaultPriority                  int64                              `json:"default_priority"`
+	DefaultWeight                    uint                               `json:"default_weight"`
+	EnableMonitor                    bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes           int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels                   bool                               `json:"auto_sync_models"`
+	ModelStrategy                    string                             `json:"model_strategy"`
+	FixedModels                      []string                           `json:"fixed_models"`
+	AllowPrivateIP                   common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled                  bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes          int                                `json:"auto_sync_interval_minutes"`
+	AutoPriorityEnabled              bool                               `json:"auto_priority_enabled"`
+	AutoPriorityIntervalMinutes      int                                `json:"auto_priority_interval_minutes"`
+	AutoPriorityWindowHours          int                                `json:"auto_priority_window_hours"`
+	CodexImageGenerationBridgePolicy string                             `json:"codex_image_generation_bridge_policy"`
+	DefaultLocalGroup                string                             `json:"default_local_group"`
+	LocalGroupRules                  []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 func ListUpstreamSources(c *gin.Context) {
@@ -329,6 +330,7 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 	if req.AutoPriorityWindowHours != nil {
 		syncConfigInput.AutoPriorityWindowHours = *req.AutoPriorityWindowHours
 	}
+	syncConfigInput.CodexImageGenerationBridgePolicy = req.CodexImageGenerationBridgePolicy
 	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
 	syncConfigInput.LocalGroupRules = req.LocalGroupRules
 	syncConfig, err := marshalUpstreamSourceSyncConfig(syncConfigInput)
@@ -372,6 +374,7 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 	if req.AutoPriorityWindowHours != nil {
 		syncConfigInput.AutoPriorityWindowHours = *req.AutoPriorityWindowHours
 	}
+	syncConfigInput.CodexImageGenerationBridgePolicy = req.CodexImageGenerationBridgePolicy
 	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
 	syncConfigInput.LocalGroupRules = req.LocalGroupRules
 	syncConfig, err := marshalUpstreamSourceSyncConfig(syncConfigInput)
@@ -438,40 +441,41 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 	auth := parseUpstreamSourceAuthConfig(source.AuthConfig)
 	sync := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	return dto.UpstreamSourceResponse{
-		Id:                          source.Id,
-		Name:                        source.Name,
-		Type:                        source.Type,
-		Status:                      source.Status,
-		BaseURL:                     source.BaseURL,
-		AdminAPIBasePath:            source.AdminAPIBasePath,
-		RelayBaseURL:                source.RelayBaseURL,
-		LocalGroup:                  sync.LocalGroup,
-		ChannelType:                 sync.ChannelType,
-		DefaultPriority:             sync.DefaultPriority,
-		DefaultWeight:               sync.DefaultWeight,
-		EnableMonitor:               sync.EnableMonitor,
-		MonitorIntervalMinutes:      sync.MonitorIntervalMinutes,
-		AutoSyncModels:              sync.AutoSyncModels,
-		ModelStrategy:               sync.ModelStrategy,
-		FixedModels:                 sync.FixedModels,
-		AllowPrivateIP:              bool(sync.AllowPrivateIP),
-		AutoSyncEnabled:             sync.AutoSyncEnabled,
-		AutoSyncIntervalMinutes:     sync.AutoSyncIntervalMinutes,
-		AutoPriorityEnabled:         sync.AutoPriorityEnabled,
-		AutoPriorityIntervalMinutes: sync.AutoPriorityIntervalMinutes,
-		AutoPriorityWindowHours:     sync.AutoPriorityWindowHours,
-		DefaultLocalGroup:           sync.DefaultLocalGroup,
-		LocalGroupRules:             sync.LocalGroupRules,
-		MaskedEmail:                 common.MaskEmail(auth.Email),
-		HasCredentials:              upstreamSourceHasCredentials(auth),
-		LastDiscoveryTime:           source.LastDiscoveryTime,
-		LastDiscoveryStatus:         source.LastDiscoveryStatus,
-		LastDiscoveryError:          sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
-		LastSyncTime:                source.LastSyncTime,
-		LastSyncStatus:              source.LastSyncStatus,
-		LastSyncError:               sanitizeUpstreamSourceResponseError(source.LastSyncError),
-		CreatedTime:                 source.CreatedTime,
-		UpdatedTime:                 source.UpdatedTime,
+		Id:                               source.Id,
+		Name:                             source.Name,
+		Type:                             source.Type,
+		Status:                           source.Status,
+		BaseURL:                          source.BaseURL,
+		AdminAPIBasePath:                 source.AdminAPIBasePath,
+		RelayBaseURL:                     source.RelayBaseURL,
+		LocalGroup:                       sync.LocalGroup,
+		ChannelType:                      sync.ChannelType,
+		DefaultPriority:                  sync.DefaultPriority,
+		DefaultWeight:                    sync.DefaultWeight,
+		EnableMonitor:                    sync.EnableMonitor,
+		MonitorIntervalMinutes:           sync.MonitorIntervalMinutes,
+		AutoSyncModels:                   sync.AutoSyncModels,
+		ModelStrategy:                    sync.ModelStrategy,
+		FixedModels:                      sync.FixedModels,
+		AllowPrivateIP:                   bool(sync.AllowPrivateIP),
+		AutoSyncEnabled:                  sync.AutoSyncEnabled,
+		AutoSyncIntervalMinutes:          sync.AutoSyncIntervalMinutes,
+		AutoPriorityEnabled:              sync.AutoPriorityEnabled,
+		AutoPriorityIntervalMinutes:      sync.AutoPriorityIntervalMinutes,
+		AutoPriorityWindowHours:          sync.AutoPriorityWindowHours,
+		CodexImageGenerationBridgePolicy: sync.CodexImageGenerationBridgePolicy,
+		DefaultLocalGroup:                sync.DefaultLocalGroup,
+		LocalGroupRules:                  sync.LocalGroupRules,
+		MaskedEmail:                      common.MaskEmail(auth.Email),
+		HasCredentials:                   upstreamSourceHasCredentials(auth),
+		LastDiscoveryTime:                source.LastDiscoveryTime,
+		LastDiscoveryStatus:              source.LastDiscoveryStatus,
+		LastDiscoveryError:               sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
+		LastSyncTime:                     source.LastSyncTime,
+		LastSyncStatus:                   source.LastSyncStatus,
+		LastSyncError:                    sanitizeUpstreamSourceResponseError(source.LastSyncError),
+		CreatedTime:                      source.CreatedTime,
+		UpdatedTime:                      source.UpdatedTime,
 	}
 }
 
@@ -524,19 +528,21 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	}
 	config.ModelStrategy = normalizeUpstreamSourceControllerModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceControllerFixedModels(config.FixedModels)
+	config.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
 	config.LocalGroupRules = service.NormalizeUpstreamSourceLocalGroupRulesForConfig(config.LocalGroupRules)
 	return config
 }
 
 func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncConfig {
 	return upstreamSourceControllerSyncConfig{
-		LocalGroup:                  "default",
-		ChannelType:                 constant.ChannelTypeOpenAI,
-		AutoSyncModels:              true,
-		AutoPriorityIntervalMinutes: 30,
-		AutoPriorityWindowHours:     24,
-		ModelStrategy:               upstreamSourceControllerModelStrategyAllUpstream,
-		DefaultLocalGroup:           "default",
+		LocalGroup:                       "default",
+		ChannelType:                      constant.ChannelTypeOpenAI,
+		AutoSyncModels:                   true,
+		AutoPriorityIntervalMinutes:      30,
+		AutoPriorityWindowHours:          24,
+		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyFollow,
+		ModelStrategy:                    upstreamSourceControllerModelStrategyAllUpstream,
+		DefaultLocalGroup:                "default",
 	}
 }
 

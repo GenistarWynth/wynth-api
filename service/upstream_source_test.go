@@ -1097,6 +1097,48 @@ func TestSyncUpstreamSourceUsesRuleLocalGroupAndMonitorOverrides(t *testing.T) {
 	assert.Equal(t, 5, settings.ChannelMonitorIntervalMinutes)
 }
 
+func TestSyncUpstreamSourceAppliesCodexImageBridgePolicyToGeneratedNewAPIChannel(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"channel_type":                         constant.ChannelTypeCodex,
+		"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyEnabled,
+		"local_group_rules": []map[string]any{
+			{
+				"name":                                 "OpenAI Pro",
+				"local_group":                          "pro",
+				"platforms":                            []string{"openai"},
+				"name_contains":                        []string{"pro"},
+				"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyDisabled,
+			},
+		},
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("type", model.UpstreamSourceTypeNewAPI).Error)
+	rate := 1.0
+	createSyncTestMapping(t, source.Id, "10", "ChatGPT Pro", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			require.Equal(t, model.UpstreamSourceTypeNewAPI, sourceType)
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-5.5"}, nil
+		},
+		Now: func() int64 { return 2004 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel).Error)
+	assert.Equal(t, constant.ChannelTypeCodex, channel.Type)
+	assert.Equal(t, "pro", channel.Group)
+	settings := channel.GetOtherSettings()
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, settings.CodexImageGenerationBridgePolicy)
+}
+
 func TestSyncUpstreamSourceFixedModelsIntersectsFetchedModels(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, map[string]any{

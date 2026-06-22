@@ -134,6 +134,7 @@ import {
   type LocalGroupRuleTemplateKey,
   type LocalGroupRuleUserTemplate,
   normalizeKeywordList,
+  normalizeCodexImageGenerationBridgePolicy,
   normalizeModelList,
   normalizeModelStrategy,
   normalizeSyncRules,
@@ -148,6 +149,7 @@ import {
   UPSTREAM_SOURCE_TYPE_NEW_API,
   UPSTREAM_SOURCE_TYPE_SUB2API,
   type ApiResponse,
+  type CodexImageGenerationBridgePolicy,
   type UpstreamDiscoveryStatus,
   type UpstreamMappingDiscoveryStatus,
   type UpstreamMappingSyncStatus,
@@ -214,6 +216,19 @@ function sourceTypeLabel(sourceType: UpstreamSourceType) {
   return sourceType === UPSTREAM_SOURCE_TYPE_NEW_API ? 'new-api' : 'sub2api'
 }
 
+function codexImageGenerationBridgePolicyLabel(
+  policy: CodexImageGenerationBridgePolicy
+) {
+  switch (policy) {
+    case 'enabled':
+      return 'Force enable'
+    case 'disabled':
+      return 'Force disable'
+    default:
+      return 'Follow channel'
+  }
+}
+
 function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
   return {
     name: '',
@@ -248,6 +263,12 @@ function normalizeRuleForForm(
     name_contains: normalizeKeywordList(rule.name_contains ?? []),
     description_contains: normalizeKeywordList(rule.description_contains ?? []),
     exclude_keywords: normalizeKeywordList(rule.exclude_keywords ?? []),
+    codex_image_generation_bridge_policy:
+      rule.codex_image_generation_bridge_policy
+        ? normalizeCodexImageGenerationBridgePolicy(
+            rule.codex_image_generation_bridge_policy
+          )
+        : undefined,
     model_strategy: normalizeModelStrategy(rule.model_strategy),
     fixed_models: normalizeModelList(rule.fixed_models ?? []),
   }
@@ -299,6 +320,10 @@ function defaultSourceFormValues(
     ),
     auto_priority_window_hours:
       source?.auto_priority_window_hours ?? DEFAULT_AUTO_PRIORITY_WINDOW_HOURS,
+    codex_image_generation_bridge_policy:
+      normalizeCodexImageGenerationBridgePolicy(
+        source?.codex_image_generation_bridge_policy
+      ),
   }
 }
 
@@ -341,6 +366,10 @@ function buildCreatePayload(
       values.auto_priority_interval_minutes
     ),
     auto_priority_window_hours: Math.max(1, values.auto_priority_window_hours),
+    codex_image_generation_bridge_policy:
+      normalizeCodexImageGenerationBridgePolicy(
+        values.codex_image_generation_bridge_policy
+      ),
   }
 }
 
@@ -382,6 +411,10 @@ function buildUpdatePayload(
       values.auto_priority_interval_minutes
     ),
     auto_priority_window_hours: Math.max(1, values.auto_priority_window_hours),
+    codex_image_generation_bridge_policy:
+      normalizeCodexImageGenerationBridgePolicy(
+        values.codex_image_generation_bridge_policy
+      ),
   }
 }
 
@@ -938,6 +971,45 @@ function FixedModelSelect(props: {
   )
 }
 
+function CodexImageGenerationBridgePolicySelect(props: {
+  value: CodexImageGenerationBridgePolicy | 'inherit'
+  includeInherit?: boolean
+  triggerId?: string
+  onChange: (value: CodexImageGenerationBridgePolicy | 'inherit') => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <Select
+      value={props.value}
+      onValueChange={(value) => {
+        if (value) {
+          props.onChange(value as CodexImageGenerationBridgePolicy | 'inherit')
+        }
+      }}
+    >
+      <SelectTrigger id={props.triggerId}>
+        <SelectValue>
+          {props.value === 'inherit'
+            ? t('Inherit upstream source')
+            : t(codexImageGenerationBridgePolicyLabel(props.value))}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent alignItemWithTrigger={false}>
+        <SelectGroup>
+          {props.includeInherit && (
+            <SelectItem value='inherit'>
+              {t('Inherit upstream source')}
+            </SelectItem>
+          )}
+          <SelectItem value='follow'>{t('Follow channel')}</SelectItem>
+          <SelectItem value='enabled'>{t('Force enable')}</SelectItem>
+          <SelectItem value='disabled'>{t('Force disable')}</SelectItem>
+        </SelectGroup>
+      </SelectContent>
+    </Select>
+  )
+}
+
 function SourceFormSheet(props: {
   open: boolean
   mode: SourceSheetMode
@@ -1086,6 +1158,8 @@ function SourceFormSheet(props: {
           interval_minutes: previous.auto_priority_interval_minutes,
           window_hours: previous.auto_priority_window_hours,
         },
+        codexImageGenerationBridgePolicy:
+          previous.codex_image_generation_bridge_policy,
         modelStrategy: previous.model_strategy,
         fixedModels: previous.fixed_models,
       }
@@ -1468,6 +1542,19 @@ function SourceFormSheet(props: {
                       DEFAULT_AUTO_SYNC_INTERVAL_MINUTES
                     )
                   )
+                }
+              />
+            </FieldBlock>
+            <FieldBlock
+              label={t('Codex image generation bridge')}
+              htmlFor='source-codex-image-generation-bridge'
+            >
+              <CodexImageGenerationBridgePolicySelect
+                triggerId='source-codex-image-generation-bridge'
+                value={form.codex_image_generation_bridge_policy}
+                onChange={(value) =>
+                  value !== 'inherit' &&
+                  setField('codex_image_generation_bridge_policy', value)
                 }
               />
             </FieldBlock>
@@ -1920,6 +2007,27 @@ function SourceFormSheet(props: {
                     </div>
                   </div>
                   <FieldBlock
+                    label={t('Codex image generation bridge')}
+                    htmlFor={`source-rule-codex-image-generation-bridge-${index}`}
+                  >
+                    <CodexImageGenerationBridgePolicySelect
+                      triggerId={`source-rule-codex-image-generation-bridge-${index}`}
+                      includeInherit
+                      value={
+                        rule.codex_image_generation_bridge_policy ?? 'inherit'
+                      }
+                      onChange={(value) => {
+                        const nextRule = { ...rule }
+                        if (value === 'inherit') {
+                          delete nextRule.codex_image_generation_bridge_policy
+                        } else {
+                          nextRule.codex_image_generation_bridge_policy = value
+                        }
+                        setLocalGroupRule(index, nextRule)
+                      }}
+                    />
+                  </FieldBlock>
+                  <FieldBlock
                     label={t('Model strategy')}
                     htmlFor={`source-rule-model-strategy-${index}`}
                   >
@@ -2311,6 +2419,9 @@ function MappingRow(props: {
         DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
       )}m / ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h`
     : `${t('Auto priority')}: ${t('Disabled')}`
+  const codexImageBridgePolicy = normalizeCodexImageGenerationBridgePolicy(
+    mapping.resolved_codex_image_generation_bridge_policy
+  )
   const rowMuted =
     mapping.discovery_status === 'invalid' ||
     mapping.discovery_status === 'stale' ||
@@ -2349,6 +2460,10 @@ function MappingRow(props: {
           </span>
           <span className='text-muted-foreground text-xs'>
             {autoPriorityLabel}
+          </span>
+          <span className='text-muted-foreground text-xs'>
+            {t('Codex image generation bridge')}:{' '}
+            {t(codexImageGenerationBridgePolicyLabel(codexImageBridgePolicy))}
           </span>
         </div>
       </TableCell>

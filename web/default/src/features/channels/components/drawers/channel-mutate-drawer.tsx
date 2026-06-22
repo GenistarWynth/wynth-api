@@ -64,6 +64,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Select,
   SelectContent,
@@ -2101,6 +2102,70 @@ export function ChannelMutateDrawer({
                               )}
                             </AlertDescription>
                           </Alert>
+
+                          <FormField
+                            control={form.control}
+                            name='codex_image_generation_bridge_policy'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>
+                                  {t('Codex image generation bridge')}
+                                </FormLabel>
+                                <FormControl>
+                                  <RadioGroup
+                                    value={field.value || 'follow'}
+                                    onValueChange={field.onChange}
+                                    className='grid gap-2 sm:grid-cols-3'
+                                  >
+                                    {[
+                                      {
+                                        value: 'follow',
+                                        label: t('Follow channel'),
+                                        description: t(
+                                          'Do not override image tool injection.'
+                                        ),
+                                      },
+                                      {
+                                        value: 'enabled',
+                                        label: t('Force enable'),
+                                        description: t(
+                                          'Inject the Responses image_generation tool for Codex text requests.'
+                                        ),
+                                      },
+                                      {
+                                        value: 'disabled',
+                                        label: t('Force disable'),
+                                        description: t(
+                                          'Remove the Responses image_generation tool from Codex text requests.'
+                                        ),
+                                      },
+                                    ].map((option) => (
+                                      <label
+                                        key={option.value}
+                                        htmlFor={`codex-image-bridge-${option.value}`}
+                                        className='border-border hover:bg-accent has-data-[checked]:border-primary has-data-[checked]:bg-primary/5 flex cursor-pointer gap-3 rounded-md border p-3'
+                                      >
+                                        <RadioGroupItem
+                                          id={`codex-image-bridge-${option.value}`}
+                                          value={option.value}
+                                          className='mt-0.5'
+                                        />
+                                        <span className='space-y-1'>
+                                          <span className='block text-sm font-medium'>
+                                            {option.label}
+                                          </span>
+                                          <span className='text-muted-foreground block text-xs leading-relaxed'>
+                                            {option.description}
+                                          </span>
+                                        </span>
+                                      </label>
+                                    ))}
+                                  </RadioGroup>
+                                </FormControl>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
                         </div>
                       )}
 

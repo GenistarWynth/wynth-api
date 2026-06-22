@@ -1,4 +1,5 @@
 import type {
+  CodexImageGenerationBridgePolicy,
   UpstreamSourceLocalGroupRule,
   UpstreamSourceModelStrategy,
 } from './types'
@@ -18,6 +19,7 @@ type LocalGroupRuleTemplateDefaults = {
   monitor?: UpstreamSourceLocalGroupRule['monitor']
   autoSync?: UpstreamSourceLocalGroupRule['auto_sync']
   autoPriority?: UpstreamSourceLocalGroupRule['auto_priority']
+  codexImageGenerationBridgePolicy?: CodexImageGenerationBridgePolicy
   modelStrategy?: UpstreamSourceModelStrategy
   fixedModels?: string[]
 }
@@ -99,6 +101,16 @@ export function normalizeModelStrategy(
     : UPSTREAM_SOURCE_MODEL_STRATEGY_ALL
 }
 
+export function normalizeCodexImageGenerationBridgePolicy(
+  value?: string | null
+): CodexImageGenerationBridgePolicy {
+  return value === 'enabled' || value === 'disabled' ? value : 'follow'
+}
+
+function hasCodexImageGenerationBridgePolicy(value?: string | null): boolean {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
 export function buildLocalGroupRuleTemplate(
   key: LocalGroupRuleTemplateKey,
   defaults: LocalGroupRuleTemplateDefaults
@@ -117,6 +129,17 @@ export function buildLocalGroupRuleTemplate(
     ...(defaults.monitor ? { monitor: defaults.monitor } : {}),
     ...(defaults.autoSync ? { auto_sync: defaults.autoSync } : {}),
     ...(defaults.autoPriority ? { auto_priority: defaults.autoPriority } : {}),
+    ...(defaults.codexImageGenerationBridgePolicy &&
+    normalizeCodexImageGenerationBridgePolicy(
+      defaults.codexImageGenerationBridgePolicy
+    ) !== 'follow'
+      ? {
+          codex_image_generation_bridge_policy:
+            normalizeCodexImageGenerationBridgePolicy(
+              defaults.codexImageGenerationBridgePolicy
+            ),
+        }
+      : {}),
     model_strategy: modelStrategy,
     fixed_models:
       modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
@@ -164,6 +187,12 @@ function normalizeTemplateRule(
 ): UpstreamSourceLocalGroupRule {
   const modelStrategy = normalizeModelStrategy(rule.model_strategy)
   const autoPriority = normalizeRuleAutoPriority(rule.auto_priority)
+  const hasBridgePolicy = hasCodexImageGenerationBridgePolicy(
+    rule.codex_image_generation_bridge_policy
+  )
+  const bridgePolicy = normalizeCodexImageGenerationBridgePolicy(
+    rule.codex_image_generation_bridge_policy
+  )
   return {
     name: String(rule.name ?? '').trim(),
     local_group: String(rule.local_group ?? '').trim(),
@@ -178,6 +207,9 @@ function normalizeTemplateRule(
     ...(rule.monitor ? { monitor: rule.monitor } : {}),
     ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
     ...(autoPriority ? { auto_priority: autoPriority } : {}),
+    ...(hasBridgePolicy
+      ? { codex_image_generation_bridge_policy: bridgePolicy }
+      : {}),
     model_strategy: modelStrategy,
     fixed_models:
       modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
@@ -301,6 +333,12 @@ export function normalizeSyncRules(
           ? normalizeModelList(rule.fixed_models ?? [])
           : []
       const autoPriority = normalizeRuleAutoPriority(rule.auto_priority)
+      const hasBridgePolicy = hasCodexImageGenerationBridgePolicy(
+        rule.codex_image_generation_bridge_policy
+      )
+      const bridgePolicy = normalizeCodexImageGenerationBridgePolicy(
+        rule.codex_image_generation_bridge_policy
+      )
 
       return {
         name: rule.name.trim(),
@@ -312,6 +350,9 @@ export function normalizeSyncRules(
         ...(rule.monitor ? { monitor: rule.monitor } : {}),
         ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
         ...(autoPriority ? { auto_priority: autoPriority } : {}),
+        ...(hasBridgePolicy
+          ? { codex_image_generation_bridge_policy: bridgePolicy }
+          : {}),
         model_strategy: modelStrategy,
         fixed_models: fixedModels,
       }

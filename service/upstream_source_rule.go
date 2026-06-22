@@ -28,40 +28,42 @@ const (
 // AutoSyncModels stays pointer-based here so absent keys can preserve the
 // historical default while explicit false remains distinguishable.
 type upstreamSourceSyncConfig struct {
-	LocalGroup                  string                             `json:"local_group"`
-	ChannelType                 int                                `json:"channel_type"`
-	DefaultPriority             int64                              `json:"default_priority"`
-	DefaultWeight               uint                               `json:"default_weight"`
-	EnableMonitor               bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes      int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels              *bool                              `json:"auto_sync_models"`
-	ModelStrategy               string                             `json:"model_strategy"`
-	FixedModels                 []string                           `json:"fixed_models"`
-	AllowPrivateIP              common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled             bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes     int                                `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled         bool                               `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes int                                `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours     int                                `json:"auto_priority_window_hours"`
-	DefaultLocalGroup           string                             `json:"default_local_group"`
-	LocalGroupRules             []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	LocalGroup                       string                             `json:"local_group"`
+	ChannelType                      int                                `json:"channel_type"`
+	DefaultPriority                  int64                              `json:"default_priority"`
+	DefaultWeight                    uint                               `json:"default_weight"`
+	EnableMonitor                    bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes           int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels                   *bool                              `json:"auto_sync_models"`
+	ModelStrategy                    string                             `json:"model_strategy"`
+	FixedModels                      []string                           `json:"fixed_models"`
+	AllowPrivateIP                   common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled                  bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes          int                                `json:"auto_sync_interval_minutes"`
+	AutoPriorityEnabled              bool                               `json:"auto_priority_enabled"`
+	AutoPriorityIntervalMinutes      int                                `json:"auto_priority_interval_minutes"`
+	AutoPriorityWindowHours          int                                `json:"auto_priority_window_hours"`
+	CodexImageGenerationBridgePolicy string                             `json:"codex_image_generation_bridge_policy"`
+	DefaultLocalGroup                string                             `json:"default_local_group"`
+	LocalGroupRules                  []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 type upstreamSourceRuleResolution struct {
-	Matched                     bool
-	SyncEligible                bool
-	RuleName                    string
-	Reason                      string
-	LocalGroup                  string
-	MonitorEnabled              bool
-	MonitorIntervalMinutes      int
-	AutoSyncEnabled             bool
-	AutoSyncIntervalMinutes     int
-	AutoPriorityEnabled         bool
-	AutoPriorityIntervalMinutes int
-	AutoPriorityWindowHours     int
-	ModelStrategy               string
-	FixedModels                 []string
+	Matched                          bool
+	SyncEligible                     bool
+	RuleName                         string
+	Reason                           string
+	LocalGroup                       string
+	MonitorEnabled                   bool
+	MonitorIntervalMinutes           int
+	AutoSyncEnabled                  bool
+	AutoSyncIntervalMinutes          int
+	AutoPriorityEnabled              bool
+	AutoPriorityIntervalMinutes      int
+	AutoPriorityWindowHours          int
+	CodexImageGenerationBridgePolicy string
+	ModelStrategy                    string
+	FixedModels                      []string
 }
 
 func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {
@@ -113,6 +115,7 @@ func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstream
 	}
 	config.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes)
 	config.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours)
+	config.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
 	config.ModelStrategy = normalizeUpstreamSourceFallbackModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
 	config.LocalGroupRules = normalizeUpstreamSourceLocalGroupRules(config.LocalGroupRules)
@@ -174,20 +177,28 @@ func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroup
 			continue
 		}
 		normalized = append(normalized, dto.UpstreamSourceLocalGroupRule{
-			Name:                strings.TrimSpace(rule.Name),
-			LocalGroup:          localGroup,
-			Platforms:           platforms,
-			NameContains:        nameContains,
-			DescriptionContains: descriptionContains,
-			ExcludeKeywords:     normalizeUpstreamSourceRuleKeywords(rule.ExcludeKeywords),
-			Monitor:             normalizeUpstreamSourceRuleMonitor(rule.Monitor),
-			AutoSync:            normalizeUpstreamSourceRuleAutoSync(rule.AutoSync),
-			AutoPriority:        normalizeUpstreamSourceRuleAutoPriority(rule.AutoPriority),
-			ModelStrategy:       normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy),
-			FixedModels:         normalizeUpstreamSourceFixedModels(rule.FixedModels),
+			Name:                             strings.TrimSpace(rule.Name),
+			LocalGroup:                       localGroup,
+			Platforms:                        platforms,
+			NameContains:                     nameContains,
+			DescriptionContains:              descriptionContains,
+			ExcludeKeywords:                  normalizeUpstreamSourceRuleKeywords(rule.ExcludeKeywords),
+			Monitor:                          normalizeUpstreamSourceRuleMonitor(rule.Monitor),
+			AutoSync:                         normalizeUpstreamSourceRuleAutoSync(rule.AutoSync),
+			AutoPriority:                     normalizeUpstreamSourceRuleAutoPriority(rule.AutoPriority),
+			CodexImageGenerationBridgePolicy: normalizeUpstreamSourceRuleCodexImageGenerationBridgePolicy(rule.CodexImageGenerationBridgePolicy),
+			ModelStrategy:                    normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy),
+			FixedModels:                      normalizeUpstreamSourceFixedModels(rule.FixedModels),
 		})
 	}
 	return normalized
+}
+
+func normalizeUpstreamSourceRuleCodexImageGenerationBridgePolicy(policy string) string {
+	if strings.TrimSpace(policy) == "" {
+		return ""
+	}
+	return dto.NormalizeCodexImageGenerationBridgePolicy(policy)
 }
 
 func NormalizeUpstreamSourceLocalGroupRulesForConfig(rules []dto.UpstreamSourceLocalGroupRule) []dto.UpstreamSourceLocalGroupRule {
@@ -327,17 +338,18 @@ func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstr
 		fixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
 	}
 	return upstreamSourceRuleResolution{
-		Reason:                      upstreamSourceMatchReasonNoMatchingRule,
-		LocalGroup:                  upstreamSourceDefaultLocalGroup(config),
-		MonitorEnabled:              config.EnableMonitor,
-		MonitorIntervalMinutes:      monitorInterval,
-		AutoSyncEnabled:             config.AutoSyncEnabled,
-		AutoSyncIntervalMinutes:     autoSyncInterval,
-		AutoPriorityEnabled:         config.AutoPriorityEnabled,
-		AutoPriorityIntervalMinutes: normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes),
-		AutoPriorityWindowHours:     normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours),
-		ModelStrategy:               modelStrategy,
-		FixedModels:                 fixedModels,
+		Reason:                           upstreamSourceMatchReasonNoMatchingRule,
+		LocalGroup:                       upstreamSourceDefaultLocalGroup(config),
+		MonitorEnabled:                   config.EnableMonitor,
+		MonitorIntervalMinutes:           monitorInterval,
+		AutoSyncEnabled:                  config.AutoSyncEnabled,
+		AutoSyncIntervalMinutes:          autoSyncInterval,
+		AutoPriorityEnabled:              config.AutoPriorityEnabled,
+		AutoPriorityIntervalMinutes:      normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes),
+		AutoPriorityWindowHours:          normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours),
+		CodexImageGenerationBridgePolicy: dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy),
+		ModelStrategy:                    modelStrategy,
+		FixedModels:                      fixedModels,
 	}
 }
 
@@ -433,6 +445,9 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		if rule.AutoPriority.WindowHours != nil {
 			resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.WindowHours)
 		}
+	}
+	if strings.TrimSpace(rule.CodexImageGenerationBridgePolicy) != "" {
+		resolution.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(rule.CodexImageGenerationBridgePolicy)
 	}
 	if modelStrategy := normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy); modelStrategy != "" {
 		resolution.ModelStrategy = modelStrategy

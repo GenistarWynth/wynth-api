@@ -57,7 +57,25 @@ type ChannelOtherSettings struct {
 	ChannelAutoPriorityLastScore          *ChannelAutoPriorityScore `json:"channel_auto_priority_last_score,omitempty"`
 	GeneratedByUpstreamSourceID           int                       `json:"generated_by_upstream_source_id,omitempty"`
 	GeneratedByUpstreamMappingID          int                       `json:"generated_by_upstream_mapping_id,omitempty"`
+	CodexImageGenerationBridgePolicy      string                    `json:"codex_image_generation_bridge_policy,omitempty"`
 	AdvancedCustom                        *AdvancedCustomConfig     `json:"advanced_custom,omitempty"`
+}
+
+const (
+	CodexImageGenerationBridgePolicyFollow   = "follow"
+	CodexImageGenerationBridgePolicyEnabled  = "enabled"
+	CodexImageGenerationBridgePolicyDisabled = "disabled"
+)
+
+func NormalizeCodexImageGenerationBridgePolicy(policy string) string {
+	switch strings.TrimSpace(policy) {
+	case CodexImageGenerationBridgePolicyEnabled:
+		return CodexImageGenerationBridgePolicyEnabled
+	case CodexImageGenerationBridgePolicyDisabled:
+		return CodexImageGenerationBridgePolicyDisabled
+	default:
+		return CodexImageGenerationBridgePolicyFollow
+	}
 }
 
 type ChannelAutoPriorityScore struct {

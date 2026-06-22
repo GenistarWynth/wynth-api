@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 import {
+  CHANNEL_TYPE_CODEX,
   CHANNEL_STATUS,
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
@@ -210,6 +211,9 @@ export const channelFormSchema = z
     // Channel monitoring settings (stored in settings JSON)
     channel_monitor_enabled: z.boolean().optional(),
     channel_monitor_interval_minutes: z.number().optional(),
+    codex_image_generation_bridge_policy: z
+      .enum(['follow', 'enabled', 'disabled'])
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
@@ -260,7 +264,7 @@ export const channelFormSchema = z
       )
     }
 
-    if (data.type === 57) {
+    if (data.type === CHANNEL_TYPE_CODEX) {
       if (data.multi_key_mode && data.multi_key_mode !== 'single') {
         addRequiredIssue(
           ctx,
@@ -361,6 +365,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   upstream_model_update_ignored_models: '',
   channel_monitor_enabled: false,
   channel_monitor_interval_minutes: 10,
+  codex_image_generation_bridge_policy: 'follow',
   advanced_custom: '',
 }
 
@@ -418,6 +423,8 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateIgnoredModels = ''
   let channelMonitorEnabled = false
   let channelMonitorIntervalMinutes = 10
+  let codexImageGenerationBridgePolicy: 'follow' | 'enabled' | 'disabled' =
+    'follow'
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -448,6 +455,8 @@ export function transformChannelToFormDefaults(
         parsed.channel_monitor_interval_minutes,
         10
       )
+      codexImageGenerationBridgePolicy =
+        normalizeCodexImageGenerationBridgePolicy(parsed)
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -502,6 +511,7 @@ export function transformChannelToFormDefaults(
     upstream_model_update_ignored_models: upstreamModelUpdateIgnoredModels,
     channel_monitor_enabled: channelMonitorEnabled,
     channel_monitor_interval_minutes: channelMonitorIntervalMinutes,
+    codex_image_generation_bridge_policy: codexImageGenerationBridgePolicy,
     advanced_custom: advancedCustom,
   }
 }
@@ -525,6 +535,24 @@ function normalizeMonitorInterval(value: unknown, fallback = 10): number {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) return fallback
   return Math.max(1, Math.trunc(numeric))
+}
+
+function normalizeCodexImageGenerationBridgePolicy(
+  settings: Record<string, unknown>
+): 'follow' | 'enabled' | 'disabled' {
+  const policy = settings.codex_image_generation_bridge_policy
+  if (policy === 'enabled' || policy === 'disabled') {
+    return policy
+  }
+  if (typeof settings.codex_image_generation_bridge === 'boolean') {
+    return settings.codex_image_generation_bridge ? 'enabled' : 'disabled'
+  }
+  if (typeof settings.codex_image_generation_bridge_enabled === 'boolean') {
+    return settings.codex_image_generation_bridge_enabled
+      ? 'enabled'
+      : 'disabled'
+  }
+  return 'follow'
 }
 
 /**
@@ -643,6 +671,19 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   } else if ('advanced_custom' in settingsObj) {
     delete settingsObj.advanced_custom
   }
+
+  if (formData.type === CHANNEL_TYPE_CODEX) {
+    const policy = formData.codex_image_generation_bridge_policy || 'follow'
+    if (policy === 'enabled' || policy === 'disabled') {
+      settingsObj.codex_image_generation_bridge_policy = policy
+    } else {
+      delete settingsObj.codex_image_generation_bridge_policy
+    }
+  } else {
+    delete settingsObj.codex_image_generation_bridge_policy
+  }
+  delete settingsObj.codex_image_generation_bridge
+  delete settingsObj.codex_image_generation_bridge_enabled
 
   settingsObj.channel_monitor_enabled =
     formData.channel_monitor_enabled === true

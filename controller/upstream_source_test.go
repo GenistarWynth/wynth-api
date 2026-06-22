@@ -346,6 +346,45 @@ func TestUpstreamSourceAPICreatePersistsExplicitZeroAutoPriorityInterval(t *test
 	assert.Equal(t, 168, updateResponse.Data.AutoPriorityWindowHours)
 }
 
+func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	request := dto.UpstreamSourceCreateRequest{
+		Name:                             "codex-bridge-source",
+		Type:                             model.UpstreamSourceTypeNewAPI,
+		BaseURL:                          "https://admin.example.com",
+		ChannelType:                      constant.ChannelTypeCodex,
+		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyEnabled,
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
+			{
+				Name:                             "OpenAI pro",
+				LocalGroup:                       "paid",
+				Platforms:                        []string{"openai"},
+				CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyDisabled,
+			},
+		},
+	}
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyEnabled, response.Data.CodexImageGenerationBridgePolicy)
+	require.Len(t, response.Data.LocalGroupRules, 1)
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, response.Data.LocalGroupRules[0].CodexImageGenerationBridgePolicy)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
+	var syncConfig map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyEnabled, syncConfig["codex_image_generation_bridge_policy"])
+	rules, ok := syncConfig["local_group_rules"].([]any)
+	require.True(t, ok)
+	require.Len(t, rules, 1)
+	rule, ok := rules[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, rule["codex_image_generation_bridge_policy"])
+}
+
 func TestChannelAutoPriorityScoreSerializesZeroValues(t *testing.T) {
 	snapshot := dto.ChannelOtherSettings{
 		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
