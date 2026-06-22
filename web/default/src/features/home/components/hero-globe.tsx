@@ -16,10 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import createGlobe, { type Arc, type Marker } from 'cobe'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { useTheme } from '@/context/theme-provider'
 
 type HeroGlobeProps = {
   className?: string
@@ -75,9 +76,38 @@ const arcs: Arc[] = [
 
 export function HeroGlobe(props: HeroGlobeProps) {
   const { t } = useTranslation()
+  const { resolvedTheme } = useTheme()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [size, setSize] = useState(0)
+  const isDark = resolvedTheme === 'dark'
+  const theme = useMemo(
+    () =>
+      isDark
+        ? {
+            dark: 1,
+            diffuse: 0.98,
+            mapBrightness: 2.1,
+            mapBaseBrightness: 0,
+            baseColor: [0.32, 0.19, 0.11] as [number, number, number],
+            markerColor: [0.9, 0.42, 0.16] as [number, number, number],
+            glowColor: [0.72, 0.28, 0.1] as [number, number, number],
+            arcColor: [0.88, 0.36, 0.12] as [number, number, number],
+            opacity: 0.88,
+          }
+        : {
+            dark: 0,
+            diffuse: 1.18,
+            mapBrightness: 6.8,
+            mapBaseBrightness: 0.01,
+            baseColor: [0.98, 0.955, 0.91] as [number, number, number],
+            markerColor: [0.68, 0.28, 0.04] as [number, number, number],
+            glowColor: [1, 0.965, 0.91] as [number, number, number],
+            arcColor: [0.72, 0.35, 0.13] as [number, number, number],
+            opacity: 0.98,
+          },
+    [isDark]
+  )
 
   useEffect(() => {
     const stage = stageRef.current
@@ -118,21 +148,21 @@ export function HeroGlobe(props: HeroGlobeProps) {
       height: size,
       phi,
       theta: 0.22,
-      dark: 0,
-      diffuse: 1.18,
+      dark: theme.dark,
+      diffuse: theme.diffuse,
       mapSamples: 22_000,
-      mapBrightness: 6.8,
-      mapBaseBrightness: 0.01,
-      baseColor: [0.98, 0.955, 0.91],
-      markerColor: [0.68, 0.28, 0.04],
-      glowColor: [1, 0.965, 0.91],
-      arcColor: [0.72, 0.35, 0.13],
+      mapBrightness: theme.mapBrightness,
+      mapBaseBrightness: theme.mapBaseBrightness,
+      baseColor: theme.baseColor,
+      markerColor: theme.markerColor,
+      glowColor: theme.glowColor,
+      arcColor: theme.arcColor,
       arcWidth: 0.42,
       arcHeight: 0.22,
       markerElevation: 0.024,
       markers,
       arcs,
-      opacity: 0.98,
+      opacity: theme.opacity,
       scale: 1,
       devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
     })
@@ -151,7 +181,7 @@ export function HeroGlobe(props: HeroGlobeProps) {
       window.cancelAnimationFrame(frame)
       globe.destroy()
     }
-  }, [size])
+  }, [size, theme])
 
   return (
     <div
