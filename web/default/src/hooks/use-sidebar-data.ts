@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import {
   Activity,
   Box,
+  Boxes,
   CreditCard,
   FileText,
   FlaskConical,
@@ -126,6 +127,11 @@ export function useSidebarData(): SidebarData {
             title: t('Upstream Sources'),
             url: '/upstream-sources',
             icon: Network,
+          },
+          {
+            title: t('Account Pools'),
+            url: '/account-pools',
+            icon: Boxes,
           },
           {
             title: t('Models'),
