@@ -446,7 +446,7 @@ export function AccountPools() {
     queryFn: async () => {
       const result = await listAccountPools()
       if (!result.success) {
-        throw new Error(result.message || 'Failed to load account pools')
+        throw new Error(result.message || t('Failed to load account pools'))
       }
       return result.data ?? []
     },
@@ -461,7 +461,7 @@ export function AccountPools() {
       if (!selectedPoolID) return EMPTY_ACCOUNTS
       const result = await listAccountPoolAccounts(selectedPoolID)
       if (!result.success) {
-        throw new Error(result.message || 'Failed to load pool accounts')
+        throw new Error(result.message || t('Failed to load pool accounts'))
       }
       return result.data ?? []
     },
@@ -476,7 +476,7 @@ export function AccountPools() {
       if (!selectedPoolID) return EMPTY_BINDINGS
       const result = await listAccountPoolBindings(selectedPoolID)
       if (!result.success) {
-        throw new Error(result.message || 'Failed to load pool bindings')
+        throw new Error(result.message || t('Failed to load pool bindings'))
       }
       return result.data ?? []
     },
@@ -488,7 +488,9 @@ export function AccountPools() {
     queryFn: async () => {
       const result = await listAccountPoolProxies()
       if (!result.success) {
-        throw new Error(result.message || 'Failed to load account pool proxies')
+        throw new Error(
+          result.message || t('Failed to load account pool proxies')
+        )
       }
       return result.data ?? []
     },
@@ -1161,7 +1163,7 @@ function BindingForm(props: {
     queryFn: async () => {
       const result = await getChannels({ status: 'disabled', page_size: 100 })
       if (!result.success) {
-        throw new Error(result.message || 'Failed to load disabled channels')
+        throw new Error(result.message || t('Failed to load disabled channels'))
       }
       return result.data?.items ?? []
     },
