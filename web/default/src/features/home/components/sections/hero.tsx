@@ -101,8 +101,8 @@ export function Hero(props: HeroProps) {
               className='landing-animate-fade-up text-4xl leading-none font-semibold opacity-0 sm:text-6xl lg:text-7xl'
               style={{ animationDelay: '60ms' }}
             >
-              <span className='block'>{t('Upstream aggregation')}</span>
               <span className='block'>{t('Dependable capacity')}</span>
+              <span className='block'>{t('Upstream aggregation')}</span>
             </h1>
             <p
               className='landing-animate-fade-up text-muted-foreground mt-4 max-w-xl text-sm leading-6 opacity-0 sm:mt-6 sm:text-base sm:leading-7'
