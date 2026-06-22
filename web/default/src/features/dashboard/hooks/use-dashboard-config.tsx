@@ -22,6 +22,7 @@ import {
   Layers,
   Gauge,
   Zap,
+  Percent,
   Flame,
   TrendingUp,
   Activity,
@@ -62,6 +63,13 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       description: t('Statistical tokens'),
       icon: Layers,
       getValue: (stat) => stat?.tpm ?? 0,
+    },
+    {
+      key: 'cacheHitRate',
+      title: t('Cache Hit Rate'),
+      description: t('Cached prompt share'),
+      icon: Percent,
+      getValue: (stat) => stat?.cacheHitRate ?? 0,
     },
     {
       key: 'avgRpm',
