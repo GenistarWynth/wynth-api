@@ -507,8 +507,7 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.Equal(t, int64(1000), r.ComputedPriority)
 	assert.Equal(t, int64(1000), r.NewPriority)
 	assert.Equal(t, 0.5, r.EffectiveRateMultiplier)
-	assert.Greater(t, r.CacheAdjustedCostFactor, 0.0)
-	assert.Less(t, r.CacheAdjustedCostFactor, 1.0)
+	assert.Equal(t, 1.0, r.CacheAdjustedCostFactor)
 	assert.InDelta(t, r.EffectiveRateMultiplier*r.CacheAdjustedCostFactor, r.EffectiveCostMultiplier, 0.0000001)
 	assert.Equal(t, 100.0, r.EffectivePriceScore)
 	assert.Equal(t, 100.0, r.AvailabilityScore)
@@ -539,6 +538,57 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
 	require.NotNil(t, reloadedAbility.Priority)
 	assert.Equal(t, int64(1000), *reloadedAbility.Priority)
+}
+
+func TestRunUpstreamSourceAutoPrioritySmoothsWithPreviousCostSnapshot(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(1_500_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+	})
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "15", "openai", &rate)
+	channel := createAutoPriorityTestChannel(t, "source-a / smoothed", 100, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:        source.Id,
+		GeneratedByUpstreamMappingID:       mapping.Id,
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			Version:                 "v1",
+			ComputedAt:              now - 1000,
+			WindowStart:             now - 24*3600 - 1000,
+			WindowEnd:               now - 1000,
+			EffectiveCostMultiplier: 3.0,
+			NewPriority:             100,
+			Applied:                 true,
+		},
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+	for i := 0; i < 20; i++ {
+		createAutoPriorityTestUsageLog(t, channel.Id, now-60-int64(i))
+	}
+	createAutoPriorityTestMonitorLog(t, channel.Id, now-60)
+
+	service := UpstreamSourceService{Now: func() int64 { return now }}
+
+	result, err := service.RunAutoPriority(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Results, 1)
+	r := result.Results[0]
+	assert.InDelta(t, 1.6566666667, r.EffectiveCostMultiplier, 0.0001)
+	assert.InDelta(t, 1.6566666667, r.CacheAdjustedCostFactor, 0.0001)
+
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	reloadedSettings := reloadedChannel.GetOtherSettings()
+	require.NotNil(t, reloadedSettings.ChannelAutoPriorityLastScore)
+	assert.InDelta(t, 1.6566666667, reloadedSettings.ChannelAutoPriorityLastScore.EffectiveCostMultiplier, 0.0001)
+	assert.InDelta(t, 1.6566666667, reloadedSettings.ChannelAutoPriorityLastScore.CacheAdjustedCostFactor, 0.0001)
 }
 
 func TestRunUpstreamSourceAutoPriorityHysteresisUpdatesSnapshotOnly(t *testing.T) {

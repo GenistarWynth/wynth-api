@@ -179,18 +179,19 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 			resolution:  resolution,
 			resultIndex: i,
 			scoreInput: AutoPriorityScoreInput{
-				ChannelID:               channel.Id,
-				LocalGroup:              localGroup,
-				ChannelType:             channel.Type,
-				CurrentPriority:         priority,
-				EffectiveRateMultiplier: *mapping.EffectiveRateMultiplier,
-				CacheAdjustedCostFactor: 1,
-				Availability:            nil,
-				FirstTokenLatencyMS:     0,
-				UsageLogCount:           0,
-				MonitorCheckCount:       0,
-				FirstTokenSampleCount:   0,
-				HasPreviousSnapshot:     settings.ChannelAutoPriorityLastScore != nil,
+				ChannelID:                       channel.Id,
+				LocalGroup:                      localGroup,
+				ChannelType:                     channel.Type,
+				CurrentPriority:                 priority,
+				EffectiveRateMultiplier:         *mapping.EffectiveRateMultiplier,
+				CacheAdjustedCostFactor:         1,
+				PreviousEffectiveCostMultiplier: previousAutoPriorityEffectiveCostMultiplier(settings),
+				Availability:                    nil,
+				FirstTokenLatencyMS:             0,
+				UsageLogCount:                   0,
+				MonitorCheckCount:               0,
+				FirstTokenSampleCount:           0,
+				HasPreviousSnapshot:             settings.ChannelAutoPriorityLastScore != nil,
 			},
 			windowStart: windowStart,
 			windowEnd:   now,
@@ -274,6 +275,13 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 	}
 
 	return result, nil
+}
+
+func previousAutoPriorityEffectiveCostMultiplier(settings dto.ChannelOtherSettings) float64 {
+	if settings.ChannelAutoPriorityLastScore == nil {
+		return 0
+	}
+	return settings.ChannelAutoPriorityLastScore.EffectiveCostMultiplier
 }
 
 func initChannelCacheAfterAutoPriority(ctx context.Context) {

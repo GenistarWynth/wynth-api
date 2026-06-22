@@ -7,18 +7,19 @@ import (
 )
 
 type AutoPriorityScoreInput struct {
-	ChannelID               int
-	LocalGroup              string
-	ChannelType             int
-	CurrentPriority         int64
-	EffectiveRateMultiplier float64
-	CacheAdjustedCostFactor float64
-	Availability            *float64
-	FirstTokenLatencyMS     float64
-	UsageLogCount           int64
-	MonitorCheckCount       int64
-	FirstTokenSampleCount   int64
-	HasPreviousSnapshot     bool
+	ChannelID                       int
+	LocalGroup                      string
+	ChannelType                     int
+	CurrentPriority                 int64
+	EffectiveRateMultiplier         float64
+	CacheAdjustedCostFactor         float64
+	PreviousEffectiveCostMultiplier float64
+	Availability                    *float64
+	FirstTokenLatencyMS             float64
+	UsageLogCount                   int64
+	MonitorCheckCount               int64
+	FirstTokenSampleCount           int64
+	HasPreviousSnapshot             bool
 }
 
 type AutoPriorityScoreResult struct {
@@ -41,6 +42,14 @@ type AutoPriorityScoreResult struct {
 	FirstTokenSampleCount   int64
 }
 
+const (
+	autoPriorityMinCacheSampleCount  int64   = 5
+	autoPriorityFullCacheSampleCount int64   = 20
+	autoPriorityMinCacheCostFactor   float64 = 0.35
+	autoPriorityCurrentCostWeight    float64 = 0.65
+	autoPriorityPreviousCostWeight   float64 = 0.35
+)
+
 func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority int) []AutoPriorityScoreResult {
 	if maxPriority <= 0 {
 		maxPriority = 1000
@@ -52,7 +61,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 	for i, input := range inputs {
 		cohort := autoPriorityCohortKey(input.LocalGroup, input.ChannelType)
-		cacheFactor := normalizedAutoPriorityCacheFactor(input.CacheAdjustedCostFactor)
+		cacheFactor := autoPriorityGuardedCacheFactor(input.CacheAdjustedCostFactor, input.UsageLogCount)
 		result := AutoPriorityScoreResult{
 			ChannelID:               input.ChannelID,
 			Cohort:                  cohort,
@@ -78,6 +87,11 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		}
 
 		result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
+		if input.HasPreviousSnapshot && isValidAutoPriorityMultiplier(input.PreviousEffectiveCostMultiplier) {
+			result.EffectiveCostMultiplier = autoPriorityCurrentCostWeight*result.EffectiveCostMultiplier +
+				autoPriorityPreviousCostWeight*input.PreviousEffectiveCostMultiplier
+			result.CacheAdjustedCostFactor = result.EffectiveCostMultiplier / input.EffectiveRateMultiplier
+		}
 		priceCohorts[cohort] = append(priceCohorts[cohort], i)
 		if hasSampledFirstTokenLatency(input.FirstTokenSampleCount, input.FirstTokenLatencyMS) {
 			firstTokenCohorts[cohort] = append(firstTokenCohorts[cohort], i)
@@ -173,6 +187,22 @@ func normalizedAutoPriorityCacheFactor(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64) float64 {
+	cacheFactor := normalizedAutoPriorityCacheFactor(v)
+	if cacheFactor < autoPriorityMinCacheCostFactor {
+		cacheFactor = autoPriorityMinCacheCostFactor
+	}
+
+	if usageLogCount < autoPriorityMinCacheSampleCount {
+		return 1
+	}
+	if usageLogCount < autoPriorityFullCacheSampleCount {
+		confidence := float64(usageLogCount) / float64(autoPriorityFullCacheSampleCount)
+		return 1 + (cacheFactor-1)*confidence
+	}
+	return cacheFactor
 }
 
 func autoPriorityAvailabilityScore(avail *float64) float64 {

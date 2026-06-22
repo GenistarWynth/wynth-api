@@ -95,7 +95,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				CacheAdjustedCostFactor: 3.0,
 				Availability:            floatPtr(0.8),
 				FirstTokenLatencyMS:     120,
-				UsageLogCount:           2,
+				UsageLogCount:           20,
 				MonitorCheckCount:       3,
 				FirstTokenSampleCount:   1,
 			},
@@ -108,7 +108,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				CacheAdjustedCostFactor: 0.5,
 				Availability:            floatPtr(0.8),
 				FirstTokenLatencyMS:     120,
-				UsageLogCount:           2,
+				UsageLogCount:           20,
 				MonitorCheckCount:       3,
 				FirstTokenSampleCount:   1,
 			},
@@ -124,6 +124,96 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.InDelta(t, 0.75, r302.EffectiveCostMultiplier, 0.0001)
 		assert.Greater(t, r302.EffectivePriceScore, r301.EffectivePriceScore)
 		assert.Greater(t, r302.ComputedPriority, r301.ComputedPriority)
+	})
+
+	t.Run("low usage sample ignores cache benefit", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               311,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         400,
+				EffectiveRateMultiplier: 1.0,
+				CacheAdjustedCostFactor: 0.2,
+				Availability:            floatPtr(0.8),
+				FirstTokenLatencyMS:     120,
+				UsageLogCount:           4,
+				MonitorCheckCount:       3,
+				FirstTokenSampleCount:   1,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 1.0, results[0].CacheAdjustedCostFactor, 0.0001)
+		assert.InDelta(t, 1.0, results[0].EffectiveCostMultiplier, 0.0001)
+	})
+
+	t.Run("partial usage sample blends cache benefit toward neutral", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               312,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         400,
+				EffectiveRateMultiplier: 2.0,
+				CacheAdjustedCostFactor: 0.5,
+				Availability:            floatPtr(0.8),
+				FirstTokenLatencyMS:     120,
+				UsageLogCount:           10,
+				MonitorCheckCount:       3,
+				FirstTokenSampleCount:   1,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 0.75, results[0].CacheAdjustedCostFactor, 0.0001)
+		assert.InDelta(t, 1.5, results[0].EffectiveCostMultiplier, 0.0001)
+	})
+
+	t.Run("cache benefit is capped for full sample", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               313,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         400,
+				EffectiveRateMultiplier: 2.0,
+				CacheAdjustedCostFactor: 0.05,
+				Availability:            floatPtr(0.8),
+				FirstTokenLatencyMS:     120,
+				UsageLogCount:           20,
+				MonitorCheckCount:       3,
+				FirstTokenSampleCount:   1,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 0.35, results[0].CacheAdjustedCostFactor, 0.0001)
+		assert.InDelta(t, 0.7, results[0].EffectiveCostMultiplier, 0.0001)
+	})
+
+	t.Run("previous cost snapshot smooths effective cost", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:                       314,
+				LocalGroup:                      "shared",
+				ChannelType:                     constant.ChannelTypeOpenAI,
+				CurrentPriority:                 400,
+				EffectiveRateMultiplier:         2.0,
+				CacheAdjustedCostFactor:         0.5,
+				PreviousEffectiveCostMultiplier: 3.0,
+				Availability:                    floatPtr(0.8),
+				FirstTokenLatencyMS:             120,
+				UsageLogCount:                   20,
+				MonitorCheckCount:               3,
+				FirstTokenSampleCount:           1,
+				HasPreviousSnapshot:             true,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 0.85, results[0].CacheAdjustedCostFactor, 0.0001)
+		assert.InDelta(t, 1.7, results[0].EffectiveCostMultiplier, 0.0001)
 	})
 
 	t.Run("hysteresis blocks small changes when a previous snapshot exists", func(t *testing.T) {
