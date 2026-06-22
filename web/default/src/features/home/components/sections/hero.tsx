@@ -95,20 +95,21 @@ export function Hero(props: HeroProps) {
         <div className='relative z-10 flex flex-1 items-center px-6 sm:px-10 lg:px-[clamp(3rem,7vw,10rem)] xl:pr-[52vw]'>
           <div className='max-w-2xl text-left'>
             <div className='landing-animate-fade-up bg-primary/5 text-primary mb-4 inline-flex items-center rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase opacity-0 sm:mb-5'>
-              {t('UNIFIED AI GATEWAY')}
+              {t('AI Gateway Control Plane')}
             </div>
             <h1
-              className='landing-animate-fade-up max-w-[11ch] text-4xl leading-none font-semibold opacity-0 sm:text-6xl lg:text-7xl'
+              className='landing-animate-fade-up text-4xl leading-none font-semibold opacity-0 sm:text-6xl lg:text-7xl'
               style={{ animationDelay: '60ms' }}
             >
-              {t('One screen for every upstream')}
+              <span className='block'>{t('Upstream aggregation')}</span>
+              <span className='block'>{t('Dependable capacity')}</span>
             </h1>
             <p
               className='landing-animate-fade-up text-muted-foreground mt-4 max-w-xl text-sm leading-6 opacity-0 sm:mt-6 sm:text-base sm:leading-7'
               style={{ animationDelay: '120ms' }}
             >
               {t(
-                'Aggregate new-api, sub2api, account pools, monitoring, and strict priority routing behind one OpenAI-compatible API.'
+                'Unify new-api, sub2api, account pools, monitoring, and priority orchestration into one OpenAI-compatible control plane.'
               )}
             </p>
 
