@@ -117,6 +117,8 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.DELETE("/:id", DeleteAccountPool)
 		group.GET("/:id/accounts", ListAccountPoolAccounts)
 		group.POST("/:id/accounts", CreateAccountPoolAccount)
+		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
+		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
 		group.GET("/:id/bindings", ListAccountPoolBindings)
 		group.POST("/:id/bindings", CreateAccountPoolBinding)
 		group.POST("/:id/bindings/:binding_id/activate", ActivateAccountPoolBinding)
@@ -205,6 +207,52 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 	assert.NotContains(t, raw, "ciphertext")
 	assert.NotContains(t, raw, "nonce")
 	assert.NotContains(t, raw, "credential_preview")
+}
+
+func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+
+	createResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "primary-key",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:   "api_key",
+			APIKey: "sk-account-secret",
+		},
+	})
+	require.True(t, createResult.Response.Success, createResult.Response.Message)
+	accountID := createResult.Response.Data.Id
+
+	updateResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPut, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(accountID), dto.AccountPoolAccountCreateRequest{
+		Name:              "updated-key",
+		AccountIdentifier: "account-b",
+		Status:            model.AccountPoolAccountStatusDisabled,
+		Priority:          10,
+		Weight:            20,
+		MaxConcurrency:    3,
+		SupportedModels:   []string{"gpt-5"},
+		ModelMapping:      map[string]string{"gpt-5": "upstream-gpt-5"},
+	})
+
+	require.True(t, updateResult.Response.Success, updateResult.Response.Message)
+	assert.Equal(t, "updated-key", updateResult.Response.Data.Name)
+	assert.Equal(t, "account-b", updateResult.Response.Data.AccountIdentifier)
+	assert.Equal(t, model.AccountPoolAccountStatusDisabled, updateResult.Response.Data.Status)
+	assert.True(t, updateResult.Response.Data.HasCredential)
+	assert.NotContains(t, string(updateResult.Raw), "sk-account-secret")
+
+	deleteResult := accountPoolAPIRequest[any](t, router, http.MethodDelete, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(accountID), nil)
+	require.True(t, deleteResult.Response.Success, deleteResult.Response.Message)
+
+	listResult := accountPoolAPIRequest[[]dto.AccountPoolAccountResponse](t, router, http.MethodGet, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts", nil)
+	require.True(t, listResult.Response.Success, listResult.Response.Message)
+	assert.Empty(t, listResult.Response.Data)
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, accountID).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusDeleted, stored.Status)
+	assert.NotContains(t, stored.CredentialConfig, "sk-account-secret")
 }
 
 func TestAccountPoolAPIBindingRejectsEnabledChannel(t *testing.T) {

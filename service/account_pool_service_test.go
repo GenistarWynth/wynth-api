@@ -34,6 +34,81 @@ func TestAccountPoolServiceStoresAccountSecretsEncrypted(t *testing.T) {
 	assert.False(t, account.HasToken)
 }
 
+func TestAccountPoolServiceUpdateAccountPreservesSecretsAndSoftDeletes(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:            pool.Id,
+		Name:              "primary",
+		AccountIdentifier: "account-a",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-original",
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "access-original",
+			Version:     1,
+		},
+		Priority:        10,
+		Weight:          20,
+		MaxConcurrency:  3,
+		SupportedModels: []string{"gpt-5"},
+	})
+	require.NoError(t, err)
+	var storedBefore model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&storedBefore, account.Id).Error)
+
+	updated, err := service.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
+		Name:              "primary-updated",
+		AccountIdentifier: "account-b",
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeAPIKey,
+		},
+		Status:          model.AccountPoolAccountStatusDisabled,
+		Priority:        30,
+		Weight:          40,
+		MaxConcurrency:  5,
+		SupportedModels: []string{"gpt-5", "gpt-5-mini"},
+		ModelMapping:    map[string]string{"gpt-5": "upstream-gpt-5"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "primary-updated", updated.Name)
+	assert.Equal(t, "account-b", updated.AccountIdentifier)
+	assert.Equal(t, model.AccountPoolAccountStatusDisabled, updated.Status)
+	assert.Equal(t, int64(30), updated.Priority)
+	assert.Equal(t, uint(40), updated.Weight)
+	assert.Equal(t, 5, updated.MaxConcurrency)
+	assert.Equal(t, []string{"gpt-5", "gpt-5-mini"}, updated.SupportedModels)
+	assert.Equal(t, map[string]string{"gpt-5": "upstream-gpt-5"}, updated.ModelMapping)
+
+	var storedAfter model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&storedAfter, account.Id).Error)
+	assert.Equal(t, storedBefore.CredentialConfig, storedAfter.CredentialConfig)
+	assert.Equal(t, storedBefore.TokenState, storedAfter.TokenState)
+
+	updated, err = service.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
+		Name:           "primary-unlimited",
+		Status:         model.AccountPoolAccountStatusEnabled,
+		MaxConcurrency: 0,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, updated.MaxConcurrency)
+
+	accounts, err := service.ListAccounts(pool.Id)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	assert.Equal(t, account.Id, accounts[0].Id)
+
+	require.NoError(t, service.DeleteAccount(pool.Id, account.Id))
+	accounts, err = service.ListAccounts(pool.Id)
+	require.NoError(t, err)
+	assert.Empty(t, accounts)
+	require.NoError(t, model.DB.First(&storedAfter, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusDeleted, storedAfter.Status)
+}
+
 func TestAccountPoolServiceRejectsEnabledChannelBindingInPhaseOne(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

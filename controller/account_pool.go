@@ -139,6 +139,53 @@ func CreateAccountPoolAccount(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolAccountResponse(account))
 }
 
+func UpdateAccountPoolAccount(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolAccountCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	account, err := (&service.AccountPoolService{}).UpdateAccount(poolID, accountID, accountPoolAccountCreateParams(poolID, req))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.account_update", map[string]interface{}{
+		"id":      account.Id,
+		"name":    account.Name,
+		"pool_id": poolID,
+	})
+	common.ApiSuccess(c, accountPoolAccountResponse(account))
+}
+
+func DeleteAccountPoolAccount(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	if err := (&service.AccountPoolService{}).DeleteAccount(poolID, accountID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.account_delete", map[string]interface{}{
+		"id":      accountID,
+		"pool_id": poolID,
+	})
+	common.ApiSuccess(c, nil)
+}
+
 func ListAccountPoolProxies(c *gin.Context) {
 	proxies, err := (&service.AccountPoolService{}).ListProxies()
 	if err != nil {
@@ -288,6 +335,15 @@ func accountPoolBindingIDFromParam(c *gin.Context) (int, bool) {
 	id, err := strconv.Atoi(c.Param("binding_id"))
 	if err != nil || id == 0 {
 		common.ApiError(c, errors.New("invalid account pool binding id"))
+		return 0, false
+	}
+	return id, true
+}
+
+func accountPoolAccountIDFromParam(c *gin.Context) (int, bool) {
+	id, err := strconv.Atoi(c.Param("account_id"))
+	if err != nil || id == 0 {
+		common.ApiError(c, errors.New("invalid account pool account id"))
 		return 0, false
 	}
 	return id, true

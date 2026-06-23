@@ -269,12 +269,93 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 	return buildAccountPoolAccountView(account)
 }
 
+func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
+	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	account, err := getAccountPoolAccountForPool(poolID, accountID)
+	if err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return AccountPoolAccountView{}, errors.New("account pool account name is required")
+	}
+	supportedModels, err := marshalAccountPoolOptionalJSON(params.SupportedModels)
+	if err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	modelMapping, err := marshalAccountPoolOptionalJSON(params.ModelMapping)
+	if err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	status := strings.TrimSpace(params.Status)
+	if status == "" {
+		status = account.Status
+	}
+	if status == "" {
+		status = model.AccountPoolAccountStatusEnabled
+	}
+	updates := map[string]any{
+		"name":                 name,
+		"account_identifier":   strings.TrimSpace(params.AccountIdentifier),
+		"status":               status,
+		"priority":             params.Priority,
+		"weight":               params.Weight,
+		"max_concurrency":      params.MaxConcurrency,
+		"proxy_id":             params.ProxyID,
+		"supported_models":     supportedModels,
+		"model_mapping":        modelMapping,
+		"last_used_at":         params.LastUsedAt,
+		"rate_limited_until":   params.RateLimitedUntil,
+		"temp_disabled_until":  params.TempDisabledUntil,
+		"temp_disabled_reason": params.TempDisabledReason,
+		"last_error":           params.LastError,
+		"updated_time":         common.GetTimestamp(),
+	}
+	if accountPoolCredentialHasSecret(params.Credential) {
+		credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
+		if err != nil {
+			return AccountPoolAccountView{}, err
+		}
+		updates["credential_config"] = credentialConfig
+	}
+	if accountPoolTokenStateHasValue(params.TokenState) {
+		tokenState, err := EncryptAccountPoolTokenState(params.TokenState)
+		if err != nil {
+			return AccountPoolAccountView{}, err
+		}
+		updates["token_state"] = tokenState
+	}
+	if err := model.DB.Model(&account).Updates(updates).Error; err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	if err := model.DB.First(&account, accountID).Error; err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	return buildAccountPoolAccountView(account)
+}
+
+func (s AccountPoolService) DeleteAccount(poolID int, accountID int) error {
+	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+		return err
+	}
+	account, err := getAccountPoolAccountForPool(poolID, accountID)
+	if err != nil {
+		return err
+	}
+	return model.DB.Model(&account).Updates(map[string]any{
+		"status":       model.AccountPoolAccountStatusDeleted,
+		"updated_time": common.GetTimestamp(),
+	}).Error
+}
+
 func (s AccountPoolService) ListAccounts(poolID int) ([]AccountPoolAccountView, error) {
 	if _, err := getAccountPoolExistingPool(poolID); err != nil {
 		return nil, err
 	}
 	var accounts []model.AccountPoolAccount
-	if err := model.DB.Where("pool_id = ?", poolID).Order("id asc").Find(&accounts).Error; err != nil {
+	if err := model.DB.Where("pool_id = ? AND status <> ?", poolID, model.AccountPoolAccountStatusDeleted).Order("id asc").Find(&accounts).Error; err != nil {
 		return nil, err
 	}
 	views := make([]AccountPoolAccountView, 0, len(accounts))
@@ -490,6 +571,12 @@ func getAccountPoolBindingForPool(poolID int, bindingID int) (model.AccountPoolC
 	return binding, err
 }
 
+func getAccountPoolAccountForPool(poolID int, accountID int) (model.AccountPoolAccount, error) {
+	var account model.AccountPoolAccount
+	err := model.DB.Where("id = ? AND pool_id = ? AND status <> ?", accountID, poolID, model.AccountPoolAccountStatusDeleted).First(&account).Error
+	return account, err
+}
+
 func getAccountPoolExistingPool(poolID int) (model.AccountPool, error) {
 	var pool model.AccountPool
 	err := model.DB.Where("status <> ?", model.AccountPoolStatusDeleted).First(&pool, poolID).Error
@@ -616,6 +703,10 @@ func buildAccountPoolProxyView(proxy model.AccountPoolProxy) (AccountPoolProxyVi
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
 	return strings.TrimSpace(config.APIKey) != "" || strings.TrimSpace(config.RefreshToken) != "" || strings.TrimSpace(config.Email) != ""
+}
+
+func accountPoolTokenStateHasValue(state AccountPoolTokenState) bool {
+	return accountPoolTokenStateHasSecret(state) || state.ExpiresAt != 0 || state.Version != 0
 }
 
 func marshalAccountPoolOptionalJSON(value any) (string, error) {

@@ -253,6 +253,8 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.DELETE("/:id", controller.DeleteAccountPool)
 			accountPoolRoute.GET("/:id/accounts", controller.ListAccountPoolAccounts)
 			accountPoolRoute.POST("/:id/accounts", controller.CreateAccountPoolAccount)
+			accountPoolRoute.PUT("/:id/accounts/:account_id", controller.UpdateAccountPoolAccount)
+			accountPoolRoute.DELETE("/:id/accounts/:account_id", controller.DeleteAccountPoolAccount)
 			accountPoolRoute.GET("/:id/bindings", controller.ListAccountPoolBindings)
 			accountPoolRoute.POST("/:id/bindings", controller.CreateAccountPoolBinding)
 			accountPoolRoute.POST("/:id/bindings/:binding_id/activate", controller.ActivateAccountPoolBinding)
