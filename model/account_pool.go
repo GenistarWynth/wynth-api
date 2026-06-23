@@ -25,6 +25,7 @@ const (
 	AccountPoolProxyStatusDeleted  = "deleted"
 
 	AccountPoolBindingStatusDraft    = "draft"
+	AccountPoolBindingStatusEnabled  = "enabled"
 	AccountPoolBindingStatusDisabled = "disabled"
 )
 
@@ -233,6 +234,7 @@ func HasDraftAccountPoolChannelBinding(channelID int) (bool, error) {
 	if !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
 		return false, nil
 	}
+	// Activation must extend this guard before enabled bindings can be exposed to admins.
 	var count int64
 	err := DB.Model(&AccountPoolChannelBinding{}).
 		Where("channel_id = ? AND status = ?", channelID, AccountPoolBindingStatusDraft).
@@ -244,6 +246,7 @@ func DraftAccountPoolBoundChannelIDs() ([]int, error) {
 	if DB == nil || !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
 		return nil, nil
 	}
+	// Activation must include enabled bindings before live account-pool traffic is allowed.
 	var channelIDs []int
 	err := DB.Model(&AccountPoolChannelBinding{}).
 		Where("status = ?", AccountPoolBindingStatusDraft).

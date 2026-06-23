@@ -19,6 +19,8 @@ It intentionally does not:
 - enable admin-created account-pool bindings for live traffic;
 - change relay handlers;
 - inject account credentials into upstream requests;
+- enforce account concurrency slots or `MaxConcurrency`;
+- resolve account proxies;
 - refresh OAuth tokens;
 - implement ChatGPT reverse-proxy protocol behavior;
 - write per-request metrics.
@@ -28,6 +30,8 @@ The success condition is: backend tests can prove which account would be selecte
 ## Runtime Contract
 
 Add `AccountPoolBindingStatusEnabled` as a runtime state. Phase 1 admin APIs still reject creating enabled bindings until a later relay integration task adds a deliberate activation flow.
+
+Important safety note: existing Phase 1 channel enable guards are keyed to `draft` bindings. `enabled` bindings are introduced only as an internal scheduler state in Phase 2A. A later activation task must extend the channel/ability guards or wire relay credential injection before any admin flow can mark a binding enabled.
 
 Scheduler behavior:
 
@@ -152,6 +156,7 @@ Use `errors.Is`-friendly wrapping when lookup or parsing context is needed.
 Cover these behaviors:
 
 - draft binding is rejected as not runtime-enabled;
+- missing binding is rejected as not runtime-enabled;
 - disabled pool is rejected as no schedulable account;
 - account filter `account_ids` limits candidates;
 - fixed model policy rejects unknown models;
@@ -209,4 +214,3 @@ Commit scheduler implementation and any review fixes:
 git add model/account_pool.go service/account_pool_scheduler.go service/account_pool_scheduler_test.go docs/superpowers/plans/2026-06-23-sub2api-account-pool-phase2a.md
 git commit -m "feat: add account pool scheduler foundation"
 ```
-
