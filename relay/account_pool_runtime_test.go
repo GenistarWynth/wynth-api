@@ -390,6 +390,138 @@ func TestAccountPoolRuntimeAttemptsResetMappedModelForEachRetry(t *testing.T) {
 	assert.Equal(t, []string{"account-one-model", "account-two-model"}, models)
 }
 
+func TestAccountPoolRuntimeAttemptsResetProxyForEachRetry(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	proxy := createAccountPoolRelayTestProxy(t, service.AccountPoolProxyCreateParams{
+		Name:     "first-proxy",
+		Protocol: "http",
+		Host:     "first-proxy.local",
+		Port:     8080,
+	})
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 100,
+		ProxyID:  proxy.Id,
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 50,
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	proxies := make([]string, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		proxies = append(proxies, info.RuntimeProxy)
+		if len(proxies) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("proxied account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []string{"http://first-proxy.local:8080", ""}, proxies)
+}
+
+func TestAccountPoolRuntimeAttemptsPreserveChannelProxyWhenAccountProxyEmpty(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	proxy := createAccountPoolRelayTestProxy(t, service.AccountPoolProxyCreateParams{
+		Name:     "first-proxy",
+		Protocol: "http",
+		Host:     "first-proxy.local",
+		Port:     8080,
+	})
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 100,
+		ProxyID:  proxy.Id,
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 50,
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.ChannelSetting.Proxy = "http://channel-proxy.local:8081"
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	proxies := make([]string, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		proxies = append(proxies, accountPoolRelayTestEffectiveProxy(info))
+		if len(proxies) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("proxied account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []string{"http://first-proxy.local:8080", "http://channel-proxy.local:8081"}, proxies)
+}
+
+func TestAccountPoolRuntimeAttemptsUsePoolDefaultProxyForEachRetry(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	proxy := createAccountPoolRelayTestProxy(t, service.AccountPoolProxyCreateParams{
+		Name:     "pool-proxy",
+		Protocol: "socks5",
+		Host:     "pool-proxy.local",
+		Port:     1080,
+	})
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).
+		Where("id = ?", pool.Id).
+		Update("default_proxy_id", proxy.Id).Error)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 100,
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 50,
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	proxies := make([]string, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		proxies = append(proxies, accountPoolRelayTestEffectiveProxy(info))
+		if len(proxies) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("pool-proxied account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []string{"socks5://pool-proxy.local:1080", "socks5://pool-proxy.local:1080"}, proxies)
+}
+
 func TestAccountPoolRelayTextHelperStopsBeforeUpstreamWhenPoolExhausted(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
@@ -591,6 +723,23 @@ func createAccountPoolRelayTestEnabledBindingWithRetryTimes(t *testing.T, poolID
 	var binding model.AccountPoolChannelBinding
 	require.NoError(t, model.DB.First(&binding, bindingView.Id).Error)
 	return binding
+}
+
+func createAccountPoolRelayTestProxy(t *testing.T, params service.AccountPoolProxyCreateParams) service.AccountPoolProxyView {
+	t.Helper()
+	proxy, err := service.AccountPoolService{}.CreateProxy(params)
+	require.NoError(t, err)
+	return proxy
+}
+
+func accountPoolRelayTestEffectiveProxy(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	if info.RuntimeProxy != "" {
+		return info.RuntimeProxy
+	}
+	return info.ChannelSetting.Proxy
 }
 
 func createAccountPoolRelayTestAccount(

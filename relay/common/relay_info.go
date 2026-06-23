@@ -153,6 +153,9 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	// RuntimeProxy overrides the persisted channel proxy for a single relay attempt.
+	// It is used for account-pool proxy routing without mutating channel settings.
+	RuntimeProxy string
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see

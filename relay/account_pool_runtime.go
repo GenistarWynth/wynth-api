@@ -34,6 +34,8 @@ type accountPoolRuntimeAttemptFunc func(dto.Request) *types.NewAPIError
 type accountPoolRuntimeRelaySnapshot struct {
 	apiKey                  string
 	upstreamModelName       string
+	channelSettingProxy     string
+	runtimeProxy            string
 	isStream                bool
 	upstreamRequestBodySize int64
 	requestConversionChain  []types.RelayFormat
@@ -89,7 +91,9 @@ func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRun
 	if info.ChannelMeta != nil {
 		snapshot.apiKey = info.ApiKey
 		snapshot.upstreamModelName = info.UpstreamModelName
+		snapshot.channelSettingProxy = info.ChannelSetting.Proxy
 	}
+	snapshot.runtimeProxy = info.RuntimeProxy
 	snapshot.isStream = info.IsStream
 	snapshot.upstreamRequestBodySize = info.UpstreamRequestBodySize
 	snapshot.finalRequestRelayFormat = info.FinalRequestRelayFormat
@@ -106,7 +110,9 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 	if info.ChannelMeta != nil {
 		info.ApiKey = snapshot.apiKey
 		info.UpstreamModelName = snapshot.upstreamModelName
+		info.ChannelSetting.Proxy = snapshot.channelSettingProxy
 	}
+	info.RuntimeProxy = snapshot.runtimeProxy
 	info.IsStream = snapshot.isStream
 	info.UpstreamRequestBodySize = snapshot.upstreamRequestBodySize
 	info.FinalRequestRelayFormat = snapshot.finalRequestRelayFormat

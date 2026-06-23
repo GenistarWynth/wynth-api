@@ -33,6 +33,7 @@ type AccountPoolSelectionResult struct {
 	MaxConcurrency    int
 	AccountRetryTimes int
 	UpstreamModelName string
+	ProxyURL          string
 	Credential        AccountPoolCredentialConfig
 	TokenState        AccountPoolTokenState
 }
@@ -56,7 +57,8 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 	if err != nil {
 		return AccountPoolSelectionResult{}, err
 	}
-	if _, err := loadEnabledAccountPool(binding.PoolID); err != nil {
+	pool, err := loadEnabledAccountPool(binding.PoolID)
+	if err != nil {
 		return AccountPoolSelectionResult{}, err
 	}
 
@@ -122,6 +124,10 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 	if err != nil {
 		return AccountPoolSelectionResult{}, fmt.Errorf("decrypt account pool token state: %w", err)
 	}
+	proxyURL, err := ResolveAccountPoolRuntimeProxyURL(selected.account.ProxyID, pool.DefaultProxyID)
+	if err != nil {
+		return AccountPoolSelectionResult{}, fmt.Errorf("resolve account pool proxy: %w", err)
+	}
 
 	return AccountPoolSelectionResult{
 		PoolID:            binding.PoolID,
@@ -131,6 +137,7 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		MaxConcurrency:    selected.account.MaxConcurrency,
 		AccountRetryTimes: binding.AccountRetryTimes,
 		UpstreamModelName: selected.upstreamModelName,
+		ProxyURL:          proxyURL,
 		Credential:        credential,
 		TokenState:        tokenState,
 	}, nil

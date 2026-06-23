@@ -55,6 +55,9 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 
 	info.ApiKey = runtimeCredential
 	info.UpstreamModelName = selection.UpstreamModelName
+	if selection.ProxyURL != "" {
+		info.RuntimeProxy = selection.ProxyURL
+	}
 	if request != nil {
 		request.SetModelName(selection.UpstreamModelName)
 	}

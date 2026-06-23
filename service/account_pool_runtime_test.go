@@ -102,6 +102,39 @@ func TestAccountPoolRuntimeAppliesSelectedAccountCredentialAndModel(t *testing.T
 	assert.Equal(t, []string{"7"}, ctx.GetStringSlice("use_channel"))
 }
 
+func TestAccountPoolRuntimeAppliesSelectedProxy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	proxy := createAccountPoolRuntimeTestProxy(t, service, AccountPoolProxyCreateParams{
+		Name:     "runtime-proxy",
+		Protocol: "socks5",
+		Host:     "proxy.local",
+		Port:     1080,
+	})
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:    "proxied-account",
+		ProxyID: proxy.Id,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-runtime-account",
+		},
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.ChannelSetting.Proxy = "http://channel-proxy.local:8081"
+	request := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
+
+	require.NoError(t, err)
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+	assert.Equal(t, "http://channel-proxy.local:8081", info.ChannelSetting.Proxy)
+	assert.Equal(t, "socks5://proxy.local:1080", info.RuntimeProxy)
+}
+
 func TestAccountPoolRuntimeStoresBindingRetryTimes(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	ctx := newAccountPoolRuntimeTestContext()
