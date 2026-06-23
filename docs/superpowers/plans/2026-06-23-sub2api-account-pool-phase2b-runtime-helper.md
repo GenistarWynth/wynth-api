@@ -27,6 +27,8 @@ The success condition is: tests can construct an enabled account-pool binding, c
 
 Future wiring note: Claude relay handling currently has additional thinking-suffix model normalization after `adaptor.Init`. Phase 2C must account for that handler-specific ordering before wiring this helper into Claude traffic.
 
+Future audit note: Phase 2C must decide whether account-level model remapping should set `ChannelMeta.IsModelMapped` when the account upstream model differs from the channel upstream model.
+
 ## Placement Contract
 
 Existing relay handlers follow this pattern:
