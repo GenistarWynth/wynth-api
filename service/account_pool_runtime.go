@@ -1,8 +1,8 @@
 package service
 
 import (
+	"context"
 	"errors"
-	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -45,9 +45,20 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		}
 	}()
 
-	runtimeCredential := strings.TrimSpace(selection.Credential.APIKey)
-	if runtimeCredential == "" {
-		runtimeCredential = strings.TrimSpace(selection.TokenState.AccessToken)
+	c.Set(accountPoolSelectedPoolIDContextKey, selection.PoolID)
+	c.Set(accountPoolSelectedBindingIDContextKey, selection.BindingID)
+	c.Set(accountPoolSelectedAccountIDContextKey, selection.AccountID)
+	c.Set(accountPoolSelectedRetryTimesContextKey, selection.AccountRetryTimes)
+	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
+
+	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(accountPoolRuntimeContext(c), AccountPoolRuntimeCredentialRequest{
+		AccountID:  selection.AccountID,
+		Credential: selection.Credential,
+		TokenState: selection.TokenState,
+		ProxyURL:   selection.ProxyURL,
+	})
+	if err != nil {
+		return err
 	}
 	if runtimeCredential == "" {
 		return errors.New("account pool selected account has no runtime credential")
@@ -61,14 +72,16 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if request != nil {
 		request.SetModelName(selection.UpstreamModelName)
 	}
-	c.Set(accountPoolSelectedPoolIDContextKey, selection.PoolID)
-	c.Set(accountPoolSelectedBindingIDContextKey, selection.BindingID)
-	c.Set(accountPoolSelectedAccountIDContextKey, selection.AccountID)
-	c.Set(accountPoolSelectedRetryTimesContextKey, selection.AccountRetryTimes)
-	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 	setAccountPoolRuntimeLeaseRelease(c, release)
 	releaseStored = true
 	return nil
+}
+
+func accountPoolRuntimeContext(c *gin.Context) context.Context {
+	if c == nil || c.Request == nil {
+		return context.Background()
+	}
+	return c.Request.Context()
 }
 
 func GetAccountPoolAttemptedAccountIDs(c *gin.Context) map[int]struct{} {
