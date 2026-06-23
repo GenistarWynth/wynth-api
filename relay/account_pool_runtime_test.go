@@ -229,6 +229,97 @@ func TestAccountPoolRuntimeAttemptsRecordSuccessForSelectedAccount(t *testing.T)
 	assert.Empty(t, reloaded.LastError)
 }
 
+func TestAccountPoolRuntimeAffinityIsSoftAndBreaksOnFailure(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 10,
+	})
+	sessionID := t.Name() + ":codex-session-1"
+
+	firstCtx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	firstCtx.Request.Header.Set("Session_id", sessionID)
+	firstInfo := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	newAPIError := runAccountPoolRuntimeAttempts(firstCtx, firstInfo, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		assert.Equal(t, first.Id, service.GetSelectedAccountPoolAccountID(firstCtx))
+		return nil
+	})
+	require.Nil(t, newAPIError)
+
+	second := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 100,
+	})
+
+	stickyCtx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	stickyCtx.Request.Header.Set("Session_id", sessionID)
+	stickyInfo := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	stickySelected := make([]int, 0, 1)
+
+	newAPIError = runAccountPoolRuntimeAttempts(stickyCtx, stickyInfo, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		stickySelected = append(stickySelected, service.GetSelectedAccountPoolAccountID(stickyCtx))
+		return nil
+	})
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{first.Id}, stickySelected)
+
+	breakCtx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	breakCtx.Request.Header.Set("Session_id", sessionID)
+	breakInfo := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	breakSelected := make([]int, 0, 2)
+
+	newAPIError = runAccountPoolRuntimeAttempts(breakCtx, breakInfo, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		breakSelected = append(breakSelected, service.GetSelectedAccountPoolAccountID(breakCtx))
+		if len(breakSelected) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("sticky account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{first.Id, second.Id}, breakSelected)
+
+	nextCtx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	nextCtx.Request.Header.Set("Session_id", sessionID)
+	nextInfo := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	nextSelected := make([]int, 0, 1)
+
+	newAPIError = runAccountPoolRuntimeAttempts(nextCtx, nextInfo, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		nextSelected = append(nextSelected, service.GetSelectedAccountPoolAccountID(nextCtx))
+		return nil
+	})
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{second.Id}, nextSelected)
+}
+
 func TestAccountPoolRuntimeAttemptsDoNotRetrySkipRetryError(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")

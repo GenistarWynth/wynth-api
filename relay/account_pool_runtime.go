@@ -19,6 +19,7 @@ func applyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if err == nil {
 		return nil
 	}
+	service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 	// Account-pool selection errors should allow the outer channel retry loop
 	// to try another channel. Do not add ErrOptionWithSkipRetry here.
 	return types.NewErrorWithStatusCode(
@@ -71,12 +72,15 @@ func runAccountPoolRuntimeAttempts(
 		}()
 		if newAPIError == nil {
 			if selectedAccountID > 0 {
-				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, common.GetTimestamp())
+				now := common.GetTimestamp()
+				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, now)
+				service.RememberSelectedAccountPoolRuntimeAffinity(c, now)
 			}
 			return nil
 		}
 		if selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
+			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 		}
 		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
 			return newAPIError

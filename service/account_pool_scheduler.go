@@ -22,6 +22,7 @@ type AccountPoolSelectionRequest struct {
 	RequestModel         string
 	ChannelUpstreamModel string
 	AttemptedAccountIDs  map[int]struct{}
+	AffinityKey          string
 	Now                  int64
 }
 
@@ -117,6 +118,9 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 	}
 
 	selected := selectAccountPoolCandidate(candidates)
+	if affinityCandidate, ok := selectAccountPoolAffinityCandidate(req.AffinityKey, binding.Id, candidates, now); ok {
+		selected = affinityCandidate
+	}
 	credential, err := DecryptAccountPoolCredentialConfig(selected.account.CredentialConfig)
 	if err != nil {
 		return AccountPoolSelectionResult{}, fmt.Errorf("decrypt account pool credential: %w", err)
@@ -143,6 +147,20 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		Credential:        credential,
 		TokenState:        tokenState,
 	}, nil
+}
+
+func selectAccountPoolAffinityCandidate(key string, bindingID int, candidates []accountPoolAccountCandidate, now int64) (accountPoolAccountCandidate, bool) {
+	accountID, ok := lookupAccountPoolRuntimeAffinity(key, bindingID, now)
+	if !ok {
+		return accountPoolAccountCandidate{}, false
+	}
+	for _, candidate := range candidates {
+		if candidate.account.Id == accountID {
+			return candidate, true
+		}
+	}
+	forgetAccountPoolRuntimeAffinity(key)
+	return accountPoolAccountCandidate{}, false
 }
 
 func SelectAccountPoolAccountWithLease(req AccountPoolSelectionRequest) (AccountPoolSelectionResult, accountPoolRuntimeReleaseFunc, error) {

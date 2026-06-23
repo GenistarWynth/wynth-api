@@ -18,6 +18,7 @@ const (
 	accountPoolSelectedBindingIDContextKey   = "account_pool_selected_binding_id"
 	accountPoolSelectedAccountIDContextKey   = "account_pool_selected_account_id"
 	accountPoolSelectedRetryTimesContextKey  = "account_pool_selected_retry_times"
+	accountPoolSelectedAffinityKeyContextKey = "account_pool_selected_affinity_key"
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
@@ -28,11 +29,13 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
 	}
+	affinityKey := BuildAccountPoolRuntimeAffinityKey(c, info, request)
 	selection, release, err := SelectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
 		ChannelID:            info.ChannelId,
 		RequestModel:         info.OriginModelName,
 		ChannelUpstreamModel: info.UpstreamModelName,
 		AttemptedAccountIDs:  GetAccountPoolAttemptedAccountIDs(c),
+		AffinityKey:          affinityKey,
 	})
 	if err != nil {
 		if errors.Is(err, ErrAccountPoolBindingNotRuntimeEnabled) {
@@ -52,6 +55,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	c.Set(accountPoolSelectedBindingIDContextKey, selection.BindingID)
 	c.Set(accountPoolSelectedAccountIDContextKey, selection.AccountID)
 	c.Set(accountPoolSelectedRetryTimesContextKey, selection.AccountRetryTimes)
+	c.Set(accountPoolSelectedAffinityKeyContextKey, affinityKey)
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 
 	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(accountPoolRuntimeContext(c), AccountPoolRuntimeCredentialRequest{
@@ -123,6 +127,29 @@ func GetSelectedAccountPoolAccountRetryTimes(c *gin.Context) int {
 	return c.GetInt(accountPoolSelectedRetryTimesContextKey)
 }
 
+func RememberSelectedAccountPoolRuntimeAffinity(c *gin.Context, now int64) {
+	if c == nil {
+		return
+	}
+	key := c.GetString(accountPoolSelectedAffinityKeyContextKey)
+	if key == "" {
+		return
+	}
+	rememberAccountPoolRuntimeAffinity(
+		key,
+		c.GetInt(accountPoolSelectedBindingIDContextKey),
+		c.GetInt(accountPoolSelectedAccountIDContextKey),
+		now,
+	)
+}
+
+func ForgetSelectedAccountPoolRuntimeAffinity(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	forgetAccountPoolRuntimeAffinity(c.GetString(accountPoolSelectedAffinityKeyContextKey))
+}
+
 func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
 	if c == nil {
 		return
@@ -131,4 +158,5 @@ func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
 	c.Set(accountPoolSelectedBindingIDContextKey, 0)
 	c.Set(accountPoolSelectedAccountIDContextKey, 0)
 	c.Set(accountPoolSelectedRetryTimesContextKey, 0)
+	c.Set(accountPoolSelectedAffinityKeyContextKey, "")
 }

@@ -101,6 +101,67 @@ func TestAccountPoolSchedulerSelectsHighestPriorityRemainingAccount(t *testing.T
 	assert.Equal(t, second.Id, result.AccountID)
 }
 
+func TestAccountPoolSchedulerPrefersSchedulableRuntimeAffinityAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding := createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "higher-priority",
+		Priority: 100,
+	})
+	sticky := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "sticky",
+		Priority: 10,
+	})
+	affinityKey := "test-affinity"
+	rememberAccountPoolRuntimeAffinity(affinityKey, binding.Id, sticky.Id, 100)
+
+	result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		AffinityKey:          affinityKey,
+		Now:                  101,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, sticky.Id, result.AccountID)
+}
+
+func TestAccountPoolSchedulerDropsRuntimeAffinityForUnschedulableAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding := createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	sticky := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:             "sticky-rate-limited",
+		Priority:         100,
+		RateLimitedUntil: 200,
+	})
+	fallback := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "fallback",
+		Priority: 10,
+	})
+	affinityKey := "test-affinity"
+	rememberAccountPoolRuntimeAffinity(affinityKey, binding.Id, sticky.Id, 100)
+
+	result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		AffinityKey:          affinityKey,
+		Now:                  101,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, fallback.Id, result.AccountID)
+	_, ok := lookupAccountPoolRuntimeAffinity(affinityKey, binding.Id, 102)
+	assert.False(t, ok)
+}
+
 func TestAccountPoolSchedulerWithLeaseSkipsSaturatedAccount(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
