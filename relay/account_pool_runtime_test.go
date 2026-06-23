@@ -191,6 +191,44 @@ func TestAccountPoolRuntimeAttemptsRecordFailureBeforeRetryingNextAccount(t *tes
 	assert.Contains(t, reloaded.LastError, "rate limited")
 }
 
+func TestAccountPoolRuntimeAttemptsRecordSuccessForSelectedAccount(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:               "successful-account",
+		LastUsedAt:         100,
+		RateLimitedUntil:   1200,
+		TempDisabledUntil:  1300,
+		TempDisabledReason: "previous temporary failure",
+		LastError:          "previous failure",
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		assert.Equal(t, account.Id, service.GetSelectedAccountPoolAccountID(ctx))
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Greater(t, reloaded.LastUsedAt, int64(100))
+	assert.Zero(t, reloaded.RateLimitedUntil)
+	assert.Zero(t, reloaded.TempDisabledUntil)
+	assert.Empty(t, reloaded.TempDisabledReason)
+	assert.Empty(t, reloaded.LastError)
+}
+
 func TestAccountPoolRuntimeAttemptsDoNotRetrySkipRetryError(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")

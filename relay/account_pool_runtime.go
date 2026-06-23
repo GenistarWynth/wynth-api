@@ -67,6 +67,9 @@ func runAccountPoolRuntimeAttempts(
 			return attempt(request)
 		}()
 		if newAPIError == nil {
+			if selectedAccountID > 0 {
+				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, common.GetTimestamp())
+			}
 			return nil
 		}
 		if selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
