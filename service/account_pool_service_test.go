@@ -447,6 +447,7 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 	model.DB = db
 	common.CryptoSecret = "account-pool-service-test-secret"
 	common.CryptoSecretStable = true
+	resetAccountPoolRuntimeLeasesForTest()
 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},

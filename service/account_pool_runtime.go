@@ -23,7 +23,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
 	}
-	selection, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+	selection, release, err := SelectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
 		ChannelID:            info.ChannelId,
 		RequestModel:         info.OriginModelName,
 		ChannelUpstreamModel: info.UpstreamModelName,
@@ -36,6 +36,12 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		// Phase 2C must map ErrAccountPoolNoSchedulableAccount to a retriable 503.
 		return err
 	}
+	releaseStored := false
+	defer func() {
+		if !releaseStored {
+			release()
+		}
+	}()
 
 	runtimeCredential := strings.TrimSpace(selection.Credential.APIKey)
 	if runtimeCredential == "" {
@@ -54,6 +60,8 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	c.Set(accountPoolSelectedBindingIDContextKey, selection.BindingID)
 	c.Set(accountPoolSelectedAccountIDContextKey, selection.AccountID)
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
+	setAccountPoolRuntimeLeaseRelease(c, release)
+	releaseStored = true
 	return nil
 }
 

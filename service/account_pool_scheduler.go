@@ -30,6 +30,7 @@ type AccountPoolSelectionResult struct {
 	BindingID         int
 	AccountID         int
 	AccountName       string
+	MaxConcurrency    int
 	UpstreamModelName string
 	Credential        AccountPoolCredentialConfig
 	TokenState        AccountPoolTokenState
@@ -126,10 +127,30 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		BindingID:         binding.Id,
 		AccountID:         selected.account.Id,
 		AccountName:       selected.account.Name,
+		MaxConcurrency:    selected.account.MaxConcurrency,
 		UpstreamModelName: selected.upstreamModelName,
 		Credential:        credential,
 		TokenState:        tokenState,
 	}, nil
+}
+
+func SelectAccountPoolAccountWithLease(req AccountPoolSelectionRequest) (AccountPoolSelectionResult, accountPoolRuntimeReleaseFunc, error) {
+	attempted := make(map[int]struct{}, len(req.AttemptedAccountIDs)+1)
+	for accountID := range req.AttemptedAccountIDs {
+		attempted[accountID] = struct{}{}
+	}
+	for {
+		req.AttemptedAccountIDs = attempted
+		selection, err := SelectAccountPoolAccount(req)
+		if err != nil {
+			return AccountPoolSelectionResult{}, nil, err
+		}
+		release, acquired := tryAcquireAccountPoolRuntimeLease(selection.AccountID, selection.MaxConcurrency)
+		if acquired {
+			return selection, release, nil
+		}
+		attempted[selection.AccountID] = struct{}{}
+	}
 }
 
 func loadRuntimeAccountPoolBinding(req AccountPoolSelectionRequest) (model.AccountPoolChannelBinding, error) {

@@ -102,6 +102,48 @@ func TestAccountPoolRuntimeAppliesSelectedAccountCredentialAndModel(t *testing.T
 	assert.Equal(t, []string{"7"}, ctx.GetStringSlice("use_channel"))
 }
 
+func TestAccountPoolRuntimeLeaseExhaustsThenAllowsSelectionAfterRelease(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "single-slot",
+		MaxConcurrency: 1,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-single-slot",
+		},
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "gpt-5")
+	request := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
+	require.NoError(t, err)
+	assert.Equal(t, account.Id, GetSelectedAccountPoolAccountID(ctx))
+
+	_, _, err = SelectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "client-gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  100,
+	})
+	require.ErrorIs(t, err, ErrAccountPoolNoSchedulableAccount)
+
+	ReleaseAccountPoolRuntimeSelection(ctx)
+	selected, release, err := SelectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "client-gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  100,
+	})
+	require.NoError(t, err)
+	defer release()
+	assert.Equal(t, account.Id, selected.AccountID)
+}
+
 func TestAccountPoolRuntimeFallsBackToAccessToken(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	ctx := newAccountPoolRuntimeTestContext()

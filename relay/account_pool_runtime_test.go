@@ -58,6 +58,7 @@ func TestAccountPoolRelayHookAppliesSelectedAccount(t *testing.T) {
 	newAPIError := applyAccountPoolRuntimeSelection(ctx, info, request)
 
 	require.Nil(t, newAPIError)
+	defer service.ReleaseAccountPoolRuntimeSelection(ctx)
 	assert.Equal(t, "sk-account", info.ApiKey)
 	assert.Equal(t, "account-gpt-5", info.UpstreamModelName)
 	assert.Equal(t, "account-gpt-5", request.Model)

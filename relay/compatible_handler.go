@@ -46,6 +46,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
 		return newAPIError
 	}
+	defer service.ReleaseAccountPoolRuntimeSelection(c)
 
 	includeUsage := true
 	// 判断用户是否需要返回使用情况

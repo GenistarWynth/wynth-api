@@ -101,6 +101,49 @@ func TestAccountPoolSchedulerSelectsHighestPriorityRemainingAccount(t *testing.T
 	assert.Equal(t, second.Id, result.AccountID)
 }
 
+func TestAccountPoolSchedulerWithLeaseSkipsSaturatedAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	first := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "first",
+		Priority:       100,
+		MaxConcurrency: 1,
+	})
+	second := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "second",
+		Priority:       100,
+		MaxConcurrency: 1,
+	})
+	releaseFirst, acquired := tryAcquireAccountPoolRuntimeLease(first.Id, first.MaxConcurrency)
+	require.True(t, acquired)
+	defer releaseFirst()
+
+	selected, releaseSelected, err := SelectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  100,
+	})
+
+	require.NoError(t, err)
+	defer releaseSelected()
+	assert.Equal(t, second.Id, selected.AccountID)
+}
+
+func TestAccountPoolRuntimeLeaseTreatsZeroConcurrencyAsUnlimited(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+
+	releaseOne, acquired := tryAcquireAccountPoolRuntimeLease(1001, 0)
+	require.True(t, acquired)
+	defer releaseOne()
+	releaseTwo, acquired := tryAcquireAccountPoolRuntimeLease(1001, 0)
+	require.True(t, acquired)
+	defer releaseTwo()
+}
+
 func TestAccountPoolSchedulerFiltersUnsupportedModelsBeforeAccountMapping(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
