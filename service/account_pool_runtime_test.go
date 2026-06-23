@@ -22,6 +22,7 @@ func TestAccountPoolRuntimeNoopsWithoutRuntimeBinding(t *testing.T) {
 	ctx := newAccountPoolRuntimeTestContext()
 	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
 	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "channel-gpt-5")
+	info.RuntimeAccountID = "stale-runtime-account"
 	request := &dto.GeneralOpenAIRequest{Model: "channel-gpt-5"}
 	ctx.Set("use_channel", []string{"123"})
 
@@ -30,6 +31,7 @@ func TestAccountPoolRuntimeNoopsWithoutRuntimeBinding(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "channel-key", info.ApiKey)
 	assert.Equal(t, "channel-gpt-5", info.UpstreamModelName)
+	assert.Empty(t, info.RuntimeAccountID)
 	assert.Equal(t, "channel-gpt-5", request.Model)
 	assert.Zero(t, GetSelectedAccountPoolAccountID(ctx))
 	assert.Equal(t, []string{"123"}, ctx.GetStringSlice("use_channel"))
@@ -262,6 +264,33 @@ func TestAccountPoolRuntimeFallsBackToAccessToken(t *testing.T) {
 	assert.Equal(t, "access-runtime-token", info.ApiKey)
 	assert.Equal(t, "channel-gpt-5", info.UpstreamModelName)
 	assert.Equal(t, "channel-gpt-5", request.Model)
+}
+
+func TestAccountPoolRuntimeStoresSelectedAccountIdentifier(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:              "runtime-codex-account",
+		AccountIdentifier: "chatgpt-account-runtime",
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "access-runtime-token",
+		},
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "channel-gpt-5")
+	request := &dto.GeneralOpenAIRequest{Model: "channel-gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
+
+	require.NoError(t, err)
+	assert.Equal(t, "access-runtime-token", info.ApiKey)
+	assert.Equal(t, "chatgpt-account-runtime", info.RuntimeAccountID)
 }
 
 func TestAccountPoolRuntimeRefreshesExpiredOAuthToken(t *testing.T) {

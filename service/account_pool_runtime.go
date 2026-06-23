@@ -22,6 +22,9 @@ const (
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
 	clearSelectedAccountPoolRuntimeSelection(c)
+	if info != nil {
+		info.RuntimeAccountID = ""
+	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
 	}
@@ -65,6 +68,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	info.ApiKey = runtimeCredential
+	info.RuntimeAccountID = selection.AccountIdentifier
 	info.UpstreamModelName = selection.UpstreamModelName
 	if selection.ProxyURL != "" {
 		info.RuntimeProxy = selection.ProxyURL

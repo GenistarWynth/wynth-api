@@ -156,6 +156,9 @@ type RelayInfo struct {
 	// RuntimeProxy overrides the persisted channel proxy for a single relay attempt.
 	// It is used for account-pool proxy routing without mutating channel settings.
 	RuntimeProxy string
+	// RuntimeAccountID carries the selected upstream account identifier for provider
+	// adaptors that need it in addition to the runtime credential.
+	RuntimeAccountID string
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see

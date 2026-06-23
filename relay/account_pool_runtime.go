@@ -36,6 +36,7 @@ type accountPoolRuntimeRelaySnapshot struct {
 	upstreamModelName       string
 	channelSettingProxy     string
 	runtimeProxy            string
+	runtimeAccountID        string
 	isStream                bool
 	upstreamRequestBodySize int64
 	requestConversionChain  []types.RelayFormat
@@ -94,6 +95,7 @@ func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRun
 		snapshot.channelSettingProxy = info.ChannelSetting.Proxy
 	}
 	snapshot.runtimeProxy = info.RuntimeProxy
+	snapshot.runtimeAccountID = info.RuntimeAccountID
 	snapshot.isStream = info.IsStream
 	snapshot.upstreamRequestBodySize = info.UpstreamRequestBodySize
 	snapshot.finalRequestRelayFormat = info.FinalRequestRelayFormat
@@ -113,6 +115,7 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 		info.ChannelSetting.Proxy = snapshot.channelSettingProxy
 	}
 	info.RuntimeProxy = snapshot.runtimeProxy
+	info.RuntimeAccountID = snapshot.runtimeAccountID
 	info.IsStream = snapshot.isStream
 	info.UpstreamRequestBodySize = snapshot.upstreamRequestBodySize
 	info.FinalRequestRelayFormat = snapshot.finalRequestRelayFormat

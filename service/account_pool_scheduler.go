@@ -30,6 +30,7 @@ type AccountPoolSelectionResult struct {
 	BindingID         int
 	AccountID         int
 	AccountName       string
+	AccountIdentifier string
 	MaxConcurrency    int
 	AccountRetryTimes int
 	UpstreamModelName string
@@ -134,6 +135,7 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		BindingID:         binding.Id,
 		AccountID:         selected.account.Id,
 		AccountName:       selected.account.Name,
+		AccountIdentifier: selected.account.AccountIdentifier,
 		MaxConcurrency:    selected.account.MaxConcurrency,
 		AccountRetryTimes: binding.AccountRetryTimes,
 		UpstreamModelName: selected.upstreamModelName,
