@@ -88,6 +88,10 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	if newAPIError := rejectUnsupportedAccountPoolRuntime(c, info, "gemini"); newAPIError != nil {
+		return newAPIError
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -245,6 +249,10 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	err = helper.ModelMappedHelper(c, info, req)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+
+	if newAPIError := rejectUnsupportedAccountPoolRuntime(c, info, "gemini_embedding"); newAPIError != nil {
+		return newAPIError
 	}
 
 	req.SetModelName("models/" + info.UpstreamModelName)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -83,6 +84,101 @@ func TestAccountPoolServiceCreateBindingRejectsNonPhaseOneStatus(t *testing.T) {
 	require.ErrorContains(t, err, "account pool binding status must be draft or disabled in phase 1")
 }
 
+func TestAccountPoolServiceActivateBindingEnablesRuntimeButNotChannel(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	activated, err := service.ActivateBinding(pool.Id, binding.Id)
+
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, activated.Status)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, activated.ChannelStatus)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+	assert.True(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "manual enable after account pool activation"))
+
+	again, err := service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, again.Status)
+}
+
+func TestAccountPoolServiceDisableBindingDisablesRuntime(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	enabled, err := AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	require.True(t, enabled)
+
+	disabled, err := service.DisableBinding(pool.Id, binding.Id)
+
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusDisabled, disabled.Status)
+	enabled, err = AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
+}
+
+func TestAccountPoolServiceBindingActivationRejectsWrongPoolAndUnsupportedChannel(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	otherPool := model.AccountPool{Name: "other-pool", Platform: model.AccountPoolPlatformOpenAI}
+	require.NoError(t, model.DB.Create(&otherPool).Error)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	_, err = service.ActivateBinding(otherPool.Id, binding.Id)
+	require.Error(t, err)
+
+	unsupported := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeMidjourney, common.ChannelStatusManuallyDisabled)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: unsupported.Id,
+	})
+	require.ErrorContains(t, err, "OpenAI-compatible")
+
+	legacyBinding := model.AccountPoolChannelBinding{
+		PoolID:    pool.Id,
+		ChannelID: unsupported.Id,
+		Status:    model.AccountPoolBindingStatusDraft,
+	}
+	require.NoError(t, model.DB.Create(&legacyBinding).Error)
+	_, err = service.ActivateBinding(pool.Id, legacyBinding.Id)
+	require.ErrorContains(t, err, "OpenAI-compatible")
+
+	anotherUnsupported := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeMidjourney, common.ChannelStatusManuallyDisabled)
+	legacyEnabledBinding := model.AccountPoolChannelBinding{
+		PoolID:    pool.Id,
+		ChannelID: anotherUnsupported.Id,
+		Status:    model.AccountPoolBindingStatusEnabled,
+	}
+	require.NoError(t, model.DB.Create(&legacyEnabledBinding).Error)
+	disabled, err := service.DisableBinding(pool.Id, legacyEnabledBinding.Id)
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusDisabled, disabled.Status)
+}
+
 func TestAccountPoolServiceDeletePoolDisablesBindingsAndPreservesChannelStatus(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -104,6 +200,29 @@ func TestAccountPoolServiceDeletePoolDisablesBindingsAndPreservesChannelStatus(t
 	require.NoError(t, model.DB.First(&reloadedBinding, binding.Id).Error)
 	assert.Equal(t, model.AccountPoolBindingStatusDisabled, reloadedBinding.Status)
 	assert.NotZero(t, reloadedBinding.UpdatedTime)
+}
+
+func TestAccountPoolServiceDeletePoolInvalidatesRuntimeEnabledCache(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	enabled, err := AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	require.True(t, enabled)
+
+	require.NoError(t, service.DeletePool(pool.Id))
+
+	enabled, err = AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
 }
 
 func TestAccountPoolServiceProxyCreateListRedactsPassword(t *testing.T) {
@@ -359,8 +478,14 @@ func createAccountPoolServiceTestPool(t *testing.T, service AccountPoolService) 
 func createAccountPoolServiceTestChannel(t *testing.T, status int) model.Channel {
 	t.Helper()
 
+	return createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeOpenAI, status)
+}
+
+func createAccountPoolServiceTestChannelWithType(t *testing.T, channelType int, status int) model.Channel {
+	t.Helper()
+
 	channel := model.Channel{
-		Type:   1,
+		Type:   channelType,
 		Key:    "sk-channel",
 		Name:   "channel-a",
 		Status: status,

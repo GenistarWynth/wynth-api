@@ -2,14 +2,30 @@ package service
 
 import (
 	"errors"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/samber/hot"
 	"gorm.io/gorm"
 )
 
 type AccountPoolService struct{}
+
+const (
+	accountPoolRuntimeEnabledCacheNamespace = "new-api:account_pool_runtime_enabled:v1"
+	accountPoolRuntimeEnabledCacheTTL       = 30 * time.Second
+)
+
+var (
+	accountPoolRuntimeEnabledCacheOnce sync.Once
+	accountPoolRuntimeEnabledCache     *cachex.HybridCache[bool]
+)
 
 type AccountPoolCreateParams struct {
 	Name                  string
@@ -172,8 +188,14 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 }
 
 func (s AccountPoolService) DeletePool(id int) error {
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	var channelIDs []int
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		now := common.GetTimestamp()
+		if err := tx.Model(&model.AccountPoolChannelBinding{}).
+			Where("pool_id = ?", id).
+			Pluck("channel_id", &channelIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&model.AccountPool{}).
 			Where("id = ? AND status <> ?", id, model.AccountPoolStatusDeleted).
 			Updates(map[string]any{
@@ -189,6 +211,13 @@ func (s AccountPoolService) DeletePool(id int) error {
 				"updated_time": now,
 			}).Error
 	})
+	if err != nil {
+		return err
+	}
+	for _, channelID := range channelIDs {
+		invalidateAccountPoolRuntimeEnabledForChannel(channelID)
+	}
+	return nil
 }
 
 func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
@@ -268,6 +297,9 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	}
 	var channel model.Channel
 	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	if channel.Status == common.ChannelStatusEnabled {
@@ -374,6 +406,47 @@ func (s AccountPoolService) ListBindings(poolID int) ([]AccountPoolBindingView, 
 	return views, nil
 }
 
+func (s AccountPoolService) ActivateBinding(poolID int, bindingID int) (AccountPoolBindingView, error) {
+	return s.setBindingStatus(poolID, bindingID, model.AccountPoolBindingStatusEnabled)
+}
+
+func (s AccountPoolService) DisableBinding(poolID int, bindingID int) (AccountPoolBindingView, error) {
+	return s.setBindingStatus(poolID, bindingID, model.AccountPoolBindingStatusDisabled)
+}
+
+func (s AccountPoolService) setBindingStatus(poolID int, bindingID int, status string) (AccountPoolBindingView, error) {
+	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	binding, err := getAccountPoolBindingForPool(poolID, bindingID)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	var channel model.Channel
+	if err := model.DB.First(&channel, binding.ChannelID).Error; err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	if status == model.AccountPoolBindingStatusEnabled {
+		if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+			return AccountPoolBindingView{}, err
+		}
+	}
+	if err := validateAccountPoolMutableBindingStatus(status); err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	now := common.GetTimestamp()
+	if err := model.DB.Model(&binding).Updates(map[string]any{
+		"status":       status,
+		"updated_time": now,
+	}).Error; err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	binding.Status = status
+	binding.UpdatedTime = now
+	invalidateAccountPoolRuntimeEnabledForChannel(binding.ChannelID)
+	return buildAccountPoolBindingView(binding, channel), nil
+}
+
 func normalizeAccountPoolPlatform(platform string) (string, error) {
 	platform = strings.TrimSpace(platform)
 	if platform == "" {
@@ -385,6 +458,15 @@ func normalizeAccountPoolPlatform(platform string) (string, error) {
 	return platform, nil
 }
 
+func validateAccountPoolRuntimeChannel(channel model.Channel) error {
+	switch channel.Type {
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex:
+		return nil
+	default:
+		return errors.New("account pool runtime only supports OpenAI-compatible channels in this phase")
+	}
+}
+
 func validateAccountPoolBindingStatus(status string) error {
 	status = strings.TrimSpace(status)
 	if status == "" || status == model.AccountPoolBindingStatusDraft || status == model.AccountPoolBindingStatusDisabled {
@@ -393,10 +475,73 @@ func validateAccountPoolBindingStatus(status string) error {
 	return errors.New("account pool binding status must be draft or disabled in phase 1")
 }
 
+func validateAccountPoolMutableBindingStatus(status string) error {
+	switch status {
+	case model.AccountPoolBindingStatusEnabled, model.AccountPoolBindingStatusDisabled:
+		return nil
+	default:
+		return errors.New("account pool binding status must be enabled or disabled")
+	}
+}
+
+func getAccountPoolBindingForPool(poolID int, bindingID int) (model.AccountPoolChannelBinding, error) {
+	var binding model.AccountPoolChannelBinding
+	err := model.DB.Where("id = ? AND pool_id = ?", bindingID, poolID).First(&binding).Error
+	return binding, err
+}
+
 func getAccountPoolExistingPool(poolID int) (model.AccountPool, error) {
 	var pool model.AccountPool
 	err := model.DB.Where("status <> ?", model.AccountPoolStatusDeleted).First(&pool, poolID).Error
 	return pool, err
+}
+
+func AccountPoolRuntimeEnabledForChannel(channelID int) (bool, error) {
+	if channelID <= 0 || model.DB == nil {
+		return false, nil
+	}
+	cacheKey := strconv.Itoa(channelID)
+	if cached, found, err := getAccountPoolRuntimeEnabledCache().Get(cacheKey); err == nil && found {
+		return cached, nil
+	}
+	var count int64
+	err := model.DB.Model(&model.AccountPoolChannelBinding{}).
+		Where("channel_id = ? AND status = ?", channelID, model.AccountPoolBindingStatusEnabled).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	enabled := count > 0
+	_ = getAccountPoolRuntimeEnabledCache().SetWithTTL(cacheKey, enabled, accountPoolRuntimeEnabledCacheTTL)
+	return enabled, nil
+}
+
+func getAccountPoolRuntimeEnabledCache() *cachex.HybridCache[bool] {
+	accountPoolRuntimeEnabledCacheOnce.Do(func() {
+		accountPoolRuntimeEnabledCache = cachex.NewHybridCache[bool](cachex.HybridCacheConfig[bool]{
+			Namespace:  cachex.Namespace(accountPoolRuntimeEnabledCacheNamespace),
+			Redis:      common.RDB,
+			RedisCodec: cachex.JSONCodec[bool]{},
+			RedisEnabled: func() bool {
+				return common.RedisEnabled && common.RDB != nil
+			},
+			Memory: func() *hot.HotCache[string, bool] {
+				return hot.NewHotCache[string, bool](hot.LRU, 1024).
+					WithTTL(accountPoolRuntimeEnabledCacheTTL).
+					WithJanitor().
+					Build()
+			},
+		})
+	})
+	return accountPoolRuntimeEnabledCache
+}
+
+func invalidateAccountPoolRuntimeEnabledForChannel(channelID int) {
+	if channelID <= 0 {
+		return
+	}
+	// HybridCache.DeleteMany accepts raw keys and applies the namespace internally.
+	_, _ = getAccountPoolRuntimeEnabledCache().DeleteMany([]string{strconv.Itoa(channelID)})
 }
 
 func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolAccountView, error) {

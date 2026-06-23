@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -117,6 +119,8 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/accounts", CreateAccountPoolAccount)
 		group.GET("/:id/bindings", ListAccountPoolBindings)
 		group.POST("/:id/bindings", CreateAccountPoolBinding)
+		group.POST("/:id/bindings/:binding_id/activate", ActivateAccountPoolBinding)
+		group.POST("/:id/bindings/:binding_id/disable", DisableAccountPoolBinding)
 	}
 	return router
 }
@@ -235,6 +239,61 @@ func TestAccountPoolAPIBindingCreatesDraftForDisabledChannel(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 }
 
+func TestAccountPoolAPIBindingActivateDisableControlsRuntimeButNotChannel(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+	channel := createAccountPoolAPITestChannel(t, common.ChannelStatusManuallyDisabled)
+	createResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{
+		ChannelID: channel.Id,
+	})
+	require.True(t, createResult.Response.Success, createResult.Response.Message)
+
+	activateResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id)+"/activate", nil)
+
+	require.True(t, activateResult.Response.Success, activateResult.Response.Message)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, activateResult.Response.Data.Status)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, activateResult.Response.Data.ChannelStatus)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+	enabled, err := service.AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.True(t, enabled)
+
+	disableResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id)+"/disable", nil)
+
+	require.True(t, disableResult.Response.Success, disableResult.Response.Message)
+	assert.Equal(t, model.AccountPoolBindingStatusDisabled, disableResult.Response.Data.Status)
+	enabled, err = service.AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
+}
+
+func TestAccountPoolAPIBindingActivationRejectsWrongPoolAndUnsupportedChannel(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+	otherPool := createAccountPoolAPITestPool(t, router)
+	channel := createAccountPoolAPITestChannel(t, common.ChannelStatusManuallyDisabled)
+	createResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{
+		ChannelID: channel.Id,
+	})
+	require.True(t, createResult.Response.Success, createResult.Response.Message)
+
+	wrongPoolResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(otherPool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id)+"/activate", nil)
+
+	require.False(t, wrongPoolResult.Response.Success)
+
+	unsupported := createAccountPoolAPITestChannelWithType(t, constant.ChannelTypeMidjourney, common.ChannelStatusManuallyDisabled)
+	unsupportedResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{
+		ChannelID: unsupported.Id,
+	})
+
+	require.False(t, unsupportedResult.Response.Success)
+	assert.Contains(t, unsupportedResult.Response.Message, "OpenAI-compatible")
+}
+
 func TestAccountPoolAPIProxyRedaction(t *testing.T) {
 	setupAccountPoolAPITestDB(t)
 	router := accountPoolAPIRouter()
@@ -295,8 +354,14 @@ func createAccountPoolAPITestPool(t *testing.T, router *gin.Engine) dto.AccountP
 func createAccountPoolAPITestChannel(t *testing.T, status int) model.Channel {
 	t.Helper()
 
+	return createAccountPoolAPITestChannelWithType(t, constant.ChannelTypeOpenAI, status)
+}
+
+func createAccountPoolAPITestChannelWithType(t *testing.T, channelType int, status int) model.Channel {
+	t.Helper()
+
 	channel := model.Channel{
-		Type:   1,
+		Type:   channelType,
 		Key:    "sk-channel",
 		Name:   "channel-a",
 		Status: status,

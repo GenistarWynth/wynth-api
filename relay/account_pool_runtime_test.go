@@ -151,6 +151,73 @@ func TestAccountPoolRelayResponsesHelperStopsBeforeUpstreamWhenPoolExhausted(t *
 	assert.False(t, types.IsSkipRetryError(newAPIError))
 }
 
+func TestAccountPoolRelayUnsupportedGuardNoopsForUnboundChannel(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/images/generations")
+	channel := createAccountPoolRelayTestChannel(t)
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	info := newAccountPoolRelayTestInfo(channel.Id, "gpt-image-1", "gpt-image-1")
+
+	newAPIError := rejectUnsupportedAccountPoolRuntime(ctx, info, "image")
+
+	require.Nil(t, newAPIError)
+}
+
+func TestAccountPoolRelayUnsupportedGuardRejectsEnabledBinding(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/images/generations")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBinding(t, pool.Id, channel.Id)
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	info := newAccountPoolRelayTestInfo(channel.Id, "gpt-image-1", "gpt-image-1")
+
+	newAPIError := rejectUnsupportedAccountPoolRuntime(ctx, info, "image")
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
+	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
+	assert.False(t, types.IsSkipRetryError(newAPIError))
+	assert.Contains(t, newAPIError.Error(), "image")
+	assert.NotContains(t, newAPIError.Error(), "sk-")
+}
+
+func TestAccountPoolRelayUnsupportedGuardUsesContextChannelWhenMetaMissing(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/images/generations")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBinding(t, pool.Id, channel.Id)
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	info := &relaycommon.RelayInfo{}
+
+	newAPIError := rejectUnsupportedAccountPoolRuntime(ctx, info, "image")
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
+	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
+	assert.False(t, types.IsSkipRetryError(newAPIError))
+}
+
+func TestAccountPoolRelayImageHelperRejectsEnabledBindingBeforeUpstream(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/images/generations")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBinding(t, pool.Id, channel.Id)
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gpt-image-1")
+	request := &dto.ImageRequest{Model: "gpt-image-1", Prompt: "draw a cube"}
+	info := relaycommon.GenRelayInfoImage(ctx, request)
+
+	newAPIError := ImageHelper(ctx, info)
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
+	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
+	assert.False(t, types.IsSkipRetryError(newAPIError))
+}
+
 func setupAccountPoolRelayTestDB(t *testing.T) {
 	t.Helper()
 
@@ -215,12 +282,16 @@ func createAccountPoolRelayTestChannel(t *testing.T) model.Channel {
 
 func createAccountPoolRelayTestEnabledBinding(t *testing.T, poolID int, channelID int) model.AccountPoolChannelBinding {
 	t.Helper()
-	binding := model.AccountPoolChannelBinding{
+
+	bindingView, err := service.AccountPoolService{}.CreateBinding(service.AccountPoolBindingCreateParams{
 		PoolID:    poolID,
 		ChannelID: channelID,
-		Status:    model.AccountPoolBindingStatusEnabled,
-	}
-	require.NoError(t, model.DB.Create(&binding).Error)
+	})
+	require.NoError(t, err)
+	_, err = service.AccountPoolService{}.ActivateBinding(poolID, bindingView.Id)
+	require.NoError(t, err)
+	var binding model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&binding, bindingView.Id).Error)
 	return binding
 }
 

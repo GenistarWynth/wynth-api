@@ -255,6 +255,8 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.POST("/:id/accounts", controller.CreateAccountPoolAccount)
 			accountPoolRoute.GET("/:id/bindings", controller.ListAccountPoolBindings)
 			accountPoolRoute.POST("/:id/bindings", controller.CreateAccountPoolBinding)
+			accountPoolRoute.POST("/:id/bindings/:binding_id/activate", controller.ActivateAccountPoolBinding)
+			accountPoolRoute.POST("/:id/bindings/:binding_id/disable", controller.DisableAccountPoolBinding)
 		}
 		channelRoute := apiRouter.Group("/channel")
 		channelRoute.Use(middleware.AdminAuth())

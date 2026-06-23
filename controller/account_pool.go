@@ -231,10 +231,63 @@ func CreateAccountPoolBinding(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolBindingResponse(binding))
 }
 
+func ActivateAccountPoolBinding(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	bindingID, ok := accountPoolBindingIDFromParam(c)
+	if !ok {
+		return
+	}
+	binding, err := (&service.AccountPoolService{}).ActivateBinding(poolID, bindingID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.binding_activate", map[string]interface{}{
+		"id":         binding.Id,
+		"pool_id":    poolID,
+		"channel_id": binding.ChannelID,
+	})
+	common.ApiSuccess(c, accountPoolBindingResponse(binding))
+}
+
+func DisableAccountPoolBinding(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	bindingID, ok := accountPoolBindingIDFromParam(c)
+	if !ok {
+		return
+	}
+	binding, err := (&service.AccountPoolService{}).DisableBinding(poolID, bindingID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.binding_disable", map[string]interface{}{
+		"id":         binding.Id,
+		"pool_id":    poolID,
+		"channel_id": binding.ChannelID,
+	})
+	common.ApiSuccess(c, accountPoolBindingResponse(binding))
+}
+
 func accountPoolIDFromParam(c *gin.Context) (int, bool) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id == 0 {
 		common.ApiError(c, errors.New("invalid account pool id"))
+		return 0, false
+	}
+	return id, true
+}
+
+func accountPoolBindingIDFromParam(c *gin.Context) (int, bool) {
+	id, err := strconv.Atoi(c.Param("binding_id"))
+	if err != nil || id == 0 {
+		common.ApiError(c, errors.New("invalid account pool binding id"))
 		return 0, false
 	}
 	return id, true
