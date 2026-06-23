@@ -64,6 +64,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
+		return newAPIError
+	}
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {

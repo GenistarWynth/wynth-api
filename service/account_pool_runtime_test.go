@@ -148,6 +148,7 @@ func TestAccountPoolRuntimeErrorsWhenEnabledAccountHasNoCredential(t *testing.T)
 	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
 
 	require.ErrorContains(t, err, "account pool selected account has no runtime credential")
+	assert.NotContains(t, err.Error(), "account_id=")
 }
 
 func newAccountPoolRuntimeTestContext() *gin.Context {

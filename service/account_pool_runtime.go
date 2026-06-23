@@ -2,7 +2,6 @@ package service
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -43,7 +42,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		runtimeCredential = strings.TrimSpace(selection.TokenState.AccessToken)
 	}
 	if runtimeCredential == "" {
-		return fmt.Errorf("account pool selected account has no runtime credential: account_id=%d", selection.AccountID)
+		return errors.New("account pool selected account has no runtime credential")
 	}
 
 	info.ApiKey = runtimeCredential
