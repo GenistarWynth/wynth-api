@@ -157,6 +157,40 @@ func TestAccountPoolRuntimeAttemptsRetryAnotherAccountBeforeResponse(t *testing.
 	assert.Equal(t, []int{first.Id, second.Id}, selected)
 }
 
+func TestAccountPoolRuntimeAttemptsRecordFailureBeforeRetryingNextAccount(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "first", Priority: 100})
+	second := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "second", Priority: 50})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	selected := make([]int, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		selected = append(selected, service.GetSelectedAccountPoolAccountID(ctx))
+		if len(selected) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("rate limited"), types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{first.Id, second.Id}, selected)
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, first.Id).Error)
+	assert.Greater(t, reloaded.RateLimitedUntil, int64(0))
+	assert.Contains(t, reloaded.LastError, "rate limited")
+}
+
 func TestAccountPoolRuntimeAttemptsDoNotRetrySkipRetryError(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
@@ -182,6 +216,35 @@ func TestAccountPoolRuntimeAttemptsDoNotRetrySkipRetryError(t *testing.T) {
 	require.NotNil(t, newAPIError)
 	assert.Equal(t, 1, attempts)
 	assert.True(t, types.IsSkipRetryError(newAPIError))
+}
+
+func TestAccountPoolRuntimeAttemptsDoNotRecordSkipRetryErrorAsAccountFailure(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "skip-retry"})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		return types.NewErrorWithStatusCode(errors.New("client request is invalid"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	})
+
+	require.NotNil(t, newAPIError)
+	assert.True(t, types.IsSkipRetryError(newAPIError))
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Empty(t, reloaded.LastError)
+	assert.Zero(t, reloaded.RateLimitedUntil)
+	assert.Zero(t, reloaded.TempDisabledUntil)
 }
 
 func TestAccountPoolRuntimeAttemptsDoNotRetryAfterResponseStarted(t *testing.T) {
