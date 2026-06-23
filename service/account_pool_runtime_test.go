@@ -102,6 +102,63 @@ func TestAccountPoolRuntimeAppliesSelectedAccountCredentialAndModel(t *testing.T
 	assert.Equal(t, []string{"7"}, ctx.GetStringSlice("use_channel"))
 }
 
+func TestAccountPoolRuntimeStoresBindingRetryTimes(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBindingWithRetryTimes(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{}, 2)
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "retry-budget-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-retry-budget",
+		},
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "gpt-5")
+	request := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
+
+	require.NoError(t, err)
+	assert.Equal(t, account.Id, GetSelectedAccountPoolAccountID(ctx))
+	assert.Equal(t, 2, GetSelectedAccountPoolAccountRetryTimes(ctx))
+}
+
+func TestAccountPoolRuntimeClearsStaleSelectedMetadataWhenNoBindingApplies(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	boundChannel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBindingWithRetryTimes(t, pool.Id, boundChannel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{}, 1)
+	selected := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "stale-selected",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-stale",
+		},
+	})
+	boundInfo := newAccountPoolRuntimeTestRelayInfo(boundChannel.Id, "client-gpt-5", "gpt-5")
+	boundRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, boundInfo, boundRequest))
+	require.Equal(t, selected.Id, GetSelectedAccountPoolAccountID(ctx))
+	require.Equal(t, 1, GetSelectedAccountPoolAccountRetryTimes(ctx))
+	ReleaseAccountPoolRuntimeSelection(ctx)
+
+	unboundChannel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	unboundInfo := newAccountPoolRuntimeTestRelayInfo(unboundChannel.Id, "client-gpt-5", "gpt-5")
+	unboundRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, unboundInfo, unboundRequest)
+
+	require.NoError(t, err)
+	assert.Zero(t, GetSelectedAccountPoolAccountID(ctx))
+	assert.Zero(t, GetSelectedAccountPoolAccountRetryTimes(ctx))
+	assert.Contains(t, GetAccountPoolAttemptedAccountIDs(ctx), selected.Id)
+}
+
 func TestAccountPoolRuntimeLeaseExhaustsThenAllowsSelectionAfterRelease(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	ctx := newAccountPoolRuntimeTestContext()
@@ -208,4 +265,20 @@ func newAccountPoolRuntimeTestRelayInfo(channelID int, originModel string, upstr
 			UpstreamModelName: upstreamModel,
 		},
 	}
+}
+
+func createEnabledAccountPoolSchedulerBindingWithRetryTimes(
+	t *testing.T,
+	poolID int,
+	channelID int,
+	filter AccountPoolAccountFilterConfig,
+	modelPolicy AccountPoolModelPolicy,
+	accountRetryTimes int,
+) model.AccountPoolChannelBinding {
+	t.Helper()
+
+	binding := createEnabledAccountPoolSchedulerBinding(t, poolID, channelID, filter, modelPolicy)
+	require.NoError(t, model.DB.Model(&model.AccountPoolChannelBinding{Id: binding.Id}).Update("account_retry_times", accountRetryTimes).Error)
+	require.NoError(t, model.DB.First(&binding, binding.Id).Error)
+	return binding
 }

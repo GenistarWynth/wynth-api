@@ -1,9 +1,11 @@
 package relay
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -107,6 +109,184 @@ func TestAccountPoolRelayHookMapsMissingCredentialToRetriable503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
 	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
 	assert.False(t, types.IsSkipRetryError(newAPIError))
+}
+
+func TestAccountPoolRuntimeAttemptsRetryAnotherAccountBeforeResponse(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 100,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-first",
+		},
+	})
+	second := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 50,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-second",
+		},
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	selected := make([]int, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		selected = append(selected, service.GetSelectedAccountPoolAccountID(ctx))
+		if len(selected) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("first account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		assert.Equal(t, "sk-second", info.ApiKey)
+		assert.Equal(t, second.Id, service.GetSelectedAccountPoolAccountID(ctx))
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{first.Id, second.Id}, selected)
+}
+
+func TestAccountPoolRuntimeAttemptsDoNotRetrySkipRetryError(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "only"})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	attempts := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attempts++
+		return types.NewErrorWithStatusCode(errors.New("bad request"), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	})
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, 1, attempts)
+	assert.True(t, types.IsSkipRetryError(newAPIError))
+}
+
+func TestAccountPoolRuntimeAttemptsDoNotRetryAfterResponseStarted(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "first", Priority: 100})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "second", Priority: 50})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	attempts := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attempts++
+		info.StartTime = time.Now().Add(-time.Second)
+		info.FirstResponseTime = time.Now()
+		return types.NewErrorWithStatusCode(errors.New("stream already started"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+	})
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, http.StatusInternalServerError, newAPIError.StatusCode)
+}
+
+func TestAccountPoolRuntimeAttemptsReturnPoolExhaustionWhenRetryBudgetHasNoCandidate(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{Name: "only"})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	attempts := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attempts++
+		return types.NewErrorWithStatusCode(errors.New("single account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+	})
+
+	require.NotNil(t, newAPIError)
+	require.ErrorIs(t, newAPIError, service.ErrAccountPoolNoSchedulableAccount)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
+	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
+}
+
+func TestAccountPoolRuntimeAttemptsResetMappedModelForEachRetry(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:            "first",
+		Priority:        100,
+		SupportedModels: []string{"channel-gpt-5"},
+		ModelMapping: map[string]string{
+			"channel-gpt-5": "account-one-model",
+		},
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:            "second",
+		Priority:        50,
+		SupportedModels: []string{"channel-gpt-5"},
+		ModelMapping: map[string]string{
+			"channel-gpt-5": "account-two-model",
+		},
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "channel-gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "channel-gpt-5"}
+	models := make([]string, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		textRequest, ok := request.(*dto.GeneralOpenAIRequest)
+		require.True(t, ok)
+		models = append(models, textRequest.Model)
+		if len(models) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("mapped model account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []string{"account-one-model", "account-two-model"}, models)
 }
 
 func TestAccountPoolRelayTextHelperStopsBeforeUpstreamWhenPoolExhausted(t *testing.T) {
@@ -287,6 +467,22 @@ func createAccountPoolRelayTestEnabledBinding(t *testing.T, poolID int, channelI
 	bindingView, err := service.AccountPoolService{}.CreateBinding(service.AccountPoolBindingCreateParams{
 		PoolID:    poolID,
 		ChannelID: channelID,
+	})
+	require.NoError(t, err)
+	_, err = service.AccountPoolService{}.ActivateBinding(poolID, bindingView.Id)
+	require.NoError(t, err)
+	var binding model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&binding, bindingView.Id).Error)
+	return binding
+}
+
+func createAccountPoolRelayTestEnabledBindingWithRetryTimes(t *testing.T, poolID int, channelID int, accountRetryTimes int) model.AccountPoolChannelBinding {
+	t.Helper()
+
+	bindingView, err := service.AccountPoolService{}.CreateBinding(service.AccountPoolBindingCreateParams{
+		PoolID:            poolID,
+		ChannelID:         channelID,
+		AccountRetryTimes: accountRetryTimes,
 	})
 	require.NoError(t, err)
 	_, err = service.AccountPoolService{}.ActivateBinding(poolID, bindingView.Id)

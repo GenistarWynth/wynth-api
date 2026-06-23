@@ -17,9 +17,11 @@ const (
 	accountPoolSelectedPoolIDContextKey      = "account_pool_selected_pool_id"
 	accountPoolSelectedBindingIDContextKey   = "account_pool_selected_binding_id"
 	accountPoolSelectedAccountIDContextKey   = "account_pool_selected_account_id"
+	accountPoolSelectedRetryTimesContextKey  = "account_pool_selected_retry_times"
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
+	clearSelectedAccountPoolRuntimeSelection(c)
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
 	}
@@ -59,6 +61,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	c.Set(accountPoolSelectedPoolIDContextKey, selection.PoolID)
 	c.Set(accountPoolSelectedBindingIDContextKey, selection.BindingID)
 	c.Set(accountPoolSelectedAccountIDContextKey, selection.AccountID)
+	c.Set(accountPoolSelectedRetryTimesContextKey, selection.AccountRetryTimes)
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 	setAccountPoolRuntimeLeaseRelease(c, release)
 	releaseStored = true
@@ -91,4 +94,21 @@ func GetSelectedAccountPoolAccountID(c *gin.Context) int {
 		return 0
 	}
 	return c.GetInt(accountPoolSelectedAccountIDContextKey)
+}
+
+func GetSelectedAccountPoolAccountRetryTimes(c *gin.Context) int {
+	if c == nil {
+		return 0
+	}
+	return c.GetInt(accountPoolSelectedRetryTimesContextKey)
+}
+
+func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	c.Set(accountPoolSelectedPoolIDContextKey, 0)
+	c.Set(accountPoolSelectedBindingIDContextKey, 0)
+	c.Set(accountPoolSelectedAccountIDContextKey, 0)
+	c.Set(accountPoolSelectedRetryTimesContextKey, 0)
 }

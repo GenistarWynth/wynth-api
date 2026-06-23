@@ -31,6 +31,7 @@ type AccountPoolSelectionResult struct {
 	AccountID         int
 	AccountName       string
 	MaxConcurrency    int
+	AccountRetryTimes int
 	UpstreamModelName string
 	Credential        AccountPoolCredentialConfig
 	TokenState        AccountPoolTokenState
@@ -128,6 +129,7 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		AccountID:         selected.account.Id,
 		AccountName:       selected.account.Name,
 		MaxConcurrency:    selected.account.MaxConcurrency,
+		AccountRetryTimes: binding.AccountRetryTimes,
 		UpstreamModelName: selected.upstreamModelName,
 		Credential:        credential,
 		TokenState:        tokenState,

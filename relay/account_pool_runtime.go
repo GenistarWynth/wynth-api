@@ -28,6 +28,109 @@ func applyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	)
 }
 
+type accountPoolRuntimeRequestFactory func() (dto.Request, *types.NewAPIError)
+type accountPoolRuntimeAttemptFunc func(dto.Request) *types.NewAPIError
+
+type accountPoolRuntimeRelaySnapshot struct {
+	apiKey                  string
+	upstreamModelName       string
+	isStream                bool
+	upstreamRequestBodySize int64
+	requestConversionChain  []types.RelayFormat
+	finalRequestRelayFormat types.RelayFormat
+}
+
+func runAccountPoolRuntimeAttempts(
+	c *gin.Context,
+	info *relaycommon.RelayInfo,
+	requestFactory accountPoolRuntimeRequestFactory,
+	attempt accountPoolRuntimeAttemptFunc,
+) *types.NewAPIError {
+	if requestFactory == nil || attempt == nil {
+		return nil
+	}
+	snapshot := snapshotAccountPoolRuntimeRelay(info)
+	for attemptIndex := 0; ; attemptIndex++ {
+		restoreAccountPoolRuntimeRelay(info, snapshot)
+		request, newAPIError := requestFactory()
+		if newAPIError != nil {
+			return newAPIError
+		}
+		if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
+			return newAPIError
+		}
+		selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
+		accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
+
+		newAPIError = func() *types.NewAPIError {
+			defer service.ReleaseAccountPoolRuntimeSelection(c)
+			return attempt(request)
+		}()
+		if newAPIError == nil {
+			return nil
+		}
+		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
+			return newAPIError
+		}
+	}
+}
+
+func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRuntimeRelaySnapshot {
+	snapshot := accountPoolRuntimeRelaySnapshot{}
+	if info == nil {
+		return snapshot
+	}
+	if info.ChannelMeta != nil {
+		snapshot.apiKey = info.ApiKey
+		snapshot.upstreamModelName = info.UpstreamModelName
+	}
+	snapshot.isStream = info.IsStream
+	snapshot.upstreamRequestBodySize = info.UpstreamRequestBodySize
+	snapshot.finalRequestRelayFormat = info.FinalRequestRelayFormat
+	if len(info.RequestConversionChain) > 0 {
+		snapshot.requestConversionChain = append([]types.RelayFormat(nil), info.RequestConversionChain...)
+	}
+	return snapshot
+}
+
+func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accountPoolRuntimeRelaySnapshot) {
+	if info == nil {
+		return
+	}
+	if info.ChannelMeta != nil {
+		info.ApiKey = snapshot.apiKey
+		info.UpstreamModelName = snapshot.upstreamModelName
+	}
+	info.IsStream = snapshot.isStream
+	info.UpstreamRequestBodySize = snapshot.upstreamRequestBodySize
+	info.FinalRequestRelayFormat = snapshot.finalRequestRelayFormat
+	info.RequestConversionChain = append([]types.RelayFormat(nil), snapshot.requestConversionChain...)
+}
+
+func shouldRetryAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo, selectedAccountID int, accountRetryTimes int, attemptIndex int, err *types.NewAPIError) bool {
+	if err == nil || selectedAccountID <= 0 || accountRetryTimes <= 0 || attemptIndex >= accountRetryTimes {
+		return false
+	}
+	if types.IsSkipRetryError(err) {
+		return false
+	}
+	if info != nil && info.HasSendResponse() {
+		return false
+	}
+	if err.GetErrorCode() == types.ErrorCodeDoRequestFailed {
+		return true
+	}
+	statusCode := err.StatusCode
+	if statusCode < 100 || statusCode > 599 {
+		return true
+	}
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+		return true
+	}
+	return statusCode >= http.StatusInternalServerError
+}
+
 func accountPoolRuntimeChannelID(c *gin.Context, info *relaycommon.RelayInfo) int {
 	if info != nil && info.ChannelMeta != nil && info.ChannelId > 0 {
 		return info.ChannelId
