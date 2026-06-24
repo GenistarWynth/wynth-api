@@ -1187,7 +1187,7 @@ func TestAccountPoolServiceAccountViewIncludesCapabilityMetadata(t *testing.T) {
 		Updates(map[string]any{
 			"last_capability_check_at":     int64(1234),
 			"last_capability_check_status": "success",
-			"last_capability_check_error":  "",
+			"last_capability_check_error":  "capability check failed",
 			"last_capability_check_models": `["gpt-5","gpt-5-mini"]`,
 		}).Error)
 
@@ -1196,6 +1196,7 @@ func TestAccountPoolServiceAccountViewIncludesCapabilityMetadata(t *testing.T) {
 	require.Len(t, accounts, 1)
 	assert.Equal(t, int64(1234), accounts[0].LastCapabilityCheckAt)
 	assert.Equal(t, "success", accounts[0].LastCapabilityCheckStatus)
+	assert.Equal(t, "capability check failed", accounts[0].LastCapabilityCheckError)
 	assert.Equal(t, []string{"gpt-5", "gpt-5-mini"}, accounts[0].LastCapabilityCheckModels)
 }
 
