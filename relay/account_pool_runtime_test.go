@@ -675,6 +675,49 @@ func TestAccountPoolRuntimeAttemptsUsePoolDefaultProxyForEachRetry(t *testing.T)
 	assert.Equal(t, []string{"socks5://pool-proxy.local:1080", "socks5://pool-proxy.local:1080"}, proxies)
 }
 
+func TestAccountPoolRuntimeAttemptsResetRuntimeHeaderOverrideForEachRetry(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 100,
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 50,
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.UseRuntimeHeadersOverride = true
+	info.RuntimeHeadersOverride = map[string]any{
+		"x-static": "channel-value",
+	}
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	overrides := make([]map[string]any, 0, 2)
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		overrides = append(overrides, cloneAccountPoolRelayTestRuntimeHeaders(info.RuntimeHeadersOverride))
+		info.RuntimeHeadersOverride["x-account-attempt"] = "first-account"
+		if len(overrides) == 1 {
+			return types.NewErrorWithStatusCode(errors.New("first account failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	require.Len(t, overrides, 2)
+	assert.Equal(t, map[string]any{"x-static": "channel-value"}, overrides[0])
+	assert.Equal(t, map[string]any{"x-static": "channel-value"}, overrides[1])
+}
+
 func TestAccountPoolRelayTextHelperStopsBeforeUpstreamWhenPoolExhausted(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
@@ -893,6 +936,17 @@ func accountPoolRelayTestEffectiveProxy(info *relaycommon.RelayInfo) string {
 		return info.RuntimeProxy
 	}
 	return info.ChannelSetting.Proxy
+}
+
+func cloneAccountPoolRelayTestRuntimeHeaders(headers map[string]any) map[string]any {
+	if headers == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(headers))
+	for key, value := range headers {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func createAccountPoolRelayTestAccount(

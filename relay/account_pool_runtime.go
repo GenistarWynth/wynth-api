@@ -38,6 +38,8 @@ type accountPoolRuntimeRelaySnapshot struct {
 	channelSettingProxy     string
 	runtimeProxy            string
 	runtimeAccountID        string
+	runtimeHeadersOverride  map[string]interface{}
+	useRuntimeHeaders       bool
 	isStream                bool
 	upstreamRequestBodySize int64
 	requestConversionChain  []types.RelayFormat
@@ -109,6 +111,8 @@ func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRun
 	}
 	snapshot.runtimeProxy = info.RuntimeProxy
 	snapshot.runtimeAccountID = info.RuntimeAccountID
+	snapshot.runtimeHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(info.RuntimeHeadersOverride)
+	snapshot.useRuntimeHeaders = info.UseRuntimeHeadersOverride
 	snapshot.isStream = info.IsStream
 	snapshot.upstreamRequestBodySize = info.UpstreamRequestBodySize
 	snapshot.finalRequestRelayFormat = info.FinalRequestRelayFormat
@@ -129,6 +133,8 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 	}
 	info.RuntimeProxy = snapshot.runtimeProxy
 	info.RuntimeAccountID = snapshot.runtimeAccountID
+	info.RuntimeHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(snapshot.runtimeHeadersOverride)
+	info.UseRuntimeHeadersOverride = snapshot.useRuntimeHeaders
 	info.IsStream = snapshot.isStream
 	info.UpstreamRequestBodySize = snapshot.upstreamRequestBodySize
 	info.FinalRequestRelayFormat = snapshot.finalRequestRelayFormat
@@ -137,6 +143,17 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 	} else {
 		info.RequestConversionChain = nil
 	}
+}
+
+func cloneAccountPoolRuntimeHeadersOverride(headers map[string]interface{}) map[string]interface{} {
+	if headers == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(headers))
+	for key, value := range headers {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func shouldRetryAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo, selectedAccountID int, accountRetryTimes int, attemptIndex int, err *types.NewAPIError) bool {
