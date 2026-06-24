@@ -138,6 +138,20 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		return result, nil
 	}
 
+	var probeCandidateModels []string
+	if result.Mode == AccountPoolCapabilityModeProbeModels {
+		probeCandidateModels = normalizeAccountPoolCapabilityModels(req.CandidateModels)
+		if len(probeCandidateModels) == 0 {
+			result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "probe_models requires candidate_models")
+			if req.Apply {
+				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					return result, writeErr
+				}
+			}
+			return result, nil
+		}
+	}
+
 	baseURL := strings.TrimSpace(channel.GetBaseURL())
 	if baseURL == "" {
 		baseURL = constant.ChannelBaseURLs[channel.Type]
@@ -211,20 +225,9 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 
 	switch result.Mode {
 	case AccountPoolCapabilityModeProbeModels:
-		candidateModels := normalizeAccountPoolCapabilityModels(req.CandidateModels)
-		if len(candidateModels) == 0 {
-			result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "probe_models requires candidate_models")
-			if req.Apply {
-				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
-					return result, writeErr
-				}
-			}
-			return result, nil
-		}
-
-		supportedCandidates := make([]string, 0, len(candidateModels))
-		probeErrors := make([]string, 0, len(candidateModels))
-		for _, candidateModel := range candidateModels {
+		supportedCandidates := make([]string, 0, len(probeCandidateModels))
+		probeErrors := make([]string, 0, len(probeCandidateModels))
+		for _, candidateModel := range probeCandidateModels {
 			requestBody, err := buildAccountPoolCapabilityProbeRequestBody(candidateModel)
 			if err != nil {
 				return result, err

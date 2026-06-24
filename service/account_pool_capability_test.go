@@ -241,14 +241,37 @@ func TestAccountPoolCapabilityProbeRequiresCandidateModels(t *testing.T) {
 		PoolID: pool.Id,
 		Name:   "probe-requires-candidates-account",
 		Credential: AccountPoolCredentialConfig{
-			Type:   AccountPoolCredentialTypeAPIKey,
-			APIKey: "sk-probe-requires",
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken:  "access-expired",
+			RefreshToken: "refresh-probe-requires",
+			ExpiresAt:    900,
+			Version:      2,
 		},
 		SupportedModels: []string{"existing"},
 	})
 	require.NoError(t, err)
 
-	channel := createAccountPoolCapabilityTestChannel(t, "https://example.com")
+	refreshCalls := 0
+	setAccountPoolOAuthRefreshForTest(t, func(ctx context.Context, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error) {
+		refreshCalls++
+		assert.Equal(t, "refresh-probe-requires", refreshToken)
+		return &CodexOAuthTokenResult{
+			AccessToken:  "access-refreshed",
+			RefreshToken: "refresh-probe-requires-next",
+			ExpiresAt:    time.Unix(2000, 0),
+		}, nil
+	})
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		http.Error(w, "unexpected upstream call", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
 	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
 		PoolID:    pool.Id,
 		ChannelID: channel.Id,
@@ -269,6 +292,8 @@ func TestAccountPoolCapabilityProbeRequiresCandidateModels(t *testing.T) {
 	assert.Contains(t, result.Errors[0], "candidate")
 	assert.Empty(t, result.DetectedModels)
 	assert.Empty(t, result.AppliedModels)
+	assert.Zero(t, refreshCalls)
+	assert.Zero(t, requestCount)
 
 	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
 	assert.Equal(t, `["existing"]`, stored.SupportedModels)
