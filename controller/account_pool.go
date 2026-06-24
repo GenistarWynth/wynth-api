@@ -215,6 +215,81 @@ func DeleteAccountPoolAccount(c *gin.Context) {
 	common.ApiSuccess(c, nil)
 }
 
+func DetectAccountPoolAccountCapability(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolCapabilityDetectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result, err := (&service.AccountPoolService{}).DetectAccountCapability(c.Request.Context(), service.AccountPoolCapabilityDetectRequest{
+		PoolID:          poolID,
+		AccountID:       accountID,
+		ChannelID:       req.ChannelID,
+		Mode:            req.Mode,
+		CandidateModels: req.CandidateModels,
+		Apply:           req.Apply,
+		Merge:           req.Merge,
+		ModelMapping:    req.ModelMapping,
+		TimeoutSeconds:  req.TimeoutSeconds,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.capability_detect", map[string]interface{}{
+		"pool_id":    poolID,
+		"account_id": accountID,
+		"mode":       req.Mode,
+		"apply":      req.Apply,
+	})
+	common.ApiSuccess(c, accountPoolCapabilityDetectResponse(result))
+}
+
+func DetectAccountPoolCapabilities(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolCapabilityDetectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result, err := (&service.AccountPoolService{}).DetectPoolCapabilities(c.Request.Context(), service.AccountPoolCapabilityDetectRequest{
+		PoolID:          poolID,
+		AccountIDs:      req.AccountIDs,
+		ChannelID:       req.ChannelID,
+		Mode:            req.Mode,
+		CandidateModels: req.CandidateModels,
+		Apply:           req.Apply,
+		Merge:           req.Merge,
+		ModelMapping:    req.ModelMapping,
+		TimeoutSeconds:  req.TimeoutSeconds,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.capability_detect", map[string]interface{}{
+		"pool_id":        poolID,
+		"mode":           req.Mode,
+		"apply":          req.Apply,
+		"account_count":  len(req.AccountIDs),
+		"result_total":   result.Total,
+		"result_failed":  result.Failed,
+		"result_success": result.Succeeded,
+	})
+	common.ApiSuccess(c, accountPoolCapabilityPoolResponse(result))
+}
+
 func ListAccountPoolProxies(c *gin.Context) {
 	proxies, err := (&service.AccountPoolService{}).ListProxies()
 	if err != nil {
@@ -657,6 +732,47 @@ func accountPoolAccountResponse(account service.AccountPoolAccountView) dto.Acco
 		HasToken:                  account.HasToken,
 		CreatedTime:               account.CreatedTime,
 		UpdatedTime:               account.UpdatedTime,
+	}
+}
+
+func accountPoolCapabilityDetectResponse(result service.AccountPoolCapabilityDetectResult) dto.AccountPoolCapabilityDetectResult {
+	detectedModels := result.DetectedModels
+	if detectedModels == nil {
+		detectedModels = []string{}
+	}
+	appliedModels := result.AppliedModels
+	if appliedModels == nil {
+		appliedModels = []string{}
+	}
+	modelMapping := result.ModelMapping
+	if modelMapping == nil {
+		modelMapping = map[string]string{}
+	}
+	errors := result.Errors
+	if errors == nil {
+		errors = []string{}
+	}
+	return dto.AccountPoolCapabilityDetectResult{
+		AccountID:      result.AccountID,
+		Status:         result.Status,
+		Mode:           result.Mode,
+		DetectedModels: detectedModels,
+		AppliedModels:  appliedModels,
+		ModelMapping:   modelMapping,
+		Errors:         errors,
+	}
+}
+
+func accountPoolCapabilityPoolResponse(result service.AccountPoolCapabilityPoolResult) dto.AccountPoolCapabilityPoolResult {
+	responses := make([]dto.AccountPoolCapabilityDetectResult, 0, len(result.Results))
+	for _, item := range result.Results {
+		responses = append(responses, accountPoolCapabilityDetectResponse(item))
+	}
+	return dto.AccountPoolCapabilityPoolResult{
+		Total:     result.Total,
+		Succeeded: result.Succeeded,
+		Failed:    result.Failed,
+		Results:   responses,
 	}
 }
 

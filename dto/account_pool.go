@@ -117,6 +117,34 @@ type AccountPoolAccountImportResponse struct {
 	Errors       []AccountPoolAccountImportError `json:"errors,omitempty"`
 }
 
+type AccountPoolCapabilityDetectRequest struct {
+	Mode            string            `json:"mode"`
+	ChannelID       int               `json:"channel_id"`
+	AccountIDs      []int             `json:"account_ids"`
+	CandidateModels []string          `json:"candidate_models"`
+	Apply           bool              `json:"apply"`
+	Merge           bool              `json:"merge"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+	TimeoutSeconds  int               `json:"timeout_seconds"`
+}
+
+type AccountPoolCapabilityDetectResult struct {
+	AccountID      int               `json:"account_id"`
+	Status         string            `json:"status"`
+	Mode           string            `json:"mode"`
+	DetectedModels []string          `json:"detected_models"`
+	AppliedModels  []string          `json:"applied_models"`
+	ModelMapping   map[string]string `json:"model_mapping"`
+	Errors         []string          `json:"errors"`
+}
+
+type AccountPoolCapabilityPoolResult struct {
+	Total     int                                 `json:"total"`
+	Succeeded int                                 `json:"succeeded"`
+	Failed    int                                 `json:"failed"`
+	Results   []AccountPoolCapabilityDetectResult `json:"results"`
+}
+
 type AccountPoolBindingCreateRequest struct {
 	ChannelID         int      `json:"channel_id" binding:"required"`
 	AccountIDs        []int    `json:"account_ids"`

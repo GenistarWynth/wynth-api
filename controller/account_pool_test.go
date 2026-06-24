@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -121,8 +122,10 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.GET("/:id/accounts", ListAccountPoolAccounts)
 		group.POST("/:id/accounts", CreateAccountPoolAccount)
 		group.POST("/:id/accounts/import", ImportAccountPoolAccounts)
+		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
+		group.POST("/:id/capabilities/detect", DetectAccountPoolCapabilities)
 		group.GET("/:id/bindings", ListAccountPoolBindings)
 		group.POST("/:id/bindings", CreateAccountPoolBinding)
 		group.POST("/:id/bindings/channel", CreateAccountPoolBoundChannel)
@@ -281,6 +284,179 @@ func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 	require.NoError(t, model.DB.First(&stored, accountID).Error)
 	assert.Equal(t, model.AccountPoolAccountStatusDeleted, stored.Status)
 	assert.NotContains(t, stored.CredentialConfig, "sk-account-secret")
+}
+
+func TestAccountPoolAPIDetectAccountCapabilityDryRun(t *testing.T) {
+	withAccountPoolAPIFetchSetting(t, true)
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+	accountPoolService := service.AccountPoolService{}
+
+	account, err := accountPoolService.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "dry-run-account",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-dry-run",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		assert.Equal(t, "Bearer sk-dry-run", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, writeErr := w.Write([]byte(`{"data":[{"id":"gpt-5"},{"id":"gpt-5-mini"},{"id":""},{"id":"gpt-5"}]}`))
+		require.NoError(t, writeErr)
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolAPITestChannelWithBaseURL(t, common.ChannelStatusManuallyDisabled, server.URL)
+	_, err = accountPoolService.CreateBinding(service.AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result := accountPoolAPIRequest[dto.AccountPoolCapabilityDetectResult](
+		t,
+		router,
+		http.MethodPost,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(account.Id)+"/capabilities/detect",
+		dto.AccountPoolCapabilityDetectRequest{
+			Mode:            "models_endpoint",
+			ChannelID:       channel.Id,
+			CandidateModels: []string{"gpt-5-mini", "missing"},
+			Apply:           false,
+		},
+	)
+
+	require.Equal(t, http.StatusOK, result.Code, string(result.Raw))
+	require.True(t, result.Response.Success, result.Response.Message)
+	assert.Equal(t, account.Id, result.Response.Data.AccountID)
+	assert.Equal(t, "success", result.Response.Data.Status)
+	assert.Equal(t, "models_endpoint", result.Response.Data.Mode)
+	assert.Equal(t, []string{"gpt-5-mini"}, result.Response.Data.DetectedModels)
+	assert.Empty(t, result.Response.Data.AppliedModels)
+	require.NotNil(t, result.Response.Data.ModelMapping)
+	assert.Empty(t, result.Response.Data.ModelMapping)
+	require.NotNil(t, result.Response.Data.Errors)
+	assert.Empty(t, result.Response.Data.Errors)
+
+	stored := loadAccountPoolAPITestAccount(t, account.Id)
+	assert.Equal(t, []string{"existing"}, mustUnmarshalAccountPoolAPITestModels(t, stored.SupportedModels))
+	assert.Zero(t, stored.LastCapabilityCheckAt)
+	assert.Empty(t, stored.LastCapabilityCheckStatus)
+	assert.Empty(t, stored.LastCapabilityCheckError)
+	assert.Empty(t, stored.LastCapabilityCheckModels)
+}
+
+func TestAccountPoolAPIDetectPoolCapabilitiesContinuesAfterFailure(t *testing.T) {
+	withAccountPoolAPIFetchSetting(t, true)
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+	accountPoolService := service.AccountPoolService{}
+
+	successAccount, err := accountPoolService.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "success-account",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-success",
+		},
+		SupportedModels: []string{"existing-success"},
+	})
+	require.NoError(t, err)
+
+	failedAccount, err := accountPoolService.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "failed-account",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-fail",
+		},
+		SupportedModels: []string{"existing-fail"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Header.Get("Authorization") {
+		case "Bearer sk-success":
+			_, writeErr := w.Write([]byte(`{"data":[{"id":"gpt-5"}]}`))
+			require.NoError(t, writeErr)
+		case "Bearer sk-fail":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, writeErr := w.Write([]byte(`{"error":{"message":"bearer sk-fail rejected"}}`))
+			require.NoError(t, writeErr)
+		default:
+			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+		}
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolAPITestChannelWithBaseURL(t, common.ChannelStatusManuallyDisabled, server.URL)
+	_, err = accountPoolService.CreateBinding(service.AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result := accountPoolAPIRequest[dto.AccountPoolCapabilityPoolResult](
+		t,
+		router,
+		http.MethodPost,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/capabilities/detect",
+		dto.AccountPoolCapabilityDetectRequest{
+			Mode:       "models_endpoint",
+			ChannelID:  channel.Id,
+			AccountIDs: []int{successAccount.Id, failedAccount.Id},
+			Apply:      true,
+		},
+	)
+
+	require.Equal(t, http.StatusOK, result.Code, string(result.Raw))
+	require.True(t, result.Response.Success, result.Response.Message)
+	assert.Equal(t, 2, result.Response.Data.Total)
+	assert.Equal(t, 1, result.Response.Data.Succeeded)
+	assert.Equal(t, 1, result.Response.Data.Failed)
+	require.Len(t, result.Response.Data.Results, 2)
+
+	resultsByAccountID := make(map[int]dto.AccountPoolCapabilityDetectResult, len(result.Response.Data.Results))
+	for _, item := range result.Response.Data.Results {
+		resultsByAccountID[item.AccountID] = item
+	}
+
+	successResult, ok := resultsByAccountID[successAccount.Id]
+	require.True(t, ok)
+	assert.Equal(t, "success", successResult.Status)
+	assert.Equal(t, []string{"gpt-5"}, successResult.DetectedModels)
+	assert.Equal(t, []string{"gpt-5"}, successResult.AppliedModels)
+	require.NotNil(t, successResult.Errors)
+	assert.Empty(t, successResult.Errors)
+
+	failedResult, ok := resultsByAccountID[failedAccount.Id]
+	require.True(t, ok)
+	assert.Equal(t, "auth_error", failedResult.Status)
+	assert.Empty(t, failedResult.DetectedModels)
+	assert.Empty(t, failedResult.AppliedModels)
+	require.NotEmpty(t, failedResult.Errors)
+	assert.NotContains(t, failedResult.Errors[0], "sk-fail")
+
+	successStored := loadAccountPoolAPITestAccount(t, successAccount.Id)
+	assert.Equal(t, []string{"gpt-5"}, mustUnmarshalAccountPoolAPITestModels(t, successStored.SupportedModels))
+	assert.Equal(t, "success", successStored.LastCapabilityCheckStatus)
+
+	failedStored := loadAccountPoolAPITestAccount(t, failedAccount.Id)
+	assert.Equal(t, []string{"existing-fail"}, mustUnmarshalAccountPoolAPITestModels(t, failedStored.SupportedModels))
+	assert.Equal(t, "auth_error", failedStored.LastCapabilityCheckStatus)
+	assert.NotContains(t, failedStored.LastCapabilityCheckError, "sk-fail")
 }
 
 func TestAccountPoolAPIImportAccountsRedactsSecrets(t *testing.T) {
@@ -611,6 +787,17 @@ func createAccountPoolAPITestChannel(t *testing.T, status int) model.Channel {
 	return createAccountPoolAPITestChannelWithType(t, constant.ChannelTypeOpenAI, status)
 }
 
+func createAccountPoolAPITestChannelWithBaseURL(t *testing.T, status int, baseURL string) model.Channel {
+	t.Helper()
+
+	channel := createAccountPoolAPITestChannel(t, status)
+	channel.BaseURL = common.GetPointer(baseURL)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", channel.Id).
+		Update("base_url", baseURL).Error)
+	return channel
+}
+
 func createAccountPoolAPITestChannelWithType(t *testing.T, channelType int, status int) model.Channel {
 	t.Helper()
 
@@ -622,4 +809,38 @@ func createAccountPoolAPITestChannelWithType(t *testing.T, channelType int, stat
 	}
 	require.NoError(t, model.DB.Create(&channel).Error)
 	return channel
+}
+
+func withAccountPoolAPIFetchSetting(t *testing.T, allowPrivate bool) {
+	t.Helper()
+
+	fetchSetting := system_setting.GetFetchSetting()
+	old := *fetchSetting
+	fetchSetting.EnableSSRFProtection = true
+	fetchSetting.AllowPrivateIp = allowPrivate
+	fetchSetting.DomainFilterMode = false
+	fetchSetting.IpFilterMode = false
+	fetchSetting.DomainList = nil
+	fetchSetting.IpList = nil
+	fetchSetting.AllowedPorts = []string{}
+	fetchSetting.ApplyIPFilterForDomain = false
+	t.Cleanup(func() {
+		*fetchSetting = old
+	})
+}
+
+func loadAccountPoolAPITestAccount(t *testing.T, accountID int) model.AccountPoolAccount {
+	t.Helper()
+
+	var account model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&account, accountID).Error)
+	return account
+}
+
+func mustUnmarshalAccountPoolAPITestModels(t *testing.T, raw string) []string {
+	t.Helper()
+
+	var models []string
+	require.NoError(t, common.UnmarshalJsonStr(raw, &models))
+	return models
 }
