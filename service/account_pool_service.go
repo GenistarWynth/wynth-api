@@ -49,6 +49,7 @@ type AccountPoolAccountCreateParams struct {
 	Priority           int64
 	Weight             uint
 	MaxConcurrency     int
+	MaxConcurrencySet  bool
 	ProxyID            int
 	SupportedModels    []string
 	ModelMapping       map[string]string
@@ -287,7 +288,7 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 		Status:             params.Status,
 		Priority:           params.Priority,
 		Weight:             params.Weight,
-		MaxConcurrency:     params.MaxConcurrency,
+		MaxConcurrency:     accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
 		ProxyID:            params.ProxyID,
 		SupportedModels:    supportedModels,
 		ModelMapping:       modelMapping,
@@ -339,7 +340,7 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 		"status":               status,
 		"priority":             params.Priority,
 		"weight":               params.Weight,
-		"max_concurrency":      params.MaxConcurrency,
+		"max_concurrency":      accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
 		"proxy_id":             params.ProxyID,
 		"supported_models":     supportedModels,
 		"model_mapping":        modelMapping,
@@ -1006,6 +1007,16 @@ func invalidateAccountPoolRuntimeEnabledForChannel(channelID int) {
 	}
 	// HybridCache.DeleteMany accepts raw keys and applies the namespace internally.
 	_, _ = getAccountPoolRuntimeEnabledCache().DeleteMany([]string{strconv.Itoa(channelID)})
+}
+
+func accountPoolNormalizeMaxConcurrency(value int, explicit bool) int {
+	if value < 0 {
+		return 0
+	}
+	if !explicit && value == 0 {
+		return 1
+	}
+	return value
 }
 
 func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolAccountView, error) {

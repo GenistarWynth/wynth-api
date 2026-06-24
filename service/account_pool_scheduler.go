@@ -176,6 +176,7 @@ func SelectAccountPoolAccountWithLease(req AccountPoolSelectionRequest) (Account
 		}
 		release, acquired := tryAcquireAccountPoolRuntimeLease(selection.AccountID, selection.MaxConcurrency)
 		if acquired {
+			rememberAccountPoolRuntimeSelection(selection.AccountID, req.Now)
 			return selection, release, nil
 		}
 		attempted[selection.AccountID] = struct{}{}
@@ -323,9 +324,12 @@ func highestPriorityAccountPoolCandidates(candidates []accountPoolAccountCandida
 
 func selectRoundRobinAccountPoolCandidate(candidates []accountPoolAccountCandidate) accountPoolAccountCandidate {
 	selected := candidates[0]
+	selectedRank := accountPoolRuntimeSelectionRank(selected.account.Id, selected.account.LastUsedAt)
 	for _, candidate := range candidates[1:] {
-		if candidate.account.LastUsedAt < selected.account.LastUsedAt {
+		candidateRank := accountPoolRuntimeSelectionRank(candidate.account.Id, candidate.account.LastUsedAt)
+		if candidateRank < selectedRank {
 			selected = candidate
+			selectedRank = candidateRank
 		}
 	}
 	return selected

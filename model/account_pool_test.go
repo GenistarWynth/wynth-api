@@ -59,7 +59,7 @@ func TestAccountPoolModelDefaults(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(&account).Error)
 	assert.Equal(t, AccountPoolAccountStatusEnabled, account.Status)
-	assert.Equal(t, 1, account.MaxConcurrency)
+	assert.Zero(t, account.MaxConcurrency)
 	assert.NotZero(t, account.CreatedTime)
 	assert.NotZero(t, account.UpdatedTime)
 

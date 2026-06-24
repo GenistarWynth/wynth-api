@@ -137,6 +137,39 @@ func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T
 	require.ErrorContains(t, err, "account pool proxy not found")
 }
 
+func TestAccountPoolServiceImportSub2APIPreservesExplicitZeroConcurrency(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "unlimited-sub2api-key",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-sub2api"
+					},
+					"concurrency": 0
+				}
+			]
+		}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			MaxConcurrency: 4,
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	account := requireAccountPoolAccountByName(t, "unlimited-sub2api-key")
+	assert.Zero(t, account.MaxConcurrency)
+}
+
 func TestAccountPoolServiceImportCPAConfigMapsCodexKeysAndModels(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

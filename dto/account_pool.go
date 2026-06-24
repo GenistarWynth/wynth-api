@@ -46,7 +46,7 @@ type AccountPoolAccountCreateRequest struct {
 	Status             string                             `json:"status"`
 	Priority           int64                              `json:"priority"`
 	Weight             uint                               `json:"weight"`
-	MaxConcurrency     int                                `json:"max_concurrency"`
+	MaxConcurrency     *int                               `json:"max_concurrency"`
 	ProxyID            int                                `json:"proxy_id"`
 	SupportedModels    []string                           `json:"supported_models"`
 	ModelMapping       map[string]string                  `json:"model_mapping"`
@@ -84,7 +84,7 @@ type AccountPoolAccountImportDefaultsRequest struct {
 	Status          string            `json:"status"`
 	Priority        int64             `json:"priority"`
 	Weight          uint              `json:"weight"`
-	MaxConcurrency  int               `json:"max_concurrency"`
+	MaxConcurrency  *int              `json:"max_concurrency"`
 	ProxyID         int               `json:"proxy_id"`
 	SupportedModels []string          `json:"supported_models"`
 	ModelMapping    map[string]string `json:"model_mapping"`

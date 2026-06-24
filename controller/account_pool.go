@@ -486,6 +486,7 @@ func accountPoolCreateParams(req dto.AccountPoolCreateRequest) service.AccountPo
 }
 
 func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreateRequest) service.AccountPoolAccountCreateParams {
+	maxConcurrency, maxConcurrencySet := accountPoolMaxConcurrencyRequestValue(req.MaxConcurrency)
 	return service.AccountPoolAccountCreateParams{
 		PoolID:            poolID,
 		Name:              req.Name,
@@ -505,7 +506,8 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 		Status:             req.Status,
 		Priority:           req.Priority,
 		Weight:             req.Weight,
-		MaxConcurrency:     req.MaxConcurrency,
+		MaxConcurrency:     maxConcurrency,
+		MaxConcurrencySet:  maxConcurrencySet,
 		ProxyID:            req.ProxyID,
 		SupportedModels:    req.SupportedModels,
 		ModelMapping:       req.ModelMapping,
@@ -518,21 +520,30 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 }
 
 func accountPoolAccountImportParams(poolID int, req dto.AccountPoolAccountImportRequest) service.AccountPoolAccountImportParams {
+	maxConcurrency, maxConcurrencySet := accountPoolMaxConcurrencyRequestValue(req.Defaults.MaxConcurrency)
 	return service.AccountPoolAccountImportParams{
 		PoolID:  poolID,
 		Format:  req.Format,
 		Content: req.Content,
 		Defaults: service.AccountPoolAccountImportDefaults{
-			Status:          req.Defaults.Status,
-			Priority:        req.Defaults.Priority,
-			Weight:          req.Defaults.Weight,
-			MaxConcurrency:  req.Defaults.MaxConcurrency,
-			ProxyID:         req.Defaults.ProxyID,
-			SupportedModels: req.Defaults.SupportedModels,
-			ModelMapping:    req.Defaults.ModelMapping,
+			Status:            req.Defaults.Status,
+			Priority:          req.Defaults.Priority,
+			Weight:            req.Defaults.Weight,
+			MaxConcurrency:    maxConcurrency,
+			MaxConcurrencySet: maxConcurrencySet,
+			ProxyID:           req.Defaults.ProxyID,
+			SupportedModels:   req.Defaults.SupportedModels,
+			ModelMapping:      req.Defaults.ModelMapping,
 		},
 		DryRun: req.DryRun,
 	}
+}
+
+func accountPoolMaxConcurrencyRequestValue(value *int) (int, bool) {
+	if value == nil {
+		return 0, false
+	}
+	return *value, true
 }
 
 func accountPoolBindingCreateParams(poolID int, req dto.AccountPoolBindingCreateRequest) service.AccountPoolBindingCreateParams {

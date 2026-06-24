@@ -195,21 +195,37 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
 	assert.True(t, accountResult.Response.Data.HasCredential)
 	assert.True(t, accountResult.Response.Data.HasToken)
+	assert.Equal(t, 1, accountResult.Response.Data.MaxConcurrency)
+
+	unlimitedResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(poolResult.Response.Data.Id)+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "unlimited-key",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:   "api_key",
+			APIKey: "sk-unlimited-secret",
+		},
+		MaxConcurrency: common.GetPointer(0),
+	})
+	require.True(t, unlimitedResult.Response.Success, unlimitedResult.Response.Message)
+	assert.Zero(t, unlimitedResult.Response.Data.MaxConcurrency)
 
 	var storedAccount model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&storedAccount, accountResult.Response.Data.Id).Error)
+	var storedUnlimitedAccount model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&storedUnlimitedAccount, unlimitedResult.Response.Data.Id).Error)
 
 	listResult := accountPoolAPIRequest[[]dto.AccountPoolAccountResponse](t, router, http.MethodGet, "/api/account_pools/"+strconv.Itoa(poolResult.Response.Data.Id)+"/accounts", nil)
 
 	require.True(t, listResult.Response.Success, listResult.Response.Message)
-	require.Len(t, listResult.Response.Data, 1)
+	require.Len(t, listResult.Response.Data, 2)
 	assert.True(t, listResult.Response.Data[0].HasCredential)
 	assert.True(t, listResult.Response.Data[0].HasToken)
 	raw := string(listResult.Raw)
 	assert.NotContains(t, raw, "sk-account-secret")
+	assert.NotContains(t, raw, "sk-unlimited-secret")
 	assert.NotContains(t, raw, "account-access-secret")
 	assert.NotContains(t, raw, "account-refresh-secret")
 	assert.NotContains(t, raw, storedAccount.CredentialConfig)
+	assert.NotContains(t, raw, storedUnlimitedAccount.CredentialConfig)
 	assert.NotContains(t, raw, storedAccount.TokenState)
 	assert.NotContains(t, raw, "ciphertext")
 	assert.NotContains(t, raw, "nonce")
@@ -237,7 +253,7 @@ func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 		Status:            model.AccountPoolAccountStatusDisabled,
 		Priority:          10,
 		Weight:            20,
-		MaxConcurrency:    3,
+		MaxConcurrency:    common.GetPointer(3),
 		SupportedModels:   []string{"gpt-5"},
 		ModelMapping:      map[string]string{"gpt-5": "upstream-gpt-5"},
 	})
@@ -287,11 +303,15 @@ func TestAccountPoolAPIImportAccountsRedactsSecrets(t *testing.T) {
 				}
 			]
 		}`,
+		Defaults: dto.AccountPoolAccountImportDefaultsRequest{
+			MaxConcurrency: common.GetPointer(0),
+		},
 	})
 
 	require.True(t, result.Response.Success, result.Response.Message)
 	assert.Equal(t, 1, result.Response.Data.Imported)
 	require.Len(t, result.Response.Data.Accounts, 1)
+	assert.Zero(t, result.Response.Data.Accounts[0].MaxConcurrency)
 	assert.True(t, result.Response.Data.Accounts[0].HasCredential)
 	raw := string(result.Raw)
 	assert.NotContains(t, raw, "sk-import-secret")

@@ -89,19 +89,38 @@ func TestAccountPoolServiceUpdateAccountPreservesSecretsAndSoftDeletes(t *testin
 	assert.Equal(t, storedBefore.TokenState, storedAfter.TokenState)
 
 	updated, err = service.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
-		Name:           "primary-unlimited",
-		Status:         model.AccountPoolAccountStatusEnabled,
-		MaxConcurrency: 0,
+		Name:              "primary-unlimited",
+		Status:            model.AccountPoolAccountStatusEnabled,
+		MaxConcurrency:    0,
+		MaxConcurrencySet: true,
 	})
 	require.NoError(t, err)
 	assert.Zero(t, updated.MaxConcurrency)
 
+	unlimited, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:            pool.Id,
+		Name:              "created-unlimited",
+		MaxConcurrency:    0,
+		MaxConcurrencySet: true,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-created-unlimited",
+		},
+	})
+	require.NoError(t, err)
+	assert.Zero(t, unlimited.MaxConcurrency)
+
 	accounts, err := service.ListAccounts(pool.Id)
 	require.NoError(t, err)
-	require.Len(t, accounts, 1)
+	require.Len(t, accounts, 2)
 	assert.Equal(t, account.Id, accounts[0].Id)
 
 	require.NoError(t, service.DeleteAccount(pool.Id, account.Id))
+	accounts, err = service.ListAccounts(pool.Id)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	assert.Equal(t, unlimited.Id, accounts[0].Id)
+	require.NoError(t, service.DeleteAccount(pool.Id, unlimited.Id))
 	accounts, err = service.ListAccounts(pool.Id)
 	require.NoError(t, err)
 	assert.Empty(t, accounts)
@@ -1199,6 +1218,7 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 	common.CryptoSecret = "account-pool-service-test-secret"
 	common.CryptoSecretStable = true
 	resetAccountPoolRuntimeLeasesForTest()
+	resetAccountPoolRuntimeSelectionRecencyForTest()
 	resetAccountPoolRuntimeAffinitiesForTest()
 
 	require.NoError(t, model.DB.AutoMigrate(

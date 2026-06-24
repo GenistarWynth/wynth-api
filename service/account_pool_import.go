@@ -20,13 +20,14 @@ const (
 )
 
 type AccountPoolAccountImportDefaults struct {
-	Status          string
-	Priority        int64
-	Weight          uint
-	MaxConcurrency  int
-	ProxyID         int
-	SupportedModels []string
-	ModelMapping    map[string]string
+	Status            string
+	Priority          int64
+	Weight            uint
+	MaxConcurrency    int
+	MaxConcurrencySet bool
+	ProxyID           int
+	SupportedModels   []string
+	ModelMapping      map[string]string
 }
 
 type AccountPoolAccountImportParams struct {
@@ -98,7 +99,7 @@ type accountPoolSub2APIAccount struct {
 	Credentials        map[string]any `json:"credentials"`
 	Extra              map[string]any `json:"extra,omitempty"`
 	ProxyKey           *string        `json:"proxy_key,omitempty"`
-	Concurrency        int            `json:"concurrency"`
+	Concurrency        *int           `json:"concurrency"`
 	Priority           int64          `json:"priority"`
 	RateMultiplier     *float64       `json:"rate_multiplier,omitempty"`
 	ExpiresAt          *int64         `json:"expires_at,omitempty"`
@@ -340,7 +341,6 @@ func accountPoolSub2APIAccountCandidate(poolID int, account accountPoolSub2APIAc
 			Name:              strings.TrimSpace(account.Name),
 			AccountIdentifier: accountIdentifier,
 			Priority:          account.Priority,
-			MaxConcurrency:    account.Concurrency,
 			SupportedModels: accountPoolFirstStringSlice(
 				accountPoolImportStringSliceFromMap(account.Extra, "supported_models", "models"),
 				accountPoolImportStringSliceFromMap(account.Credentials, "supported_models", "models"),
@@ -350,6 +350,10 @@ func accountPoolSub2APIAccountCandidate(poolID int, account accountPoolSub2APIAc
 				accountPoolImportStringMapFromMap(account.Credentials, "model_mapping"),
 			),
 		},
+	}
+	if account.Concurrency != nil {
+		candidate.Params.MaxConcurrency = *account.Concurrency
+		candidate.Params.MaxConcurrencySet = true
 	}
 	if candidate.Params.Name == "" {
 		candidate.Params.Name = accountPoolImportDefaultString(email, accountPoolImportDefaultString(accountIdentifier, "sub2api account"))
@@ -613,8 +617,9 @@ func accountPoolApplyImportDefaults(params *AccountPoolAccountCreateParams, defa
 	if params.Weight == 0 {
 		params.Weight = defaults.Weight
 	}
-	if params.MaxConcurrency == 0 {
+	if params.MaxConcurrency == 0 && !params.MaxConcurrencySet {
 		params.MaxConcurrency = defaults.MaxConcurrency
+		params.MaxConcurrencySet = defaults.MaxConcurrencySet
 	}
 	if params.ProxyID == 0 {
 		params.ProxyID = defaults.ProxyID

@@ -73,7 +73,7 @@ type AccountPoolAccount struct {
 	Status             string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index:idx_account_pool_status,priority:2"`
 	Priority           int64  `json:"priority" gorm:"bigint;not null;default:0;index"`
 	Weight             uint   `json:"weight" gorm:"not null;default:0"`
-	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null;default:1"`
+	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null"`
 	ProxyID            int    `json:"proxy_id" gorm:"index"`
 	SupportedModels    string `json:"supported_models" gorm:"type:text"`
 	ModelMapping       string `json:"model_mapping" gorm:"type:text"`
@@ -96,9 +96,6 @@ func (a *AccountPoolAccount) BeforeCreate(tx *gorm.DB) error {
 	}
 	if a.Status == "" {
 		a.Status = AccountPoolAccountStatusEnabled
-	}
-	if a.MaxConcurrency == 0 {
-		a.MaxConcurrency = 1
 	}
 	return nil
 }
