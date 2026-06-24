@@ -49,6 +49,12 @@ export type AccountPoolModelStrategy = 'all' | 'fixed' | string
 
 export type AccountPoolSchedulePolicy = 'round_robin' | 'random'
 
+export type AccountPoolCapabilityMode =
+  | 'auto'
+  | 'models_endpoint'
+  | 'probe_models'
+  | string
+
 export type AccountPool = {
   id: number
   name: string
@@ -182,6 +188,34 @@ export type AccountPoolAccountImportResponse = {
   proxy_reused: number
   accounts?: AccountPoolAccount[]
   errors?: AccountPoolAccountImportError[]
+}
+
+export type AccountPoolCapabilityDetectRequest = {
+  mode: AccountPoolCapabilityMode
+  channel_id: number
+  account_ids?: number[]
+  candidate_models: string[]
+  apply: boolean
+  merge: boolean
+  model_mapping: Record<string, string>
+  timeout_seconds: number
+}
+
+export type AccountPoolCapabilityDetectResult = {
+  account_id: number
+  status: string
+  mode: string
+  detected_models: string[]
+  applied_models: string[]
+  model_mapping: Record<string, string>
+  errors: string[]
+}
+
+export type AccountPoolCapabilityPoolResult = {
+  total: number
+  succeeded: number
+  failed: number
+  results: AccountPoolCapabilityDetectResult[]
 }
 
 export type AccountPoolBinding = {

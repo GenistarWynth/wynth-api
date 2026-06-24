@@ -33,6 +33,7 @@ import {
   Plus,
   Power,
   PowerOff,
+  Radar,
   Save,
   Trash2,
   Upload,
@@ -138,6 +139,8 @@ import {
   deleteAccountPoolAccount,
   deleteAccountPoolBinding,
   deleteAccountPoolProxy,
+  detectAccountPoolAccountCapability,
+  detectAccountPoolCapabilities,
   disableAccountPoolBinding,
   importAccountPoolAccounts,
   listAccountPoolAccounts,
@@ -174,6 +177,10 @@ import type {
   AccountPool,
   AccountPoolAccount,
   AccountPoolBinding,
+  AccountPoolCapabilityDetectRequest,
+  AccountPoolCapabilityDetectResult,
+  AccountPoolCapabilityMode,
+  AccountPoolCapabilityPoolResult,
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
   AccountPoolSchedulePolicy,
@@ -187,6 +194,15 @@ type BindingFormValues = {
   fixed_models_text: string
   schedule_policy: AccountPoolSchedulePolicy
   account_retry_times: number
+}
+
+type CapabilityDetectFormValues = {
+  mode: AccountPoolCapabilityMode
+  channel_id: number
+  candidate_models_text: string
+  apply: boolean
+  merge: boolean
+  timeout_seconds: number
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -224,6 +240,11 @@ const SCHEDULE_POLICY_OPTIONS = [
   { value: 'round_robin', label: 'Round robin' },
   { value: 'random', label: 'Random' },
 ]
+const ACCOUNT_POOL_CAPABILITY_MODE_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'models_endpoint', label: 'Models Endpoint' },
+  { value: 'probe_models', label: 'Probe Models' },
+]
 
 function translateOptions(
   options: Array<{ value: string; label: string }>,
@@ -243,6 +264,19 @@ function emptyBindingForm(defaultSchedulePolicy = ''): BindingFormValues {
     fixed_models_text: '',
     schedule_policy: normalizeAccountPoolSchedulePolicy(defaultSchedulePolicy),
     account_retry_times: 0,
+  }
+}
+
+function emptyCapabilityDetectForm(
+  defaultChannelID = 0
+): CapabilityDetectFormValues {
+  return {
+    mode: 'auto',
+    channel_id: defaultChannelID,
+    candidate_models_text: '',
+    apply: false,
+    merge: true,
+    timeout_seconds: 30,
   }
 }
 
@@ -356,6 +390,29 @@ function modelListFromText(value: string): string[] {
 
 function modelListToText(values: string[]) {
   return values.join(', ')
+}
+
+function capabilityStatusVariant(status?: string): StatusVariant {
+  switch (status) {
+    case 'success':
+      return 'success'
+    case 'partial':
+      return 'warning'
+    case 'auth_error':
+    case 'network_error':
+    case 'upstream_error':
+    case 'config_error':
+      return 'danger'
+    case 'unsupported':
+      return 'neutral'
+    default:
+      return 'neutral'
+  }
+}
+
+function capabilityStatusLabel(status?: string) {
+  if (!status) return 'Unknown'
+  return status.replace(/_/g, ' ')
 }
 
 function useAccountPoolModelSelect(enabled = true) {
@@ -640,6 +697,8 @@ export function AccountPools() {
   const [accountSheetOpen, setAccountSheetOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<AccountPoolAccount>()
   const [deletingAccount, setDeletingAccount] = useState<AccountPoolAccount>()
+  const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false)
+  const [detectingAccount, setDetectingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
   const [editingProxy, setEditingProxy] = useState<AccountPoolProxy>()
@@ -1232,6 +1291,8 @@ export function AccountPools() {
             setSelectedPool(undefined)
             setEditingBinding(undefined)
             setBoundChannelDialogOpen(false)
+            setCapabilityDialogOpen(false)
+            setDetectingAccount(undefined)
           }
         }}
         onCreateAccount={() => {
@@ -1242,6 +1303,14 @@ export function AccountPools() {
         onEditAccount={(account) => {
           setEditingAccount(account)
           setAccountSheetOpen(true)
+        }}
+        onDetectAccount={(account) => {
+          setDetectingAccount(account)
+          setCapabilityDialogOpen(true)
+        }}
+        onBatchDetectModels={() => {
+          setDetectingAccount(undefined)
+          setCapabilityDialogOpen(true)
         }}
         onDeleteAccount={setDeletingAccount}
         onSetAccountStatus={(account, status) =>
@@ -1298,6 +1367,19 @@ export function AccountPools() {
         isSubmitting={importAccountsMutation.isPending}
         onOpenChange={setAccountImportOpen}
         onSubmit={(values) => importAccountsMutation.mutate(values)}
+      />
+      <CapabilityDetectDialog
+        open={capabilityDialogOpen}
+        pool={selectedPool}
+        bindings={bindingsQuery.data ?? EMPTY_BINDINGS}
+        accounts={accountsQuery.data ?? EMPTY_ACCOUNTS}
+        account={detectingAccount}
+        onOpenChange={(open) => {
+          setCapabilityDialogOpen(open)
+          if (!open) {
+            setDetectingAccount(undefined)
+          }
+        }}
       />
       <AccountFormSheet
         key={
@@ -1706,6 +1788,377 @@ function BoundChannelDialog(props: {
   )
 }
 
+function CapabilityDetectDialog(props: {
+  open: boolean
+  pool?: AccountPool
+  bindings: AccountPoolBinding[]
+  accounts: AccountPoolAccount[]
+  account?: AccountPoolAccount
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const defaultChannelID =
+    props.bindings.length === 1 ? props.bindings[0].channel_id : 0
+  const [form, setForm] = useState<CapabilityDetectFormValues>(
+    emptyCapabilityDetectForm(defaultChannelID)
+  )
+  const [singleResult, setSingleResult] =
+    useState<AccountPoolCapabilityDetectResult>()
+  const [poolResult, setPoolResult] = useState<AccountPoolCapabilityPoolResult>()
+  const modeOptions = useMemo(
+    () => translateOptions(ACCOUNT_POOL_CAPABILITY_MODE_OPTIONS, t),
+    [t]
+  )
+  const bindingOptions = useMemo(
+    () =>
+      props.bindings.map((binding) => ({
+        value: String(binding.channel_id),
+        label:
+          binding.channel_name || `${t('Channel')} #${binding.channel_id}`,
+      })),
+    [props.bindings, t]
+  )
+  const accountNameByID = useMemo(
+    () =>
+      new Map(
+        props.accounts.map((account) => [account.id, account.name || `#${account.id}`])
+      ),
+    [props.accounts]
+  )
+
+  useEffect(() => {
+    if (props.open) {
+      setForm(emptyCapabilityDetectForm(defaultChannelID))
+      setSingleResult(undefined)
+      setPoolResult(undefined)
+    }
+  }, [defaultChannelID, props.account?.id, props.open, props.pool?.id])
+
+  const setField = <K extends keyof CapabilityDetectFormValues>(
+    key: K,
+    value: CapabilityDetectFormValues[K]
+  ) => setForm((previous) => ({ ...previous, [key]: value }))
+
+  const detectMutation = useMutation({
+    mutationFn: async (values: CapabilityDetectFormValues) => {
+      if (!props.pool) {
+        throw new Error(t('Select an account pool first'))
+      }
+
+      const request: AccountPoolCapabilityDetectRequest = {
+        mode: values.mode,
+        channel_id: values.channel_id,
+        candidate_models: modelListFromText(values.candidate_models_text),
+        apply: values.apply,
+        merge: values.merge,
+        model_mapping: {},
+        timeout_seconds: values.timeout_seconds,
+      }
+
+      if (props.account) {
+        const response = await detectAccountPoolAccountCapability(
+          props.pool.id,
+          props.account.id,
+          request
+        )
+        return { scope: 'account' as const, response }
+      }
+
+      const response = await detectAccountPoolCapabilities(props.pool.id, request)
+      return { scope: 'pool' as const, response }
+    },
+    onSuccess: async (payload) => {
+      if (!payload.response.success) {
+        toast.error(payload.response.message || t('Detection failed'))
+        return
+      }
+
+      if (payload.scope === 'account') {
+        setSingleResult(payload.response.data)
+        setPoolResult(undefined)
+      } else {
+        setPoolResult(payload.response.data)
+        setSingleResult(undefined)
+      }
+
+      toast.success(t('Detection completed'))
+      if (props.pool) {
+        await queryClient.invalidateQueries({
+          queryKey: accountPoolsQueryKeys.accounts(props.pool.id),
+        })
+      }
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!props.pool) {
+      toast.error(t('Select an account pool first'))
+      return
+    }
+    if (props.bindings.length === 0) {
+      toast.error(t('No bindings found'))
+      return
+    }
+    if (!form.channel_id && props.bindings.length > 1) {
+      toast.error(t('Select a channel'))
+      return
+    }
+    if (
+      form.mode === 'probe_models' &&
+      modelListFromText(form.candidate_models_text).length === 0
+    ) {
+      toast.error(t('Candidate models are required'))
+      return
+    }
+    if (form.timeout_seconds <= 0) {
+      toast.error(t('Timeout must be greater than 0'))
+      return
+    }
+
+    detectMutation.mutate(form)
+  }
+
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className='sm:max-w-[640px]'>
+        <DialogHeader>
+          <DialogTitle>{t('Capability Detection')}</DialogTitle>
+          <DialogDescription>
+            {props.pool
+              ? props.account
+                ? t('Detect models for {{account}}', {
+                    account: props.account.name || `#${props.account.id}`,
+                  })
+                : t('Detect models for {{pool}}', {
+                    pool: props.pool.name,
+                  })
+              : t('Account Pool')}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id='account-pool-capability-detect-form'
+          className='flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1'
+          onSubmit={handleSubmit}
+        >
+          <FieldGroup className='gap-4 sm:grid sm:grid-cols-2'>
+            <FieldBlock
+              label={t('Mode')}
+              htmlFor='account-pool-capability-mode'
+            >
+              <Select
+                items={modeOptions}
+                value={String(form.mode)}
+                onValueChange={(value) => value && setField('mode', value)}
+              >
+                <SelectTrigger id='account-pool-capability-mode'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {modeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </FieldBlock>
+            <FieldBlock
+              label={t('Channel')}
+              htmlFor='account-pool-capability-channel'
+            >
+              <Select
+                items={bindingOptions}
+                value={form.channel_id > 0 ? String(form.channel_id) : ''}
+                onValueChange={(value) =>
+                  setField('channel_id', value ? Number(value) : 0)
+                }
+              >
+                <SelectTrigger id='account-pool-capability-channel'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {bindingOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </FieldBlock>
+          </FieldGroup>
+
+          <FieldBlock
+            label={t('Candidate Models')}
+            htmlFor='account-pool-capability-candidate-models'
+          >
+            <Textarea
+              id='account-pool-capability-candidate-models'
+              className='min-h-[120px] font-mono text-xs'
+              value={form.candidate_models_text}
+              onChange={(event) =>
+                setField('candidate_models_text', event.target.value)
+              }
+              required={form.mode === 'probe_models'}
+              placeholder={'gpt-5\ngpt-5-mini'}
+            />
+          </FieldBlock>
+
+          <FieldGroup className='gap-3'>
+            <div className={sideDrawerSwitchItemClassName()}>
+              <div className='min-w-0'>
+                <FieldLabel htmlFor='account-pool-capability-apply'>
+                  {t('Apply detected models')}
+                </FieldLabel>
+                {!form.apply && (
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    {t('Dry Run')}
+                  </p>
+                )}
+              </div>
+              <Switch
+                id='account-pool-capability-apply'
+                checked={form.apply}
+                onCheckedChange={(checked) => setField('apply', checked)}
+              />
+            </div>
+            <div className={sideDrawerSwitchItemClassName()}>
+              <div className='min-w-0'>
+                <FieldLabel htmlFor='account-pool-capability-merge'>
+                  {t('Merge with existing models')}
+                </FieldLabel>
+              </div>
+              <Switch
+                id='account-pool-capability-merge'
+                checked={form.merge}
+                onCheckedChange={(checked) => setField('merge', checked)}
+              />
+            </div>
+            <NumericField
+              id='account-pool-capability-timeout'
+              label={t('Timeout')}
+              min={1}
+              value={form.timeout_seconds}
+              onChange={(value) => setField('timeout_seconds', value)}
+            />
+          </FieldGroup>
+
+          {singleResult && (
+            <div className='rounded-lg border p-3 text-sm'>
+              <div className='flex flex-wrap items-center gap-2'>
+                <StatusBadge
+                  label={capabilityStatusLabel(singleResult.status)}
+                  variant={capabilityStatusVariant(singleResult.status)}
+                  copyable={false}
+                />
+                <span className='text-muted-foreground text-xs'>
+                  #{singleResult.account_id}
+                </span>
+              </div>
+              <div className='text-muted-foreground mt-3 grid gap-2 sm:grid-cols-3'>
+                <div>
+                  {t('Detected Models')}: {singleResult.detected_models.length}
+                </div>
+                <div>
+                  {t('Applied Models')}: {singleResult.applied_models.length}
+                </div>
+                <div>
+                  {t('Status')}: {capabilityStatusLabel(singleResult.status)}
+                </div>
+              </div>
+              {singleResult.errors.length > 0 && (
+                <div className='text-destructive mt-3 text-xs'>
+                  {singleResult.errors.join('; ')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {poolResult && (
+            <div className='rounded-lg border p-3 text-sm'>
+              <div className='grid gap-2 sm:grid-cols-3'>
+                <div>
+                  {t('Total')}: {poolResult.total}
+                </div>
+                <div>
+                  {t('Succeeded')}: {poolResult.succeeded}
+                </div>
+                <div>
+                  {t('Failed')}: {poolResult.failed}
+                </div>
+              </div>
+              <div className='mt-3 flex max-h-56 flex-col gap-2 overflow-y-auto'>
+                {poolResult.results.map((result) => (
+                  <div
+                    key={`${result.account_id}-${result.status}`}
+                    className='flex flex-col gap-1 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between'
+                  >
+                    <div className='min-w-0'>
+                      <div className='flex items-center gap-2'>
+                        <span className='font-medium'>
+                          {accountNameByID.get(result.account_id) ||
+                            `#${result.account_id}`}
+                        </span>
+                        <span className='text-muted-foreground text-xs'>
+                          #{result.account_id}
+                        </span>
+                      </div>
+                      {result.errors.length > 0 && (
+                        <div className='text-destructive text-xs'>
+                          {result.errors.join('; ')}
+                        </div>
+                      )}
+                    </div>
+                    <div className='flex flex-wrap items-center gap-2 text-xs'>
+                      <StatusBadge
+                        label={capabilityStatusLabel(result.status)}
+                        variant={capabilityStatusVariant(result.status)}
+                        copyable={false}
+                      />
+                      <span className='text-muted-foreground'>
+                        {t('Detected Models')}: {result.detected_models.length}
+                      </span>
+                      <span className='text-muted-foreground'>
+                        {t('Applied Models')}: {result.applied_models.length}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </form>
+        <DialogFooter>
+          <DialogClose render={<Button type='button' variant='outline' />}>
+            {t('Cancel')}
+          </DialogClose>
+          <Button
+            type='submit'
+            form='account-pool-capability-detect-form'
+            disabled={detectMutation.isPending || props.bindings.length === 0}
+          >
+            {detectMutation.isPending ? (
+              <Loader2 data-icon='inline-start' className='animate-spin' />
+            ) : (
+              <Radar data-icon='inline-start' />
+            )}
+            {props.account ? t('Detect Models') : t('Batch Detect Models')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PoolDetailsSheet(props: {
   open: boolean
   pool?: AccountPool
@@ -1722,6 +2175,8 @@ function PoolDetailsSheet(props: {
   onCreateAccount: () => void
   onImportAccounts: () => void
   onEditAccount: (account: AccountPoolAccount) => void
+  onDetectAccount: (account: AccountPoolAccount) => void
+  onBatchDetectModels: () => void
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onCreateProxy: () => void
@@ -1785,6 +2240,8 @@ function PoolDetailsSheet(props: {
                 onCreateAccount={props.onCreateAccount}
                 onImportAccounts={props.onImportAccounts}
                 onEditAccount={props.onEditAccount}
+                onDetectAccount={props.onDetectAccount}
+                onBatchDetectModels={props.onBatchDetectModels}
                 onDeleteAccount={props.onDeleteAccount}
                 onSetAccountStatus={props.onSetAccountStatus}
               />
@@ -1843,6 +2300,8 @@ function AccountListSection(props: {
   onCreateAccount: () => void
   onImportAccounts: () => void
   onEditAccount: (account: AccountPoolAccount) => void
+  onDetectAccount: (account: AccountPoolAccount) => void
+  onBatchDetectModels: () => void
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
 }) {
@@ -1853,6 +2312,15 @@ function AccountListSection(props: {
       <div className='flex items-center justify-between gap-3'>
         <SideDrawerSectionHeader title={t('Accounts')} />
         <div className='flex items-center gap-2'>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            onClick={props.onBatchDetectModels}
+          >
+            <Radar data-icon='inline-start' />
+            {t('Batch Detect Models')}
+          </Button>
           <Button
             type='button'
             size='sm'
@@ -1941,6 +2409,7 @@ function AccountListSection(props: {
                   <AccountRowActions
                     account={account}
                     onEdit={props.onEditAccount}
+                    onDetect={props.onDetectAccount}
                     onDelete={props.onDeleteAccount}
                     onSetStatus={props.onSetAccountStatus}
                   />
@@ -1996,6 +2465,16 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
       <div className='text-muted-foreground'>
         {t('Last Failure')}: {formatOptionalTimestamp(account.last_failure_at)}
       </div>
+      <div className='text-muted-foreground'>
+        {t('Capability detection status')}:{' '}
+        {account.last_capability_check_status
+          ? `${account.last_capability_check_status}${
+              account.last_capability_check_at > 0
+                ? ` / ${formatOptionalTimestamp(account.last_capability_check_at)}`
+                : ''
+            }`
+          : '-'}
+      </div>
     </div>
   )
 }
@@ -2003,6 +2482,7 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
 function AccountRowActions(props: {
   account: AccountPoolAccount
   onEdit: (account: AccountPoolAccount) => void
+  onDetect: (account: AccountPoolAccount) => void
   onDelete: (account: AccountPoolAccount) => void
   onSetStatus: (account: AccountPoolAccount, status: string) => void
 }) {
@@ -2028,6 +2508,10 @@ function AccountRowActions(props: {
         <DropdownMenuItem onClick={() => props.onEdit(props.account)}>
           <Pencil />
           {t('Edit')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => props.onDetect(props.account)}>
+          <Radar />
+          {t('Detect Models')}
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => props.onSetStatus(props.account, nextStatus)}
