@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -26,18 +27,34 @@ func setupControllerChannelMonitorTestDB(t *testing.T) *gorm.DB {
 	oldDB := model.DB
 	oldLogDB := model.LOG_DB
 	oldRedisEnabled := common.RedisEnabled
+	oldSecret := common.CryptoSecret
+	oldStable := common.CryptoSecretStable
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
 	model.LOG_DB = db
 	common.RedisEnabled = false
+	common.CryptoSecret = "controller-channel-monitor-test-secret"
+	common.CryptoSecretStable = true
 	t.Cleanup(func() {
 		model.DB = oldDB
 		model.LOG_DB = oldLogDB
 		common.RedisEnabled = oldRedisEnabled
+		common.CryptoSecret = oldSecret
+		common.CryptoSecretStable = oldStable
 	})
 
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.ChannelMonitorLog{}, &model.User{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.Channel{},
+		&model.Ability{},
+		&model.ChannelMonitorLog{},
+		&model.User{},
+		&model.Log{},
+		&model.AccountPool{},
+		&model.AccountPoolAccount{},
+		&model.AccountPoolProxy{},
+		&model.AccountPoolChannelBinding{},
+	))
 	require.NoError(t, db.Create(&model.User{
 		Id:       1,
 		Username: "root",
@@ -67,6 +84,51 @@ func monitorChannel(t *testing.T, id int, status int, settings dto.ChannelOtherS
 		Status:        status,
 		OtherSettings: monitorSettingsJSON(t, settings),
 	}
+}
+
+func createControllerAccountPoolMonitorChannel(t *testing.T, db *gorm.DB, status int) *model.Channel {
+	t.Helper()
+
+	channel := &model.Channel{
+		Type:    constant.ChannelTypeOpenAI,
+		Name:    "account-pool-monitor-channel",
+		Key:     "account-pool-monitor-key",
+		Status:  status,
+		Models:  "gpt-4o-mini",
+		Group:   "default",
+		AutoBan: common.GetPointer(0),
+		OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+			ChannelMonitorEnabled: true,
+		}),
+	}
+	require.NoError(t, db.Create(channel).Error)
+	return channel
+}
+
+func createControllerAccountPoolMonitorPool(t *testing.T) model.AccountPool {
+	t.Helper()
+
+	pool, err := service.AccountPoolService{}.CreatePool(service.AccountPoolCreateParams{
+		Name:     "monitor-pool",
+		Platform: model.AccountPoolPlatformOpenAI,
+	})
+	require.NoError(t, err)
+	return pool
+}
+
+func createControllerAccountPoolMonitorBinding(t *testing.T, poolID int, channelID int) model.AccountPoolChannelBinding {
+	t.Helper()
+
+	bindingView, err := service.AccountPoolService{}.CreateBinding(service.AccountPoolBindingCreateParams{
+		PoolID:    poolID,
+		ChannelID: channelID,
+	})
+	require.NoError(t, err)
+	_, err = service.AccountPoolService{}.ActivateBinding(poolID, bindingView.Id)
+	require.NoError(t, err)
+	var binding model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&binding, bindingView.Id).Error)
+	return binding
 }
 
 func channelMonitorTestContext(channel *model.Channel) *gin.Context {
@@ -333,6 +395,55 @@ func TestFilterDueChannelMonitorCandidatesKeepsInvalidSettingsReadOnly(t *testin
 	var reloaded model.Channel
 	require.NoError(t, db.First(&reloaded, channel.Id).Error)
 	assert.Equal(t, "{bad-json", reloaded.OtherSettings)
+}
+
+func TestRunChannelMonitorProbeUsesSyntheticAccountPoolSchedulability(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	channel := createControllerAccountPoolMonitorChannel(t, db, common.ChannelStatusManuallyDisabled)
+	modelMapping := `{"gpt-4o-mini":"account-upstream-model"}`
+	channel.ModelMapping = &modelMapping
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("model_mapping", modelMapping).Error)
+	pool := createControllerAccountPoolMonitorPool(t)
+	createControllerAccountPoolMonitorBinding(t, pool.Id, channel.Id)
+	_, err := service.AccountPoolService{}.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID:          pool.Id,
+		Name:            "schedulable",
+		SupportedModels: []string{"account-upstream-model"},
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-account-pool-monitor",
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("status", common.ChannelStatusEnabled).Error)
+	channel.Status = common.ChannelStatusEnabled
+	channel.Key = ""
+
+	runChannelMonitorProbe(channel, 1)
+
+	var log model.ChannelMonitorLog
+	require.NoError(t, db.First(&log, "channel_id = ?", channel.Id).Error)
+	assert.Equal(t, model.ChannelMonitorStatusSuccess, log.Status)
+	assert.Equal(t, "gpt-4o-mini", log.Model)
+	assert.Empty(t, log.Message)
+}
+
+func TestRunChannelMonitorProbeMarksAccountPoolChannelFailedWhenNoAccountSchedulable(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	channel := createControllerAccountPoolMonitorChannel(t, db, common.ChannelStatusManuallyDisabled)
+	pool := createControllerAccountPoolMonitorPool(t)
+	createControllerAccountPoolMonitorBinding(t, pool.Id, channel.Id)
+	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("status", common.ChannelStatusEnabled).Error)
+	channel.Status = common.ChannelStatusEnabled
+	channel.Key = ""
+
+	runChannelMonitorProbe(channel, 1)
+
+	var log model.ChannelMonitorLog
+	require.NoError(t, db.First(&log, "channel_id = ?", channel.Id).Error)
+	assert.Equal(t, model.ChannelMonitorStatusFailed, log.Status)
+	assert.Equal(t, "gpt-4o-mini", log.Model)
+	assert.Contains(t, log.Message, "no schedulable account")
 }
 
 func TestChannelMonitorStatusFromResult(t *testing.T) {
