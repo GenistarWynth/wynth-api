@@ -141,6 +141,9 @@ func (s AccountPoolService) CreatePool(params AccountPoolCreateParams) (model.Ac
 	if err != nil {
 		return model.AccountPool{}, err
 	}
+	if err := validateAccountPoolProxyReference(params.DefaultProxyID); err != nil {
+		return model.AccountPool{}, err
+	}
 	pool := model.AccountPool{
 		Name:                  name,
 		Platform:              platform,
@@ -173,6 +176,9 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 	}
 	pool, err := getAccountPoolExistingPool(id)
 	if err != nil {
+		return model.AccountPool{}, err
+	}
+	if err := validateAccountPoolProxyReference(params.DefaultProxyID); err != nil {
 		return model.AccountPool{}, err
 	}
 	err = model.DB.Model(&pool).Updates(map[string]any{
@@ -231,6 +237,9 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 	if name == "" {
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
 	}
+	if err := validateAccountPoolProxyReference(params.ProxyID); err != nil {
+		return AccountPoolAccountView{}, err
+	}
 	credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
 	if err != nil {
 		return AccountPoolAccountView{}, err
@@ -283,6 +292,9 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
+	}
+	if err := validateAccountPoolProxyReference(params.ProxyID); err != nil {
+		return AccountPoolAccountView{}, err
 	}
 	supportedModels, err := marshalAccountPoolOptionalJSON(params.SupportedModels)
 	if err != nil {
@@ -488,6 +500,9 @@ func (s AccountPoolService) CreateProxy(params AccountPoolProxyCreateParams) (Ac
 	if params.Port <= 0 {
 		return AccountPoolProxyView{}, errors.New("account pool proxy port is required")
 	}
+	if err := validateAccountPoolProxyReference(params.FallbackProxyID); err != nil {
+		return AccountPoolProxyView{}, err
+	}
 	authConfig, err := EncryptAccountPoolProxyAuthConfig(AccountPoolProxyAuthConfig{
 		Username: strings.TrimSpace(params.Username),
 		Password: params.Password,
@@ -530,6 +545,9 @@ func (s AccountPoolService) UpdateProxy(id int, params AccountPoolProxyCreatePar
 	}
 	if params.Port <= 0 {
 		return AccountPoolProxyView{}, errors.New("account pool proxy port is required")
+	}
+	if err := validateAccountPoolProxyReference(params.FallbackProxyID); err != nil {
+		return AccountPoolProxyView{}, err
 	}
 	status := strings.TrimSpace(params.Status)
 	if status == "" {
@@ -720,6 +738,19 @@ func validateAccountPoolMutableBindingStatus(status string) error {
 	default:
 		return errors.New("account pool binding status must be enabled or disabled")
 	}
+}
+
+func validateAccountPoolProxyReference(proxyID int) error {
+	if proxyID <= 0 {
+		return nil
+	}
+	if _, err := getAccountPoolExistingProxy(proxyID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("account pool proxy not found")
+		}
+		return err
+	}
+	return nil
 }
 
 func getAccountPoolBindingForPool(poolID int, bindingID int) (model.AccountPoolChannelBinding, error) {

@@ -530,6 +530,135 @@ func TestAccountPoolServiceUpdateProxyRejectsFallbackCycle(t *testing.T) {
 	require.ErrorContains(t, err, "cycle")
 }
 
+func TestAccountPoolServiceRejectsMissingProxyReferences(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.CreatePool(AccountPoolCreateParams{
+		Name:           "missing-default-proxy",
+		DefaultProxyID: 999,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	_, err = service.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:           pool.Name,
+		Platform:       model.AccountPoolPlatformOpenAI,
+		DefaultProxyID: 999,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	_, err = service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:  pool.Id,
+		Name:    "missing-account-proxy",
+		ProxyID: 999,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-missing-proxy",
+		},
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "valid-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-valid",
+		},
+	})
+	require.NoError(t, err)
+	_, err = service.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
+		Name:    account.Name,
+		ProxyID: 999,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	_, err = service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:            "missing-fallback-proxy",
+		Protocol:        "http",
+		Host:            "127.0.0.1",
+		Port:            8080,
+		FallbackProxyID: 999,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	proxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "valid-proxy",
+		Protocol: "http",
+		Host:     "127.0.0.2",
+		Port:     8081,
+	})
+	require.NoError(t, err)
+	_, err = service.UpdateProxy(proxy.Id, AccountPoolProxyCreateParams{
+		Name:            proxy.Name,
+		Protocol:        proxy.Protocol,
+		Host:            proxy.Host,
+		Port:            proxy.Port,
+		Status:          model.AccountPoolProxyStatusEnabled,
+		FallbackProxyID: 999,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+}
+
+func TestAccountPoolServiceRejectsDeletedProxyReferences(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	proxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+	})
+	require.NoError(t, err)
+	require.NoError(t, service.DeleteProxy(proxy.Id))
+
+	_, err = service.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:           pool.Name,
+		Platform:       model.AccountPoolPlatformOpenAI,
+		DefaultProxyID: proxy.Id,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	_, err = service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:  pool.Id,
+		Name:    "deleted-account-proxy",
+		ProxyID: proxy.Id,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-deleted-proxy",
+		},
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	_, err = service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:            "deleted-fallback-proxy",
+		Protocol:        "http",
+		Host:            "127.0.0.2",
+		Port:            8081,
+		FallbackProxyID: proxy.Id,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+
+	target, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "valid-target-proxy",
+		Protocol: "http",
+		Host:     "127.0.0.3",
+		Port:     8082,
+	})
+	require.NoError(t, err)
+	_, err = service.UpdateProxy(target.Id, AccountPoolProxyCreateParams{
+		Name:            target.Name,
+		Protocol:        target.Protocol,
+		Host:            target.Host,
+		Port:            target.Port,
+		Status:          model.AccountPoolProxyStatusEnabled,
+		FallbackProxyID: proxy.Id,
+	})
+	require.ErrorContains(t, err, "account pool proxy not found")
+}
+
 func TestAccountPoolServiceListPresenceFlagsDoNotDecryptSecrets(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -626,10 +755,17 @@ func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 func TestAccountPoolServicePoolCRUDSoftDeletesAndUpdatesZeroValues(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
+	proxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "pool-default-proxy",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+	})
+	require.NoError(t, err)
 
 	pool, err := service.CreatePool(AccountPoolCreateParams{
 		Name:                  "  shared pool  ",
-		DefaultProxyID:        123,
+		DefaultProxyID:        proxy.Id,
 		DefaultMonitorEnabled: true,
 		Remark:                "created",
 	})

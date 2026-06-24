@@ -140,6 +140,9 @@ func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams
 	if err != nil {
 		return result, err
 	}
+	if err := validateAccountPoolProxyReference(params.Defaults.ProxyID); err != nil {
+		return result, err
+	}
 
 	var candidates []accountPoolImportCandidate
 	var stats accountPoolImportProxyStats

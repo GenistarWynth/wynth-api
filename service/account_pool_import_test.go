@@ -108,6 +108,35 @@ func TestAccountPoolServiceImportSub2APIDataCreatesAccountsAndReferencedProxy(t 
 	assert.Equal(t, int64(4102444800), tokenState.ExpiresAt)
 }
 
+func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		DryRun: true,
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "sub2api-key",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-sub2api"
+					}
+				}
+			]
+		}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			ProxyID: 999,
+		},
+	})
+
+	require.ErrorContains(t, err, "account pool proxy not found")
+}
+
 func TestAccountPoolServiceImportCPAConfigMapsCodexKeysAndModels(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
