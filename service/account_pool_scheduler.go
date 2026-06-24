@@ -117,7 +117,7 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		return AccountPoolSelectionResult{}, ErrAccountPoolNoSchedulableAccount
 	}
 
-	selected := selectAccountPoolCandidate(candidates)
+	selected := selectAccountPoolCandidate(candidates, binding.SchedulePolicy)
 	if affinityCandidate, ok := selectAccountPoolAffinityCandidate(req.AffinityKey, binding.Id, candidates, now); ok {
 		selected = affinityCandidate
 	}
@@ -297,7 +297,15 @@ func mapAccountPoolUpstreamModel(rawMapping string, upstreamModelName string) (s
 	return upstreamModelName, nil
 }
 
-func selectAccountPoolCandidate(candidates []accountPoolAccountCandidate) accountPoolAccountCandidate {
+func selectAccountPoolCandidate(candidates []accountPoolAccountCandidate, schedulePolicy string) accountPoolAccountCandidate {
+	priorityCandidates := highestPriorityAccountPoolCandidates(candidates)
+	if strings.EqualFold(strings.TrimSpace(schedulePolicy), AccountPoolSchedulePolicyRandom) {
+		return selectWeightedRandomAccountPoolCandidate(priorityCandidates)
+	}
+	return selectRoundRobinAccountPoolCandidate(priorityCandidates)
+}
+
+func highestPriorityAccountPoolCandidates(candidates []accountPoolAccountCandidate) []accountPoolAccountCandidate {
 	highestPriority := candidates[0].account.Priority
 	for _, candidate := range candidates[1:] {
 		if candidate.account.Priority > highestPriority {
@@ -310,7 +318,20 @@ func selectAccountPoolCandidate(candidates []accountPoolAccountCandidate) accoun
 			priorityCandidates = append(priorityCandidates, candidate)
 		}
 	}
+	return priorityCandidates
+}
 
+func selectRoundRobinAccountPoolCandidate(candidates []accountPoolAccountCandidate) accountPoolAccountCandidate {
+	selected := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate.account.LastUsedAt < selected.account.LastUsedAt {
+			selected = candidate
+		}
+	}
+	return selected
+}
+
+func selectWeightedRandomAccountPoolCandidate(priorityCandidates []accountPoolAccountCandidate) accountPoolAccountCandidate {
 	totalWeight := 0
 	for _, candidate := range priorityCandidates {
 		totalWeight += int(candidate.account.Weight) + 10

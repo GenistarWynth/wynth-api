@@ -20,6 +20,9 @@ type AccountPoolService struct{}
 const (
 	accountPoolRuntimeEnabledCacheNamespace = "new-api:account_pool_runtime_enabled:v1"
 	accountPoolRuntimeEnabledCacheTTL       = 30 * time.Second
+
+	AccountPoolSchedulePolicyRoundRobin = "round_robin"
+	AccountPoolSchedulePolicyRandom     = "random"
 )
 
 var (
@@ -370,7 +373,8 @@ func (s AccountPoolService) ListAccounts(poolID int) ([]AccountPoolAccountView, 
 }
 
 func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams) (AccountPoolBindingView, error) {
-	if _, err := getAccountPoolExistingPool(params.PoolID); err != nil {
+	pool, err := getAccountPoolExistingPool(params.PoolID)
+	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	if err := validateAccountPoolBindingStatus(params.Status); err != nil {
@@ -398,12 +402,13 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if status == "" {
 		status = model.AccountPoolBindingStatusDraft
 	}
+	schedulePolicy := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
 	binding := model.AccountPoolChannelBinding{
 		PoolID:              params.PoolID,
 		ChannelID:           params.ChannelID,
 		AccountFilterConfig: accountFilterConfig,
 		ModelPolicy:         modelPolicy,
-		SchedulePolicy:      params.SchedulePolicy,
+		SchedulePolicy:      schedulePolicy,
 		AccountRetryTimes:   params.AccountRetryTimes,
 		Status:              status,
 	}
@@ -414,7 +419,8 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 }
 
 func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params AccountPoolBindingCreateParams) (AccountPoolBindingView, error) {
-	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+	pool, err := getAccountPoolExistingPool(poolID)
+	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	binding, err := getAccountPoolBindingForPool(poolID, bindingID)
@@ -443,12 +449,13 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 		return AccountPoolBindingView{}, err
 	}
 	oldChannelID := binding.ChannelID
+	schedulePolicy := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
 	now := common.GetTimestamp()
 	if err := model.DB.Model(&binding).Updates(map[string]any{
 		"channel_id":            channel.Id,
 		"account_filter_config": accountFilterConfig,
 		"model_policy":          modelPolicy,
-		"schedule_policy":       params.SchedulePolicy,
+		"schedule_policy":       schedulePolicy,
 		"account_retry_times":   params.AccountRetryTimes,
 		"updated_time":          now,
 	}).Error; err != nil {
@@ -457,7 +464,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	binding.ChannelID = channel.Id
 	binding.AccountFilterConfig = accountFilterConfig
 	binding.ModelPolicy = modelPolicy
-	binding.SchedulePolicy = params.SchedulePolicy
+	binding.SchedulePolicy = schedulePolicy
 	binding.AccountRetryTimes = params.AccountRetryTimes
 	binding.UpdatedTime = now
 	invalidateAccountPoolRuntimeEnabledForChannel(oldChannelID)
@@ -676,6 +683,17 @@ func normalizeAccountPoolPlatform(platform string) (string, error) {
 		return "", errors.New("unsupported account pool platform")
 	}
 	return platform, nil
+}
+
+func resolveAccountPoolSchedulePolicy(policy string, fallback string) string {
+	policy = strings.TrimSpace(policy)
+	if policy == "" {
+		policy = strings.TrimSpace(fallback)
+	}
+	if policy == "" {
+		return AccountPoolSchedulePolicyRoundRobin
+	}
+	return policy
 }
 
 func validateAccountPoolRuntimeChannel(channel model.Channel) error {

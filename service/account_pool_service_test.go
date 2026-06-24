@@ -144,6 +144,26 @@ func TestAccountPoolServiceCreatesDraftBindingForDisabledChannel(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 }
 
+func TestAccountPoolServiceCreateBindingUsesPoolDefaultSchedulePolicy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:                  "pool-with-default-schedule",
+		Platform:              model.AccountPoolPlatformOpenAI,
+		DefaultSchedulePolicy: "random",
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "random", binding.SchedulePolicy)
+}
+
 func TestAccountPoolServiceCreateBindingRejectsNonPhaseOneStatus(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

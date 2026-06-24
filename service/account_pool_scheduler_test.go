@@ -101,6 +101,46 @@ func TestAccountPoolSchedulerSelectsHighestPriorityRemainingAccount(t *testing.T
 	assert.Equal(t, second.Id, result.AccountID)
 }
 
+func TestAccountPoolSchedulerRoundRobinSelectsLeastRecentlyUsedHighestPriorityAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	require.NoError(t, model.DB.Model(&model.AccountPoolChannelBinding{}).
+		Where("channel_id = ?", channel.Id).
+		Update("schedule_policy", "round_robin").Error)
+
+	selected := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "least-recent-high",
+		Priority:   100,
+		Weight:     0,
+		LastUsedAt: 10,
+	})
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "weighted-recent-high",
+		Priority:   100,
+		Weight:     1_000_000_000,
+		LastUsedAt: 100,
+	})
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "least-recent-low",
+		Priority:   50,
+		Weight:     1_000_000_000,
+		LastUsedAt: 0,
+	})
+
+	result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  200,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, selected.Id, result.AccountID)
+}
+
 func TestAccountPoolSchedulerPrefersSchedulableRuntimeAffinityAccount(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
