@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -72,7 +73,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	info.ApiKey = runtimeCredential
-	info.RuntimeAccountID = selection.AccountIdentifier
+	info.RuntimeAccountID = accountPoolRuntimeAccountIdentifier(selection, runtimeCredential)
 	info.UpstreamModelName = selection.UpstreamModelName
 	if selection.ProxyURL != "" {
 		info.RuntimeProxy = selection.ProxyURL
@@ -83,6 +84,17 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	setAccountPoolRuntimeLeaseRelease(c, release)
 	releaseStored = true
 	return nil
+}
+
+func accountPoolRuntimeAccountIdentifier(selection AccountPoolSelectionResult, runtimeCredential string) string {
+	if accountID := strings.TrimSpace(selection.AccountIdentifier); accountID != "" {
+		return accountID
+	}
+	accountID, ok := ExtractCodexAccountIDFromJWT(runtimeCredential)
+	if !ok {
+		return ""
+	}
+	return accountID
 }
 
 func accountPoolRuntimeContext(c *gin.Context) context.Context {

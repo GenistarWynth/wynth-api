@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http/httptest"
 	"testing"
@@ -264,6 +265,7 @@ func TestAccountPoolRuntimeFallsBackToAccessToken(t *testing.T) {
 	assert.Equal(t, "access-runtime-token", info.ApiKey)
 	assert.Equal(t, "channel-gpt-5", info.UpstreamModelName)
 	assert.Equal(t, "channel-gpt-5", request.Model)
+	assert.Empty(t, info.RuntimeAccountID)
 }
 
 func TestAccountPoolRuntimeStoresSelectedAccountIdentifier(t *testing.T) {
@@ -291,6 +293,35 @@ func TestAccountPoolRuntimeStoresSelectedAccountIdentifier(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "access-runtime-token", info.ApiKey)
 	assert.Equal(t, "chatgpt-account-runtime", info.RuntimeAccountID)
+}
+
+func TestAccountPoolRuntimeDerivesAccountIdentifierFromAccessToken(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "runtime-codex-jwt-account",
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: newAccountPoolRuntimeTestJWT(map[string]any{
+				"https://api.openai.com/auth": map[string]any{
+					"chatgpt_account_id": "chatgpt-account-from-jwt",
+				},
+			}),
+		},
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "channel-gpt-5")
+	request := &dto.GeneralOpenAIRequest{Model: "channel-gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
+
+	require.NoError(t, err)
+	assert.Equal(t, "chatgpt-account-from-jwt", info.RuntimeAccountID)
 }
 
 func TestAccountPoolRuntimeRefreshesExpiredOAuthToken(t *testing.T) {
@@ -407,6 +438,19 @@ func newAccountPoolRuntimeTestRelayInfo(channelID int, originModel string, upstr
 			UpstreamModelName: upstreamModel,
 		},
 	}
+}
+
+func newAccountPoolRuntimeTestJWT(claims map[string]any) string {
+	header, err := common.Marshal(map[string]any{"alg": "none", "typ": "JWT"})
+	if err != nil {
+		panic(err)
+	}
+	payload, err := common.Marshal(claims)
+	if err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." +
+		base64.RawURLEncoding.EncodeToString(payload) + ".signature"
 }
 
 func createEnabledAccountPoolSchedulerBindingWithRetryTimes(
