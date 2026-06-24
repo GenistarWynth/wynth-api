@@ -216,3 +216,25 @@ export async function createAccountPoolProxy(
   )
   return res.data
 }
+
+export async function updateAccountPoolProxy(
+  id: number,
+  data: AccountPoolProxyCreateRequest
+): Promise<ApiResponse<AccountPoolProxy>> {
+  const res = await api.put(
+    `/api/account_pools/proxies/${id}`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function deleteAccountPoolProxy(
+  id: number
+): Promise<ApiResponse<null>> {
+  const res = await api.delete(
+    `/api/account_pools/proxies/${id}`,
+    accountPoolActionConfig()
+  )
+  return res.data
+}

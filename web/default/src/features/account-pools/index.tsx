@@ -130,6 +130,7 @@ import {
   createAccountPoolBinding,
   createAccountPoolProxy,
   deleteAccountPoolAccount,
+  deleteAccountPoolProxy,
   disableAccountPoolBinding,
   importAccountPoolAccounts,
   listAccountPoolAccounts,
@@ -138,6 +139,7 @@ import {
   listAccountPools,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
+  updateAccountPoolProxy,
 } from './api'
 import {
   accountToFormValues,
@@ -147,6 +149,7 @@ import {
   emptyAccountForm,
   emptyPoolForm,
   emptyProxyForm,
+  proxyToFormValues,
   type AccountPoolAccountFormValues,
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
@@ -570,6 +573,8 @@ export function AccountPools() {
   const [deletingAccount, setDeletingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
+  const [editingProxy, setEditingProxy] = useState<AccountPoolProxy>()
+  const [deletingProxy, setDeletingProxy] = useState<AccountPoolProxy>()
   const [editingBinding, setEditingBinding] = useState<AccountPoolBinding>()
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
     Record<number, AccountPoolAccount[] | undefined>
@@ -809,6 +814,46 @@ export function AccountPools() {
       }
       toast.success(t('Proxy created'))
       setProxySheetOpen(false)
+      setEditingProxy(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const updateProxyMutation = useMutation({
+    mutationFn: async (values: AccountPoolProxyFormValues) => {
+      if (!editingProxy) {
+        throw new Error(t('Select a proxy first'))
+      }
+      return updateAccountPoolProxy(editingProxy.id, buildProxyPayload(values))
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to update proxy')))
+        return
+      }
+      toast.success(t('Proxy updated'))
+      setProxySheetOpen(false)
+      setEditingProxy(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const deleteProxyMutation = useMutation({
+    mutationFn: async (proxy: AccountPoolProxy) =>
+      deleteAccountPoolProxy(proxy.id),
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to delete proxy')))
+        return
+      }
+      toast.success(t('Proxy deleted'))
+      setDeletingProxy(undefined)
       invalidatePools()
     },
     onError: (error) => {
@@ -1001,7 +1046,15 @@ export function AccountPools() {
         onSetAccountStatus={(account, status) =>
           updateAccountStatusMutation.mutate({ account, status })
         }
-        onCreateProxy={() => setProxySheetOpen(true)}
+        onCreateProxy={() => {
+          setEditingProxy(undefined)
+          setProxySheetOpen(true)
+        }}
+        onEditProxy={(proxy) => {
+          setEditingProxy(proxy)
+          setProxySheetOpen(true)
+        }}
+        onDeleteProxy={setDeletingProxy}
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
         onUpdateBinding={(values) => updateBindingMutation.mutate(values)}
         onEditBinding={setEditingBinding}
@@ -1070,10 +1123,38 @@ export function AccountPools() {
       />
       <ProxyFormSheet
         open={proxySheetOpen}
+        proxy={editingProxy}
         proxies={proxiesQuery.data ?? EMPTY_PROXIES}
-        isSubmitting={createProxyMutation.isPending}
-        onOpenChange={setProxySheetOpen}
-        onSubmit={(values) => createProxyMutation.mutate(values)}
+        isSubmitting={createProxyMutation.isPending || updateProxyMutation.isPending}
+        onOpenChange={(open) => {
+          setProxySheetOpen(open)
+          if (!open) setEditingProxy(undefined)
+        }}
+        onSubmit={(values) => {
+          if (editingProxy) {
+            updateProxyMutation.mutate(values)
+          } else {
+            createProxyMutation.mutate(values)
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(deletingProxy)}
+        onOpenChange={(open) => !open && setDeletingProxy(undefined)}
+        title={t('Delete proxy?')}
+        desc={
+          deletingProxy
+            ? t('Delete proxy {{name}} and clear existing references.', {
+                name: deletingProxy.name,
+              })
+            : ''
+        }
+        destructive
+        confirmText={t('Delete')}
+        isLoading={deleteProxyMutation.isPending}
+        handleConfirm={() => {
+          if (deletingProxy) deleteProxyMutation.mutate(deletingProxy)
+        }}
       />
     </>
   )
@@ -1262,6 +1343,8 @@ function PoolDetailsSheet(props: {
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onCreateProxy: () => void
+  onEditProxy: (proxy: AccountPoolProxy) => void
+  onDeleteProxy: (proxy: AccountPoolProxy) => void
   onCreateBinding: (values: BindingFormValues) => void
   onUpdateBinding: (values: BindingFormValues) => void
   onEditBinding: (binding: AccountPoolBinding) => void
@@ -1342,6 +1425,8 @@ function PoolDetailsSheet(props: {
                 proxies={props.proxies}
                 loading={props.proxiesLoading}
                 onCreateProxy={props.onCreateProxy}
+                onEditProxy={props.onEditProxy}
+                onDeleteProxy={props.onDeleteProxy}
               />
             </TabsContent>
           </Tabs>
@@ -1928,6 +2013,8 @@ function ProxyListSection(props: {
   proxies: AccountPoolProxy[]
   loading: boolean
   onCreateProxy: () => void
+  onEditProxy: (proxy: AccountPoolProxy) => void
+  onDeleteProxy: (proxy: AccountPoolProxy) => void
 }) {
   const { t } = useTranslation()
 
@@ -1949,12 +2036,13 @@ function ProxyListSection(props: {
               <TableHead>{t('Status')}</TableHead>
               <TableHead>{t('Password')}</TableHead>
               <TableHead>{t('Fallback Proxy ID')}</TableHead>
+              <TableHead>{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {props.loading && <LoadingRow colSpan={5} />}
+            {props.loading && <LoadingRow colSpan={6} />}
             {!props.loading && props.proxies.length === 0 && (
-              <EmptyRow colSpan={5} label={t('No proxies found')} />
+              <EmptyRow colSpan={6} label={t('No proxies found')} />
             )}
             {props.proxies.map((proxy) => (
               <TableRow key={proxy.id}>
@@ -1980,12 +2068,54 @@ function ProxyListSection(props: {
                   />
                 </TableCell>
                 <TableCell>{proxy.fallback_proxy_id || '-'}</TableCell>
+                <TableCell>
+                  <ProxyRowActions
+                    proxy={proxy}
+                    onEdit={props.onEditProxy}
+                    onDelete={props.onDeleteProxy}
+                  />
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </div>
     </SideDrawerSection>
+  )
+}
+
+function ProxyRowActions(props: {
+  proxy: AccountPoolProxy
+  onEdit: (proxy: AccountPoolProxy) => void
+  onDelete: (proxy: AccountPoolProxy) => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            className='data-popup-open:bg-muted'
+          />
+        }
+      >
+        <MoreHorizontal />
+        <span className='sr-only'>{t('Open menu')}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        <DropdownMenuItem onClick={() => props.onEdit(props.proxy)}>
+          <Pencil />
+          {t('Edit')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => props.onDelete(props.proxy)}>
+          <Trash2 />
+          {t('Delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -2477,6 +2607,7 @@ function AccountFormSheet(props: {
 
 function ProxyFormSheet(props: {
   open: boolean
+  proxy?: AccountPoolProxy
   proxies: AccountPoolProxy[]
   isSubmitting: boolean
   onOpenChange: (open: boolean) => void
@@ -2496,19 +2627,21 @@ function ProxyFormSheet(props: {
   const fallbackProxyOptions = useMemo(
     () => [
       { value: '0', label: t('No Fallback Proxy') },
-      ...props.proxies.map((proxy) => ({
-        value: String(proxy.id),
-        label: proxy.name,
-      })),
+      ...props.proxies
+        .filter((proxy) => proxy.id !== props.proxy?.id)
+        .map((proxy) => ({
+          value: String(proxy.id),
+          label: proxy.name,
+        })),
     ],
-    [props.proxies, t]
+    [props.proxies, props.proxy?.id, t]
   )
 
   useEffect(() => {
     if (props.open) {
-      setForm(emptyProxyForm())
+      setForm(props.proxy ? proxyToFormValues(props.proxy) : emptyProxyForm())
     }
-  }, [props.open])
+  }, [props.open, props.proxy])
 
   const setField = <K extends keyof AccountPoolProxyFormValues>(
     key: K,
@@ -2532,7 +2665,7 @@ function ProxyFormSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent className={sideDrawerContentClassName('sm:max-w-[560px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>{t('Add Proxy')}</SheetTitle>
+          <SheetTitle>{props.proxy ? t('Edit Proxy') : t('Add Proxy')}</SheetTitle>
           <SheetDescription>{t('Proxies')}</SheetDescription>
         </SheetHeader>
         <form
@@ -2604,6 +2737,9 @@ function ProxyFormSheet(props: {
                 type='password'
                 value={form.password}
                 onChange={(event) => setField('password', event.target.value)}
+                placeholder={
+                  props.proxy?.has_password ? t('Leave blank to keep') : ''
+                }
               />
             </FieldBlock>
             <FieldBlock label={t('Status')} htmlFor='account-pool-proxy-status'>
@@ -2667,7 +2803,7 @@ function ProxyFormSheet(props: {
             ) : (
               <Save data-icon='inline-start' />
             )}
-            {t('Create')}
+            {props.proxy ? t('Save Changes') : t('Create')}
           </Button>
         </SheetFooter>
       </SheetContent>

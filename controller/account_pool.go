@@ -234,16 +234,7 @@ func CreateAccountPoolProxy(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	proxy, err := (&service.AccountPoolService{}).CreateProxy(service.AccountPoolProxyCreateParams{
-		Name:            req.Name,
-		Protocol:        req.Protocol,
-		Host:            req.Host,
-		Port:            req.Port,
-		Username:        req.Username,
-		Password:        req.Password,
-		Status:          req.Status,
-		FallbackProxyID: req.FallbackProxyID,
-	})
+	proxy, err := (&service.AccountPoolService{}).CreateProxy(accountPoolProxyCreateParams(req))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -253,6 +244,43 @@ func CreateAccountPoolProxy(c *gin.Context) {
 		"name": proxy.Name,
 	})
 	common.ApiSuccess(c, accountPoolProxyResponse(proxy))
+}
+
+func UpdateAccountPoolProxy(c *gin.Context) {
+	proxyID, ok := accountPoolProxyIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolProxyCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	proxy, err := (&service.AccountPoolService{}).UpdateProxy(proxyID, accountPoolProxyCreateParams(req))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.proxy_update", map[string]interface{}{
+		"id":   proxy.Id,
+		"name": proxy.Name,
+	})
+	common.ApiSuccess(c, accountPoolProxyResponse(proxy))
+}
+
+func DeleteAccountPoolProxy(c *gin.Context) {
+	proxyID, ok := accountPoolProxyIDFromParam(c)
+	if !ok {
+		return
+	}
+	if err := (&service.AccountPoolService{}).DeleteProxy(proxyID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.proxy_delete", map[string]interface{}{
+		"id": proxyID,
+	})
+	common.ApiSuccess(c, nil)
 }
 
 func ListAccountPoolBindings(c *gin.Context) {
@@ -393,6 +421,15 @@ func accountPoolAccountIDFromParam(c *gin.Context) (int, bool) {
 	return id, true
 }
 
+func accountPoolProxyIDFromParam(c *gin.Context) (int, bool) {
+	id, err := strconv.Atoi(c.Param("proxy_id"))
+	if err != nil || id == 0 {
+		common.ApiError(c, errors.New("invalid account pool proxy id"))
+		return 0, false
+	}
+	return id, true
+}
+
 func accountPoolCreateParams(req dto.AccountPoolCreateRequest) service.AccountPoolCreateParams {
 	return service.AccountPoolCreateParams{
 		Name:                  req.Name,
@@ -467,6 +504,19 @@ func accountPoolBindingCreateParams(poolID int, req dto.AccountPoolBindingCreate
 		},
 		SchedulePolicy:    req.SchedulePolicy,
 		AccountRetryTimes: req.AccountRetryTimes,
+	}
+}
+
+func accountPoolProxyCreateParams(req dto.AccountPoolProxyCreateRequest) service.AccountPoolProxyCreateParams {
+	return service.AccountPoolProxyCreateParams{
+		Name:            req.Name,
+		Protocol:        req.Protocol,
+		Host:            req.Host,
+		Port:            req.Port,
+		Username:        req.Username,
+		Password:        req.Password,
+		Status:          req.Status,
+		FallbackProxyID: req.FallbackProxyID,
 	}
 }
 

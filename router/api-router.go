@@ -248,6 +248,8 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.POST("", controller.CreateAccountPool)
 			accountPoolRoute.GET("/proxies", controller.ListAccountPoolProxies)
 			accountPoolRoute.POST("/proxies", controller.CreateAccountPoolProxy)
+			accountPoolRoute.PUT("/proxies/:proxy_id", controller.UpdateAccountPoolProxy)
+			accountPoolRoute.DELETE("/proxies/:proxy_id", controller.DeleteAccountPoolProxy)
 			accountPoolRoute.GET("/:id", controller.GetAccountPool)
 			accountPoolRoute.PUT("/:id", controller.UpdateAccountPool)
 			accountPoolRoute.DELETE("/:id", controller.DeleteAccountPool)

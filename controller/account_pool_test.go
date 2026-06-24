@@ -112,6 +112,8 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("", CreateAccountPool)
 		group.GET("/proxies", ListAccountPoolProxies)
 		group.POST("/proxies", CreateAccountPoolProxy)
+		group.PUT("/proxies/:proxy_id", UpdateAccountPoolProxy)
+		group.DELETE("/proxies/:proxy_id", DeleteAccountPoolProxy)
 		group.GET("/:id", GetAccountPool)
 		group.PUT("/:id", UpdateAccountPool)
 		group.DELETE("/:id", DeleteAccountPool)
@@ -456,6 +458,47 @@ func TestAccountPoolAPIProxyRedaction(t *testing.T) {
 	assert.NotContains(t, raw, stored.Password)
 	assert.NotContains(t, raw, "ciphertext")
 	assert.NotContains(t, raw, "nonce")
+}
+
+func TestAccountPoolAPIUpdateAndDeleteProxy(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+
+	createResult := accountPoolAPIRequest[dto.AccountPoolProxyResponse](t, router, http.MethodPost, "/api/account_pools/proxies", dto.AccountPoolProxyCreateRequest{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Username: "proxy-user",
+		Password: "proxy-password-secret",
+	})
+	require.True(t, createResult.Response.Success, createResult.Response.Message)
+
+	updateResult := accountPoolAPIRequest[dto.AccountPoolProxyResponse](t, router, http.MethodPut, "/api/account_pools/proxies/"+strconv.Itoa(createResult.Response.Data.Id), dto.AccountPoolProxyCreateRequest{
+		Name:     "proxy-updated",
+		Protocol: "socks5",
+		Host:     "10.0.0.1",
+		Port:     1080,
+		Username: "proxy-user-updated",
+		Status:   model.AccountPoolProxyStatusDisabled,
+	})
+
+	require.True(t, updateResult.Response.Success, updateResult.Response.Message)
+	assert.Equal(t, "proxy-updated", updateResult.Response.Data.Name)
+	assert.Equal(t, "socks5", updateResult.Response.Data.Protocol)
+	assert.Equal(t, "10.0.0.1", updateResult.Response.Data.Host)
+	assert.Equal(t, 1080, updateResult.Response.Data.Port)
+	assert.Equal(t, "proxy-user-updated", updateResult.Response.Data.Username)
+	assert.Equal(t, model.AccountPoolProxyStatusDisabled, updateResult.Response.Data.Status)
+	assert.True(t, updateResult.Response.Data.HasPassword)
+	assert.NotContains(t, string(updateResult.Raw), "proxy-password-secret")
+
+	deleteResult := accountPoolAPIRequest[any](t, router, http.MethodDelete, "/api/account_pools/proxies/"+strconv.Itoa(createResult.Response.Data.Id), nil)
+	require.True(t, deleteResult.Response.Success, deleteResult.Response.Message)
+
+	listResult := accountPoolAPIRequest[[]dto.AccountPoolProxyResponse](t, router, http.MethodGet, "/api/account_pools/proxies", nil)
+	require.True(t, listResult.Response.Success, listResult.Response.Message)
+	assert.Empty(t, listResult.Response.Data)
 }
 
 func TestAccountPoolAPIRejectsMissingRequiredFields(t *testing.T) {

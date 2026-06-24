@@ -23,6 +23,7 @@ import type {
   AccountPoolCreateRequest,
   AccountPoolCredentialType,
   AccountPoolPlatform,
+  AccountPoolProxy,
   AccountPoolProxyCreateRequest,
   AccountPoolProxyProtocol,
   AccountPoolProxyStatus,
@@ -224,6 +225,21 @@ export function emptyProxyForm(): AccountPoolProxyFormValues {
     password: '',
     status: 'enabled',
     fallback_proxy_id: 0,
+  }
+}
+
+export function proxyToFormValues(
+  proxy: AccountPoolProxy
+): AccountPoolProxyFormValues {
+  return {
+    name: proxy.name,
+    protocol: proxy.protocol,
+    host: proxy.host,
+    port: proxy.port,
+    username: proxy.username,
+    password: '',
+    status: proxy.status,
+    fallback_proxy_id: proxy.fallback_proxy_id,
   }
 }
 

@@ -504,6 +504,93 @@ func (s AccountPoolService) CreateProxy(params AccountPoolProxyCreateParams) (Ac
 	return buildAccountPoolProxyView(proxy)
 }
 
+func (s AccountPoolService) UpdateProxy(id int, params AccountPoolProxyCreateParams) (AccountPoolProxyView, error) {
+	proxy, err := getAccountPoolExistingProxy(id)
+	if err != nil {
+		return AccountPoolProxyView{}, err
+	}
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return AccountPoolProxyView{}, errors.New("account pool proxy name is required")
+	}
+	protocol := strings.TrimSpace(params.Protocol)
+	if protocol == "" {
+		return AccountPoolProxyView{}, errors.New("account pool proxy protocol is required")
+	}
+	host := strings.TrimSpace(params.Host)
+	if host == "" {
+		return AccountPoolProxyView{}, errors.New("account pool proxy host is required")
+	}
+	if params.Port <= 0 {
+		return AccountPoolProxyView{}, errors.New("account pool proxy port is required")
+	}
+	status := strings.TrimSpace(params.Status)
+	if status == "" {
+		status = proxy.Status
+	}
+	proxy.Name = name
+	proxy.Protocol = protocol
+	proxy.Host = host
+	proxy.Port = params.Port
+	proxy.Username = strings.TrimSpace(params.Username)
+	proxy.Status = status
+	proxy.FallbackProxyID = params.FallbackProxyID
+	if strings.TrimSpace(params.Password) != "" {
+		authConfig, err := EncryptAccountPoolProxyAuthConfig(AccountPoolProxyAuthConfig{
+			Username: proxy.Username,
+			Password: params.Password,
+		})
+		if err != nil {
+			return AccountPoolProxyView{}, err
+		}
+		proxy.Password = authConfig
+	}
+	if err := model.DB.Save(&proxy).Error; err != nil {
+		return AccountPoolProxyView{}, err
+	}
+	return buildAccountPoolProxyView(proxy)
+}
+
+func (s AccountPoolService) DeleteProxy(id int) error {
+	if _, err := getAccountPoolExistingProxy(id); err != nil {
+		return err
+	}
+	now := common.GetTimestamp()
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.AccountPoolProxy{}).
+			Where("id = ? AND status <> ?", id, model.AccountPoolProxyStatusDeleted).
+			Updates(map[string]any{
+				"status":            model.AccountPoolProxyStatusDeleted,
+				"fallback_proxy_id": 0,
+				"updated_time":      now,
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.AccountPool{}).
+			Where("default_proxy_id = ?", id).
+			Updates(map[string]any{
+				"default_proxy_id": 0,
+				"updated_time":     now,
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.AccountPoolAccount{}).
+			Where("proxy_id = ?", id).
+			Updates(map[string]any{
+				"proxy_id":     0,
+				"updated_time": now,
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.AccountPoolProxy{}).
+			Where("fallback_proxy_id = ?", id).
+			Updates(map[string]any{
+				"fallback_proxy_id": 0,
+				"updated_time":      now,
+			}).Error
+	})
+}
+
 func (s AccountPoolService) ListProxies() ([]AccountPoolProxyView, error) {
 	var proxies []model.AccountPoolProxy
 	if err := model.DB.Where("status <> ?", model.AccountPoolProxyStatusDeleted).Order("id asc").Find(&proxies).Error; err != nil {
@@ -633,6 +720,12 @@ func getAccountPoolExistingPool(poolID int) (model.AccountPool, error) {
 	var pool model.AccountPool
 	err := model.DB.Where("status <> ?", model.AccountPoolStatusDeleted).First(&pool, poolID).Error
 	return pool, err
+}
+
+func getAccountPoolExistingProxy(proxyID int) (model.AccountPoolProxy, error) {
+	var proxy model.AccountPoolProxy
+	err := model.DB.Where("status <> ?", model.AccountPoolProxyStatusDeleted).First(&proxy, proxyID).Error
+	return proxy, err
 }
 
 func AccountPoolRuntimeEnabledForChannel(channelID int) (bool, error) {

@@ -379,6 +379,137 @@ func TestAccountPoolServiceProxyCreateListRedactsPassword(t *testing.T) {
 	assert.Equal(t, "proxy-user", proxies[0].Username)
 }
 
+func TestAccountPoolServiceUpdateProxyPreservesPasswordAndSoftDeletesReferences(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	proxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Username: "proxy-user",
+		Password: "proxy-password-secret",
+	})
+	require.NoError(t, err)
+	fallback, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:            "proxy-b",
+		Protocol:        "http",
+		Host:            "127.0.0.2",
+		Port:            8081,
+		FallbackProxyID: proxy.Id,
+	})
+	require.NoError(t, err)
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "proxied-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-proxied",
+		},
+		ProxyID: proxy.Id,
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).
+		Where("id = ?", pool.Id).
+		Update("default_proxy_id", proxy.Id).Error)
+	var storedBefore model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&storedBefore, proxy.Id).Error)
+
+	updated, err := service.UpdateProxy(proxy.Id, AccountPoolProxyCreateParams{
+		Name:            "proxy-updated",
+		Protocol:        "socks5",
+		Host:            "10.0.0.1",
+		Port:            1080,
+		Username:        "proxy-user-updated",
+		Status:          model.AccountPoolProxyStatusDisabled,
+		FallbackProxyID: 0,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "proxy-updated", updated.Name)
+	assert.Equal(t, "socks5", updated.Protocol)
+	assert.Equal(t, "10.0.0.1", updated.Host)
+	assert.Equal(t, 1080, updated.Port)
+	assert.Equal(t, "proxy-user-updated", updated.Username)
+	assert.Equal(t, model.AccountPoolProxyStatusDisabled, updated.Status)
+	assert.True(t, updated.HasPassword)
+	var storedAfter model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&storedAfter, proxy.Id).Error)
+	assert.Equal(t, storedBefore.Password, storedAfter.Password)
+	proxyAuth, err := DecryptAccountPoolProxyAuthConfig(storedAfter.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "proxy-password-secret", proxyAuth.Password)
+
+	updated, err = service.UpdateProxy(proxy.Id, AccountPoolProxyCreateParams{
+		Name:            "proxy-rekeyed",
+		Protocol:        "socks5",
+		Host:            "10.0.0.1",
+		Port:            1080,
+		Username:        "proxy-user-updated",
+		Password:        "proxy-password-new",
+		Status:          model.AccountPoolProxyStatusEnabled,
+		FallbackProxyID: 0,
+	})
+	require.NoError(t, err)
+	assert.True(t, updated.HasPassword)
+	var storedRekeyed model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&storedRekeyed, proxy.Id).Error)
+	assert.NotEqual(t, storedAfter.Password, storedRekeyed.Password)
+	proxyAuth, err = DecryptAccountPoolProxyAuthConfig(storedRekeyed.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "proxy-password-new", proxyAuth.Password)
+
+	require.NoError(t, service.DeleteProxy(proxy.Id))
+	proxies, err := service.ListProxies()
+	require.NoError(t, err)
+	require.Len(t, proxies, 1)
+	assert.Equal(t, fallback.Id, proxies[0].Id)
+	var deletedProxy model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&deletedProxy, proxy.Id).Error)
+	assert.Equal(t, model.AccountPoolProxyStatusDeleted, deletedProxy.Status)
+	var reloadedPool model.AccountPool
+	require.NoError(t, model.DB.First(&reloadedPool, pool.Id).Error)
+	assert.Zero(t, reloadedPool.DefaultProxyID)
+	var reloadedAccount model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloadedAccount, account.Id).Error)
+	assert.Zero(t, reloadedAccount.ProxyID)
+	var reloadedFallback model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&reloadedFallback, fallback.Id).Error)
+	assert.Zero(t, reloadedFallback.FallbackProxyID)
+}
+
+func TestAccountPoolServiceUpdateProxyRejectsFallbackCycle(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	proxyA, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "proxy-a",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+	})
+	require.NoError(t, err)
+	proxyB, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:            "proxy-b",
+		Protocol:        "http",
+		Host:            "127.0.0.2",
+		Port:            8081,
+		FallbackProxyID: proxyA.Id,
+	})
+	require.NoError(t, err)
+
+	_, err = service.UpdateProxy(proxyA.Id, AccountPoolProxyCreateParams{
+		Name:            proxyA.Name,
+		Protocol:        proxyA.Protocol,
+		Host:            proxyA.Host,
+		Port:            proxyA.Port,
+		Status:          model.AccountPoolProxyStatusEnabled,
+		FallbackProxyID: proxyB.Id,
+	})
+
+	require.ErrorContains(t, err, "cycle")
+}
+
 func TestAccountPoolServiceListPresenceFlagsDoNotDecryptSecrets(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
