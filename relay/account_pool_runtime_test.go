@@ -111,6 +111,68 @@ func TestAccountPoolRelayHookMapsMissingCredentialToRetriable503(t *testing.T) {
 	assert.False(t, types.IsSkipRetryError(newAPIError))
 }
 
+func TestAccountPoolRuntimeAttemptsRetryAnotherAccountWhenCredentialResolutionFails(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := model.AccountPoolAccount{
+		PoolID:   pool.Id,
+		Name:     "missing-credential",
+		Status:   model.AccountPoolAccountStatusEnabled,
+		Priority: 100,
+	}
+	require.NoError(t, model.DB.Create(&first).Error)
+	second := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "fallback",
+		Priority: 50,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-fallback",
+		},
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	attempts := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attempts++
+		assert.Equal(t, second.Id, service.GetSelectedAccountPoolAccountID(ctx))
+		assert.Equal(t, "sk-fallback", info.ApiKey)
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, 1, attempts)
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, first.Id).Error)
+	assert.Greater(t, reloaded.TempDisabledUntil, int64(0))
+	assert.Contains(t, reloaded.LastError, "no runtime credential")
+}
+
+func TestAccountPoolRuntimeSnapshotRestorePreservesNilConversionChain(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "sk-original",
+			UpstreamModelName: "gpt-5",
+		},
+		RequestConversionChain: nil,
+	}
+	snapshot := snapshotAccountPoolRuntimeRelay(info)
+	info.RequestConversionChain = []types.RelayFormat{types.RelayFormatClaude}
+
+	restoreAccountPoolRuntimeRelay(info, snapshot)
+
+	assert.Nil(t, info.RequestConversionChain)
+}
+
 func TestAccountPoolRuntimeAttemptsRetryAnotherAccountBeforeResponse(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")

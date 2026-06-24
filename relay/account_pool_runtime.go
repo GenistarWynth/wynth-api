@@ -61,7 +61,16 @@ func runAccountPoolRuntimeAttempts(
 			return newAPIError
 		}
 		if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
-			return newAPIError
+			selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
+			accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
+			if selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+				_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
+				service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+			}
+			if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
+				return newAPIError
+			}
+			continue
 		}
 		selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 		accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
@@ -123,7 +132,11 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 	info.IsStream = snapshot.isStream
 	info.UpstreamRequestBodySize = snapshot.upstreamRequestBodySize
 	info.FinalRequestRelayFormat = snapshot.finalRequestRelayFormat
-	info.RequestConversionChain = append([]types.RelayFormat(nil), snapshot.requestConversionChain...)
+	if len(snapshot.requestConversionChain) > 0 {
+		info.RequestConversionChain = append([]types.RelayFormat(nil), snapshot.requestConversionChain...)
+	} else {
+		info.RequestConversionChain = nil
+	}
 }
 
 func shouldRetryAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo, selectedAccountID int, accountRetryTimes int, attemptIndex int, err *types.NewAPIError) bool {
