@@ -350,6 +350,26 @@ func UpdateAccountPoolBinding(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolBindingResponse(binding))
 }
 
+func DeleteAccountPoolBinding(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	bindingID, ok := accountPoolBindingIDFromParam(c)
+	if !ok {
+		return
+	}
+	if err := (&service.AccountPoolService{}).DeleteBinding(poolID, bindingID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.binding_delete", map[string]interface{}{
+		"id":      bindingID,
+		"pool_id": poolID,
+	})
+	common.ApiSuccess(c, nil)
+}
+
 func ActivateAccountPoolBinding(c *gin.Context) {
 	poolID, ok := accountPoolIDFromParam(c)
 	if !ok {

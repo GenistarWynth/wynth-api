@@ -61,6 +61,7 @@ var auditContentTemplates = map[string]string{
 	"account_pool.account_create": "Created account ${name} in account pool ${pool_id}",
 	"account_pool.proxy_create":   "Created account pool proxy ${name} (ID: ${id})",
 	"account_pool.binding_create": "Created draft account pool binding for channel ${channel_id} in pool ${pool_id}",
+	"account_pool.binding_delete": "Deleted account pool binding ${id} from pool ${pool_id}",
 
 	"redemption.create": "Created ${count} redemption codes named ${name} (${quota} each)",
 }

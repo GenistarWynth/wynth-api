@@ -499,6 +499,21 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	return buildAccountPoolBindingView(binding, channel), nil
 }
 
+func (s AccountPoolService) DeleteBinding(poolID int, bindingID int) error {
+	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+		return err
+	}
+	binding, err := getAccountPoolBindingForPool(poolID, bindingID)
+	if err != nil {
+		return err
+	}
+	if err := model.DB.Delete(&binding).Error; err != nil {
+		return err
+	}
+	invalidateAccountPoolRuntimeEnabledForChannel(binding.ChannelID)
+	return nil
+}
+
 func (s AccountPoolService) CreateProxy(params AccountPoolProxyCreateParams) (AccountPoolProxyView, error) {
 	name := strings.TrimSpace(params.Name)
 	if name == "" {

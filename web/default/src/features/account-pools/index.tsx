@@ -131,6 +131,7 @@ import {
   createAccountPoolProxy,
   deleteAccountPool,
   deleteAccountPoolAccount,
+  deleteAccountPoolBinding,
   deleteAccountPoolProxy,
   disableAccountPoolBinding,
   importAccountPoolAccounts,
@@ -578,6 +579,7 @@ export function AccountPools() {
   const [editingProxy, setEditingProxy] = useState<AccountPoolProxy>()
   const [deletingProxy, setDeletingProxy] = useState<AccountPoolProxy>()
   const [editingBinding, setEditingBinding] = useState<AccountPoolBinding>()
+  const [deletingBinding, setDeletingBinding] = useState<AccountPoolBinding>()
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
     Record<number, AccountPoolAccount[] | undefined>
   >({})
@@ -977,6 +979,28 @@ export function AccountPools() {
     },
   })
 
+  const deleteBindingMutation = useMutation({
+    mutationFn: async (binding: AccountPoolBinding) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return deleteAccountPoolBinding(selectedPoolID, binding.id)
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to delete binding')))
+        return
+      }
+      toast.success(t('Binding deleted'))
+      setDeletingBinding(undefined)
+      setEditingBinding(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
   const columns = useAccountPoolColumns({
     accountsByPool: loadedAccountsByPool,
     onDetails: (pool) => setSelectedPool(pool),
@@ -1140,10 +1164,29 @@ export function AccountPools() {
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
         onUpdateBinding={(values) => updateBindingMutation.mutate(values)}
         onEditBinding={setEditingBinding}
+        onDeleteBinding={setDeletingBinding}
         onCancelBindingEdit={() => setEditingBinding(undefined)}
         onSetBindingStatus={(binding, status) =>
           setBindingStatusMutation.mutate({ binding, status })
         }
+      />
+      <ConfirmDialog
+        open={Boolean(deletingBinding)}
+        onOpenChange={(open) => !open && setDeletingBinding(undefined)}
+        title={t('Delete binding?')}
+        desc={
+          deletingBinding
+            ? t('Delete binding for channel {{name}}. The channel itself will be kept.', {
+                name: deletingBinding.channel_name || `#${deletingBinding.channel_id}`,
+              })
+            : ''
+        }
+        destructive
+        confirmText={t('Delete')}
+        isLoading={deleteBindingMutation.isPending}
+        handleConfirm={() => {
+          if (deletingBinding) deleteBindingMutation.mutate(deletingBinding)
+        }}
       />
       <AccountImportDialog
         open={accountImportOpen}
@@ -1454,6 +1497,7 @@ function PoolDetailsSheet(props: {
   onCreateBinding: (values: BindingFormValues) => void
   onUpdateBinding: (values: BindingFormValues) => void
   onEditBinding: (binding: AccountPoolBinding) => void
+  onDeleteBinding: (binding: AccountPoolBinding) => void
   onCancelBindingEdit: () => void
   onSetBindingStatus: (
     binding: AccountPoolBinding,
@@ -1523,6 +1567,7 @@ function PoolDetailsSheet(props: {
                 onCreateBinding={props.onCreateBinding}
                 onUpdateBinding={props.onUpdateBinding}
                 onEditBinding={props.onEditBinding}
+                onDeleteBinding={props.onDeleteBinding}
                 onCancelBindingEdit={props.onCancelBindingEdit}
                 onSetBindingStatus={props.onSetBindingStatus}
               />
@@ -1728,6 +1773,7 @@ function BindingSection(props: {
   onCreateBinding: (values: BindingFormValues) => void
   onUpdateBinding: (values: BindingFormValues) => void
   onEditBinding: (binding: AccountPoolBinding) => void
+  onDeleteBinding: (binding: AccountPoolBinding) => void
   onCancelBindingEdit: () => void
   onSetBindingStatus: (
     binding: AccountPoolBinding,
@@ -1791,6 +1837,7 @@ function BindingSection(props: {
                     <BindingRowActions
                       binding={binding}
                       onEdit={props.onEditBinding}
+                      onDelete={props.onDeleteBinding}
                       onSetStatus={props.onSetBindingStatus}
                     />
                   </TableCell>
@@ -1819,6 +1866,7 @@ function BindingSection(props: {
 function BindingRowActions(props: {
   binding: AccountPoolBinding
   onEdit: (binding: AccountPoolBinding) => void
+  onDelete: (binding: AccountPoolBinding) => void
   onSetStatus: (
     binding: AccountPoolBinding,
     status: 'enabled' | 'disabled'
@@ -1853,6 +1901,13 @@ function BindingRowActions(props: {
         >
           {enabled ? <PowerOff /> : <Power />}
           {enabled ? t('Disable') : t('Enable')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className='text-destructive focus:text-destructive'
+          onClick={() => props.onDelete(props.binding)}
+        >
+          <Trash2 />
+          {t('Delete')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -327,6 +327,40 @@ func TestAccountPoolServiceDisableBindingDisablesRuntime(t *testing.T) {
 	assert.False(t, enabled)
 }
 
+func TestAccountPoolServiceDeleteBindingReleasesChannelAndInvalidatesRuntime(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	enabled, err := AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	require.True(t, enabled)
+
+	require.NoError(t, service.DeleteBinding(pool.Id, binding.Id))
+
+	enabled, err = AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
+	var reloadedBinding model.AccountPoolChannelBinding
+	require.Error(t, model.DB.First(&reloadedBinding, binding.Id).Error)
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
+	rebound, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, channel.Id, rebound.ChannelID)
+}
+
 func TestAccountPoolServiceUpdateBindingConfigPreservesRuntimeStatus(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

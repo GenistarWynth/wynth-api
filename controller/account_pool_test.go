@@ -125,6 +125,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.GET("/:id/bindings", ListAccountPoolBindings)
 		group.POST("/:id/bindings", CreateAccountPoolBinding)
 		group.PUT("/:id/bindings/:binding_id", UpdateAccountPoolBinding)
+		group.DELETE("/:id/bindings/:binding_id", DeleteAccountPoolBinding)
 		group.POST("/:id/bindings/:binding_id/activate", ActivateAccountPoolBinding)
 		group.POST("/:id/bindings/:binding_id/disable", DisableAccountPoolBinding)
 	}
@@ -364,6 +365,36 @@ func TestAccountPoolAPIBindingActivateDisableControlsRuntimeButNotChannel(t *tes
 	enabled, err = service.AccountPoolRuntimeEnabledForChannel(channel.Id)
 	require.NoError(t, err)
 	assert.False(t, enabled)
+}
+
+func TestAccountPoolAPIDeleteBindingReleasesChannel(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+	channel := createAccountPoolAPITestChannel(t, common.ChannelStatusManuallyDisabled)
+	createResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{
+		ChannelID: channel.Id,
+	})
+	require.True(t, createResult.Response.Success, createResult.Response.Message)
+	activateResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id)+"/activate", nil)
+	require.True(t, activateResult.Response.Success, activateResult.Response.Message)
+	enabled, err := service.AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	require.True(t, enabled)
+
+	deleteResult := accountPoolAPIRequest[any](t, router, http.MethodDelete, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id), nil)
+
+	require.True(t, deleteResult.Response.Success, deleteResult.Response.Message)
+	enabled, err = service.AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
+	var reloadedBinding model.AccountPoolChannelBinding
+	require.Error(t, model.DB.First(&reloadedBinding, createResult.Response.Data.Id).Error)
+	rebindResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{
+		ChannelID: channel.Id,
+	})
+	require.True(t, rebindResult.Response.Success, rebindResult.Response.Message)
+	assert.Equal(t, channel.Id, rebindResult.Response.Data.ChannelID)
 }
 
 func TestAccountPoolAPIUpdateBindingConfig(t *testing.T) {

@@ -175,6 +175,17 @@ export async function updateAccountPoolBinding(
   return res.data
 }
 
+export async function deleteAccountPoolBinding(
+  poolID: number,
+  bindingID: number
+): Promise<ApiResponse<null>> {
+  const res = await api.delete(
+    `/api/account_pools/${poolID}/bindings/${bindingID}`,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
 export async function activateAccountPoolBinding(
   poolID: number,
   bindingID: number
