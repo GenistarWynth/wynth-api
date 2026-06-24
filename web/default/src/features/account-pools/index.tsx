@@ -1867,6 +1867,8 @@ function CapabilityDetectDialog(props: {
   const [singleResult, setSingleResult] =
     useState<AccountPoolCapabilityDetectResult>()
   const [poolResult, setPoolResult] = useState<AccountPoolCapabilityPoolResult>()
+  const [pendingContext, setPendingContext] =
+    useState<CapabilityDetectRequestContext | null>(null)
   const activeContextRef = useRef<CapabilityDetectRequestContext | null>(null)
   const dialogNonceRef = useRef(0)
   const requestNonceRef = useRef(0)
@@ -1899,6 +1901,7 @@ function CapabilityDetectDialog(props: {
       setForm(emptyCapabilityDetectForm(defaultChannelID))
       setSingleResult(undefined)
       setPoolResult(undefined)
+      setPendingContext(null)
       activeContextRef.current = {
         scope: props.account ? 'account' : 'pool',
         poolID: props.pool?.id ?? 0,
@@ -1908,6 +1911,7 @@ function CapabilityDetectDialog(props: {
         requestNonce: requestNonceRef.current,
       }
     } else {
+      setPendingContext(null)
       activeContextRef.current = null
     }
   }, [defaultChannelID, props.account?.id, props.open, props.pool?.id])
@@ -1960,6 +1964,7 @@ function CapabilityDetectDialog(props: {
     },
     onMutate: ({ context }) => {
       if (isActiveCapabilityDetectContext(activeContextRef.current, context)) {
+        setPendingContext(context)
         setSingleResult(undefined)
         setPoolResult(undefined)
       }
@@ -2005,7 +2010,20 @@ function CapabilityDetectDialog(props: {
       }
       toast.error(error instanceof Error ? error.message : t('Request failed'))
     },
+    onSettled: (_payload, _error, variables) => {
+      setPendingContext((previous) =>
+        previous &&
+        isActiveCapabilityDetectContext(previous, variables.context)
+          ? null
+          : previous
+      )
+    },
   })
+
+  const isCurrentDetectionPending = Boolean(
+    pendingContext &&
+      isActiveCapabilityDetectContext(activeContextRef.current, pendingContext)
+  )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -2280,9 +2298,9 @@ function CapabilityDetectDialog(props: {
           <Button
             type='submit'
             form='account-pool-capability-detect-form'
-            disabled={detectMutation.isPending || !hasBindings}
+            disabled={isCurrentDetectionPending || !hasBindings}
           >
-            {detectMutation.isPending ? (
+            {isCurrentDetectionPending ? (
               <Loader2 data-icon='inline-start' className='animate-spin' />
             ) : (
               <Radar data-icon='inline-start' />
