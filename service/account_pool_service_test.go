@@ -210,6 +210,58 @@ func TestAccountPoolServiceDisableBindingDisablesRuntime(t *testing.T) {
 	assert.False(t, enabled)
 }
 
+func TestAccountPoolServiceUpdateBindingConfigPreservesRuntimeStatus(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	oldChannel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	newChannel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: oldChannel.Id,
+	})
+	require.NoError(t, err)
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	enabled, err := AccountPoolRuntimeEnabledForChannel(oldChannel.Id)
+	require.NoError(t, err)
+	require.True(t, enabled)
+
+	updated, err := service.UpdateBinding(pool.Id, binding.Id, AccountPoolBindingCreateParams{
+		ChannelID: newChannel.Id,
+		AccountFilterConfig: AccountPoolAccountFilterConfig{
+			AccountIDs: []int{101, 202},
+		},
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5", "gpt-5-mini"},
+		},
+		SchedulePolicy:    "priority",
+		AccountRetryTimes: 3,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, updated.Status)
+	assert.Equal(t, newChannel.Id, updated.ChannelID)
+	assert.Equal(t, 3, updated.AccountRetryTimes)
+	assert.Equal(t, "priority", updated.SchedulePolicy)
+	var filter AccountPoolAccountFilterConfig
+	require.NoError(t, common.UnmarshalJsonStr(updated.AccountFilterConfig, &filter))
+	assert.Equal(t, []int{101, 202}, filter.AccountIDs)
+	var policy AccountPoolModelPolicy
+	require.NoError(t, common.UnmarshalJsonStr(updated.ModelPolicy, &policy))
+	assert.Equal(t, AccountPoolModelPolicy{
+		Strategy:    "fixed",
+		FixedModels: []string{"gpt-5", "gpt-5-mini"},
+	}, policy)
+	enabled, err = AccountPoolRuntimeEnabledForChannel(oldChannel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
+	enabled, err = AccountPoolRuntimeEnabledForChannel(newChannel.Id)
+	require.NoError(t, err)
+	assert.True(t, enabled)
+}
+
 func TestAccountPoolServiceBindingActivationRejectsWrongPoolAndUnsupportedChannel(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

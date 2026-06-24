@@ -162,6 +162,19 @@ export async function createAccountPoolBinding(
   return res.data
 }
 
+export async function updateAccountPoolBinding(
+  poolID: number,
+  bindingID: number,
+  data: AccountPoolBindingCreateRequest
+): Promise<ApiResponse<AccountPoolBinding>> {
+  const res = await api.put(
+    `/api/account_pools/${poolID}/bindings/${bindingID}`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
 export async function activateAccountPoolBinding(
   poolID: number,
   bindingID: number

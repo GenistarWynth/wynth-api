@@ -413,6 +413,58 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	return buildAccountPoolBindingView(binding, channel), nil
 }
 
+func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params AccountPoolBindingCreateParams) (AccountPoolBindingView, error) {
+	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	binding, err := getAccountPoolBindingForPool(poolID, bindingID)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	if params.ChannelID <= 0 {
+		return AccountPoolBindingView{}, errors.New("account pool binding channel is required")
+	}
+	var channel model.Channel
+	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	if binding.ChannelID != channel.Id && channel.Status == common.ChannelStatusEnabled {
+		return AccountPoolBindingView{}, errors.New("account pool binding requires a disabled channel when changing channel")
+	}
+	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	modelPolicy, err := marshalAccountPoolOptionalJSON(params.ModelPolicy)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	oldChannelID := binding.ChannelID
+	now := common.GetTimestamp()
+	if err := model.DB.Model(&binding).Updates(map[string]any{
+		"channel_id":            channel.Id,
+		"account_filter_config": accountFilterConfig,
+		"model_policy":          modelPolicy,
+		"schedule_policy":       params.SchedulePolicy,
+		"account_retry_times":   params.AccountRetryTimes,
+		"updated_time":          now,
+	}).Error; err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	binding.ChannelID = channel.Id
+	binding.AccountFilterConfig = accountFilterConfig
+	binding.ModelPolicy = modelPolicy
+	binding.SchedulePolicy = params.SchedulePolicy
+	binding.AccountRetryTimes = params.AccountRetryTimes
+	binding.UpdatedTime = now
+	invalidateAccountPoolRuntimeEnabledForChannel(oldChannelID)
+	invalidateAccountPoolRuntimeEnabledForChannel(channel.Id)
+	return buildAccountPoolBindingView(binding, channel), nil
+}
+
 func (s AccountPoolService) CreateProxy(params AccountPoolProxyCreateParams) (AccountPoolProxyView, error) {
 	name := strings.TrimSpace(params.Name)
 	if name == "" {

@@ -122,6 +122,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
 		group.GET("/:id/bindings", ListAccountPoolBindings)
 		group.POST("/:id/bindings", CreateAccountPoolBinding)
+		group.PUT("/:id/bindings/:binding_id", UpdateAccountPoolBinding)
 		group.POST("/:id/bindings/:binding_id/activate", ActivateAccountPoolBinding)
 		group.POST("/:id/bindings/:binding_id/disable", DisableAccountPoolBinding)
 	}
@@ -361,6 +362,44 @@ func TestAccountPoolAPIBindingActivateDisableControlsRuntimeButNotChannel(t *tes
 	enabled, err = service.AccountPoolRuntimeEnabledForChannel(channel.Id)
 	require.NoError(t, err)
 	assert.False(t, enabled)
+}
+
+func TestAccountPoolAPIUpdateBindingConfig(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+	oldChannel := createAccountPoolAPITestChannel(t, common.ChannelStatusManuallyDisabled)
+	newChannel := createAccountPoolAPITestChannel(t, common.ChannelStatusManuallyDisabled)
+	createResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings", dto.AccountPoolBindingCreateRequest{
+		ChannelID: oldChannel.Id,
+	})
+	require.True(t, createResult.Response.Success, createResult.Response.Message)
+	activateResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id)+"/activate", nil)
+	require.True(t, activateResult.Response.Success, activateResult.Response.Message)
+
+	updateResult := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPut, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/"+strconv.Itoa(createResult.Response.Data.Id), dto.AccountPoolBindingCreateRequest{
+		ChannelID:         newChannel.Id,
+		AccountIDs:        []int{11, 22},
+		ModelStrategy:     "fixed",
+		FixedModels:       []string{"gpt-5", "gpt-5-mini"},
+		SchedulePolicy:    "priority",
+		AccountRetryTimes: 2,
+	})
+
+	require.True(t, updateResult.Response.Success, updateResult.Response.Message)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, updateResult.Response.Data.Status)
+	assert.Equal(t, newChannel.Id, updateResult.Response.Data.ChannelID)
+	assert.Equal(t, "priority", updateResult.Response.Data.SchedulePolicy)
+	assert.Equal(t, 2, updateResult.Response.Data.AccountRetryTimes)
+	var filter service.AccountPoolAccountFilterConfig
+	require.NoError(t, common.UnmarshalJsonStr(updateResult.Response.Data.AccountFilterConfig, &filter))
+	assert.Equal(t, []int{11, 22}, filter.AccountIDs)
+	var policy service.AccountPoolModelPolicy
+	require.NoError(t, common.UnmarshalJsonStr(updateResult.Response.Data.ModelPolicy, &policy))
+	assert.Equal(t, service.AccountPoolModelPolicy{
+		Strategy:    "fixed",
+		FixedModels: []string{"gpt-5", "gpt-5-mini"},
+	}, policy)
 }
 
 func TestAccountPoolAPIBindingActivationRejectsWrongPoolAndUnsupportedChannel(t *testing.T) {

@@ -137,6 +137,7 @@ import {
   listAccountPoolProxies,
   listAccountPools,
   updateAccountPoolAccount,
+  updateAccountPoolBinding,
 } from './api'
 import {
   accountToFormValues,
@@ -258,6 +259,19 @@ function buildAccountImportPayload(
   }
 }
 
+function buildBindingPayload(
+  values: BindingFormValues
+): AccountPoolBindingCreateRequest {
+  return {
+    channel_id: values.channel_id,
+    account_ids: values.account_ids,
+    model_strategy: values.model_strategy,
+    fixed_models: modelListFromText(values.fixed_models_text),
+    schedule_policy: values.schedule_policy,
+    account_retry_times: values.account_retry_times,
+  }
+}
+
 function formatOptionalTimestamp(value: number) {
   return value > 0 ? formatTimestamp(value) : '-'
 }
@@ -317,6 +331,39 @@ function modelListFromText(value: string): string[] {
     .split(/[,，\n\r]+/)
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function parseAccountPoolJSON<T>(value: string, fallback: T): T {
+  if (!value.trim()) {
+    return fallback
+  }
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
+function bindingToFormValues(binding: AccountPoolBinding): BindingFormValues {
+  const filter = parseAccountPoolJSON<{ account_ids?: number[] }>(
+    binding.account_filter_config,
+    {}
+  )
+  const policy = parseAccountPoolJSON<{
+    strategy?: string
+    fixed_models?: string[]
+  }>(binding.model_policy, {})
+
+  return {
+    channel_id: binding.channel_id,
+    account_ids: Array.isArray(filter.account_ids) ? filter.account_ids : [],
+    model_strategy: policy.strategy || 'all',
+    fixed_models_text: Array.isArray(policy.fixed_models)
+      ? policy.fixed_models.join(', ')
+      : '',
+    schedule_policy: binding.schedule_policy || 'round_robin',
+    account_retry_times: binding.account_retry_times,
+  }
 }
 
 function channelStatusLabel(status: number) {
@@ -523,6 +570,7 @@ export function AccountPools() {
   const [deletingAccount, setDeletingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
+  const [editingBinding, setEditingBinding] = useState<AccountPoolBinding>()
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
     Record<number, AccountPoolAccount[] | undefined>
   >({})
@@ -773,15 +821,7 @@ export function AccountPools() {
       if (!selectedPoolID) {
         throw new Error(t('Select an account pool first'))
       }
-      const payload: AccountPoolBindingCreateRequest = {
-        channel_id: values.channel_id,
-        account_ids: values.account_ids,
-        model_strategy: values.model_strategy,
-        fixed_models: modelListFromText(values.fixed_models_text),
-        schedule_policy: values.schedule_policy,
-        account_retry_times: values.account_retry_times,
-      }
-      return createAccountPoolBinding(selectedPoolID, payload)
+      return createAccountPoolBinding(selectedPoolID, buildBindingPayload(values))
     },
     onSuccess: (result) => {
       if (!result.success) {
@@ -789,6 +829,33 @@ export function AccountPools() {
         return
       }
       toast.success(t('Binding created'))
+      setEditingBinding(undefined)
+      setBindingFormResetVersion((version) => version + 1)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const updateBindingMutation = useMutation({
+    mutationFn: async (values: BindingFormValues) => {
+      if (!selectedPoolID || !editingBinding) {
+        throw new Error(t('Select a binding first'))
+      }
+      return updateAccountPoolBinding(
+        selectedPoolID,
+        editingBinding.id,
+        buildBindingPayload(values)
+      )
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to update binding')))
+        return
+      }
+      toast.success(t('Binding updated'))
+      setEditingBinding(undefined)
       setBindingFormResetVersion((version) => version + 1)
       invalidatePools()
     },
@@ -910,9 +977,17 @@ export function AccountPools() {
         accountsLoading={accountsQuery.isLoading}
         bindingsLoading={bindingsQuery.isLoading}
         proxiesLoading={proxiesQuery.isLoading}
+        editingBinding={editingBinding}
         bindingFormResetVersion={bindingFormResetVersion}
-        bindingSubmitting={createBindingMutation.isPending}
-        onOpenChange={(open) => !open && setSelectedPool(undefined)}
+        bindingSubmitting={
+          createBindingMutation.isPending || updateBindingMutation.isPending
+        }
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedPool(undefined)
+            setEditingBinding(undefined)
+          }
+        }}
         onCreateAccount={() => {
           setEditingAccount(undefined)
           setAccountSheetOpen(true)
@@ -928,6 +1003,9 @@ export function AccountPools() {
         }
         onCreateProxy={() => setProxySheetOpen(true)}
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
+        onUpdateBinding={(values) => updateBindingMutation.mutate(values)}
+        onEditBinding={setEditingBinding}
+        onCancelBindingEdit={() => setEditingBinding(undefined)}
         onSetBindingStatus={(binding, status) =>
           setBindingStatusMutation.mutate({ binding, status })
         }
@@ -1174,6 +1252,7 @@ function PoolDetailsSheet(props: {
   accountsLoading: boolean
   bindingsLoading: boolean
   proxiesLoading: boolean
+  editingBinding?: AccountPoolBinding
   bindingFormResetVersion: number
   bindingSubmitting: boolean
   onOpenChange: (open: boolean) => void
@@ -1184,6 +1263,9 @@ function PoolDetailsSheet(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onCreateProxy: () => void
   onCreateBinding: (values: BindingFormValues) => void
+  onUpdateBinding: (values: BindingFormValues) => void
+  onEditBinding: (binding: AccountPoolBinding) => void
+  onCancelBindingEdit: () => void
   onSetBindingStatus: (
     binding: AccountPoolBinding,
     status: 'enabled' | 'disabled'
@@ -1244,10 +1326,14 @@ function PoolDetailsSheet(props: {
               <BindingSection
                 accounts={props.accounts}
                 bindings={props.bindings}
+                editingBinding={props.editingBinding}
                 loading={props.bindingsLoading}
                 resetVersion={props.bindingFormResetVersion}
                 submitting={props.bindingSubmitting}
                 onCreateBinding={props.onCreateBinding}
+                onUpdateBinding={props.onUpdateBinding}
+                onEditBinding={props.onEditBinding}
+                onCancelBindingEdit={props.onCancelBindingEdit}
                 onSetBindingStatus={props.onSetBindingStatus}
               />
             </TabsContent>
@@ -1442,10 +1528,14 @@ function AccountRowActions(props: {
 function BindingSection(props: {
   accounts: AccountPoolAccount[]
   bindings: AccountPoolBinding[]
+  editingBinding?: AccountPoolBinding
   loading: boolean
   resetVersion: number
   submitting: boolean
   onCreateBinding: (values: BindingFormValues) => void
+  onUpdateBinding: (values: BindingFormValues) => void
+  onEditBinding: (binding: AccountPoolBinding) => void
+  onCancelBindingEdit: () => void
   onSetBindingStatus: (
     binding: AccountPoolBinding,
     status: 'enabled' | 'disabled'
@@ -1503,6 +1593,7 @@ function BindingSection(props: {
                   <TableCell>
                     <BindingRowActions
                       binding={binding}
+                      onEdit={props.onEditBinding}
                       onSetStatus={props.onSetBindingStatus}
                     />
                   </TableCell>
@@ -1514,10 +1605,14 @@ function BindingSection(props: {
       </SideDrawerSection>
       <BindingForm
         accounts={props.accounts}
+        binding={props.editingBinding}
         bindings={props.bindings}
         resetVersion={props.resetVersion}
         submitting={props.submitting}
-        onSubmit={props.onCreateBinding}
+        onCancelEdit={props.onCancelBindingEdit}
+        onSubmit={
+          props.editingBinding ? props.onUpdateBinding : props.onCreateBinding
+        }
       />
     </div>
   )
@@ -1525,6 +1620,7 @@ function BindingSection(props: {
 
 function BindingRowActions(props: {
   binding: AccountPoolBinding
+  onEdit: (binding: AccountPoolBinding) => void
   onSetStatus: (
     binding: AccountPoolBinding,
     status: 'enabled' | 'disabled'
@@ -1548,6 +1644,10 @@ function BindingRowActions(props: {
         <span className='sr-only'>{t('Open menu')}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end'>
+        <DropdownMenuItem onClick={() => props.onEdit(props.binding)}>
+          <Pencil />
+          {t('Edit')}
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() =>
             props.onSetStatus(props.binding, enabled ? 'disabled' : 'enabled')
@@ -1563,9 +1663,11 @@ function BindingRowActions(props: {
 
 function BindingForm(props: {
   accounts: AccountPoolAccount[]
+  binding?: AccountPoolBinding
   bindings: AccountPoolBinding[]
   resetVersion: number
   submitting: boolean
+  onCancelEdit: () => void
   onSubmit: (values: BindingFormValues) => void
 }) {
   const { t } = useTranslation()
@@ -1590,12 +1692,37 @@ function BindingForm(props: {
   })
   const disabledChannels = disabledChannelsQuery.data ?? EMPTY_CHANNELS
   const boundChannelIDs = useMemo(
-    () => new Set(props.bindings.map((binding) => binding.channel_id)),
-    [props.bindings]
+    () =>
+      new Set(
+        props.bindings
+          .filter((binding) => binding.id !== props.binding?.id)
+          .map((binding) => binding.channel_id)
+      ),
+    [props.binding?.id, props.bindings]
   )
-  const availableDisabledChannels = useMemo(
-    () => disabledChannels.filter((channel) => !boundChannelIDs.has(channel.id)),
-    [boundChannelIDs, disabledChannels]
+  const availableBindingChannels = useMemo(
+    () => {
+      const channels = disabledChannels
+        .filter((channel) => !boundChannelIDs.has(channel.id))
+        .map((channel) => ({
+          id: channel.id,
+          name: channel.name,
+        }))
+      if (
+        props.binding &&
+        !channels.some((channel) => channel.id === props.binding?.channel_id)
+      ) {
+        return [
+          {
+            id: props.binding.channel_id,
+            name: props.binding.channel_name || `#${props.binding.channel_id}`,
+          },
+          ...channels,
+        ]
+      }
+      return channels
+    },
+    [boundChannelIDs, disabledChannels, props.binding]
   )
 
   useEffect(() => {
@@ -1605,8 +1732,8 @@ function BindingForm(props: {
   }, [disabledChannelsQuery.error])
 
   useEffect(() => {
-    setForm(emptyBindingForm())
-  }, [props.resetVersion])
+    setForm(props.binding ? bindingToFormValues(props.binding) : emptyBindingForm())
+  }, [props.binding, props.resetVersion])
 
   const setField = <K extends keyof BindingFormValues>(
     key: K,
@@ -1633,7 +1760,9 @@ function BindingForm(props: {
 
   return (
     <SideDrawerSection>
-      <SideDrawerSectionHeader title={t('Draft Binding')} />
+      <SideDrawerSectionHeader
+        title={props.binding ? t('Edit Binding') : t('Draft Binding')}
+      />
       <form className='flex flex-col gap-4' onSubmit={handleSubmit}>
         <FieldGroup className='gap-4 sm:grid sm:grid-cols-2'>
           <FieldBlock
@@ -1642,7 +1771,7 @@ function BindingForm(props: {
             description={t('Only disabled channels are available for binding.')}
           >
             <Select
-              items={availableDisabledChannels.map((channel) => ({
+              items={availableBindingChannels.map((channel) => ({
                 value: String(channel.id),
                 label: channel.name,
               }))}
@@ -1657,7 +1786,7 @@ function BindingForm(props: {
               </SelectTrigger>
               <SelectContent alignItemWithTrigger={false}>
                 <SelectGroup>
-                  {availableDisabledChannels.map((channel) => (
+                  {availableBindingChannels.map((channel) => (
                     <SelectItem key={channel.id} value={String(channel.id)}>
                       #{channel.id} {channel.name}
                     </SelectItem>
@@ -1768,14 +1897,26 @@ function BindingForm(props: {
             )}
           </div>
         </FieldSet>
-        <div className='flex justify-end'>
+        <div className='flex justify-end gap-2'>
+          {props.binding && (
+            <Button
+              type='button'
+              variant='outline'
+              disabled={props.submitting}
+              onClick={props.onCancelEdit}
+            >
+              {t('Cancel Edit')}
+            </Button>
+          )}
           <Button type='submit' disabled={props.submitting}>
             {props.submitting ? (
               <Loader2 data-icon='inline-start' className='animate-spin' />
+            ) : props.binding ? (
+              <Save data-icon='inline-start' />
             ) : (
               <Link2 data-icon='inline-start' />
             )}
-            {t('Create Draft Binding')}
+            {props.binding ? t('Save Changes') : t('Create Draft Binding')}
           </Button>
         </div>
       </form>

@@ -282,24 +282,39 @@ func CreateAccountPoolBinding(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	binding, err := (&service.AccountPoolService{}).CreateBinding(service.AccountPoolBindingCreateParams{
-		PoolID:    poolID,
-		ChannelID: req.ChannelID,
-		AccountFilterConfig: service.AccountPoolAccountFilterConfig{
-			AccountIDs: req.AccountIDs,
-		},
-		ModelPolicy: service.AccountPoolModelPolicy{
-			Strategy:    req.ModelStrategy,
-			FixedModels: req.FixedModels,
-		},
-		SchedulePolicy:    req.SchedulePolicy,
-		AccountRetryTimes: req.AccountRetryTimes,
-	})
+	binding, err := (&service.AccountPoolService{}).CreateBinding(accountPoolBindingCreateParams(poolID, req))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	recordManageAudit(c, "account_pool.binding_create", map[string]interface{}{
+		"id":         binding.Id,
+		"pool_id":    poolID,
+		"channel_id": binding.ChannelID,
+	})
+	common.ApiSuccess(c, accountPoolBindingResponse(binding))
+}
+
+func UpdateAccountPoolBinding(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	bindingID, ok := accountPoolBindingIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolBindingCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	binding, err := (&service.AccountPoolService{}).UpdateBinding(poolID, bindingID, accountPoolBindingCreateParams(poolID, req))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.binding_update", map[string]interface{}{
 		"id":         binding.Id,
 		"pool_id":    poolID,
 		"channel_id": binding.ChannelID,
@@ -436,6 +451,22 @@ func accountPoolAccountImportParams(poolID int, req dto.AccountPoolAccountImport
 			ModelMapping:    req.Defaults.ModelMapping,
 		},
 		DryRun: req.DryRun,
+	}
+}
+
+func accountPoolBindingCreateParams(poolID int, req dto.AccountPoolBindingCreateRequest) service.AccountPoolBindingCreateParams {
+	return service.AccountPoolBindingCreateParams{
+		PoolID:    poolID,
+		ChannelID: req.ChannelID,
+		AccountFilterConfig: service.AccountPoolAccountFilterConfig{
+			AccountIDs: req.AccountIDs,
+		},
+		ModelPolicy: service.AccountPoolModelPolicy{
+			Strategy:    req.ModelStrategy,
+			FixedModels: req.FixedModels,
+		},
+		SchedulePolicy:    req.SchedulePolicy,
+		AccountRetryTimes: req.AccountRetryTimes,
 	}
 }
 
