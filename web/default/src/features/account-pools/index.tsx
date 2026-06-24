@@ -120,6 +120,8 @@ import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { getChannels } from '@/features/channels/api'
 import {
+  CHANNEL_TYPE_CODEX,
+  CHANNEL_TYPES,
   CHANNEL_STATUS_CONFIG,
   CHANNEL_STATUS_LABELS,
 } from '@/features/channels/constants'
@@ -187,6 +189,7 @@ type BindingFormValues = {
 
 type BoundChannelFormValues = {
   name: string
+  type: number
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -194,6 +197,13 @@ const EMPTY_BINDINGS: AccountPoolBinding[] = []
 const EMPTY_PROXIES: AccountPoolProxy[] = []
 const EMPTY_CHANNELS: Channel[] = []
 const POOL_PLATFORM_OPTIONS = [{ value: 'openai', label: 'OpenAI' }]
+const ACCOUNT_POOL_BOUND_CHANNEL_TYPE_OPTIONS = [
+  { value: '1', label: CHANNEL_TYPES[1] },
+  {
+    value: String(CHANNEL_TYPE_CODEX),
+    label: CHANNEL_TYPES[CHANNEL_TYPE_CODEX],
+  },
+]
 const STATUS_OPTIONS = [
   { value: 'enabled', label: 'Enabled' },
   { value: 'disabled', label: 'Disabled' },
@@ -974,6 +984,7 @@ export function AccountPools() {
       }
       return createAccountPoolBoundChannel(selectedPoolID, {
         name: values.name.trim(),
+        type: values.type,
       })
     },
     onSuccess: (result) => {
@@ -1557,10 +1568,12 @@ function BoundChannelDialog(props: {
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
+  const [channelType, setChannelType] = useState('1')
 
   useEffect(() => {
     if (props.open) {
       setName(props.pool ? `${props.pool.name} Channel` : '')
+      setChannelType('1')
     }
   }, [props.open, props.pool])
 
@@ -1571,7 +1584,10 @@ function BoundChannelDialog(props: {
       toast.error(t('Channel name is required'))
       return
     }
-    props.onSubmit({ name: trimmedName })
+    props.onSubmit({
+      name: trimmedName,
+      type: Number.parseInt(channelType, 10) || 1,
+    })
   }
 
   return (
@@ -1598,6 +1614,28 @@ function BoundChannelDialog(props: {
               onChange={(event) => setName(event.target.value)}
               autoFocus
             />
+          </FieldBlock>
+          <FieldBlock
+            label={t('Channel Type')}
+            htmlFor='account-pool-bound-channel-type'
+          >
+            <Select
+              value={channelType}
+              onValueChange={(value) => setChannelType(value ?? '1')}
+            >
+              <SelectTrigger id='account-pool-bound-channel-type'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {ACCOUNT_POOL_BOUND_CHANNEL_TYPE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {t(option.label)}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
           </FieldBlock>
         </form>
         <DialogFooter>
