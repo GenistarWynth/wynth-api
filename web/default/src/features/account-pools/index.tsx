@@ -1917,6 +1917,7 @@ function BindingSection(props: {
                 <TableHead>{t('Channel')}</TableHead>
                 <TableHead>{t('Channel Status')}</TableHead>
                 <TableHead>{t('Binding Status')}</TableHead>
+                <TableHead>{t('Runtime')}</TableHead>
                 <TableHead>{t('Schedule Policy')}</TableHead>
                 <TableHead>{t('Retry Count')}</TableHead>
                 <TableHead>{t('Updated At')}</TableHead>
@@ -1924,9 +1925,9 @@ function BindingSection(props: {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.loading && <LoadingRow colSpan={7} />}
+              {props.loading && <LoadingRow colSpan={8} />}
               {!props.loading && props.bindings.length === 0 && (
-                <EmptyRow colSpan={7} label={t('No bindings found')} />
+                <EmptyRow colSpan={8} label={t('No bindings found')} />
               )}
               {props.bindings.map((binding) => (
                 <TableRow key={binding.id}>
@@ -1947,6 +1948,13 @@ function BindingSection(props: {
                   </TableCell>
                   <TableCell>
                     <StatusPill status={binding.status} />
+                  </TableCell>
+                  <TableCell>
+                    <StatusBadge
+                      label={binding.runtime_enabled ? t('Routed') : t('Not Routed')}
+                      variant={binding.runtime_enabled ? 'success' : 'neutral'}
+                      copyable={false}
+                    />
                   </TableCell>
                   <TableCell>
                     {t(schedulePolicyLabel(binding.schedule_policy))}

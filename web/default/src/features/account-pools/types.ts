@@ -173,6 +173,7 @@ export type AccountPoolBinding = {
   schedule_policy: string
   account_retry_times: number
   status: AccountPoolBindingStatus | string
+  runtime_enabled: boolean
   created_time: number
   updated_time: number
 }

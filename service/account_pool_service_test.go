@@ -442,6 +442,7 @@ func TestAccountPoolServiceActivateBindingEnablesRuntimeButNotChannel(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, model.AccountPoolBindingStatusEnabled, activated.Status)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, activated.ChannelStatus)
+	assert.True(t, activated.RuntimeEnabled)
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
@@ -452,6 +453,7 @@ func TestAccountPoolServiceActivateBindingEnablesRuntimeButNotChannel(t *testing
 	again, err := service.ActivateBinding(pool.Id, binding.Id)
 	require.NoError(t, err)
 	assert.Equal(t, model.AccountPoolBindingStatusEnabled, again.Status)
+	assert.True(t, again.RuntimeEnabled)
 }
 
 func TestAccountPoolServiceDisableBindingDisablesRuntime(t *testing.T) {
@@ -474,6 +476,7 @@ func TestAccountPoolServiceDisableBindingDisablesRuntime(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, model.AccountPoolBindingStatusDisabled, disabled.Status)
+	assert.False(t, disabled.RuntimeEnabled)
 	enabled, err = AccountPoolRuntimeEnabledForChannel(channel.Id)
 	require.NoError(t, err)
 	assert.False(t, enabled)

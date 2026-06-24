@@ -657,6 +657,7 @@ func accountPoolBindingResponse(binding service.AccountPoolBindingView) dto.Acco
 		SchedulePolicy:      binding.SchedulePolicy,
 		AccountRetryTimes:   binding.AccountRetryTimes,
 		Status:              binding.Status,
+		RuntimeEnabled:      binding.RuntimeEnabled,
 		CreatedTime:         binding.CreatedTime,
 		UpdatedTime:         binding.UpdatedTime,
 	}

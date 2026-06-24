@@ -143,6 +143,7 @@ type AccountPoolBindingResponse struct {
 	SchedulePolicy      string `json:"schedule_policy"`
 	AccountRetryTimes   int    `json:"account_retry_times"`
 	Status              string `json:"status"`
+	RuntimeEnabled      bool   `json:"runtime_enabled"`
 	CreatedTime         int64  `json:"created_time"`
 	UpdatedTime         int64  `json:"updated_time"`
 }
