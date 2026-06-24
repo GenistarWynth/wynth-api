@@ -78,6 +78,24 @@ export type AccountPoolProxyFormValues = {
   fallback_proxy_id: number
 }
 
+export type AccountPoolProxyOption = {
+  value: string
+  label: string
+}
+
+export function buildAccountPoolProxyOptions(
+  proxies: Pick<AccountPoolProxy, 'id' | 'name'>[],
+  noProxyLabel: string
+): AccountPoolProxyOption[] {
+  return [
+    { value: '0', label: noProxyLabel },
+    ...proxies.map((proxy) => ({
+      value: String(proxy.id),
+      label: proxy.name,
+    })),
+  ]
+}
+
 export function emptyPoolForm(): AccountPoolFormValues {
   return {
     name: '',

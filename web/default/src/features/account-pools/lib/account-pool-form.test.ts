@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   buildAccountPayload,
+  buildAccountPoolProxyOptions,
   buildPoolPayload,
   buildProxyPayload,
   emptyAccountForm,
@@ -152,6 +153,23 @@ describe('account pool form helpers', () => {
         status: 'enabled',
         fallback_proxy_id: 0,
       }
+    )
+  })
+
+  test('builds default proxy select options from existing proxies', () => {
+    assert.deepEqual(
+      buildAccountPoolProxyOptions(
+        [
+          { id: 12, name: '香港代理' },
+          { id: 18, name: '日本代理' },
+        ],
+        'No Proxy'
+      ),
+      [
+        { value: '0', label: 'No Proxy' },
+        { value: '12', label: '香港代理' },
+        { value: '18', label: '日本代理' },
+      ]
     )
   })
 })

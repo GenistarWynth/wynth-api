@@ -146,6 +146,7 @@ import {
 import {
   accountToFormValues,
   buildAccountPayload,
+  buildAccountPoolProxyOptions,
   buildPoolPayload,
   buildProxyPayload,
   emptyAccountForm,
@@ -1083,6 +1084,7 @@ export function AccountPools() {
       <PoolFormSheet
         open={poolSheetOpen}
         pool={editingPool}
+        proxies={proxiesQuery.data ?? EMPTY_PROXIES}
         isSubmitting={createPoolMutation.isPending || updatePoolMutation.isPending}
         onOpenChange={(open) => {
           setPoolSheetOpen(open)
@@ -1264,6 +1266,7 @@ export function AccountPools() {
 function PoolFormSheet(props: {
   open: boolean
   pool?: AccountPool
+  proxies: AccountPoolProxy[]
   isSubmitting: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (values: AccountPoolFormValues) => void
@@ -1277,6 +1280,10 @@ function PoolFormSheet(props: {
   const schedulePolicyOptions = useMemo(
     () => translateOptions(SCHEDULE_POLICY_OPTIONS, t),
     [t]
+  )
+  const proxyOptions = useMemo(
+    () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
+    [props.proxies, t]
   )
 
   useEffect(() => {
@@ -1342,18 +1349,29 @@ function PoolFormSheet(props: {
               </Select>
             </FieldBlock>
             <FieldBlock
-              label={t('Default Proxy ID')}
-              htmlFor='account-pool-default-proxy-id'
+              label={t('Default Proxy')}
+              htmlFor='account-pool-default-proxy'
             >
-              <Input
-                id='account-pool-default-proxy-id'
-                type='number'
-                min={0}
-                value={form.default_proxy_id}
-                onChange={(event) =>
-                  setField('default_proxy_id', Number(event.target.value))
+              <Select
+                items={proxyOptions}
+                value={String(form.default_proxy_id)}
+                onValueChange={(value) =>
+                  setField('default_proxy_id', value ? Number(value) : 0)
                 }
-              />
+              >
+                <SelectTrigger id='account-pool-default-proxy'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {proxyOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </FieldBlock>
             <FieldBlock
               label={t('Schedule Policy')}
@@ -2408,13 +2426,7 @@ function AccountFormSheet(props: {
     [t]
   )
   const proxyOptions = useMemo(
-    () => [
-      { value: '0', label: t('No Proxy') },
-      ...props.proxies.map((proxy) => ({
-        value: String(proxy.id),
-        label: proxy.name,
-      })),
-    ],
+    () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
     [props.proxies, t]
   )
 
