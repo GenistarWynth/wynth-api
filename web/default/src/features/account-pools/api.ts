@@ -162,6 +162,30 @@ export async function createAccountPoolBinding(
   return res.data
 }
 
+export async function activateAccountPoolBinding(
+  poolID: number,
+  bindingID: number
+): Promise<ApiResponse<AccountPoolBinding>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/bindings/${bindingID}/activate`,
+    null,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function disableAccountPoolBinding(
+  poolID: number,
+  bindingID: number
+): Promise<ApiResponse<AccountPoolBinding>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/bindings/${bindingID}/disable`,
+    null,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
 export async function listAccountPoolProxies(): Promise<
   ApiResponse<AccountPoolProxy[]>
 > {

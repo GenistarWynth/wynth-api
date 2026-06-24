@@ -34,7 +34,7 @@ export type AccountPoolAccountStatus =
 
 export type AccountPoolProxyStatus = 'enabled' | 'disabled' | 'deleted'
 
-export type AccountPoolBindingStatus = 'draft' | 'disabled'
+export type AccountPoolBindingStatus = 'draft' | 'enabled' | 'disabled'
 
 export type AccountPoolCredentialType = 'api_key' | 'oauth' | string
 

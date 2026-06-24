@@ -123,12 +123,14 @@ import {
 } from '@/features/channels/constants'
 import type { Channel } from '@/features/channels/types'
 import {
+  activateAccountPoolBinding,
   accountPoolsQueryKeys,
   createAccountPool,
   createAccountPoolAccount,
   createAccountPoolBinding,
   createAccountPoolProxy,
   deleteAccountPoolAccount,
+  disableAccountPoolBinding,
   importAccountPoolAccounts,
   listAccountPoolAccounts,
   listAccountPoolBindings,
@@ -795,6 +797,32 @@ export function AccountPools() {
     },
   })
 
+  const setBindingStatusMutation = useMutation({
+    mutationFn: async (params: {
+      binding: AccountPoolBinding
+      status: 'enabled' | 'disabled'
+    }) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      if (params.status === 'enabled') {
+        return activateAccountPoolBinding(selectedPoolID, params.binding.id)
+      }
+      return disableAccountPoolBinding(selectedPoolID, params.binding.id)
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to update binding')))
+        return
+      }
+      toast.success(t('Binding updated'))
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
   const columns = useAccountPoolColumns({
     accountsByPool: loadedAccountsByPool,
     onDetails: (pool) => setSelectedPool(pool),
@@ -900,6 +928,9 @@ export function AccountPools() {
         }
         onCreateProxy={() => setProxySheetOpen(true)}
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
+        onSetBindingStatus={(binding, status) =>
+          setBindingStatusMutation.mutate({ binding, status })
+        }
       />
       <AccountImportDialog
         open={accountImportOpen}
@@ -1153,6 +1184,10 @@ function PoolDetailsSheet(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onCreateProxy: () => void
   onCreateBinding: (values: BindingFormValues) => void
+  onSetBindingStatus: (
+    binding: AccountPoolBinding,
+    status: 'enabled' | 'disabled'
+  ) => void
 }) {
   const { t } = useTranslation()
   const pool = props.pool
@@ -1213,6 +1248,7 @@ function PoolDetailsSheet(props: {
                 resetVersion={props.bindingFormResetVersion}
                 submitting={props.bindingSubmitting}
                 onCreateBinding={props.onCreateBinding}
+                onSetBindingStatus={props.onSetBindingStatus}
               />
             </TabsContent>
             <TabsContent value='proxies' className='min-h-0'>
@@ -1410,6 +1446,10 @@ function BindingSection(props: {
   resetVersion: number
   submitting: boolean
   onCreateBinding: (values: BindingFormValues) => void
+  onSetBindingStatus: (
+    binding: AccountPoolBinding,
+    status: 'enabled' | 'disabled'
+  ) => void
 }) {
   const { t } = useTranslation()
 
@@ -1426,12 +1466,13 @@ function BindingSection(props: {
                 <TableHead>{t('Binding Status')}</TableHead>
                 <TableHead>{t('Retry Count')}</TableHead>
                 <TableHead>{t('Updated At')}</TableHead>
+                <TableHead>{t('Actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.loading && <LoadingRow colSpan={5} />}
+              {props.loading && <LoadingRow colSpan={6} />}
               {!props.loading && props.bindings.length === 0 && (
-                <EmptyRow colSpan={5} label={t('No bindings found')} />
+                <EmptyRow colSpan={6} label={t('No bindings found')} />
               )}
               {props.bindings.map((binding) => (
                 <TableRow key={binding.id}>
@@ -1459,6 +1500,12 @@ function BindingSection(props: {
                       {formatOptionalTimestamp(binding.updated_time)}
                     </span>
                   </TableCell>
+                  <TableCell>
+                    <BindingRowActions
+                      binding={binding}
+                      onSetStatus={props.onSetBindingStatus}
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -1473,6 +1520,44 @@ function BindingSection(props: {
         onSubmit={props.onCreateBinding}
       />
     </div>
+  )
+}
+
+function BindingRowActions(props: {
+  binding: AccountPoolBinding
+  onSetStatus: (
+    binding: AccountPoolBinding,
+    status: 'enabled' | 'disabled'
+  ) => void
+}) {
+  const { t } = useTranslation()
+  const enabled = props.binding.status === 'enabled'
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            className='data-popup-open:bg-muted'
+          />
+        }
+      >
+        <MoreHorizontal />
+        <span className='sr-only'>{t('Open menu')}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        <DropdownMenuItem
+          onClick={() =>
+            props.onSetStatus(props.binding, enabled ? 'disabled' : 'enabled')
+          }
+        >
+          {enabled ? <PowerOff /> : <Power />}
+          {enabled ? t('Disable') : t('Enable')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
