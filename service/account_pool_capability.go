@@ -149,13 +149,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if err != nil {
 		return result, err
 	}
-	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(ctx, AccountPoolRuntimeCredentialRequest{
-		AccountID:         account.Id,
-		Credential:        credential,
-		TokenState:        tokenState,
-		ProxyURL:          proxyURL,
-		SkipFailureRecord: true,
-	})
+	runtimeCredential, err := resolveAccountPoolCapabilityRuntimeCredential(ctx, credential, tokenState, proxyURL)
 	if err != nil {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 		if req.Apply {
@@ -521,6 +515,42 @@ func sanitizeAccountPoolCapabilityError(message string) string {
 	return sanitizeAccountPoolRuntimeErrorMessage(message, accountPoolLastErrorMaxLength)
 }
 
+func resolveAccountPoolCapabilityRuntimeCredential(
+	ctx context.Context,
+	credential AccountPoolCredentialConfig,
+	tokenState AccountPoolTokenState,
+	proxyURL string,
+) (string, error) {
+	if token := strings.TrimSpace(credential.APIKey); token != "" {
+		return token, nil
+	}
+	now := common.GetTimestamp()
+	if accountPoolAccessTokenUsable(tokenState, now) {
+		return strings.TrimSpace(tokenState.AccessToken), nil
+	}
+	if !accountPoolHasOAuthRuntimeCredential(credential, tokenState) {
+		return "", nil
+	}
+	refreshToken := accountPoolRuntimeRefreshToken(credential, tokenState)
+	if refreshToken == "" {
+		if strings.TrimSpace(tokenState.AccessToken) != "" && tokenState.ExpiresAt == 0 {
+			return strings.TrimSpace(tokenState.AccessToken), nil
+		}
+		return "", errors.New("account pool oauth refresh_token is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
+	if err != nil {
+		return "", err
+	}
+	if result == nil || strings.TrimSpace(result.AccessToken) == "" {
+		return "", errors.New("account pool oauth refresh response missing access_token")
+	}
+	return strings.TrimSpace(result.AccessToken), nil
+}
+
 func persistAccountPoolCapabilitySuccess(accountID int, supportedModels []string, detectedModels []string, modelMapping map[string]string, status string) error {
 	supportedModelsJSON, err := common.Marshal(supportedModels)
 	if err != nil {
@@ -563,7 +593,6 @@ func persistAccountPoolCapabilityFailure(accountID int, result AccountPoolCapabi
 		"last_capability_check_status": result.Status,
 		"last_capability_check_error":  errorText,
 		"last_capability_check_models": string(detectedModelsJSON),
-		"last_error":                   errorText,
 	}
 	return model.DB.Model(&model.AccountPoolAccount{}).
 		Where("id = ?", accountID).

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -61,6 +62,76 @@ func TestAccountPoolCapabilityDetectModelsEndpointDryRunDoesNotWrite(t *testing.
 	assert.Empty(t, stored.LastCapabilityCheckStatus)
 	assert.Empty(t, stored.LastCapabilityCheckError)
 	assert.Empty(t, stored.LastCapabilityCheckModels)
+}
+
+func TestAccountPoolCapabilityDetectDryRunOAuthRefreshDoesNotPersistTokenState(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "dry-run-oauth-account",
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken:  "access-expired",
+			RefreshToken: "refresh-old",
+			ExpiresAt:    900,
+			Version:      3,
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	storedBefore := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	originalTokenState := storedBefore.TokenState
+
+	setAccountPoolOAuthRefreshForTest(t, func(ctx context.Context, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error) {
+		assert.Equal(t, "refresh-old", refreshToken)
+		assert.Empty(t, proxyURL)
+		return &CodexOAuthTokenResult{
+			AccessToken:  "access-new",
+			RefreshToken: "refresh-next",
+			ExpiresAt:    time.Unix(2000, 0),
+		}, nil
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer access-new", r.Header.Get("Authorization"))
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5"}]}`))
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:    pool.Id,
+		AccountID: account.Id,
+		ChannelID: channel.Id,
+		Mode:      AccountPoolCapabilityModeModelsEndpoint,
+		Apply:     false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusSuccess, result.Status)
+	assert.Equal(t, []string{"gpt-5"}, result.DetectedModels)
+
+	storedAfter := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, originalTokenState, storedAfter.TokenState)
+	assert.Equal(t, `["existing"]`, storedAfter.SupportedModels)
+	assert.Zero(t, storedAfter.LastCapabilityCheckAt)
+	assert.Empty(t, storedAfter.LastCapabilityCheckStatus)
+	assert.Empty(t, storedAfter.LastCapabilityCheckError)
+	assert.Empty(t, storedAfter.LastCapabilityCheckModels)
 }
 
 func TestAccountPoolCapabilityDetectModelsEndpointApplyMergeAndReplace(t *testing.T) {
@@ -191,6 +262,7 @@ func TestAccountPoolCapabilityDetectSanitizesAuthErrorsAndDoesNotDisableAccount(
 			Type:   AccountPoolCredentialTypeAPIKey,
 			APIKey: "sk-auth",
 		},
+		LastError: "keep me",
 	})
 	require.NoError(t, err)
 
@@ -227,8 +299,7 @@ func TestAccountPoolCapabilityDetectSanitizesAuthErrorsAndDoesNotDisableAccount(
 	assert.Equal(t, AccountPoolCapabilityStatusAuthError, stored.LastCapabilityCheckStatus)
 	assert.NotEmpty(t, stored.LastCapabilityCheckError)
 	assert.NotContains(t, stored.LastCapabilityCheckError, "sk-secret-token")
-	assert.NotEmpty(t, stored.LastError)
-	assert.NotContains(t, stored.LastError, "sk-secret-token")
+	assert.Equal(t, "keep me", stored.LastError)
 	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
 }
 
