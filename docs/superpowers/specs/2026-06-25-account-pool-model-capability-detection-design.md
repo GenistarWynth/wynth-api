@@ -80,6 +80,7 @@ Request shape:
 ```json
 {
   "mode": "models_endpoint",
+  "channel_id": 42,
   "candidate_models": ["gpt-5", "gpt-5-mini"],
   "apply": true,
   "merge": true,
@@ -91,6 +92,7 @@ Request shape:
 Fields:
 
 - `mode`: `models_endpoint`, `probe_models`, or `auto`.
+- `channel_id`: optional bound local channel used as the upstream shape for base URL, channel type, header override, and proxy fallback. If omitted, the service may infer it only when the pool has exactly one non-deleted binding; otherwise it must return `config_error`.
 - `candidate_models`: required for `probe_models`; optional filter for `models_endpoint`.
 - `apply`: when false, return a dry-run result without writing account fields.
 - `merge`: when true, merge detected models into existing `SupportedModels`; when false, replace `SupportedModels` with detected models.
@@ -133,11 +135,12 @@ Detection must not acquire long-lived runtime leases unless the probe path can o
 
 For OpenAI-compatible accounts:
 
-1. Build the account base URL from the bound channel or configured runtime defaults.
-2. Call `GET /v1/models` with the account runtime credential.
-3. Decode `data[].id`.
-4. Filter empty ids and deduplicate while preserving upstream order.
-5. If `candidate_models` is non-empty, intersect with candidates while preserving candidate order.
+1. Resolve the detection channel from `channel_id` or the pool's single non-deleted binding.
+2. Build the account base URL and request headers from that channel while replacing the channel key with the selected account runtime credential.
+3. Call `GET /v1/models` with the account runtime credential.
+4. Decode `data[].id`.
+5. Filter empty ids and deduplicate while preserving upstream order.
+6. If `candidate_models` is non-empty, intersect with candidates while preserving candidate order.
 
 If the endpoint returns 401 or 403, report an auth error but do not mark the account expired in this phase.
 
