@@ -1114,7 +1114,7 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 			return AccountPoolAccountView{}, err
 		}
 	}
-	var lastCapabilityCheckModels []string
+	lastCapabilityCheckModels := []string{}
 	if strings.TrimSpace(account.LastCapabilityCheckModels) != "" {
 		if err := common.UnmarshalJsonStr(account.LastCapabilityCheckModels, &lastCapabilityCheckModels); err != nil {
 			return AccountPoolAccountView{}, err

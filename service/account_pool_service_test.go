@@ -1167,6 +1167,25 @@ func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, bindings[0].ChannelStatus)
 }
 
+func TestAccountPoolServiceAccountViewReturnsEmptyCapabilityModelsWithoutMetadata(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "no-capability-metadata",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-test",
+		},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, account.LastCapabilityCheckModels)
+	assert.Empty(t, account.LastCapabilityCheckModels)
+}
+
 func TestAccountPoolServiceAccountViewIncludesCapabilityMetadata(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
