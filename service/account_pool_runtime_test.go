@@ -240,6 +240,54 @@ func TestAccountPoolRuntimeLeaseExhaustsThenAllowsSelectionAfterRelease(t *testi
 	assert.Equal(t, account.Id, selected.AccountID)
 }
 
+func TestAccountPoolRuntimeSelectionReleasesPreviousLeaseBeforeReselecting(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	first := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "first-slot",
+		Priority:       100,
+		MaxConcurrency: 1,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-first-slot",
+		},
+	})
+	second := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "second-slot",
+		Priority:       50,
+		MaxConcurrency: 1,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-second-slot",
+		},
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "gpt-5")
+	request := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, info, request))
+	require.Equal(t, first.Id, GetSelectedAccountPoolAccountID(ctx))
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, info, request))
+	require.Equal(t, second.Id, GetSelectedAccountPoolAccountID(ctx))
+	ReleaseAccountPoolRuntimeSelection(ctx)
+
+	selected, release, err := SelectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "client-gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		AttemptedAccountIDs: map[int]struct{}{
+			second.Id: {},
+		},
+		Now: 100,
+	})
+	require.NoError(t, err)
+	defer release()
+	assert.Equal(t, first.Id, selected.AccountID)
+}
+
 func TestAccountPoolRuntimeFallsBackToAccessToken(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	ctx := newAccountPoolRuntimeTestContext()

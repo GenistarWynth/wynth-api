@@ -23,6 +23,7 @@ const (
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
+	ReleaseAccountPoolRuntimeSelection(c)
 	clearSelectedAccountPoolRuntimeSelection(c)
 	if info != nil {
 		info.RuntimeAccountID = ""
