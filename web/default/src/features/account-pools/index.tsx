@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   type ColumnDef,
@@ -411,8 +411,69 @@ function capabilityStatusVariant(status?: string): StatusVariant {
 }
 
 function capabilityStatusLabel(status?: string) {
-  if (!status) return 'Unknown'
-  return status.replace(/_/g, ' ')
+  switch (status) {
+    case 'success':
+      return 'Success'
+    case 'partial':
+      return 'Partial'
+    case 'unsupported':
+      return 'Unsupported'
+    case 'auth_error':
+      return 'Authentication Error'
+    case 'network_error':
+      return 'Network Error'
+    case 'upstream_error':
+      return 'Upstream Error'
+    case 'config_error':
+      return 'Configuration Error'
+    default:
+      return status ? status.replace(/_/g, ' ') : 'Unknown'
+  }
+}
+
+type CapabilityDetectScope = 'account' | 'pool'
+
+type CapabilityDetectRequestContext = {
+  scope: CapabilityDetectScope
+  poolID: number
+  accountID?: number
+  channelID: number
+  dialogNonce: number
+  requestNonce: number
+}
+
+type CapabilityDetectMutationInput = {
+  values: CapabilityDetectFormValues
+  context: CapabilityDetectRequestContext
+}
+
+type CapabilityDetectMutationResult =
+  | {
+      context: CapabilityDetectRequestContext & {
+        scope: 'account'
+        accountID: number
+      }
+      response: ApiResponse<AccountPoolCapabilityDetectResult>
+    }
+  | {
+      context: CapabilityDetectRequestContext & {
+        scope: 'pool'
+      }
+      response: ApiResponse<AccountPoolCapabilityPoolResult>
+    }
+
+function isActiveCapabilityDetectContext(
+  active: CapabilityDetectRequestContext | null,
+  target: CapabilityDetectRequestContext
+) {
+  return (
+    active?.scope === target.scope &&
+    active.poolID === target.poolID &&
+    active.accountID === target.accountID &&
+    active.channelID === target.channelID &&
+    active.dialogNonce === target.dialogNonce &&
+    active.requestNonce === target.requestNonce
+  )
 }
 
 function useAccountPoolModelSelect(enabled = true) {
@@ -1806,6 +1867,10 @@ function CapabilityDetectDialog(props: {
   const [singleResult, setSingleResult] =
     useState<AccountPoolCapabilityDetectResult>()
   const [poolResult, setPoolResult] = useState<AccountPoolCapabilityPoolResult>()
+  const activeContextRef = useRef<CapabilityDetectRequestContext | null>(null)
+  const dialogNonceRef = useRef(0)
+  const requestNonceRef = useRef(0)
+  const hasBindings = props.bindings.length > 0
   const modeOptions = useMemo(
     () => translateOptions(ACCOUNT_POOL_CAPABILITY_MODE_OPTIONS, t),
     [t]
@@ -1829,9 +1894,21 @@ function CapabilityDetectDialog(props: {
 
   useEffect(() => {
     if (props.open) {
+      dialogNonceRef.current += 1
+      requestNonceRef.current = 0
       setForm(emptyCapabilityDetectForm(defaultChannelID))
       setSingleResult(undefined)
       setPoolResult(undefined)
+      activeContextRef.current = {
+        scope: props.account ? 'account' : 'pool',
+        poolID: props.pool?.id ?? 0,
+        accountID: props.account?.id,
+        channelID: defaultChannelID,
+        dialogNonce: dialogNonceRef.current,
+        requestNonce: requestNonceRef.current,
+      }
+    } else {
+      activeContextRef.current = null
     }
   }, [defaultChannelID, props.account?.id, props.open, props.pool?.id])
 
@@ -1840,9 +1917,16 @@ function CapabilityDetectDialog(props: {
     value: CapabilityDetectFormValues[K]
   ) => setForm((previous) => ({ ...previous, [key]: value }))
 
-  const detectMutation = useMutation({
-    mutationFn: async (values: CapabilityDetectFormValues) => {
-      if (!props.pool) {
+  const detectMutation = useMutation<
+    CapabilityDetectMutationResult,
+    Error,
+    CapabilityDetectMutationInput
+  >({
+    mutationFn: async ({
+      values,
+      context,
+    }: CapabilityDetectMutationInput) => {
+      if (!context.poolID) {
         throw new Error(t('Select an account pool first'))
       }
 
@@ -1856,40 +1940,69 @@ function CapabilityDetectDialog(props: {
         timeout_seconds: values.timeout_seconds,
       }
 
-      if (props.account) {
+      if (context.scope === 'account' && context.accountID) {
         const response = await detectAccountPoolAccountCapability(
-          props.pool.id,
-          props.account.id,
+          context.poolID,
+          context.accountID,
           request
         )
-        return { scope: 'account' as const, response }
+        return {
+          context: { ...context, scope: 'account', accountID: context.accountID },
+          response,
+        }
       }
 
-      const response = await detectAccountPoolCapabilities(props.pool.id, request)
-      return { scope: 'pool' as const, response }
+      const response = await detectAccountPoolCapabilities(context.poolID, request)
+      return {
+        context: { ...context, scope: 'pool' },
+        response,
+      }
+    },
+    onMutate: ({ context }) => {
+      if (isActiveCapabilityDetectContext(activeContextRef.current, context)) {
+        setSingleResult(undefined)
+        setPoolResult(undefined)
+      }
     },
     onSuccess: async (payload) => {
+      await queryClient.invalidateQueries({
+        queryKey: accountPoolsQueryKeys.accounts(payload.context.poolID),
+      })
+
+      if (
+        !isActiveCapabilityDetectContext(activeContextRef.current, payload.context)
+      ) {
+        return
+      }
+
       if (!payload.response.success) {
         toast.error(payload.response.message || t('Detection failed'))
         return
       }
 
-      if (payload.scope === 'account') {
-        setSingleResult(payload.response.data)
+      if (payload.context.scope === 'account') {
+        setSingleResult(
+          payload.response.data as AccountPoolCapabilityDetectResult | undefined
+        )
         setPoolResult(undefined)
       } else {
-        setPoolResult(payload.response.data)
+        setPoolResult(
+          payload.response.data as AccountPoolCapabilityPoolResult | undefined
+        )
         setSingleResult(undefined)
       }
 
       toast.success(t('Detection completed'))
-      if (props.pool) {
-        await queryClient.invalidateQueries({
-          queryKey: accountPoolsQueryKeys.accounts(props.pool.id),
-        })
-      }
     },
-    onError: (error) => {
+    onError: (error, variables) => {
+      if (
+        !isActiveCapabilityDetectContext(
+          activeContextRef.current,
+          variables.context
+        )
+      ) {
+        return
+      }
       toast.error(error instanceof Error ? error.message : t('Request failed'))
     },
   })
@@ -1901,7 +2014,7 @@ function CapabilityDetectDialog(props: {
       toast.error(t('Select an account pool first'))
       return
     }
-    if (props.bindings.length === 0) {
+    if (!hasBindings) {
       toast.error(t('No bindings found'))
       return
     }
@@ -1921,7 +2034,18 @@ function CapabilityDetectDialog(props: {
       return
     }
 
-    detectMutation.mutate(form)
+    const context: CapabilityDetectRequestContext = {
+      scope: props.account ? 'account' : 'pool',
+      poolID: props.pool.id,
+      accountID: props.account?.id,
+      channelID: form.channel_id,
+      dialogNonce: activeContextRef.current?.dialogNonce ?? dialogNonceRef.current,
+      requestNonce: requestNonceRef.current + 1,
+    }
+
+    requestNonceRef.current = context.requestNonce
+    activeContextRef.current = context
+    detectMutation.mutate({ values: form, context })
   }
 
   return (
@@ -1955,6 +2079,7 @@ function CapabilityDetectDialog(props: {
                 items={modeOptions}
                 value={String(form.mode)}
                 onValueChange={(value) => value && setField('mode', value)}
+                disabled={!hasBindings}
               >
                 <SelectTrigger id='account-pool-capability-mode'>
                   <SelectValue />
@@ -1980,6 +2105,7 @@ function CapabilityDetectDialog(props: {
                 onValueChange={(value) =>
                   setField('channel_id', value ? Number(value) : 0)
                 }
+                disabled={!hasBindings}
               >
                 <SelectTrigger id='account-pool-capability-channel'>
                   <SelectValue />
@@ -1997,6 +2123,12 @@ function CapabilityDetectDialog(props: {
             </FieldBlock>
           </FieldGroup>
 
+          {!hasBindings && (
+            <div className='text-muted-foreground rounded-md border border-dashed px-3 py-2 text-sm'>
+              {t('No bound channels')}
+            </div>
+          )}
+
           <FieldBlock
             label={t('Candidate Models')}
             htmlFor='account-pool-capability-candidate-models'
@@ -2010,6 +2142,7 @@ function CapabilityDetectDialog(props: {
               }
               required={form.mode === 'probe_models'}
               placeholder={'gpt-5\ngpt-5-mini'}
+              disabled={!hasBindings}
             />
           </FieldBlock>
 
@@ -2029,6 +2162,7 @@ function CapabilityDetectDialog(props: {
                 id='account-pool-capability-apply'
                 checked={form.apply}
                 onCheckedChange={(checked) => setField('apply', checked)}
+                disabled={!hasBindings}
               />
             </div>
             <div className={sideDrawerSwitchItemClassName()}>
@@ -2041,6 +2175,7 @@ function CapabilityDetectDialog(props: {
                 id='account-pool-capability-merge'
                 checked={form.merge}
                 onCheckedChange={(checked) => setField('merge', checked)}
+                disabled={!hasBindings}
               />
             </div>
             <NumericField
@@ -2049,6 +2184,7 @@ function CapabilityDetectDialog(props: {
               min={1}
               value={form.timeout_seconds}
               onChange={(value) => setField('timeout_seconds', value)}
+              disabled={!hasBindings}
             />
           </FieldGroup>
 
@@ -2056,7 +2192,7 @@ function CapabilityDetectDialog(props: {
             <div className='rounded-lg border p-3 text-sm'>
               <div className='flex flex-wrap items-center gap-2'>
                 <StatusBadge
-                  label={capabilityStatusLabel(singleResult.status)}
+                  label={t(capabilityStatusLabel(singleResult.status))}
                   variant={capabilityStatusVariant(singleResult.status)}
                   copyable={false}
                 />
@@ -2072,7 +2208,7 @@ function CapabilityDetectDialog(props: {
                   {t('Applied Models')}: {singleResult.applied_models.length}
                 </div>
                 <div>
-                  {t('Status')}: {capabilityStatusLabel(singleResult.status)}
+                  {t('Status')}: {t(capabilityStatusLabel(singleResult.status))}
                 </div>
               </div>
               {singleResult.errors.length > 0 && (
@@ -2120,7 +2256,7 @@ function CapabilityDetectDialog(props: {
                     </div>
                     <div className='flex flex-wrap items-center gap-2 text-xs'>
                       <StatusBadge
-                        label={capabilityStatusLabel(result.status)}
+                        label={t(capabilityStatusLabel(result.status))}
                         variant={capabilityStatusVariant(result.status)}
                         copyable={false}
                       />
@@ -2144,14 +2280,18 @@ function CapabilityDetectDialog(props: {
           <Button
             type='submit'
             form='account-pool-capability-detect-form'
-            disabled={detectMutation.isPending || props.bindings.length === 0}
+            disabled={detectMutation.isPending || !hasBindings}
           >
             {detectMutation.isPending ? (
               <Loader2 data-icon='inline-start' className='animate-spin' />
             ) : (
               <Radar data-icon='inline-start' />
             )}
-            {props.account ? t('Detect Models') : t('Batch Detect Models')}
+            {!hasBindings
+              ? t('No bound channels')
+              : props.account
+                ? t('Detect Models')
+                : t('Batch Detect Models')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2236,6 +2376,7 @@ function PoolDetailsSheet(props: {
             <TabsContent value='accounts' className='min-h-0'>
               <AccountListSection
                 accounts={props.accounts}
+                hasBindings={props.bindings.length > 0}
                 loading={props.accountsLoading}
                 onCreateAccount={props.onCreateAccount}
                 onImportAccounts={props.onImportAccounts}
@@ -2296,6 +2437,7 @@ function SummaryItem(props: { label: React.ReactNode; value: React.ReactNode }) 
 
 function AccountListSection(props: {
   accounts: AccountPoolAccount[]
+  hasBindings: boolean
   loading: boolean
   onCreateAccount: () => void
   onImportAccounts: () => void
@@ -2317,9 +2459,10 @@ function AccountListSection(props: {
             size='sm'
             variant='outline'
             onClick={props.onBatchDetectModels}
+            disabled={!props.hasBindings}
           >
             <Radar data-icon='inline-start' />
-            {t('Batch Detect Models')}
+            {props.hasBindings ? t('Batch Detect Models') : t('No bound channels')}
           </Button>
           <Button
             type='button'
@@ -2468,7 +2611,7 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
       <div className='text-muted-foreground'>
         {t('Capability detection status')}:{' '}
         {account.last_capability_check_status
-          ? `${account.last_capability_check_status}${
+          ? `${t(capabilityStatusLabel(account.last_capability_check_status))}${
               account.last_capability_check_at > 0
                 ? ` / ${formatOptionalTimestamp(account.last_capability_check_at)}`
                 : ''
@@ -3838,6 +3981,7 @@ function ProxyFormSheet(props: {
 function NumericField(props: {
   id: string
   label: React.ReactNode
+  disabled?: boolean
   min?: number
   value: number
   onChange: (value: number) => void
@@ -3847,6 +3991,7 @@ function NumericField(props: {
       <Input
         id={props.id}
         type='number'
+        disabled={props.disabled}
         min={props.min}
         value={props.value}
         onChange={(event) => props.onChange(Number(event.target.value))}
