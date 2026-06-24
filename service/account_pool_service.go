@@ -405,6 +405,9 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if channel.Status == common.ChannelStatusEnabled {
 		return AccountPoolBindingView{}, errors.New("account pool binding requires a disabled channel in phase 1")
 	}
+	if err := validateAccountPoolBindingChannelAvailable(channel.Id, 0); err != nil {
+		return AccountPoolBindingView{}, err
+	}
 	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
 	if err != nil {
 		return AccountPoolBindingView{}, err
@@ -457,6 +460,9 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	}
 	if binding.ChannelID != channel.Id && channel.Status == common.ChannelStatusEnabled {
 		return AccountPoolBindingView{}, errors.New("account pool binding requires a disabled channel when changing channel")
+	}
+	if err := validateAccountPoolBindingChannelAvailable(channel.Id, binding.Id); err != nil {
+		return AccountPoolBindingView{}, err
 	}
 	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
 	if err != nil {
@@ -745,6 +751,21 @@ func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 	default:
 		return errors.New("account pool runtime only supports OpenAI-compatible channels in this phase")
 	}
+}
+
+func validateAccountPoolBindingChannelAvailable(channelID int, excludeBindingID int) error {
+	var count int64
+	query := model.DB.Model(&model.AccountPoolChannelBinding{}).Where("channel_id = ?", channelID)
+	if excludeBindingID > 0 {
+		query = query.Where("id <> ?", excludeBindingID)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("account pool channel is already bound")
+	}
+	return nil
 }
 
 func validateAccountPoolBindingStatus(status string) error {

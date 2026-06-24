@@ -236,6 +236,46 @@ func TestAccountPoolServiceCreateBindingRejectsNonPhaseOneStatus(t *testing.T) {
 	require.ErrorContains(t, err, "account pool binding status must be draft or disabled in phase 1")
 }
 
+func TestAccountPoolServiceRejectsDuplicateBindingChannel(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	otherPool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:     "pool-b",
+		Platform: model.AccountPoolPlatformOpenAI,
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	otherChannel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    otherPool.Id,
+		ChannelID: channel.Id,
+	})
+	require.ErrorContains(t, err, "account pool channel is already bound")
+
+	otherBinding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    otherPool.Id,
+		ChannelID: otherChannel.Id,
+	})
+	require.NoError(t, err)
+	_, err = service.UpdateBinding(otherPool.Id, otherBinding.Id, AccountPoolBindingCreateParams{
+		ChannelID: channel.Id,
+	})
+	require.ErrorContains(t, err, "account pool channel is already bound")
+
+	updated, err := service.UpdateBinding(pool.Id, binding.Id, AccountPoolBindingCreateParams{
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, channel.Id, updated.ChannelID)
+}
+
 func TestAccountPoolServiceActivateBindingEnablesRuntimeButNotChannel(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
