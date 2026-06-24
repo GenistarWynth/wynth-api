@@ -20,12 +20,21 @@ func TestRecordAccountPoolRuntimeAttemptSuccessClearsTransientFailureState(t *te
 		TempDisabledReason: "previous temporary failure",
 		LastError:          "previous error",
 	})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"success_count": 2,
+			"failure_count": 5,
+		}).Error)
 
 	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, 2000))
 
 	var reloaded model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
 	assert.Equal(t, int64(2000), reloaded.LastUsedAt)
+	assert.Equal(t, int64(2000), reloaded.LastSuccessAt)
+	assert.Equal(t, int64(3), reloaded.SuccessCount)
+	assert.Equal(t, int64(5), reloaded.FailureCount)
 	assert.Zero(t, reloaded.RateLimitedUntil)
 	assert.Zero(t, reloaded.TempDisabledUntil)
 	assert.Empty(t, reloaded.TempDisabledReason)

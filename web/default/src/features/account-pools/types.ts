@@ -100,6 +100,10 @@ export type AccountPoolAccount = {
   supported_models: string[]
   model_mapping: Record<string, string>
   last_used_at: number
+  last_success_at: number
+  last_failure_at: number
+  success_count: number
+  failure_count: number
   rate_limited_until: number
   temp_disabled_until: number
   temp_disabled_reason: string

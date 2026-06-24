@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
+	"gorm.io/gorm"
 )
 
 const (
@@ -48,7 +49,9 @@ func accountPoolFailureUpdate(err *types.NewAPIError, now int64) map[string]any 
 	}
 	message := sanitizeAccountPoolFailureMessage(err, accountPoolLastErrorMaxLength)
 	updates := map[string]any{
-		"last_error": message,
+		"last_error":      message,
+		"last_failure_at": now,
+		"failure_count":   gorm.Expr("failure_count + ?", 1),
 	}
 	switch err.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:

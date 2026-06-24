@@ -1859,14 +1859,15 @@ function AccountListSection(props: {
               <TableHead>{t('Max Concurrency')}</TableHead>
               <TableHead>{t('Models')}</TableHead>
               <TableHead>{t('Credentials')}</TableHead>
+              <TableHead>{t('Runtime Stats')}</TableHead>
               <TableHead>{t('Last Error')}</TableHead>
               <TableHead>{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {props.loading && <LoadingRow colSpan={9} />}
+            {props.loading && <LoadingRow colSpan={10} />}
             {!props.loading && props.accounts.length === 0 && (
-              <EmptyRow colSpan={9} label={t('No accounts found')} />
+              <EmptyRow colSpan={10} label={t('No accounts found')} />
             )}
             {props.accounts.map((account) => (
               <TableRow
@@ -1909,6 +1910,9 @@ function AccountListSection(props: {
                   </div>
                 </TableCell>
                 <TableCell>
+                  <AccountRuntimeStats account={account} />
+                </TableCell>
+                <TableCell>
                   <LongText className='text-destructive max-w-[200px] text-xs'>
                     {account.last_error || '-'}
                   </LongText>
@@ -1927,6 +1931,28 @@ function AccountListSection(props: {
         </Table>
       </div>
     </SideDrawerSection>
+  )
+}
+
+function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
+  const { t } = useTranslation()
+  const account = props.account
+
+  return (
+    <div className='flex min-w-[140px] flex-col gap-1 text-xs'>
+      <div className='flex items-center gap-2'>
+        <span className='text-muted-foreground'>{t('Success')}</span>
+        <span className='font-medium'>{account.success_count}</span>
+        <span className='text-muted-foreground'>{t('Failure')}</span>
+        <span className='font-medium'>{account.failure_count}</span>
+      </div>
+      <div className='text-muted-foreground'>
+        {t('Last Success')}: {formatOptionalTimestamp(account.last_success_at)}
+      </div>
+      <div className='text-muted-foreground'>
+        {t('Last Failure')}: {formatOptionalTimestamp(account.last_failure_at)}
+      </div>
+    </div>
   )
 }
 

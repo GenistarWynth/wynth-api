@@ -3,6 +3,8 @@ package service
 import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+
+	"gorm.io/gorm"
 )
 
 func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64) error {
@@ -16,6 +18,8 @@ func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64) error {
 		Where("id = ? AND status = ?", accountID, model.AccountPoolAccountStatusEnabled).
 		Updates(map[string]any{
 			"last_used_at":         now,
+			"last_success_at":      now,
+			"success_count":        gorm.Expr("success_count + ?", 1),
 			"rate_limited_until":   int64(0),
 			"temp_disabled_until":  int64(0),
 			"temp_disabled_reason": "",

@@ -78,6 +78,10 @@ type AccountPoolAccount struct {
 	SupportedModels    string `json:"supported_models" gorm:"type:text"`
 	ModelMapping       string `json:"model_mapping" gorm:"type:text"`
 	LastUsedAt         int64  `json:"last_used_at" gorm:"bigint;index"`
+	LastSuccessAt      int64  `json:"last_success_at" gorm:"bigint;index"`
+	LastFailureAt      int64  `json:"last_failure_at" gorm:"bigint;index"`
+	SuccessCount       int64  `json:"success_count" gorm:"bigint;not null;default:0"`
+	FailureCount       int64  `json:"failure_count" gorm:"bigint;not null;default:0"`
 	RateLimitedUntil   int64  `json:"rate_limited_until" gorm:"bigint;index"`
 	TempDisabledUntil  int64  `json:"temp_disabled_until" gorm:"bigint;index"`
 	TempDisabledReason string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`

@@ -18,6 +18,12 @@ func TestRecordAccountPoolRuntimeAttemptFailureMarksAuthFailureExpired(t *testin
 	service := AccountPoolService{}
 	pool := createAccountPoolServiceTestPool(t, service)
 	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{Name: "auth-failed"})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"success_count": 7,
+			"failure_count": 2,
+		}).Error)
 	err := types.NewErrorWithStatusCode(errors.New("authorization: bearer sk-secret-token-value"), types.ErrorCodeBadResponseStatusCode, http.StatusUnauthorized)
 
 	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, 1000))
@@ -25,6 +31,9 @@ func TestRecordAccountPoolRuntimeAttemptFailureMarksAuthFailureExpired(t *testin
 	var reloaded model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
 	assert.Equal(t, model.AccountPoolAccountStatusExpired, reloaded.Status)
+	assert.Equal(t, int64(7), reloaded.SuccessCount)
+	assert.Equal(t, int64(3), reloaded.FailureCount)
+	assert.Equal(t, int64(1000), reloaded.LastFailureAt)
 	assert.Zero(t, reloaded.RateLimitedUntil)
 	assert.Zero(t, reloaded.TempDisabledUntil)
 	assert.Contains(t, reloaded.LastError, "status_code=401")

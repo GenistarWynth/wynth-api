@@ -104,6 +104,10 @@ type AccountPoolAccountView struct {
 	SupportedModels    []string          `json:"supported_models"`
 	ModelMapping       map[string]string `json:"model_mapping"`
 	LastUsedAt         int64             `json:"last_used_at"`
+	LastSuccessAt      int64             `json:"last_success_at"`
+	LastFailureAt      int64             `json:"last_failure_at"`
+	SuccessCount       int64             `json:"success_count"`
+	FailureCount       int64             `json:"failure_count"`
 	RateLimitedUntil   int64             `json:"rate_limited_until"`
 	TempDisabledUntil  int64             `json:"temp_disabled_until"`
 	TempDisabledReason string            `json:"temp_disabled_reason"`
@@ -1105,6 +1109,10 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		SupportedModels:    supportedModels,
 		ModelMapping:       modelMapping,
 		LastUsedAt:         account.LastUsedAt,
+		LastSuccessAt:      account.LastSuccessAt,
+		LastFailureAt:      account.LastFailureAt,
+		SuccessCount:       account.SuccessCount,
+		FailureCount:       account.FailureCount,
 		RateLimitedUntil:   account.RateLimitedUntil,
 		TempDisabledUntil:  account.TempDisabledUntil,
 		TempDisabledReason: account.TempDisabledReason,
