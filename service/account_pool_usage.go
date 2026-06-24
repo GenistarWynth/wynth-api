@@ -57,6 +57,9 @@ func RecordAccountPoolRuntimeUsage(accountID int, metrics AccountPoolRuntimeUsag
 }
 
 func recordSelectedAccountPoolTextUsage(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, summary textQuotaSummary) {
+	if relayInfo != nil && relayInfo.IsChannelTest {
+		return
+	}
 	accountID := GetSelectedAccountPoolAccountID(ctx)
 	if accountID <= 0 || usage == nil {
 		return

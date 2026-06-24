@@ -79,7 +79,7 @@ func TestRecordAccountPoolRuntimeUsageRecordsCompletedDisabledAccount(t *testing
 
 func TestPostTextConsumeQuotaRecordsSelectedAccountUsageMetrics(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
-	require.NoError(t, model.DB.AutoMigrate(&model.User{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}))
 	oldBatchUpdateEnabled := common.BatchUpdateEnabled
 	oldLogConsumeEnabled := common.LogConsumeEnabled
 	common.BatchUpdateEnabled = false
@@ -135,4 +135,61 @@ func TestPostTextConsumeQuotaRecordsSelectedAccountUsageMetrics(t *testing.T) {
 	assert.Equal(t, int64(1), reloaded.FirstTokenLatencySampleCount)
 	assert.Equal(t, int64(1), reloaded.LatencySampleCount)
 	assert.Greater(t, reloaded.LastLatencyMS, int64(0))
+}
+
+func TestPostTextConsumeQuotaSkipsAccountUsageMetricsForChannelTests(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}))
+	oldBatchUpdateEnabled := common.BatchUpdateEnabled
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	common.BatchUpdateEnabled = false
+	common.LogConsumeEnabled = false
+	t.Cleanup(func() {
+		common.BatchUpdateEnabled = oldBatchUpdateEnabled
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+	})
+
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{Name: "channel-test"})
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	user := model.User{Username: "usage-channel-test", Password: "password123"}
+	require.NoError(t, model.DB.Create(&user).Error)
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	ctx.Set(accountPoolSelectedAccountIDContextKey, account.Id)
+	start := time.Now().Add(-1500 * time.Millisecond)
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:            user.Id,
+		OriginModelName:   "gpt-5",
+		StartTime:         start,
+		FirstResponseTime: start.Add(275 * time.Millisecond),
+		IsChannelTest:     true,
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			CacheRatio:      0.1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id},
+	}
+	usage := &dto.Usage{
+		PromptTokens:     100,
+		CompletionTokens: 50,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 25,
+		},
+	}
+
+	PostTextConsumeQuota(ctx, relayInfo, usage, nil)
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Zero(t, reloaded.TotalPromptTokens)
+	assert.Zero(t, reloaded.TotalCompletionTokens)
+	assert.Zero(t, reloaded.TotalCachedTokens)
+	assert.Zero(t, reloaded.FirstTokenLatencySampleCount)
+	assert.Zero(t, reloaded.LatencySampleCount)
 }
