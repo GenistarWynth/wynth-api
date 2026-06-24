@@ -19,7 +19,9 @@ func applyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if err == nil {
 		return nil
 	}
-	service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+	if shouldRecordAccountPoolRuntimeAttempt(info) {
+		service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+	}
 	// Account-pool selection errors should allow the outer channel retry loop
 	// to try another channel. Do not add ErrOptionWithSkipRetry here.
 	return types.NewErrorWithStatusCode(
@@ -65,7 +67,7 @@ func runAccountPoolRuntimeAttempts(
 		if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
 			selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 			accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
-			if selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+			if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 				_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
 				service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 			}
@@ -82,14 +84,14 @@ func runAccountPoolRuntimeAttempts(
 			return attempt(request)
 		}()
 		if newAPIError == nil {
-			if selectedAccountID > 0 {
+			if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 {
 				now := common.GetTimestamp()
 				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, now)
 				service.RememberSelectedAccountPoolRuntimeAffinity(c, now)
 			}
 			return nil
 		}
-		if selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+		if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
 			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 		}
@@ -97,6 +99,10 @@ func runAccountPoolRuntimeAttempts(
 			return newAPIError
 		}
 	}
+}
+
+func shouldRecordAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo) bool {
+	return info == nil || !info.IsChannelTest
 }
 
 func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRuntimeRelaySnapshot {

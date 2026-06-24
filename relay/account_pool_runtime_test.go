@@ -291,6 +291,100 @@ func TestAccountPoolRuntimeAttemptsRecordSuccessForSelectedAccount(t *testing.T)
 	assert.Empty(t, reloaded.LastError)
 }
 
+func TestAccountPoolRuntimeAttemptsDoNotRecordChannelTestSuccessOrAffinity(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:       "channel-test-first",
+		Priority:   10,
+		LastUsedAt: 100,
+	})
+	sessionID := t.Name() + ":session"
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	channelTestCtx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	channelTestCtx.Request.Header.Set("Session_id", sessionID)
+	channelTestInfo := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	channelTestInfo.IsChannelTest = true
+
+	newAPIError := runAccountPoolRuntimeAttempts(channelTestCtx, channelTestInfo, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		assert.Equal(t, first.Id, service.GetSelectedAccountPoolAccountID(channelTestCtx))
+		return nil
+	})
+	require.Nil(t, newAPIError)
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, first.Id).Error)
+	assert.Equal(t, int64(100), reloaded.LastUsedAt)
+	assert.Zero(t, reloaded.SuccessCount)
+	assert.Zero(t, reloaded.LastSuccessAt)
+
+	second := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "normal-high-priority",
+		Priority: 100,
+	})
+	normalCtx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	normalCtx.Request.Header.Set("Session_id", sessionID)
+	normalInfo := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	selected := make([]int, 0, 1)
+
+	newAPIError = runAccountPoolRuntimeAttempts(normalCtx, normalInfo, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		selected = append(selected, service.GetSelectedAccountPoolAccountID(normalCtx))
+		return nil
+	})
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{second.Id}, selected)
+}
+
+func TestAccountPoolRuntimeAttemptsDoNotRecordChannelTestFailure(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 0)
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "channel-test-failure",
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.IsChannelTest = true
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		assert.Equal(t, account.Id, service.GetSelectedAccountPoolAccountID(ctx))
+		return types.NewErrorWithStatusCode(errors.New("channel test upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+	})
+	require.NotNil(t, newAPIError)
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Empty(t, reloaded.LastError)
+	assert.Zero(t, reloaded.LastFailureAt)
+	assert.Zero(t, reloaded.FailureCount)
+	assert.Zero(t, reloaded.TempDisabledUntil)
+	assert.Empty(t, reloaded.TempDisabledReason)
+	assert.Zero(t, reloaded.RateLimitedUntil)
+}
+
 func TestAccountPoolRuntimeAffinityIsSoftAndBreaksOnFailure(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	pool := createAccountPoolRelayTestPool(t)
