@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type {
+  AccountPool,
   AccountPoolAccount,
   AccountPoolAccountCreateRequest,
   AccountPoolAccountStatus,
@@ -85,6 +86,17 @@ export function emptyPoolForm(): AccountPoolFormValues {
     default_monitor_enabled: false,
     default_schedule_policy: '',
     remark: '',
+  }
+}
+
+export function poolToFormValues(pool: AccountPool): AccountPoolFormValues {
+  return {
+    name: pool.name,
+    platform: pool.platform,
+    default_proxy_id: pool.default_proxy_id,
+    default_monitor_enabled: pool.default_monitor_enabled,
+    default_schedule_policy: pool.default_schedule_policy,
+    remark: pool.remark,
   }
 }
 

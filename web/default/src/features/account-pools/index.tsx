@@ -129,6 +129,7 @@ import {
   createAccountPoolAccount,
   createAccountPoolBinding,
   createAccountPoolProxy,
+  deleteAccountPool,
   deleteAccountPoolAccount,
   deleteAccountPoolProxy,
   disableAccountPoolBinding,
@@ -137,6 +138,7 @@ import {
   listAccountPoolBindings,
   listAccountPoolProxies,
   listAccountPools,
+  updateAccountPool,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
   updateAccountPoolProxy,
@@ -149,6 +151,7 @@ import {
   emptyAccountForm,
   emptyPoolForm,
   emptyProxyForm,
+  poolToFormValues,
   proxyToFormValues,
   type AccountPoolAccountFormValues,
   type AccountPoolFormValues,
@@ -427,6 +430,8 @@ function BooleanBadge(props: { active: boolean; falseLabel: string; trueLabel: s
 function useAccountPoolColumns(props: {
   accountsByPool: Record<number, AccountPoolAccount[] | undefined>
   onDetails: (pool: AccountPool) => void
+  onEdit: (pool: AccountPool) => void
+  onDelete: (pool: AccountPool) => void
 }): ColumnDef<AccountPool>[] {
   const { t } = useTranslation()
 
@@ -514,7 +519,12 @@ function useAccountPoolColumns(props: {
         id: 'actions',
         header: () => t('Actions'),
         cell: ({ row }) => (
-          <PoolActions row={row} onDetails={props.onDetails} />
+          <PoolActions
+            row={row}
+            onDetails={props.onDetails}
+            onEdit={props.onEdit}
+            onDelete={props.onDelete}
+          />
         ),
         meta: { pinned: 'right' as const },
       },
@@ -526,6 +536,8 @@ function useAccountPoolColumns(props: {
 function PoolActions(props: {
   row: Row<AccountPool>
   onDetails: (pool: AccountPool) => void
+  onEdit: (pool: AccountPool) => void
+  onDelete: (pool: AccountPool) => void
 }) {
   const { t } = useTranslation()
   const pool = props.row.original
@@ -550,6 +562,14 @@ function PoolActions(props: {
             <Eye />
             {t('Details')}
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => props.onEdit(pool)}>
+            <Pencil />
+            {t('Edit')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => props.onDelete(pool)}>
+            <Trash2 />
+            {t('Delete')}
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -567,6 +587,8 @@ export function AccountPools() {
     pageSize: isMobile ? 10 : 20,
   })
   const [poolSheetOpen, setPoolSheetOpen] = useState(false)
+  const [editingPool, setEditingPool] = useState<AccountPool>()
+  const [deletingPool, setDeletingPool] = useState<AccountPool>()
   const [selectedPool, setSelectedPool] = useState<AccountPool>()
   const [accountSheetOpen, setAccountSheetOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<AccountPoolAccount>()
@@ -664,6 +686,46 @@ export function AccountPools() {
       }
       toast.success(t('Account pool created'))
       setPoolSheetOpen(false)
+      setEditingPool(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const updatePoolMutation = useMutation({
+    mutationFn: async (values: AccountPoolFormValues) => {
+      if (!editingPool) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return updateAccountPool(editingPool.id, buildPoolPayload(values))
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to update account pool')))
+        return
+      }
+      toast.success(t('Account pool updated'))
+      setPoolSheetOpen(false)
+      setEditingPool(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const deletePoolMutation = useMutation({
+    mutationFn: async (pool: AccountPool) => deleteAccountPool(pool.id),
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to delete account pool')))
+        return
+      }
+      toast.success(t('Account pool deleted'))
+      setDeletingPool(undefined)
+      setSelectedPool(undefined)
       invalidatePools()
     },
     onError: (error) => {
@@ -938,6 +1000,11 @@ export function AccountPools() {
   const columns = useAccountPoolColumns({
     accountsByPool: loadedAccountsByPool,
     onDetails: (pool) => setSelectedPool(pool),
+    onEdit: (pool) => {
+      setEditingPool(pool)
+      setPoolSheetOpen(true)
+    },
+    onDelete: setDeletingPool,
   })
   const pools = poolsQuery.data ?? []
   const { table } = useDataTable({
@@ -967,7 +1034,13 @@ export function AccountPools() {
       <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>{t('Account Pools')}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-          <Button type='button' onClick={() => setPoolSheetOpen(true)}>
+          <Button
+            type='button'
+            onClick={() => {
+              setEditingPool(undefined)
+              setPoolSheetOpen(true)
+            }}
+          >
             <Plus data-icon='inline-start' />
             {t('Add Pool')}
           </Button>
@@ -1009,9 +1082,37 @@ export function AccountPools() {
 
       <PoolFormSheet
         open={poolSheetOpen}
-        isSubmitting={createPoolMutation.isPending}
-        onOpenChange={setPoolSheetOpen}
-        onSubmit={(values) => createPoolMutation.mutate(values)}
+        pool={editingPool}
+        isSubmitting={createPoolMutation.isPending || updatePoolMutation.isPending}
+        onOpenChange={(open) => {
+          setPoolSheetOpen(open)
+          if (!open) setEditingPool(undefined)
+        }}
+        onSubmit={(values) => {
+          if (editingPool) {
+            updatePoolMutation.mutate(values)
+          } else {
+            createPoolMutation.mutate(values)
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(deletingPool)}
+        onOpenChange={(open) => !open && setDeletingPool(undefined)}
+        title={t('Delete account pool?')}
+        desc={
+          deletingPool
+            ? t('Delete account pool {{name}} and disable its bindings.', {
+                name: deletingPool.name,
+              })
+            : ''
+        }
+        destructive
+        confirmText={t('Delete')}
+        isLoading={deletePoolMutation.isPending}
+        handleConfirm={() => {
+          if (deletingPool) deletePoolMutation.mutate(deletingPool)
+        }}
       />
       <PoolDetailsSheet
         open={Boolean(selectedPool)}
@@ -1162,6 +1263,7 @@ export function AccountPools() {
 
 function PoolFormSheet(props: {
   open: boolean
+  pool?: AccountPool
   isSubmitting: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (values: AccountPoolFormValues) => void
@@ -1179,9 +1281,9 @@ function PoolFormSheet(props: {
 
   useEffect(() => {
     if (props.open) {
-      setForm(emptyPoolForm())
+      setForm(props.pool ? poolToFormValues(props.pool) : emptyPoolForm())
     }
-  }, [props.open])
+  }, [props.open, props.pool])
 
   const setField = <K extends keyof AccountPoolFormValues>(
     key: K,
@@ -1201,7 +1303,9 @@ function PoolFormSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent className={sideDrawerContentClassName('sm:max-w-[520px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>{t('Add Account Pool')}</SheetTitle>
+          <SheetTitle>
+            {props.pool ? t('Edit Account Pool') : t('Add Account Pool')}
+          </SheetTitle>
           <SheetDescription>{t('Account Pools')}</SheetDescription>
         </SheetHeader>
         <form
@@ -1316,7 +1420,7 @@ function PoolFormSheet(props: {
             ) : (
               <Save data-icon='inline-start' />
             )}
-            {t('Create')}
+            {props.pool ? t('Save Changes') : t('Create')}
           </Button>
         </SheetFooter>
       </SheetContent>
