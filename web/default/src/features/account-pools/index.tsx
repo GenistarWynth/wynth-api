@@ -327,6 +327,38 @@ function modelListFromText(value: string): string[] {
     .filter(Boolean)
 }
 
+function modelListToText(values: string[]) {
+  return values.join(', ')
+}
+
+function useAccountPoolModelSelect(enabled = true) {
+  const { t } = useTranslation()
+  const modelsQuery = useQuery({
+    queryKey: ['user-models', 'account-pools'],
+    queryFn: getUserModels,
+    enabled,
+  })
+  const modelSelectOptions = useMemo(
+    () =>
+      (modelsQuery.data?.data ?? []).map((model) => ({
+        value: model,
+        label: model,
+      })),
+    [modelsQuery.data]
+  )
+
+  useEffect(() => {
+    if (modelsQuery.error) {
+      toast.error(t('Failed to load models'))
+    }
+  }, [modelsQuery.error, t])
+
+  return {
+    modelSelectOptions,
+    modelsLoading: modelsQuery.isLoading,
+  }
+}
+
 function parseAccountPoolJSON<T>(value: string, fallback: T): T {
   if (!value.trim()) {
     return fallback
@@ -2078,19 +2110,8 @@ function BindingForm(props: {
       return result.data?.items ?? []
     },
   })
-  const modelsQuery = useQuery({
-    queryKey: ['user-models', 'account-pool-bindings'],
-    queryFn: getUserModels,
-  })
+  const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect()
   const disabledChannels = disabledChannelsQuery.data ?? EMPTY_CHANNELS
-  const modelSelectOptions = useMemo(
-    () =>
-      (modelsQuery.data?.data ?? []).map((model) => ({
-        value: model,
-        label: model,
-      })),
-    [modelsQuery.data]
-  )
   const boundChannelIDs = useMemo(
     () =>
       new Set(
@@ -2130,12 +2151,6 @@ function BindingForm(props: {
       toast.error(disabledChannelsQuery.error.message)
     }
   }, [disabledChannelsQuery.error])
-
-  useEffect(() => {
-    if (modelsQuery.error) {
-      toast.error(t('Failed to load models'))
-    }
-  }, [modelsQuery.error, t])
 
   useEffect(() => {
     setForm(
@@ -2239,7 +2254,7 @@ function BindingForm(props: {
               options={modelSelectOptions}
               selected={modelListFromText(form.fixed_models_text)}
               onChange={(values) =>
-                setField('fixed_models_text', values.join(', '))
+                setField('fixed_models_text', modelListToText(values))
               }
               placeholder={t('Select models or add custom ones')}
               allowCreate
@@ -2247,7 +2262,7 @@ function BindingForm(props: {
               emptyText={t('No models found')}
               maxVisibleChips={8}
               copyChipOnClick
-              disabled={modelsQuery.isLoading}
+              disabled={modelsLoading}
             />
           </FieldBlock>
           <FieldBlock
@@ -2486,6 +2501,9 @@ function AccountImportDialog(props: {
     () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
     [props.proxies, t]
   )
+  const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect(
+    props.open
+  )
 
   useEffect(() => {
     if (props.open) {
@@ -2605,13 +2623,23 @@ function AccountImportDialog(props: {
             htmlFor='account-pool-import-default-models'
             description={t('Used only when the imported account has no model list.')}
           >
-            <Textarea
+            <MultiSelect
               id='account-pool-import-default-models'
-              value={form.default_supported_models_text}
-              onChange={(event) =>
-                setField('default_supported_models_text', event.target.value)
+              options={modelSelectOptions}
+              selected={modelListFromText(form.default_supported_models_text)}
+              onChange={(values) =>
+                setField(
+                  'default_supported_models_text',
+                  modelListToText(values)
+                )
               }
-              placeholder={t('Comma-separated model names')}
+              placeholder={t('Select models or add custom ones')}
+              allowCreate
+              createLabel='Add custom model "{{value}}"'
+              emptyText={t('No models found')}
+              maxVisibleChips={8}
+              copyChipOnClick
+              disabled={modelsLoading}
             />
           </FieldBlock>
           <FieldBlock
@@ -2680,6 +2708,9 @@ function AccountFormSheet(props: {
   const proxyOptions = useMemo(
     () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
     [props.proxies, t]
+  )
+  const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect(
+    props.open
   )
 
   useEffect(() => {
@@ -2926,13 +2957,20 @@ function AccountFormSheet(props: {
                 label={t('Supported Models')}
                 htmlFor='account-pool-account-supported-models'
               >
-                <Textarea
+                <MultiSelect
                   id='account-pool-account-supported-models'
-                  value={form.supported_models_text}
-                  onChange={(event) =>
-                    setField('supported_models_text', event.target.value)
+                  options={modelSelectOptions}
+                  selected={modelListFromText(form.supported_models_text)}
+                  onChange={(values) =>
+                    setField('supported_models_text', modelListToText(values))
                   }
-                  placeholder={t('Comma-separated model names')}
+                  placeholder={t('Select models or add custom ones')}
+                  allowCreate
+                  createLabel='Add custom model "{{value}}"'
+                  emptyText={t('No models found')}
+                  maxVisibleChips={8}
+                  copyChipOnClick
+                  disabled={modelsLoading}
                 />
               </FieldBlock>
               <FieldBlock
