@@ -87,8 +87,12 @@ type accountPoolCapabilityProbeRequestMessage struct {
 type accountPoolCapabilityErrorResponse struct {
 	Error struct {
 		Message string `json:"message"`
+		Code    string `json:"code"`
+		Type    string `json:"type"`
 	} `json:"error"`
 	Message string `json:"message"`
+	Code    string `json:"code"`
+	Type    string `json:"type"`
 }
 
 func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req AccountPoolCapabilityDetectRequest) (AccountPoolCapabilityDetectResult, error) {
@@ -766,17 +770,58 @@ func accountPoolCapabilityProbeResponseIndicatesUnsupportedModel(statusCode int,
 		return false
 	}
 
-	message := strings.ToLower(strings.TrimSpace(accountPoolCapabilityErrorMessage(body)))
+	if accountPoolCapabilityStructuredErrorIndicatesUnsupportedModel(body) {
+		return true
+	}
+
+	message := strings.TrimSpace(accountPoolCapabilityErrorMessage(body))
 	if message == "" {
 		return false
 	}
-	if strings.Contains(message, "model not found") || strings.Contains(message, "deployment not found") {
+	return accountPoolCapabilityUnsupportedMessageIndicatesUnsupportedModel(message)
+}
+
+func accountPoolCapabilityStructuredErrorIndicatesUnsupportedModel(body []byte) bool {
+	var payload accountPoolCapabilityErrorResponse
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return accountPoolCapabilityUnsupportedErrorSignal(payload.Error.Code) ||
+		accountPoolCapabilityUnsupportedErrorSignal(payload.Error.Type) ||
+		accountPoolCapabilityUnsupportedErrorSignal(payload.Code) ||
+		accountPoolCapabilityUnsupportedErrorSignal(payload.Type)
+}
+
+func accountPoolCapabilityUnsupportedMessageIndicatesUnsupportedModel(message string) bool {
+	normalized := accountPoolCapabilityNormalizeUnsupportedErrorSignal(message)
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "model not found") || strings.Contains(normalized, "deployment not found") {
 		return true
 	}
-	if strings.Contains(message, "not allowed") && strings.Contains(message, "model") {
+	if strings.Contains(normalized, "model not allowed") {
+		return true
+	}
+	if strings.Contains(normalized, "not allowed") && strings.Contains(normalized, "model") {
 		return true
 	}
 	return false
+}
+
+func accountPoolCapabilityUnsupportedErrorSignal(value string) bool {
+	switch accountPoolCapabilityNormalizeUnsupportedErrorSignal(value) {
+	case "model not found", "model not allowed", "deployment not found":
+		return true
+	default:
+		return false
+	}
+}
+
+func accountPoolCapabilityNormalizeUnsupportedErrorSignal(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.NewReplacer("_", " ", "-", " ").Replace(normalized)
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 func accountPoolCapabilityErrorMessage(body []byte) string {
