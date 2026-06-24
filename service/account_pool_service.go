@@ -881,7 +881,7 @@ func syncAccountPoolBindingChannelModels(tx *gorm.DB, channel *model.Channel, po
 }
 
 func accountPoolFixedModelsCSV(policy AccountPoolModelPolicy) string {
-	if !strings.EqualFold(strings.TrimSpace(policy.Strategy), "fixed") {
+	if !strings.EqualFold(strings.TrimSpace(policy.Strategy), "fixed") && len(policy.FixedModels) == 0 {
 		return ""
 	}
 	models := make([]string, 0, len(policy.FixedModels))

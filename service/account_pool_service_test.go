@@ -222,6 +222,28 @@ func TestAccountPoolServiceCreateBoundChannelCreatesDisabledChannelAndDraftBindi
 	assert.NotEqual(t, channel.Key, secondChannel.Key)
 }
 
+func TestAccountPoolServiceCreateBoundChannelUsesFixedModelsWithoutExplicitStrategy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	binding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "pool-runtime-channel",
+		ModelPolicy: AccountPoolModelPolicy{
+			FixedModels: []string{" gpt-5 ", "gpt-5", "gpt-5-mini"},
+		},
+	})
+
+	require.NoError(t, err)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, binding.ChannelID).Error)
+	assert.Equal(t, "gpt-5,gpt-5-mini", channel.Models)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.Ability{}).Where("channel_id = ?", binding.ChannelID).Count(&count).Error)
+	assert.Equal(t, int64(2), count)
+}
+
 func TestAccountPoolServiceCreateBoundChannelRejectsBlankName(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
