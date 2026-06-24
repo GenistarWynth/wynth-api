@@ -122,6 +122,10 @@ export type AccountPoolAccount = {
   temp_disabled_until: number
   temp_disabled_reason: string
   last_error: string
+  last_capability_check_at: number
+  last_capability_check_status: string
+  last_capability_check_error: string
+  last_capability_check_models: string[]
   has_credential: boolean
   has_token: boolean
   created_time: number

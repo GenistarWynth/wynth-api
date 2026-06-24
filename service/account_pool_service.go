@@ -126,6 +126,10 @@ type AccountPoolAccountView struct {
 	TempDisabledUntil            int64             `json:"temp_disabled_until"`
 	TempDisabledReason           string            `json:"temp_disabled_reason"`
 	LastError                    string            `json:"last_error"`
+	LastCapabilityCheckAt        int64             `json:"last_capability_check_at"`
+	LastCapabilityCheckStatus    string            `json:"last_capability_check_status"`
+	LastCapabilityCheckError     string            `json:"last_capability_check_error"`
+	LastCapabilityCheckModels    []string          `json:"last_capability_check_models"`
 	HasCredential                bool              `json:"has_credential"`
 	HasToken                     bool              `json:"has_token"`
 	CreatedTime                  int64             `json:"created_time"`
@@ -1110,6 +1114,12 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 			return AccountPoolAccountView{}, err
 		}
 	}
+	var lastCapabilityCheckModels []string
+	if strings.TrimSpace(account.LastCapabilityCheckModels) != "" {
+		if err := common.UnmarshalJsonStr(account.LastCapabilityCheckModels, &lastCapabilityCheckModels); err != nil {
+			return AccountPoolAccountView{}, err
+		}
+	}
 	return AccountPoolAccountView{
 		Id:                           account.Id,
 		PoolID:                       account.PoolID,
@@ -1145,6 +1155,10 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		TempDisabledUntil:            account.TempDisabledUntil,
 		TempDisabledReason:           account.TempDisabledReason,
 		LastError:                    account.LastError,
+		LastCapabilityCheckAt:        account.LastCapabilityCheckAt,
+		LastCapabilityCheckStatus:    account.LastCapabilityCheckStatus,
+		LastCapabilityCheckError:     account.LastCapabilityCheckError,
+		LastCapabilityCheckModels:    lastCapabilityCheckModels,
 		HasCredential:                strings.TrimSpace(account.CredentialConfig) != "",
 		HasToken:                     strings.TrimSpace(account.TokenState) != "",
 		CreatedTime:                  account.CreatedTime,

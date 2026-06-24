@@ -1167,6 +1167,38 @@ func TestAccountPoolServiceListMethodsReturnBehaviorViews(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, bindings[0].ChannelStatus)
 }
 
+func TestAccountPoolServiceAccountViewIncludesCapabilityMetadata(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "capability-metadata",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-test",
+		},
+		SupportedModels: []string{"gpt-5"},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"last_capability_check_at":     int64(1234),
+			"last_capability_check_status": "success",
+			"last_capability_check_error":  "",
+			"last_capability_check_models": `["gpt-5","gpt-5-mini"]`,
+		}).Error)
+
+	accounts, err := service.ListAccounts(pool.Id)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	assert.Equal(t, int64(1234), accounts[0].LastCapabilityCheckAt)
+	assert.Equal(t, "success", accounts[0].LastCapabilityCheckStatus)
+	assert.Equal(t, []string{"gpt-5", "gpt-5-mini"}, accounts[0].LastCapabilityCheckModels)
+}
+
 func TestAccountPoolServicePoolCRUDSoftDeletesAndUpdatesZeroValues(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

@@ -58,26 +58,30 @@ type AccountPoolAccountCreateRequest struct {
 }
 
 type AccountPoolAccountResponse struct {
-	Id                 int               `json:"id"`
-	PoolID             int               `json:"pool_id"`
-	Name               string            `json:"name"`
-	AccountIdentifier  string            `json:"account_identifier"`
-	Status             string            `json:"status"`
-	Priority           int64             `json:"priority"`
-	Weight             uint              `json:"weight"`
-	MaxConcurrency     int               `json:"max_concurrency"`
-	ProxyID            int               `json:"proxy_id"`
-	SupportedModels    []string          `json:"supported_models"`
-	ModelMapping       map[string]string `json:"model_mapping"`
-	LastUsedAt         int64             `json:"last_used_at"`
-	RateLimitedUntil   int64             `json:"rate_limited_until"`
-	TempDisabledUntil  int64             `json:"temp_disabled_until"`
-	TempDisabledReason string            `json:"temp_disabled_reason"`
-	LastError          string            `json:"last_error"`
-	HasCredential      bool              `json:"has_credential"`
-	HasToken           bool              `json:"has_token"`
-	CreatedTime        int64             `json:"created_time"`
-	UpdatedTime        int64             `json:"updated_time"`
+	Id                        int               `json:"id"`
+	PoolID                    int               `json:"pool_id"`
+	Name                      string            `json:"name"`
+	AccountIdentifier         string            `json:"account_identifier"`
+	Status                    string            `json:"status"`
+	Priority                  int64             `json:"priority"`
+	Weight                    uint              `json:"weight"`
+	MaxConcurrency            int               `json:"max_concurrency"`
+	ProxyID                   int               `json:"proxy_id"`
+	SupportedModels           []string          `json:"supported_models"`
+	ModelMapping              map[string]string `json:"model_mapping"`
+	LastUsedAt                int64             `json:"last_used_at"`
+	RateLimitedUntil          int64             `json:"rate_limited_until"`
+	TempDisabledUntil         int64             `json:"temp_disabled_until"`
+	TempDisabledReason        string            `json:"temp_disabled_reason"`
+	LastError                 string            `json:"last_error"`
+	LastCapabilityCheckAt     int64             `json:"last_capability_check_at"`
+	LastCapabilityCheckStatus string            `json:"last_capability_check_status"`
+	LastCapabilityCheckError  string            `json:"last_capability_check_error"`
+	LastCapabilityCheckModels []string          `json:"last_capability_check_models"`
+	HasCredential             bool              `json:"has_credential"`
+	HasToken                  bool              `json:"has_token"`
+	CreatedTime               int64             `json:"created_time"`
+	UpdatedTime               int64             `json:"updated_time"`
 }
 
 type AccountPoolAccountImportDefaultsRequest struct {

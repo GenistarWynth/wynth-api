@@ -100,6 +100,10 @@ type AccountPoolAccount struct {
 	TempDisabledUntil            int64  `json:"temp_disabled_until" gorm:"bigint;index"`
 	TempDisabledReason           string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
 	LastError                    string `json:"last_error" gorm:"type:varchar(1024)"`
+	LastCapabilityCheckAt        int64  `json:"last_capability_check_at" gorm:"bigint;index"`
+	LastCapabilityCheckStatus    string `json:"last_capability_check_status" gorm:"type:varchar(32)"`
+	LastCapabilityCheckError     string `json:"last_capability_check_error" gorm:"type:varchar(1024)"`
+	LastCapabilityCheckModels    string `json:"last_capability_check_models" gorm:"type:text"`
 	CreatedTime                  int64  `json:"created_time" gorm:"bigint"`
 	UpdatedTime                  int64  `json:"updated_time" gorm:"bigint"`
 }
