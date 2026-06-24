@@ -1260,6 +1260,7 @@
     "Degraded": "Снижено",
     "Degraded performance recently": "Недавно наблюдалось снижение производительности",
     "Delete": "Удалить",
+    "Delete account pool {{name}} and remove its bindings.": "Удалить пул аккаунтов {{name}} и удалить его привязки.",
     "Delete (": "Удалить (",
     "Delete {{count}} API key(s)?": "Удалить {{count}} API-ключ(а/ей)?",
     "Delete {{name}}?": "Удалить {{name}}?",

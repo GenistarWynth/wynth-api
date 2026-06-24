@@ -1083,7 +1083,7 @@ export function AccountPools() {
         title={t('Delete account pool?')}
         desc={
           deletingPool
-            ? t('Delete account pool {{name}} and disable its bindings.', {
+            ? t('Delete account pool {{name}} and remove its bindings.', {
                 name: deletingPool.name,
               })
             : ''

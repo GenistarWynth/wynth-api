@@ -1260,6 +1260,7 @@
     "Degraded": "Degraded",
     "Degraded performance recently": "Degraded performance recently",
     "Delete": "Delete",
+    "Delete account pool {{name}} and remove its bindings.": "Delete account pool {{name}} and remove its bindings.",
     "Delete (": "Delete (",
     "Delete {{count}} API key(s)?": "Delete {{count}} API key(s)?",
     "Delete {{name}}?": "Delete {{name}}?",

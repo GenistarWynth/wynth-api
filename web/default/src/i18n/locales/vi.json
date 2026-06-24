@@ -1260,6 +1260,7 @@
     "Degraded": "Suy giảm",
     "Degraded performance recently": "Hiệu năng gần đây bị giảm",
     "Delete": "Xóa",
+    "Delete account pool {{name}} and remove its bindings.": "Xóa nhóm tài khoản {{name}} và xóa các liên kết của nhóm.",
     "Delete (": "Xóa (",
     "Delete {{count}} API key(s)?": "Xóa {{count}} khóa API?",
     "Delete {{name}}?": "Xóa {{name}}?",

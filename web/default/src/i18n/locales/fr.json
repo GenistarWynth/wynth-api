@@ -1260,6 +1260,7 @@
     "Degraded": "Dégradé",
     "Degraded performance recently": "Performances dégradées récemment",
     "Delete": "Supprimer",
+    "Delete account pool {{name}} and remove its bindings.": "Supprimer le pool de comptes {{name}} et supprimer ses liaisons.",
     "Delete (": "Supprimer (",
     "Delete {{count}} API key(s)?": "Supprimer {{count}} clé(s) API ?",
     "Delete {{name}}?": "Supprimer {{name}} ?",

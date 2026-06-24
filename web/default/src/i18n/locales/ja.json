@@ -1260,6 +1260,7 @@
     "Degraded": "低下",
     "Degraded performance recently": "最近パフォーマンスが低下しています",
     "Delete": "削除",
+    "Delete account pool {{name}} and remove its bindings.": "アカウントプール {{name}} を削除し、そのバインドを削除します。",
     "Delete (": "削除 (",
     "Delete {{count}} API key(s)?": "{{count}}個のAPIキーを削除しますか？",
     "Delete {{name}}?": "{{name}} を削除しますか？",

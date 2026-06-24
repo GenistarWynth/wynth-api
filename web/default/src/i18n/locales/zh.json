@@ -1260,6 +1260,7 @@
     "Degraded": "降级",
     "Degraded performance recently": "近期性能有所下降",
     "Delete": "删除",
+    "Delete account pool {{name}} and remove its bindings.": "删除账号池 {{name}} 并移除其绑定关系。",
     "Delete (": "删除 (",
     "Delete {{count}} API key(s)?": "删除 {{count}} 个 API 密钥？",
     "Delete {{name}}?": "删除 {{name}}？",

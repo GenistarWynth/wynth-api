@@ -383,7 +383,7 @@ func TestAccountPoolServiceBindingActivationRejectsWrongPoolAndUnsupportedChanne
 	assert.Equal(t, model.AccountPoolBindingStatusDisabled, disabled.Status)
 }
 
-func TestAccountPoolServiceDeletePoolDisablesBindingsAndPreservesChannelStatus(t *testing.T) {
+func TestAccountPoolServiceDeletePoolDeletesBindingsAndPreservesChannelStatus(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
 	pool := createAccountPoolServiceTestPool(t, service)
@@ -401,9 +401,15 @@ func TestAccountPoolServiceDeletePoolDisablesBindingsAndPreservesChannelStatus(t
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
 
 	var reloadedBinding model.AccountPoolChannelBinding
-	require.NoError(t, model.DB.First(&reloadedBinding, binding.Id).Error)
-	assert.Equal(t, model.AccountPoolBindingStatusDisabled, reloadedBinding.Status)
-	assert.NotZero(t, reloadedBinding.UpdatedTime)
+	require.Error(t, model.DB.First(&reloadedBinding, binding.Id).Error)
+
+	newPool := createAccountPoolServiceTestPool(t, service)
+	rebound, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    newPool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, channel.Id, rebound.ChannelID)
 }
 
 func TestAccountPoolServiceDeletePoolInvalidatesRuntimeEnabledCache(t *testing.T) {

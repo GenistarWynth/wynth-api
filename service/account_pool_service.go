@@ -221,12 +221,7 @@ func (s AccountPoolService) DeletePool(id int) error {
 			}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.AccountPoolChannelBinding{}).
-			Where("pool_id = ?", id).
-			Updates(map[string]any{
-				"status":       model.AccountPoolBindingStatusDisabled,
-				"updated_time": now,
-			}).Error
+		return tx.Where("pool_id = ?", id).Delete(&model.AccountPoolChannelBinding{}).Error
 	})
 	if err != nil {
 		return err
