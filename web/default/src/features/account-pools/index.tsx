@@ -154,6 +154,7 @@ import {
   emptyAccountImportForm,
   emptyPoolForm,
   emptyProxyForm,
+  normalizeAccountPoolSchedulePolicy,
   poolToFormValues,
   proxyToFormValues,
   type AccountPoolAccountFormValues,
@@ -167,6 +168,7 @@ import type {
   AccountPoolBinding,
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
+  AccountPoolSchedulePolicy,
   ApiResponse,
 } from './types'
 
@@ -175,7 +177,7 @@ type BindingFormValues = {
   account_ids: number[]
   model_strategy: string
   fixed_models_text: string
-  schedule_policy: string
+  schedule_policy: AccountPoolSchedulePolicy
   account_retry_times: number
 }
 
@@ -224,7 +226,7 @@ function emptyBindingForm(defaultSchedulePolicy = ''): BindingFormValues {
     account_ids: [],
     model_strategy: 'all',
     fixed_models_text: '',
-    schedule_policy: defaultSchedulePolicy || 'round_robin',
+    schedule_policy: normalizeAccountPoolSchedulePolicy(defaultSchedulePolicy),
     account_retry_times: 0,
   }
 }
@@ -237,7 +239,7 @@ function buildBindingPayload(
     account_ids: values.account_ids,
     model_strategy: values.model_strategy,
     fixed_models: modelListFromText(values.fixed_models_text),
-    schedule_policy: values.schedule_policy,
+    schedule_policy: normalizeAccountPoolSchedulePolicy(values.schedule_policy),
     account_retry_times: values.account_retry_times,
   }
 }
@@ -345,7 +347,7 @@ function bindingToFormValues(binding: AccountPoolBinding): BindingFormValues {
     fixed_models_text: Array.isArray(policy.fixed_models)
       ? policy.fixed_models.join(', ')
       : '',
-    schedule_policy: binding.schedule_policy || 'round_robin',
+    schedule_policy: normalizeAccountPoolSchedulePolicy(binding.schedule_policy),
     account_retry_times: binding.account_retry_times,
   }
 }
@@ -1359,7 +1361,11 @@ function PoolFormSheet(props: {
                 items={schedulePolicyOptions}
                 value={form.default_schedule_policy || 'round_robin'}
                 onValueChange={(value) =>
-                  value && setField('default_schedule_policy', value)
+                  value &&
+                  setField(
+                    'default_schedule_policy',
+                    normalizeAccountPoolSchedulePolicy(value)
+                  )
                 }
               >
                 <SelectTrigger id='account-pool-schedule-policy'>
@@ -2038,7 +2044,11 @@ function BindingForm(props: {
               items={schedulePolicyOptions}
               value={form.schedule_policy}
               onValueChange={(value) =>
-                value && setField('schedule_policy', value)
+                value &&
+                setField(
+                  'schedule_policy',
+                  normalizeAccountPoolSchedulePolicy(value)
+                )
               }
             >
               <SelectTrigger id='account-pool-binding-schedule-policy'>

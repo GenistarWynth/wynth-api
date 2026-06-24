@@ -47,7 +47,7 @@ export type AccountPoolProxyProtocol =
 
 export type AccountPoolModelStrategy = 'all' | 'fixed' | string
 
-export type AccountPoolSchedulePolicy = 'round_robin' | 'random' | string
+export type AccountPoolSchedulePolicy = 'round_robin' | 'random'
 
 export type AccountPool = {
   id: number
@@ -67,7 +67,7 @@ export type AccountPoolCreateRequest = {
   platform: AccountPoolPlatform | string
   default_proxy_id: number
   default_monitor_enabled: boolean
-  default_schedule_policy: string
+  default_schedule_policy: AccountPoolSchedulePolicy | ''
   remark: string
 }
 

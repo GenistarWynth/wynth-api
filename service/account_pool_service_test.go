@@ -164,6 +164,63 @@ func TestAccountPoolServiceCreateBindingUsesPoolDefaultSchedulePolicy(t *testing
 	assert.Equal(t, "random", binding.SchedulePolicy)
 }
 
+func TestAccountPoolServiceRejectsUnsupportedSchedulePolicy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+
+	_, err := service.CreatePool(AccountPoolCreateParams{
+		Name:                  "invalid-default-policy",
+		Platform:              model.AccountPoolPlatformOpenAI,
+		DefaultSchedulePolicy: "priority",
+	})
+	require.ErrorContains(t, err, "account pool schedule policy must be round_robin or random")
+
+	pool := createAccountPoolServiceTestPool(t, service)
+	_, err = service.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:                  pool.Name,
+		Platform:              model.AccountPoolPlatformOpenAI,
+		DefaultSchedulePolicy: "priority",
+	})
+	require.ErrorContains(t, err, "account pool schedule policy must be round_robin or random")
+
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:         pool.Id,
+		ChannelID:      channel.Id,
+		SchedulePolicy: "priority",
+	})
+	require.ErrorContains(t, err, "account pool schedule policy must be round_robin or random")
+
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+	_, err = service.UpdateBinding(pool.Id, binding.Id, AccountPoolBindingCreateParams{
+		ChannelID:      channel.Id,
+		SchedulePolicy: "priority",
+	})
+	require.ErrorContains(t, err, "account pool schedule policy must be round_robin or random")
+}
+
+func TestAccountPoolServiceIgnoresLegacyInvalidPoolDefaultSchedulePolicy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).
+		Where("id = ?", pool.Id).
+		Update("default_schedule_policy", "priority").Error)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+
+	binding, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolSchedulePolicyRoundRobin, binding.SchedulePolicy)
+}
+
 func TestAccountPoolServiceCreateBindingRejectsNonPhaseOneStatus(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -256,7 +313,7 @@ func TestAccountPoolServiceUpdateBindingConfigPreservesRuntimeStatus(t *testing.
 			Strategy:    "fixed",
 			FixedModels: []string{"gpt-5", "gpt-5-mini"},
 		},
-		SchedulePolicy:    "priority",
+		SchedulePolicy:    "random",
 		AccountRetryTimes: 3,
 	})
 
@@ -264,7 +321,7 @@ func TestAccountPoolServiceUpdateBindingConfigPreservesRuntimeStatus(t *testing.
 	assert.Equal(t, model.AccountPoolBindingStatusEnabled, updated.Status)
 	assert.Equal(t, newChannel.Id, updated.ChannelID)
 	assert.Equal(t, 3, updated.AccountRetryTimes)
-	assert.Equal(t, "priority", updated.SchedulePolicy)
+	assert.Equal(t, "random", updated.SchedulePolicy)
 	var filter AccountPoolAccountFilterConfig
 	require.NoError(t, common.UnmarshalJsonStr(updated.AccountFilterConfig, &filter))
 	assert.Equal(t, []int{101, 202}, filter.AccountIDs)

@@ -144,12 +144,16 @@ func (s AccountPoolService) CreatePool(params AccountPoolCreateParams) (model.Ac
 	if err := validateAccountPoolProxyReference(params.DefaultProxyID); err != nil {
 		return model.AccountPool{}, err
 	}
+	schedulePolicy, err := normalizeAccountPoolSchedulePolicy(params.DefaultSchedulePolicy)
+	if err != nil {
+		return model.AccountPool{}, err
+	}
 	pool := model.AccountPool{
 		Name:                  name,
 		Platform:              platform,
 		DefaultProxyID:        params.DefaultProxyID,
 		DefaultMonitorEnabled: params.DefaultMonitorEnabled,
-		DefaultSchedulePolicy: params.DefaultSchedulePolicy,
+		DefaultSchedulePolicy: schedulePolicy,
 		Remark:                params.Remark,
 	}
 	return pool, model.DB.Create(&pool).Error
@@ -181,12 +185,16 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 	if err := validateAccountPoolProxyReference(params.DefaultProxyID); err != nil {
 		return model.AccountPool{}, err
 	}
+	schedulePolicy, err := normalizeAccountPoolSchedulePolicy(params.DefaultSchedulePolicy)
+	if err != nil {
+		return model.AccountPool{}, err
+	}
 	err = model.DB.Model(&pool).Updates(map[string]any{
 		"name":                    name,
 		"platform":                platform,
 		"default_proxy_id":        params.DefaultProxyID,
 		"default_monitor_enabled": params.DefaultMonitorEnabled,
-		"default_schedule_policy": params.DefaultSchedulePolicy,
+		"default_schedule_policy": schedulePolicy,
 		"remark":                  params.Remark,
 		"updated_time":            common.GetTimestamp(),
 	}).Error
@@ -414,7 +422,10 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if status == "" {
 		status = model.AccountPoolBindingStatusDraft
 	}
-	schedulePolicy := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
 	binding := model.AccountPoolChannelBinding{
 		PoolID:              params.PoolID,
 		ChannelID:           params.ChannelID,
@@ -461,7 +472,10 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 		return AccountPoolBindingView{}, err
 	}
 	oldChannelID := binding.ChannelID
-	schedulePolicy := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
 	now := common.GetTimestamp()
 	if err := model.DB.Model(&binding).Updates(map[string]any{
 		"channel_id":            channel.Id,
@@ -703,15 +717,30 @@ func normalizeAccountPoolPlatform(platform string) (string, error) {
 	return platform, nil
 }
 
-func resolveAccountPoolSchedulePolicy(policy string, fallback string) string {
+func normalizeAccountPoolSchedulePolicy(policy string) (string, error) {
 	policy = strings.TrimSpace(policy)
-	if policy == "" {
-		policy = strings.TrimSpace(fallback)
+	switch policy {
+	case "":
+		return "", nil
+	case AccountPoolSchedulePolicyRoundRobin, AccountPoolSchedulePolicyRandom:
+		return policy, nil
+	default:
+		return "", errors.New("account pool schedule policy must be round_robin or random")
 	}
-	if policy == "" {
-		return AccountPoolSchedulePolicyRoundRobin
+}
+
+func resolveAccountPoolSchedulePolicy(policy string, fallback string) (string, error) {
+	normalized, err := normalizeAccountPoolSchedulePolicy(policy)
+	if err != nil {
+		return "", err
 	}
-	return policy
+	if normalized != "" {
+		return normalized, nil
+	}
+	if strings.TrimSpace(fallback) == AccountPoolSchedulePolicyRandom {
+		return AccountPoolSchedulePolicyRandom, nil
+	}
+	return AccountPoolSchedulePolicyRoundRobin, nil
 }
 
 func validateAccountPoolRuntimeChannel(channel model.Channel) error {

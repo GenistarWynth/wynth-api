@@ -384,14 +384,14 @@ func TestAccountPoolAPIUpdateBindingConfig(t *testing.T) {
 		AccountIDs:        []int{11, 22},
 		ModelStrategy:     "fixed",
 		FixedModels:       []string{"gpt-5", "gpt-5-mini"},
-		SchedulePolicy:    "priority",
+		SchedulePolicy:    "random",
 		AccountRetryTimes: 2,
 	})
 
 	require.True(t, updateResult.Response.Success, updateResult.Response.Message)
 	assert.Equal(t, model.AccountPoolBindingStatusEnabled, updateResult.Response.Data.Status)
 	assert.Equal(t, newChannel.Id, updateResult.Response.Data.ChannelID)
-	assert.Equal(t, "priority", updateResult.Response.Data.SchedulePolicy)
+	assert.Equal(t, "random", updateResult.Response.Data.SchedulePolicy)
 	assert.Equal(t, 2, updateResult.Response.Data.AccountRetryTimes)
 	var filter service.AccountPoolAccountFilterConfig
 	require.NoError(t, common.UnmarshalJsonStr(updateResult.Response.Data.AccountFilterConfig, &filter))

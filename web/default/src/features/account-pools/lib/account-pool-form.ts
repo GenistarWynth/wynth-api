@@ -29,17 +29,32 @@ import type {
   AccountPoolProxyCreateRequest,
   AccountPoolProxyProtocol,
   AccountPoolProxyStatus,
+  AccountPoolSchedulePolicy,
 } from '../types'
 
 const MODEL_MAPPING_ERROR =
   'Model mapping must be a JSON object with string values'
+
+export function normalizeAccountPoolSchedulePolicy(
+  value: string
+): AccountPoolSchedulePolicy {
+  // Legacy or externally edited values fall back to the runtime default.
+  return value.trim() === 'random' ? 'random' : 'round_robin'
+}
+
+export function normalizeOptionalAccountPoolSchedulePolicy(
+  value: string
+): AccountPoolSchedulePolicy | '' {
+  const trimmed = value.trim()
+  return trimmed === '' ? '' : normalizeAccountPoolSchedulePolicy(trimmed)
+}
 
 export type AccountPoolFormValues = {
   name: string
   platform: AccountPoolPlatform | string
   default_proxy_id: number
   default_monitor_enabled: boolean
-  default_schedule_policy: string
+  default_schedule_policy: AccountPoolSchedulePolicy | ''
   remark: string
 }
 
@@ -124,7 +139,9 @@ export function poolToFormValues(pool: AccountPool): AccountPoolFormValues {
     platform: pool.platform,
     default_proxy_id: pool.default_proxy_id,
     default_monitor_enabled: pool.default_monitor_enabled,
-    default_schedule_policy: pool.default_schedule_policy,
+    default_schedule_policy: normalizeOptionalAccountPoolSchedulePolicy(
+      pool.default_schedule_policy
+    ),
     remark: pool.remark,
   }
 }
@@ -137,7 +154,9 @@ export function buildPoolPayload(
     platform: values.platform || 'openai',
     default_proxy_id: toInteger(values.default_proxy_id),
     default_monitor_enabled: values.default_monitor_enabled === true,
-    default_schedule_policy: values.default_schedule_policy.trim(),
+    default_schedule_policy: normalizeOptionalAccountPoolSchedulePolicy(
+      values.default_schedule_policy
+    ),
     remark: values.remark.trim(),
   }
 }

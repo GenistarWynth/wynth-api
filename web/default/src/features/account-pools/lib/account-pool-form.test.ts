@@ -11,6 +11,8 @@ import {
   emptyPoolForm,
   emptyProxyForm,
   maskSecretPreview,
+  normalizeAccountPoolSchedulePolicy,
+  normalizeOptionalAccountPoolSchedulePolicy,
   normalizeModelListText,
 } from './account-pool-form'
 
@@ -27,6 +29,14 @@ describe('account pool form helpers', () => {
         remark: '',
       }
     )
+  })
+
+  test('normalizes account pool schedule policy values', () => {
+    assert.equal(normalizeAccountPoolSchedulePolicy('random'), 'random')
+    assert.equal(normalizeAccountPoolSchedulePolicy('round_robin'), 'round_robin')
+    assert.equal(normalizeAccountPoolSchedulePolicy('priority'), 'round_robin')
+    assert.equal(normalizeOptionalAccountPoolSchedulePolicy(''), '')
+    assert.equal(normalizeOptionalAccountPoolSchedulePolicy(' priority '), 'round_robin')
   })
 
   test('serializes write-only api key credential and normalizes models in first-seen order', () => {
