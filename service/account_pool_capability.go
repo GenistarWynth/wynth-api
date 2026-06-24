@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -810,18 +811,40 @@ func accountPoolCapabilityUnsupportedMessageIndicatesUnsupportedModel(message st
 }
 
 func accountPoolCapabilityUnsupportedErrorSignal(value string) bool {
-	switch accountPoolCapabilityNormalizeUnsupportedErrorSignal(value) {
+	normalized := accountPoolCapabilityNormalizeUnsupportedErrorSignal(value)
+	switch normalized {
 	case "model not found", "model not allowed", "deployment not found":
 		return true
-	default:
-		return false
 	}
+	switch strings.ReplaceAll(normalized, " ", "") {
+	case "modelnotfound", "modelnotallowed", "deploymentnotfound":
+		return true
+	}
+	return false
 }
 
 func accountPoolCapabilityNormalizeUnsupportedErrorSignal(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.NewReplacer("_", " ", "-", " ").Replace(normalized)
-	return strings.Join(strings.Fields(normalized), " ")
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(value))
+	var previous rune
+	for _, current := range value {
+		switch {
+		case current == '_' || current == '-' || unicode.IsSpace(current):
+			builder.WriteByte(' ')
+			previous = ' '
+			continue
+		case unicode.IsUpper(current) && (unicode.IsLower(previous) || unicode.IsDigit(previous)):
+			builder.WriteByte(' ')
+		}
+		builder.WriteRune(unicode.ToLower(current))
+		previous = current
+	}
+	return strings.Join(strings.Fields(builder.String()), " ")
 }
 
 func accountPoolCapabilityErrorMessage(body []byte) string {

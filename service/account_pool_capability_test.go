@@ -166,6 +166,71 @@ func TestAccountPoolCapabilityProbeModelsTreatsStructuredModelCodeAsUnsupported(
 	assert.NotContains(t, stored.LastCapabilityCheckError, "sk-probe-structured-secret")
 }
 
+func TestAccountPoolCapabilityProbeModelsTreatsCamelCaseDeploymentCodeAsUnsupported(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "probe-camelcase-error-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-probe-camelcase-secret",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload accountPoolCapabilityProbeRequestPayload
+		require.NoError(t, common.DecodeJson(r.Body, &payload))
+
+		w.Header().Set("Content-Type", "application/json")
+		switch payload.Model {
+		case "missing-deployment":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"DeploymentNotFound","message":"The deployment was not found"}}`))
+		case "gpt-5":
+			_, _ = w.Write([]byte(`{"id":"ok"}`))
+		default:
+			t.Fatalf("unexpected probed model %q", payload.Model)
+		}
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:          pool.Id,
+		AccountID:       account.Id,
+		ChannelID:       channel.Id,
+		Mode:            AccountPoolCapabilityModeProbeModels,
+		CandidateModels: []string{"missing-deployment", "gpt-5"},
+		Apply:           true,
+		Merge:           false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusPartial, result.Status)
+	assert.Equal(t, []string{"gpt-5"}, result.DetectedModels)
+	assert.Equal(t, []string{"gpt-5"}, result.AppliedModels)
+	require.NotEmpty(t, result.Errors)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "missing-deployment")
+	assert.NotContains(t, strings.Join(result.Errors, "\n"), "sk-probe-camelcase-secret")
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, []string{"gpt-5"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.SupportedModels))
+	assert.Equal(t, AccountPoolCapabilityStatusPartial, stored.LastCapabilityCheckStatus)
+	assert.Equal(t, []string{"gpt-5"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.LastCapabilityCheckModels))
+	assert.NotContains(t, stored.LastCapabilityCheckError, "sk-probe-camelcase-secret")
+}
+
 func TestAccountPoolCapabilityProbeRequiresCandidateModels(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 	setupAccountPoolServiceTestDB(t)
