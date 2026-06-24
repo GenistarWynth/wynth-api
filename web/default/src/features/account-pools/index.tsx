@@ -263,6 +263,26 @@ function formatOptionalTimestamp(value: number) {
   return value > 0 ? formatTimestamp(value) : '-'
 }
 
+function formatOptionalCount(value: number) {
+  if (value <= 0) return '-'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`
+  return String(value)
+}
+
+function formatOptionalMilliseconds(value: number) {
+  return value > 0 ? `${Math.round(value)} ms` : '-'
+}
+
+function formatOptionalPercent(numerator: number, denominator: number) {
+  if (numerator <= 0 || denominator <= 0) return '-'
+  return `${((numerator / denominator) * 100).toFixed(1)}%`
+}
+
+function averageMetric(total: number, count: number) {
+  return count > 0 ? total / count : 0
+}
+
 function apiErrorMessage<T>(result: ApiResponse<T>, fallback: string) {
   return result.message || fallback
 }
@@ -1937,14 +1957,38 @@ function AccountListSection(props: {
 function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
   const { t } = useTranslation()
   const account = props.account
+  const averageFirstTokenLatency = averageMetric(
+    account.total_first_token_latency_ms,
+    account.first_token_latency_sample_count
+  )
 
   return (
-    <div className='flex min-w-[140px] flex-col gap-1 text-xs'>
+    <div className='flex min-w-[190px] flex-col gap-1 text-xs'>
       <div className='flex items-center gap-2'>
         <span className='text-muted-foreground'>{t('Success')}</span>
         <span className='font-medium'>{account.success_count}</span>
         <span className='text-muted-foreground'>{t('Failure')}</span>
         <span className='font-medium'>{account.failure_count}</span>
+      </div>
+      <div className='text-muted-foreground'>
+        {t('Cache Rate')}:{' '}
+        {formatOptionalPercent(
+          account.total_cached_tokens,
+          account.total_prompt_tokens
+        )}
+      </div>
+      <div className='text-muted-foreground'>
+        {t('TTFT')}: {formatOptionalMilliseconds(account.last_first_token_latency_ms)}
+        {' / '}
+        {t('Avg')} {formatOptionalMilliseconds(averageFirstTokenLatency)}
+      </div>
+      <div className='text-muted-foreground'>
+        {t('Latency')}: {formatOptionalMilliseconds(account.last_latency_ms)}
+      </div>
+      <div className='text-muted-foreground'>
+        {t('Tokens')}: {formatOptionalCount(account.last_prompt_tokens)}
+        {' / '}
+        {formatOptionalCount(account.last_completion_tokens)}
       </div>
       <div className='text-muted-foreground'>
         {t('Last Success')}: {formatOptionalTimestamp(account.last_success_at)}

@@ -92,30 +92,44 @@ type AccountPoolProxyCreateParams struct {
 }
 
 type AccountPoolAccountView struct {
-	Id                 int               `json:"id"`
-	PoolID             int               `json:"pool_id"`
-	Name               string            `json:"name"`
-	AccountIdentifier  string            `json:"account_identifier"`
-	Status             string            `json:"status"`
-	Priority           int64             `json:"priority"`
-	Weight             uint              `json:"weight"`
-	MaxConcurrency     int               `json:"max_concurrency"`
-	ProxyID            int               `json:"proxy_id"`
-	SupportedModels    []string          `json:"supported_models"`
-	ModelMapping       map[string]string `json:"model_mapping"`
-	LastUsedAt         int64             `json:"last_used_at"`
-	LastSuccessAt      int64             `json:"last_success_at"`
-	LastFailureAt      int64             `json:"last_failure_at"`
-	SuccessCount       int64             `json:"success_count"`
-	FailureCount       int64             `json:"failure_count"`
-	RateLimitedUntil   int64             `json:"rate_limited_until"`
-	TempDisabledUntil  int64             `json:"temp_disabled_until"`
-	TempDisabledReason string            `json:"temp_disabled_reason"`
-	LastError          string            `json:"last_error"`
-	HasCredential      bool              `json:"has_credential"`
-	HasToken           bool              `json:"has_token"`
-	CreatedTime        int64             `json:"created_time"`
-	UpdatedTime        int64             `json:"updated_time"`
+	Id                           int               `json:"id"`
+	PoolID                       int               `json:"pool_id"`
+	Name                         string            `json:"name"`
+	AccountIdentifier            string            `json:"account_identifier"`
+	Status                       string            `json:"status"`
+	Priority                     int64             `json:"priority"`
+	Weight                       uint              `json:"weight"`
+	MaxConcurrency               int               `json:"max_concurrency"`
+	ProxyID                      int               `json:"proxy_id"`
+	SupportedModels              []string          `json:"supported_models"`
+	ModelMapping                 map[string]string `json:"model_mapping"`
+	LastUsedAt                   int64             `json:"last_used_at"`
+	LastSuccessAt                int64             `json:"last_success_at"`
+	LastFailureAt                int64             `json:"last_failure_at"`
+	SuccessCount                 int64             `json:"success_count"`
+	FailureCount                 int64             `json:"failure_count"`
+	TotalPromptTokens            int64             `json:"total_prompt_tokens"`
+	TotalCompletionTokens        int64             `json:"total_completion_tokens"`
+	TotalCachedTokens            int64             `json:"total_cached_tokens"`
+	TotalCacheWriteTokens        int64             `json:"total_cache_write_tokens"`
+	LastPromptTokens             int64             `json:"last_prompt_tokens"`
+	LastCompletionTokens         int64             `json:"last_completion_tokens"`
+	LastCachedTokens             int64             `json:"last_cached_tokens"`
+	LastCacheWriteTokens         int64             `json:"last_cache_write_tokens"`
+	TotalLatencyMS               int64             `json:"total_latency_ms"`
+	LatencySampleCount           int64             `json:"latency_sample_count"`
+	LastLatencyMS                int64             `json:"last_latency_ms"`
+	TotalFirstTokenLatencyMS     int64             `json:"total_first_token_latency_ms"`
+	FirstTokenLatencySampleCount int64             `json:"first_token_latency_sample_count"`
+	LastFirstTokenLatencyMS      int64             `json:"last_first_token_latency_ms"`
+	RateLimitedUntil             int64             `json:"rate_limited_until"`
+	TempDisabledUntil            int64             `json:"temp_disabled_until"`
+	TempDisabledReason           string            `json:"temp_disabled_reason"`
+	LastError                    string            `json:"last_error"`
+	HasCredential                bool              `json:"has_credential"`
+	HasToken                     bool              `json:"has_token"`
+	CreatedTime                  int64             `json:"created_time"`
+	UpdatedTime                  int64             `json:"updated_time"`
 }
 
 type AccountPoolBindingView struct {
@@ -1097,30 +1111,44 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		}
 	}
 	return AccountPoolAccountView{
-		Id:                 account.Id,
-		PoolID:             account.PoolID,
-		Name:               account.Name,
-		AccountIdentifier:  account.AccountIdentifier,
-		Status:             account.Status,
-		Priority:           account.Priority,
-		Weight:             account.Weight,
-		MaxConcurrency:     account.MaxConcurrency,
-		ProxyID:            account.ProxyID,
-		SupportedModels:    supportedModels,
-		ModelMapping:       modelMapping,
-		LastUsedAt:         account.LastUsedAt,
-		LastSuccessAt:      account.LastSuccessAt,
-		LastFailureAt:      account.LastFailureAt,
-		SuccessCount:       account.SuccessCount,
-		FailureCount:       account.FailureCount,
-		RateLimitedUntil:   account.RateLimitedUntil,
-		TempDisabledUntil:  account.TempDisabledUntil,
-		TempDisabledReason: account.TempDisabledReason,
-		LastError:          account.LastError,
-		HasCredential:      strings.TrimSpace(account.CredentialConfig) != "",
-		HasToken:           strings.TrimSpace(account.TokenState) != "",
-		CreatedTime:        account.CreatedTime,
-		UpdatedTime:        account.UpdatedTime,
+		Id:                           account.Id,
+		PoolID:                       account.PoolID,
+		Name:                         account.Name,
+		AccountIdentifier:            account.AccountIdentifier,
+		Status:                       account.Status,
+		Priority:                     account.Priority,
+		Weight:                       account.Weight,
+		MaxConcurrency:               account.MaxConcurrency,
+		ProxyID:                      account.ProxyID,
+		SupportedModels:              supportedModels,
+		ModelMapping:                 modelMapping,
+		LastUsedAt:                   account.LastUsedAt,
+		LastSuccessAt:                account.LastSuccessAt,
+		LastFailureAt:                account.LastFailureAt,
+		SuccessCount:                 account.SuccessCount,
+		FailureCount:                 account.FailureCount,
+		TotalPromptTokens:            account.TotalPromptTokens,
+		TotalCompletionTokens:        account.TotalCompletionTokens,
+		TotalCachedTokens:            account.TotalCachedTokens,
+		TotalCacheWriteTokens:        account.TotalCacheWriteTokens,
+		LastPromptTokens:             account.LastPromptTokens,
+		LastCompletionTokens:         account.LastCompletionTokens,
+		LastCachedTokens:             account.LastCachedTokens,
+		LastCacheWriteTokens:         account.LastCacheWriteTokens,
+		TotalLatencyMS:               account.TotalLatencyMS,
+		LatencySampleCount:           account.LatencySampleCount,
+		LastLatencyMS:                account.LastLatencyMS,
+		TotalFirstTokenLatencyMS:     account.TotalFirstTokenLatencyMS,
+		FirstTokenLatencySampleCount: account.FirstTokenLatencySampleCount,
+		LastFirstTokenLatencyMS:      account.LastFirstTokenLatencyMS,
+		RateLimitedUntil:             account.RateLimitedUntil,
+		TempDisabledUntil:            account.TempDisabledUntil,
+		TempDisabledReason:           account.TempDisabledReason,
+		LastError:                    account.LastError,
+		HasCredential:                strings.TrimSpace(account.CredentialConfig) != "",
+		HasToken:                     strings.TrimSpace(account.TokenState) != "",
+		CreatedTime:                  account.CreatedTime,
+		UpdatedTime:                  account.UpdatedTime,
 	}, nil
 }
 

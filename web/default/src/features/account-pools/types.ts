@@ -104,6 +104,20 @@ export type AccountPoolAccount = {
   last_failure_at: number
   success_count: number
   failure_count: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_cached_tokens: number
+  total_cache_write_tokens: number
+  last_prompt_tokens: number
+  last_completion_tokens: number
+  last_cached_tokens: number
+  last_cache_write_tokens: number
+  total_latency_ms: number
+  latency_sample_count: number
+  last_latency_ms: number
+  total_first_token_latency_ms: number
+  first_token_latency_sample_count: number
+  last_first_token_latency_ms: number
   rate_limited_until: number
   temp_disabled_until: number
   temp_disabled_reason: string

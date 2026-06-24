@@ -64,30 +64,44 @@ func (p *AccountPool) BeforeUpdate(tx *gorm.DB) error {
 }
 
 type AccountPoolAccount struct {
-	Id                 int    `json:"id"`
-	PoolID             int    `json:"pool_id" gorm:"not null;index:idx_account_pool_status,priority:1"`
-	Name               string `json:"name" gorm:"type:varchar(191);not null;index"`
-	AccountIdentifier  string `json:"account_identifier" gorm:"type:varchar(191);index"`
-	CredentialConfig   string `json:"-" gorm:"type:text"`
-	TokenState         string `json:"-" gorm:"type:text"`
-	Status             string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index:idx_account_pool_status,priority:2"`
-	Priority           int64  `json:"priority" gorm:"bigint;not null;default:0;index"`
-	Weight             uint   `json:"weight" gorm:"not null;default:0"`
-	MaxConcurrency     int    `json:"max_concurrency" gorm:"not null"`
-	ProxyID            int    `json:"proxy_id" gorm:"index"`
-	SupportedModels    string `json:"supported_models" gorm:"type:text"`
-	ModelMapping       string `json:"model_mapping" gorm:"type:text"`
-	LastUsedAt         int64  `json:"last_used_at" gorm:"bigint;index"`
-	LastSuccessAt      int64  `json:"last_success_at" gorm:"bigint;index"`
-	LastFailureAt      int64  `json:"last_failure_at" gorm:"bigint;index"`
-	SuccessCount       int64  `json:"success_count" gorm:"bigint;not null;default:0"`
-	FailureCount       int64  `json:"failure_count" gorm:"bigint;not null;default:0"`
-	RateLimitedUntil   int64  `json:"rate_limited_until" gorm:"bigint;index"`
-	TempDisabledUntil  int64  `json:"temp_disabled_until" gorm:"bigint;index"`
-	TempDisabledReason string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
-	LastError          string `json:"last_error" gorm:"type:varchar(1024)"`
-	CreatedTime        int64  `json:"created_time" gorm:"bigint"`
-	UpdatedTime        int64  `json:"updated_time" gorm:"bigint"`
+	Id                           int    `json:"id"`
+	PoolID                       int    `json:"pool_id" gorm:"not null;index:idx_account_pool_status,priority:1"`
+	Name                         string `json:"name" gorm:"type:varchar(191);not null;index"`
+	AccountIdentifier            string `json:"account_identifier" gorm:"type:varchar(191);index"`
+	CredentialConfig             string `json:"-" gorm:"type:text"`
+	TokenState                   string `json:"-" gorm:"type:text"`
+	Status                       string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index:idx_account_pool_status,priority:2"`
+	Priority                     int64  `json:"priority" gorm:"bigint;not null;default:0;index"`
+	Weight                       uint   `json:"weight" gorm:"not null;default:0"`
+	MaxConcurrency               int    `json:"max_concurrency" gorm:"not null"`
+	ProxyID                      int    `json:"proxy_id" gorm:"index"`
+	SupportedModels              string `json:"supported_models" gorm:"type:text"`
+	ModelMapping                 string `json:"model_mapping" gorm:"type:text"`
+	LastUsedAt                   int64  `json:"last_used_at" gorm:"bigint;index"`
+	LastSuccessAt                int64  `json:"last_success_at" gorm:"bigint;index"`
+	LastFailureAt                int64  `json:"last_failure_at" gorm:"bigint;index"`
+	SuccessCount                 int64  `json:"success_count" gorm:"bigint;not null;default:0"`
+	FailureCount                 int64  `json:"failure_count" gorm:"bigint;not null;default:0"`
+	TotalPromptTokens            int64  `json:"total_prompt_tokens" gorm:"bigint;not null;default:0"`
+	TotalCompletionTokens        int64  `json:"total_completion_tokens" gorm:"bigint;not null;default:0"`
+	TotalCachedTokens            int64  `json:"total_cached_tokens" gorm:"bigint;not null;default:0"`
+	TotalCacheWriteTokens        int64  `json:"total_cache_write_tokens" gorm:"bigint;not null;default:0"`
+	LastPromptTokens             int64  `json:"last_prompt_tokens" gorm:"bigint;not null;default:0"`
+	LastCompletionTokens         int64  `json:"last_completion_tokens" gorm:"bigint;not null;default:0"`
+	LastCachedTokens             int64  `json:"last_cached_tokens" gorm:"bigint;not null;default:0"`
+	LastCacheWriteTokens         int64  `json:"last_cache_write_tokens" gorm:"bigint;not null;default:0"`
+	TotalLatencyMS               int64  `json:"total_latency_ms" gorm:"bigint;not null;default:0"`
+	LatencySampleCount           int64  `json:"latency_sample_count" gorm:"bigint;not null;default:0"`
+	LastLatencyMS                int64  `json:"last_latency_ms" gorm:"bigint;not null;default:0"`
+	TotalFirstTokenLatencyMS     int64  `json:"total_first_token_latency_ms" gorm:"bigint;not null;default:0"`
+	FirstTokenLatencySampleCount int64  `json:"first_token_latency_sample_count" gorm:"bigint;not null;default:0"`
+	LastFirstTokenLatencyMS      int64  `json:"last_first_token_latency_ms" gorm:"bigint;not null;default:0"`
+	RateLimitedUntil             int64  `json:"rate_limited_until" gorm:"bigint;index"`
+	TempDisabledUntil            int64  `json:"temp_disabled_until" gorm:"bigint;index"`
+	TempDisabledReason           string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
+	LastError                    string `json:"last_error" gorm:"type:varchar(1024)"`
+	CreatedTime                  int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime                  int64  `json:"updated_time" gorm:"bigint"`
 }
 
 func (a *AccountPoolAccount) BeforeCreate(tx *gorm.DB) error {
