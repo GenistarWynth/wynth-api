@@ -128,6 +128,7 @@ import {
   createAccountPool,
   createAccountPoolAccount,
   createAccountPoolBinding,
+  createAccountPoolBoundChannel,
   createAccountPoolProxy,
   deleteAccountPool,
   deleteAccountPoolAccount,
@@ -180,6 +181,10 @@ type BindingFormValues = {
   fixed_models_text: string
   schedule_policy: AccountPoolSchedulePolicy
   account_retry_times: number
+}
+
+type BoundChannelFormValues = {
+  name: string
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -580,6 +585,7 @@ export function AccountPools() {
   const [deletingProxy, setDeletingProxy] = useState<AccountPoolProxy>()
   const [editingBinding, setEditingBinding] = useState<AccountPoolBinding>()
   const [deletingBinding, setDeletingBinding] = useState<AccountPoolBinding>()
+  const [boundChannelDialogOpen, setBoundChannelDialogOpen] = useState(false)
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
     Record<number, AccountPoolAccount[] | undefined>
   >({})
@@ -927,6 +933,32 @@ export function AccountPools() {
     },
   })
 
+  const createBoundChannelMutation = useMutation({
+    mutationFn: async (values: BoundChannelFormValues) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return createAccountPoolBoundChannel(selectedPoolID, {
+        name: values.name.trim(),
+      })
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(
+          apiErrorMessage(result, t('Failed to create account pool channel'))
+        )
+        return
+      }
+      toast.success(t('Account pool channel created'))
+      setBoundChannelDialogOpen(false)
+      invalidatePools()
+      queryClient.invalidateQueries({ queryKey: ['channels'] })
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
   const updateBindingMutation = useMutation({
     mutationFn: async (values: BindingFormValues) => {
       if (!selectedPoolID || !editingBinding) {
@@ -1137,6 +1169,7 @@ export function AccountPools() {
           if (!open) {
             setSelectedPool(undefined)
             setEditingBinding(undefined)
+            setBoundChannelDialogOpen(false)
           }
         }}
         onCreateAccount={() => {
@@ -1161,6 +1194,7 @@ export function AccountPools() {
           setProxySheetOpen(true)
         }}
         onDeleteProxy={setDeletingProxy}
+        onCreateBoundChannel={() => setBoundChannelDialogOpen(true)}
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
         onUpdateBinding={(values) => updateBindingMutation.mutate(values)}
         onEditBinding={setEditingBinding}
@@ -1187,6 +1221,13 @@ export function AccountPools() {
         handleConfirm={() => {
           if (deletingBinding) deleteBindingMutation.mutate(deletingBinding)
         }}
+      />
+      <BoundChannelDialog
+        open={boundChannelDialogOpen}
+        pool={selectedPool}
+        isSubmitting={createBoundChannelMutation.isPending}
+        onOpenChange={setBoundChannelDialogOpen}
+        onSubmit={(values) => createBoundChannelMutation.mutate(values)}
       />
       <AccountImportDialog
         open={accountImportOpen}
@@ -1473,6 +1514,80 @@ function PoolFormSheet(props: {
   )
 }
 
+function BoundChannelDialog(props: {
+  open: boolean
+  pool?: AccountPool
+  isSubmitting: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (values: BoundChannelFormValues) => void
+}) {
+  const { t } = useTranslation()
+  const [name, setName] = useState('')
+
+  useEffect(() => {
+    if (props.open) {
+      setName(props.pool ? `${props.pool.name} Channel` : '')
+    }
+  }, [props.open, props.pool])
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const trimmedName = name.trim()
+    if (!trimmedName) {
+      toast.error(t('Channel name is required'))
+      return
+    }
+    props.onSubmit({ name: trimmedName })
+  }
+
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className='sm:max-w-[420px]'>
+        <DialogHeader>
+          <DialogTitle>{t('Create Account Pool Channel')}</DialogTitle>
+          <DialogDescription>
+            {t('Create a disabled local channel and bind it to this pool.')}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id='account-pool-bound-channel-form'
+          className='flex flex-col gap-4'
+          onSubmit={handleSubmit}
+        >
+          <FieldBlock
+            label={t('Channel Name')}
+            htmlFor='account-pool-bound-channel-name'
+          >
+            <Input
+              id='account-pool-bound-channel-name'
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              autoFocus
+            />
+          </FieldBlock>
+        </form>
+        <DialogFooter>
+          <DialogClose render={<Button variant='outline' />}>
+            {t('Cancel')}
+          </DialogClose>
+          <Button
+            type='submit'
+            form='account-pool-bound-channel-form'
+            disabled={props.isSubmitting}
+          >
+            {props.isSubmitting ? (
+              <Loader2 data-icon='inline-start' className='animate-spin' />
+            ) : (
+              <Plus data-icon='inline-start' />
+            )}
+            {t('Create Channel')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PoolDetailsSheet(props: {
   open: boolean
   pool?: AccountPool
@@ -1494,6 +1609,7 @@ function PoolDetailsSheet(props: {
   onCreateProxy: () => void
   onEditProxy: (proxy: AccountPoolProxy) => void
   onDeleteProxy: (proxy: AccountPoolProxy) => void
+  onCreateBoundChannel: () => void
   onCreateBinding: (values: BindingFormValues) => void
   onUpdateBinding: (values: BindingFormValues) => void
   onEditBinding: (binding: AccountPoolBinding) => void
@@ -1564,6 +1680,7 @@ function PoolDetailsSheet(props: {
                 loading={props.bindingsLoading}
                 resetVersion={props.bindingFormResetVersion}
                 submitting={props.bindingSubmitting}
+                onCreateBoundChannel={props.onCreateBoundChannel}
                 onCreateBinding={props.onCreateBinding}
                 onUpdateBinding={props.onUpdateBinding}
                 onEditBinding={props.onEditBinding}
@@ -1770,6 +1887,7 @@ function BindingSection(props: {
   loading: boolean
   resetVersion: number
   submitting: boolean
+  onCreateBoundChannel: () => void
   onCreateBinding: (values: BindingFormValues) => void
   onUpdateBinding: (values: BindingFormValues) => void
   onEditBinding: (binding: AccountPoolBinding) => void
@@ -1785,7 +1903,13 @@ function BindingSection(props: {
   return (
     <div className='flex flex-col gap-6 pt-4'>
       <SideDrawerSection>
-        <SideDrawerSectionHeader title={t('Bindings')} />
+        <div className='flex items-center justify-between gap-3'>
+          <SideDrawerSectionHeader title={t('Bindings')} />
+          <Button size='sm' onClick={props.onCreateBoundChannel}>
+            <Plus data-icon='inline-start' />
+            {t('Create Channel')}
+          </Button>
+        </div>
         <div className='border-border rounded-lg border'>
           <Table>
             <TableHeader>

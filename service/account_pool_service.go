@@ -69,6 +69,16 @@ type AccountPoolBindingCreateParams struct {
 	Status              string
 }
 
+type AccountPoolBoundChannelCreateParams struct {
+	PoolID              int
+	Name                string
+	ChannelType         int
+	AccountFilterConfig AccountPoolAccountFilterConfig
+	ModelPolicy         AccountPoolModelPolicy
+	SchedulePolicy      string
+	AccountRetryTimes   int
+}
+
 type AccountPoolProxyCreateParams struct {
 	Name            string
 	Protocol        string
@@ -436,6 +446,68 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if err := model.DB.Create(&binding).Error; err != nil {
 		return AccountPoolBindingView{}, err
 	}
+	return buildAccountPoolBindingView(binding, channel), nil
+}
+
+func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCreateParams) (AccountPoolBindingView, error) {
+	pool, err := getAccountPoolExistingPool(params.PoolID)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return AccountPoolBindingView{}, errors.New("account pool channel name is required")
+	}
+	channelType := params.ChannelType
+	if channelType == 0 {
+		channelType = constant.ChannelTypeOpenAI
+	}
+	channel := model.Channel{
+		Type:        channelType,
+		Key:         "account-pool-" + common.GetUUID(),
+		Status:      common.ChannelStatusManuallyDisabled,
+		Name:        name,
+		Group:       "default",
+		Models:      strings.Join(params.ModelPolicy.FixedModels, ","),
+		CreatedTime: common.GetTimestamp(),
+		UpdatedTime: common.GetTimestamp(),
+	}
+	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	modelPolicy, err := marshalAccountPoolOptionalJSON(params.ModelPolicy)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+	if err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	binding := model.AccountPoolChannelBinding{
+		PoolID:              params.PoolID,
+		AccountFilterConfig: accountFilterConfig,
+		ModelPolicy:         modelPolicy,
+		SchedulePolicy:      schedulePolicy,
+		AccountRetryTimes:   params.AccountRetryTimes,
+		Status:              model.AccountPoolBindingStatusDraft,
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&channel).Error; err != nil {
+			return err
+		}
+		if err := channel.AddAbilities(tx); err != nil {
+			return err
+		}
+		binding.ChannelID = channel.Id
+		return tx.Create(&binding).Error
+	}); err != nil {
+		return AccountPoolBindingView{}, err
+	}
+	invalidateAccountPoolRuntimeEnabledForChannel(channel.Id)
 	return buildAccountPoolBindingView(binding, channel), nil
 }
 

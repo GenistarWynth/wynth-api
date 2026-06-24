@@ -144,6 +144,78 @@ func TestAccountPoolServiceCreatesDraftBindingForDisabledChannel(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 }
 
+func TestAccountPoolServiceCreateBoundChannelCreatesDisabledChannelAndDraftBinding(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:                  "pool-with-random-schedule",
+		Platform:              model.AccountPoolPlatformOpenAI,
+		DefaultSchedulePolicy: AccountPoolSchedulePolicyRandom,
+	})
+	require.NoError(t, err)
+
+	binding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "  Pool runtime channel  ",
+		AccountFilterConfig: AccountPoolAccountFilterConfig{
+			AccountIDs: []int{101, 202},
+		},
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5", "gpt-5-mini"},
+		},
+		AccountRetryTimes: 2,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusDraft, binding.Status)
+	assert.Equal(t, "Pool runtime channel", binding.ChannelName)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, binding.ChannelStatus)
+	assert.Equal(t, AccountPoolSchedulePolicyRandom, binding.SchedulePolicy)
+	assert.Equal(t, 2, binding.AccountRetryTimes)
+	var filter AccountPoolAccountFilterConfig
+	require.NoError(t, common.UnmarshalJsonStr(binding.AccountFilterConfig, &filter))
+	assert.Equal(t, []int{101, 202}, filter.AccountIDs)
+	var policy AccountPoolModelPolicy
+	require.NoError(t, common.UnmarshalJsonStr(binding.ModelPolicy, &policy))
+	assert.Equal(t, AccountPoolModelPolicy{
+		Strategy:    "fixed",
+		FixedModels: []string{"gpt-5", "gpt-5-mini"},
+	}, policy)
+
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, binding.ChannelID).Error)
+	assert.Equal(t, "Pool runtime channel", channel.Name)
+	assert.Equal(t, constant.ChannelTypeOpenAI, channel.Type)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+	assert.NotEmpty(t, channel.Key)
+	enabled, err := AccountPoolRuntimeEnabledForChannel(channel.Id)
+	require.NoError(t, err)
+	assert.False(t, enabled)
+
+	secondBinding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "Pool runtime channel 2",
+	})
+	require.NoError(t, err)
+	var secondChannel model.Channel
+	require.NoError(t, model.DB.First(&secondChannel, secondBinding.ChannelID).Error)
+	assert.NotEqual(t, channel.Key, secondChannel.Key)
+}
+
+func TestAccountPoolServiceCreateBoundChannelRejectsBlankName(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "   ",
+	})
+
+	require.ErrorContains(t, err, "account pool channel name is required")
+}
+
 func TestAccountPoolServiceCreateBindingUsesPoolDefaultSchedulePolicy(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

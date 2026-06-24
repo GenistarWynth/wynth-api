@@ -186,6 +186,16 @@ export type AccountPoolBindingCreateRequest = {
   account_retry_times: number
 }
 
+export type AccountPoolBoundChannelCreateRequest = {
+  name: string
+  type?: number
+  account_ids?: number[]
+  model_strategy?: AccountPoolModelStrategy
+  fixed_models?: string[]
+  schedule_policy?: AccountPoolSchedulePolicy | ''
+  account_retry_times?: number
+}
+
 export type AccountPoolProxy = {
   id: number
   name: string

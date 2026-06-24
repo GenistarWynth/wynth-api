@@ -122,6 +122,16 @@ type AccountPoolBindingCreateRequest struct {
 	AccountRetryTimes int      `json:"account_retry_times"`
 }
 
+type AccountPoolBoundChannelCreateRequest struct {
+	Name              string   `json:"name" binding:"required"`
+	ChannelType       int      `json:"type"`
+	AccountIDs        []int    `json:"account_ids"`
+	ModelStrategy     string   `json:"model_strategy"`
+	FixedModels       []string `json:"fixed_models"`
+	SchedulePolicy    string   `json:"schedule_policy"`
+	AccountRetryTimes int      `json:"account_retry_times"`
+}
+
 type AccountPoolBindingResponse struct {
 	Id                  int    `json:"id"`
 	PoolID              int    `json:"pool_id"`

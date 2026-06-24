@@ -24,6 +24,7 @@ import type {
   AccountPoolAccountImportRequest,
   AccountPoolAccountImportResponse,
   AccountPoolBinding,
+  AccountPoolBoundChannelCreateRequest,
   AccountPoolBindingCreateRequest,
   AccountPoolCreateRequest,
   AccountPoolProxy,
@@ -156,6 +157,18 @@ export async function createAccountPoolBinding(
 ): Promise<ApiResponse<AccountPoolBinding>> {
   const res = await api.post(
     `/api/account_pools/${id}/bindings`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function createAccountPoolBoundChannel(
+  id: number,
+  data: AccountPoolBoundChannelCreateRequest
+): Promise<ApiResponse<AccountPoolBinding>> {
+  const res = await api.post(
+    `/api/account_pools/${id}/bindings/channel`,
     data,
     accountPoolActionConfig()
   )

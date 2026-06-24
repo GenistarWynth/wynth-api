@@ -323,6 +323,30 @@ func CreateAccountPoolBinding(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolBindingResponse(binding))
 }
 
+func CreateAccountPoolBoundChannel(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolBoundChannelCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	binding, err := (&service.AccountPoolService{}).CreateBoundChannel(accountPoolBoundChannelCreateParams(poolID, req))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.bound_channel_create", map[string]interface{}{
+		"id":         binding.Id,
+		"pool_id":    poolID,
+		"channel_id": binding.ChannelID,
+		"name":       binding.ChannelName,
+	})
+	common.ApiSuccess(c, accountPoolBindingResponse(binding))
+}
+
 func UpdateAccountPoolBinding(c *gin.Context) {
 	poolID, ok := accountPoolIDFromParam(c)
 	if !ok {
@@ -515,6 +539,23 @@ func accountPoolBindingCreateParams(poolID int, req dto.AccountPoolBindingCreate
 	return service.AccountPoolBindingCreateParams{
 		PoolID:    poolID,
 		ChannelID: req.ChannelID,
+		AccountFilterConfig: service.AccountPoolAccountFilterConfig{
+			AccountIDs: req.AccountIDs,
+		},
+		ModelPolicy: service.AccountPoolModelPolicy{
+			Strategy:    req.ModelStrategy,
+			FixedModels: req.FixedModels,
+		},
+		SchedulePolicy:    req.SchedulePolicy,
+		AccountRetryTimes: req.AccountRetryTimes,
+	}
+}
+
+func accountPoolBoundChannelCreateParams(poolID int, req dto.AccountPoolBoundChannelCreateRequest) service.AccountPoolBoundChannelCreateParams {
+	return service.AccountPoolBoundChannelCreateParams{
+		PoolID:      poolID,
+		Name:        req.Name,
+		ChannelType: req.ChannelType,
 		AccountFilterConfig: service.AccountPoolAccountFilterConfig{
 			AccountIDs: req.AccountIDs,
 		},

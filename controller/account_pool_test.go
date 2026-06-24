@@ -124,6 +124,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
 		group.GET("/:id/bindings", ListAccountPoolBindings)
 		group.POST("/:id/bindings", CreateAccountPoolBinding)
+		group.POST("/:id/bindings/channel", CreateAccountPoolBoundChannel)
 		group.PUT("/:id/bindings/:binding_id", UpdateAccountPoolBinding)
 		group.DELETE("/:id/bindings/:binding_id", DeleteAccountPoolBinding)
 		group.POST("/:id/bindings/:binding_id/activate", ActivateAccountPoolBinding)
@@ -334,6 +335,30 @@ func TestAccountPoolAPIBindingCreatesDraftForDisabledChannel(t *testing.T) {
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
+}
+
+func TestAccountPoolAPICreateBoundChannelCreatesDisabledChannel(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+
+	result := accountPoolAPIRequest[dto.AccountPoolBindingResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/bindings/channel", dto.AccountPoolBoundChannelCreateRequest{
+		Name:              "  Pool runtime channel  ",
+		AccountRetryTimes: 2,
+	})
+
+	require.Equal(t, http.StatusOK, result.Code, string(result.Raw))
+	assert.True(t, result.Response.Success)
+	assert.Equal(t, model.AccountPoolBindingStatusDraft, result.Response.Data.Status)
+	assert.Equal(t, "Pool runtime channel", result.Response.Data.ChannelName)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, result.Response.Data.ChannelStatus)
+	assert.Equal(t, 2, result.Response.Data.AccountRetryTimes)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, result.Response.Data.ChannelID).Error)
+	assert.Equal(t, "Pool runtime channel", channel.Name)
+	assert.Equal(t, constant.ChannelTypeOpenAI, channel.Type)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+	assert.NotEmpty(t, channel.Key)
 }
 
 func TestAccountPoolAPIBindingActivateDisableControlsRuntimeButNotChannel(t *testing.T) {
