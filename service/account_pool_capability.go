@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -32,6 +33,8 @@ const (
 )
 
 const accountPoolCapabilityDefaultTimeout = 30 * time.Second
+const accountPoolCapabilityRequestBodyLimitBytes = 4 << 10
+const accountPoolCapabilityUnsupportedBodyInspectLimitBytes = 4 << 10
 
 type AccountPoolCapabilityDetectRequest struct {
 	PoolID          int               `json:"pool_id"`
@@ -67,6 +70,25 @@ type accountPoolCapabilityModelsResponse struct {
 	Data []struct {
 		ID string `json:"id"`
 	} `json:"data"`
+}
+
+type accountPoolCapabilityProbeRequest struct {
+	Model     string                                     `json:"model"`
+	Messages  []accountPoolCapabilityProbeRequestMessage `json:"messages"`
+	MaxTokens int                                        `json:"max_tokens"`
+	Stream    bool                                       `json:"stream"`
+}
+
+type accountPoolCapabilityProbeRequestMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type accountPoolCapabilityErrorResponse struct {
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
+	Message string `json:"message"`
 }
 
 func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req AccountPoolCapabilityDetectRequest) (AccountPoolCapabilityDetectResult, error) {
@@ -167,26 +189,6 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		return result, nil
 	}
 
-	switch result.Mode {
-	case AccountPoolCapabilityModeProbeModels:
-		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusUnsupported, "probe_models is not implemented in this phase")
-		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
-				return result, writeErr
-			}
-		}
-		return result, nil
-	case AccountPoolCapabilityModeModelsEndpoint:
-	default:
-		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "unsupported capability detection mode")
-		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
-				return result, writeErr
-			}
-		}
-		return result, nil
-	}
-
 	options, err := FetchChannelUpstreamModelIDsOptionsForGeneratedSource(channel.GetOtherSettings())
 	if err != nil {
 		return result, err
@@ -201,6 +203,146 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		}
 		return result, nil
 	}
+
+	switch result.Mode {
+	case AccountPoolCapabilityModeProbeModels:
+		candidateModels := normalizeAccountPoolCapabilityModels(req.CandidateModels)
+		if len(candidateModels) == 0 {
+			result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "probe_models requires candidate_models")
+			if req.Apply {
+				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					return result, writeErr
+				}
+			}
+			return result, nil
+		}
+
+		supportedCandidates := make([]string, 0, len(candidateModels))
+		probeErrors := make([]string, 0, len(candidateModels))
+		for _, candidateModel := range candidateModels {
+			requestBody, err := buildAccountPoolCapabilityProbeRequestBody(candidateModel)
+			if err != nil {
+				return result, err
+			}
+			body, statusCode, err := fetchAccountPoolCapabilityResponseBodyWithRequestBody(
+				ctx,
+				http.MethodPost,
+				buildAccountPoolCapabilityProbeURL(baseURL),
+				proxyURL,
+				headers,
+				options,
+				normalizeAccountPoolCapabilityTimeout(req.TimeoutSeconds),
+				requestBody,
+			)
+			if err != nil {
+				status := AccountPoolCapabilityStatusConfigError
+				if isAccountPoolCapabilityNetworkError(err) {
+					status = AccountPoolCapabilityStatusNetworkError
+				}
+				result = accountPoolCapabilityFailResult(result, status, err.Error())
+				if req.Apply {
+					if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+						return result, writeErr
+					}
+				}
+				return result, nil
+			}
+
+			switch {
+			case statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices:
+				supportedCandidates = append(supportedCandidates, candidateModel)
+			case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+				result = accountPoolCapabilityFailResult(
+					result,
+					AccountPoolCapabilityStatusAuthError,
+					accountPoolCapabilityProbeCandidateError(candidateModel, statusCode, body),
+				)
+				if req.Apply {
+					if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+						return result, writeErr
+					}
+				}
+				return result, nil
+			case accountPoolCapabilityProbeResponseIndicatesUnsupportedModel(statusCode, body):
+				probeErrors = append(probeErrors, accountPoolCapabilityProbeCandidateError(candidateModel, statusCode, body))
+			default:
+				result = accountPoolCapabilityFailResult(
+					result,
+					AccountPoolCapabilityStatusUpstreamError,
+					accountPoolCapabilityProbeCandidateError(candidateModel, statusCode, body),
+				)
+				if req.Apply {
+					if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+						return result, writeErr
+					}
+				}
+				return result, nil
+			}
+		}
+
+		if len(supportedCandidates) == 0 {
+			result.Status = AccountPoolCapabilityStatusUnsupported
+			result.Errors = probeErrors
+			result.DetectedModels = []string{}
+			result.AppliedModels = []string{}
+			if len(result.Errors) == 0 {
+				result.Errors = []string{sanitizeAccountPoolCapabilityError("no candidate models were supported by upstream account")}
+			}
+			if req.Apply {
+				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					return result, writeErr
+				}
+			}
+			return result, nil
+		}
+
+		schedulerModels, err := accountPoolCapabilitySchedulerModels(supportedCandidates, cleanedModelMapping)
+		if err != nil {
+			result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
+			if req.Apply {
+				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					return result, writeErr
+				}
+			}
+			return result, nil
+		}
+
+		if len(cleanedModelMapping) == 0 {
+			result.DetectedModels = schedulerModels
+		} else {
+			result.DetectedModels = supportedCandidates
+		}
+		result.Errors = probeErrors
+		if len(probeErrors) > 0 {
+			result.Status = AccountPoolCapabilityStatusPartial
+		} else {
+			result.Status = AccountPoolCapabilityStatusSuccess
+		}
+		if !req.Apply {
+			return result, nil
+		}
+
+		appliedModels, err := accountPoolCapabilityAppliedModels(account, schedulerModels, req.Merge)
+		if err != nil {
+			return result, err
+		}
+		result.AppliedModels = appliedModels
+
+		if err := persistAccountPoolCapabilitySuccess(account.Id, appliedModels, result.DetectedModels, cleanedModelMapping, result.Status); err != nil {
+			return result, err
+		}
+		return result, nil
+	case AccountPoolCapabilityModeModelsEndpoint:
+	default:
+		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "unsupported capability detection mode")
+		if req.Apply {
+			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				return result, writeErr
+			}
+		}
+		return result, nil
+	}
+
 	body, statusCode, err := fetchAccountPoolCapabilityResponseBody(
 		ctx,
 		http.MethodGet,
@@ -443,8 +585,24 @@ func fetchAccountPoolCapabilityResponseBody(
 	options FetchChannelUpstreamModelIDsOptions,
 	timeout time.Duration,
 ) ([]byte, int, error) {
+	return fetchAccountPoolCapabilityResponseBodyWithRequestBody(ctx, method, requestURL, proxyURL, headers, options, timeout, nil)
+}
+
+func fetchAccountPoolCapabilityResponseBodyWithRequestBody(
+	ctx context.Context,
+	method string,
+	requestURL string,
+	proxyURL string,
+	headers http.Header,
+	options FetchChannelUpstreamModelIDsOptions,
+	timeout time.Duration,
+	requestBody []byte,
+) ([]byte, int, error) {
 	if err := validateFetchModelsURL(requestURL, options); err != nil {
 		return nil, 0, err
+	}
+	if len(requestBody) > accountPoolCapabilityRequestBodyLimitBytes {
+		return nil, 0, fmt.Errorf("request body too large: limit %d bytes", accountPoolCapabilityRequestBodyLimitBytes)
 	}
 
 	client, err := NewProxyHttpClient(proxyURL)
@@ -462,9 +620,16 @@ func fetchAccountPoolCapabilityResponseBody(
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(requestCtx, method, requestURL, nil)
+	var requestReader io.Reader
+	if len(requestBody) > 0 {
+		requestReader = bytes.NewReader(requestBody)
+	}
+	req, err := http.NewRequestWithContext(requestCtx, method, requestURL, requestReader)
 	if err != nil {
 		return nil, 0, err
+	}
+	if len(requestBody) > 0 && headers.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	for key, values := range headers {
 		for _, value := range values {
@@ -567,6 +732,64 @@ func accountPoolCapabilityHTTPErrorMessage(statusCode int, body []byte) string {
 		return fmt.Sprintf("status code: %d", statusCode)
 	}
 	return fmt.Sprintf("status code: %d, body: %s", statusCode, bodyText)
+}
+
+func buildAccountPoolCapabilityProbeURL(baseURL string) string {
+	return fmt.Sprintf("%s/v1/chat/completions", strings.TrimRight(baseURL, "/"))
+}
+
+func buildAccountPoolCapabilityProbeRequestBody(modelName string) ([]byte, error) {
+	return common.Marshal(accountPoolCapabilityProbeRequest{
+		Model: modelName,
+		Messages: []accountPoolCapabilityProbeRequestMessage{
+			{
+				Role:    "user",
+				Content: "ping",
+			},
+		},
+		MaxTokens: 1,
+		Stream:    false,
+	})
+}
+
+func accountPoolCapabilityProbeCandidateError(modelName string, statusCode int, body []byte) string {
+	return sanitizeAccountPoolCapabilityError(
+		fmt.Sprintf("candidate model %q probe failed: %s", modelName, accountPoolCapabilityHTTPErrorMessage(statusCode, body)),
+	)
+}
+
+func accountPoolCapabilityProbeResponseIndicatesUnsupportedModel(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusNotFound {
+		return false
+	}
+	if len(body) == 0 || len(body) > accountPoolCapabilityUnsupportedBodyInspectLimitBytes {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(accountPoolCapabilityErrorMessage(body)))
+	if message == "" {
+		return false
+	}
+	if strings.Contains(message, "model not found") || strings.Contains(message, "deployment not found") {
+		return true
+	}
+	if strings.Contains(message, "not allowed") && strings.Contains(message, "model") {
+		return true
+	}
+	return false
+}
+
+func accountPoolCapabilityErrorMessage(body []byte) string {
+	var payload accountPoolCapabilityErrorResponse
+	if err := common.Unmarshal(body, &payload); err == nil {
+		if message := strings.TrimSpace(payload.Error.Message); message != "" {
+			return message
+		}
+		if message := strings.TrimSpace(payload.Message); message != "" {
+			return message
+		}
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func sanitizeAccountPoolCapabilityError(message string) string {

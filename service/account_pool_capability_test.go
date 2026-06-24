@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,196 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type accountPoolCapabilityProbeRequestPayload struct {
+	Model    string `json:"model"`
+	Messages []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"messages"`
+	MaxTokens int  `json:"max_tokens"`
+	Stream    bool `json:"stream"`
+}
+
+func TestAccountPoolCapabilityProbeModelsAppliesOnlySupportedCandidates(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "probe-apply-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-probe-secret",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/v1/chat/completions", r.URL.Path)
+		assert.Equal(t, "Bearer sk-probe-secret", r.Header.Get("Authorization"))
+
+		var payload accountPoolCapabilityProbeRequestPayload
+		require.NoError(t, common.DecodeJson(r.Body, &payload))
+		assert.Len(t, payload.Messages, 1)
+		assert.Equal(t, "user", payload.Messages[0].Role)
+		assert.Equal(t, "ping", payload.Messages[0].Content)
+		assert.Equal(t, 1, payload.MaxTokens)
+		assert.False(t, payload.Stream)
+
+		w.Header().Set("Content-Type", "application/json")
+		switch payload.Model {
+		case "gpt-5":
+			_, _ = w.Write([]byte(`{"id":"ok"}`))
+		case "missing-model":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"model missing-model not found"}}`))
+		default:
+			t.Fatalf("unexpected probed model %q", payload.Model)
+		}
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:          pool.Id,
+		AccountID:       account.Id,
+		ChannelID:       channel.Id,
+		Mode:            AccountPoolCapabilityModeProbeModels,
+		CandidateModels: []string{"gpt-5", "missing-model"},
+		Apply:           true,
+		Merge:           false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusPartial, result.Status)
+	assert.Equal(t, []string{"gpt-5"}, result.DetectedModels)
+	assert.Equal(t, []string{"gpt-5"}, result.AppliedModels)
+	require.NotEmpty(t, result.Errors)
+	assert.Contains(t, strings.Join(result.Errors, "\n"), "missing-model")
+	assert.NotContains(t, strings.Join(result.Errors, "\n"), "sk-probe-secret")
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, []string{"gpt-5"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.SupportedModels))
+	assert.Equal(t, AccountPoolCapabilityStatusPartial, stored.LastCapabilityCheckStatus)
+	assert.Equal(t, []string{"gpt-5"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.LastCapabilityCheckModels))
+	assert.NotContains(t, stored.LastCapabilityCheckError, "sk-probe-secret")
+}
+
+func TestAccountPoolCapabilityProbeRequiresCandidateModels(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "probe-requires-candidates-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-probe-requires",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	channel := createAccountPoolCapabilityTestChannel(t, "https://example.com")
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:    pool.Id,
+		AccountID: account.Id,
+		ChannelID: channel.Id,
+		Mode:      AccountPoolCapabilityModeProbeModels,
+		Apply:     true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusConfigError, result.Status)
+	assert.False(t, accountPoolCapabilitySucceeded(result.Status))
+	require.NotEmpty(t, result.Errors)
+	assert.Contains(t, result.Errors[0], "candidate")
+	assert.Empty(t, result.DetectedModels)
+	assert.Empty(t, result.AppliedModels)
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, `["existing"]`, stored.SupportedModels)
+	assert.Equal(t, AccountPoolCapabilityStatusConfigError, stored.LastCapabilityCheckStatus)
+	assert.NotEmpty(t, stored.LastCapabilityCheckError)
+	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
+}
+
+func TestAccountPoolCapabilityProbeModelsStopsOnAuthErrorWithoutApply(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "probe-auth-stop-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-probe-auth-secret",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var payload accountPoolCapabilityProbeRequestPayload
+		require.NoError(t, common.DecodeJson(r.Body, &payload))
+		assert.Equal(t, "gpt-5", payload.Model)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"bearer sk-probe-auth-secret rejected"}}`))
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:          pool.Id,
+		AccountID:       account.Id,
+		ChannelID:       channel.Id,
+		Mode:            AccountPoolCapabilityModeProbeModels,
+		CandidateModels: []string{"gpt-5", "gpt-5-mini"},
+		Apply:           true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusAuthError, result.Status)
+	assert.Equal(t, 1, requestCount)
+	require.NotEmpty(t, result.Errors)
+	assert.NotContains(t, result.Errors[0], "sk-probe-auth-secret")
+	assert.Empty(t, result.DetectedModels)
+	assert.Empty(t, result.AppliedModels)
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, `["existing"]`, stored.SupportedModels)
+	assert.Equal(t, AccountPoolCapabilityStatusAuthError, stored.LastCapabilityCheckStatus)
+	assert.NotContains(t, stored.LastCapabilityCheckError, "sk-probe-auth-secret")
+	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
+}
 
 func TestAccountPoolCapabilityDetectModelsEndpointDryRunDoesNotWrite(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
