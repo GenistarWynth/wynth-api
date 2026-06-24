@@ -218,13 +218,13 @@ function translateOptions(
   }))
 }
 
-function emptyBindingForm(): BindingFormValues {
+function emptyBindingForm(defaultSchedulePolicy = ''): BindingFormValues {
   return {
     channel_id: 0,
     account_ids: [],
     model_strategy: 'all',
     fixed_models_text: '',
-    schedule_policy: 'round_robin',
+    schedule_policy: defaultSchedulePolicy || 'round_robin',
     account_retry_times: 0,
   }
 }
@@ -1493,6 +1493,7 @@ function PoolDetailsSheet(props: {
             </TabsContent>
             <TabsContent value='bindings' className='min-h-0'>
               <BindingSection
+                pool={pool}
                 accounts={props.accounts}
                 bindings={props.bindings}
                 editingBinding={props.editingBinding}
@@ -1697,6 +1698,7 @@ function AccountRowActions(props: {
 }
 
 function BindingSection(props: {
+  pool?: AccountPool
   accounts: AccountPoolAccount[]
   bindings: AccountPoolBinding[]
   editingBinding?: AccountPoolBinding
@@ -1775,6 +1777,7 @@ function BindingSection(props: {
         </div>
       </SideDrawerSection>
       <BindingForm
+        pool={props.pool}
         accounts={props.accounts}
         binding={props.editingBinding}
         bindings={props.bindings}
@@ -1833,6 +1836,7 @@ function BindingRowActions(props: {
 }
 
 function BindingForm(props: {
+  pool?: AccountPool
   accounts: AccountPoolAccount[]
   binding?: AccountPoolBinding
   bindings: AccountPoolBinding[]
@@ -1903,8 +1907,12 @@ function BindingForm(props: {
   }, [disabledChannelsQuery.error])
 
   useEffect(() => {
-    setForm(props.binding ? bindingToFormValues(props.binding) : emptyBindingForm())
-  }, [props.binding, props.resetVersion])
+    setForm(
+      props.binding
+        ? bindingToFormValues(props.binding)
+        : emptyBindingForm(props.pool?.default_schedule_policy)
+    )
+  }, [props.binding, props.pool?.default_schedule_policy, props.resetVersion])
 
   const setField = <K extends keyof BindingFormValues>(
     key: K,
