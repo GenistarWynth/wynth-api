@@ -45,7 +45,7 @@ func (s AccountPoolTokenState) NextVersion() AccountPoolTokenState {
 }
 
 func EncryptAccountPoolCredentialConfig(config AccountPoolCredentialConfig) (string, error) {
-	if !accountPoolCredentialHasSecret(config) {
+	if !accountPoolCredentialHasValue(config) {
 		return "", nil
 	}
 	data, err := common.Marshal(config)

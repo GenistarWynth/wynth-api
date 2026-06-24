@@ -732,7 +732,14 @@ func accountPoolImportCredentialKeys(credential AccountPoolCredentialConfig) []s
 }
 
 func accountPoolImportTokenKeys(tokenState AccountPoolTokenState) []string {
-	return accountPoolSingleOptionalString(accountPoolImportSecretKey("refresh", tokenState.RefreshToken))
+	keys := make([]string, 0, 2)
+	if key := accountPoolImportSecretKey("access", tokenState.AccessToken); key != "" {
+		keys = append(keys, key)
+	}
+	if key := accountPoolImportSecretKey("refresh", tokenState.RefreshToken); key != "" {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func accountPoolImportIdentifierKey(identifier string) string {

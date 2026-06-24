@@ -316,6 +316,43 @@ func TestAccountPoolServiceImportCPAAuthJSONImportsOAuthAndSkipsDuplicate(t *tes
 	assert.Equal(t, int64(4102444801), tokenState.ExpiresAt)
 }
 
+func TestAccountPoolServiceImportCPAAuthJSONImportsAccessTokenOnlyEntry(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `[
+			{
+				"type": "codex",
+				"label": "access-only-codex",
+				"metadata": {
+					"access_token": "access-only-token",
+					"expired": 4102444800
+				}
+			}
+		]`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+
+	account := requireAccountPoolAccountByName(t, "access-only-codex")
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, credential.Type)
+	assert.Empty(t, credential.RefreshToken)
+	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "access-only-token", tokenState.AccessToken)
+	assert.Empty(t, tokenState.RefreshToken)
+	assert.Equal(t, int64(4102444800), tokenState.ExpiresAt)
+}
+
 func requireAccountPoolAccountByName(t *testing.T, name string) model.AccountPoolAccount {
 	t.Helper()
 

@@ -1186,8 +1186,17 @@ func buildAccountPoolProxyView(proxy model.AccountPoolProxy) (AccountPoolProxyVi
 	}, nil
 }
 
+func accountPoolCredentialHasValue(config AccountPoolCredentialConfig) bool {
+	return strings.TrimSpace(config.Type) != "" ||
+		strings.TrimSpace(config.APIKey) != "" ||
+		strings.TrimSpace(config.RefreshToken) != "" ||
+		strings.TrimSpace(config.Email) != ""
+}
+
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
-	return strings.TrimSpace(config.APIKey) != "" || strings.TrimSpace(config.RefreshToken) != "" || strings.TrimSpace(config.Email) != ""
+	return strings.TrimSpace(config.APIKey) != "" ||
+		strings.TrimSpace(config.RefreshToken) != "" ||
+		strings.TrimSpace(config.Email) != ""
 }
 
 func accountPoolTokenStateHasValue(state AccountPoolTokenState) bool {
