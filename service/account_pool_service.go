@@ -478,7 +478,7 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 		Status:      common.ChannelStatusManuallyDisabled,
 		Name:        name,
 		Group:       "default",
-		Models:      strings.Join(params.ModelPolicy.FixedModels, ","),
+		Models:      accountPoolFixedModelsCSV(params.ModelPolicy),
 		CreatedTime: common.GetTimestamp(),
 		UpdatedTime: common.GetTimestamp(),
 	}
@@ -570,6 +570,9 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 			"account_retry_times":   params.AccountRetryTimes,
 			"updated_time":          now,
 		}).Error; err != nil {
+			return err
+		}
+		if err := syncAccountPoolBindingChannelModels(tx, &channel, params.ModelPolicy, oldStatus == model.AccountPoolBindingStatusEnabled); err != nil {
 			return err
 		}
 		if oldStatus == model.AccountPoolBindingStatusEnabled && oldChannelID != channel.Id {
@@ -820,6 +823,15 @@ func (s AccountPoolService) setBindingStatus(poolID int, bindingID int, status s
 		}).Error; err != nil {
 			return err
 		}
+		if status == model.AccountPoolBindingStatusEnabled {
+			policy, err := parseAccountPoolModelPolicy(binding.ModelPolicy)
+			if err != nil {
+				return err
+			}
+			if err := syncAccountPoolBindingChannelModels(tx, &channel, policy, true); err != nil {
+				return err
+			}
+		}
 		return setAccountPoolBindingAbilityEnabled(tx, binding.ChannelID, status == model.AccountPoolBindingStatusEnabled)
 	}); err != nil {
 		return AccountPoolBindingView{}, err
@@ -838,6 +850,54 @@ func setAccountPoolBindingAbilityEnabled(tx *gorm.DB, channelID int, enabled boo
 	return tx.Model(&model.Ability{}).
 		Where("channel_id = ?", channelID).
 		Update("enabled", enabled).Error
+}
+
+func syncAccountPoolBindingChannelModels(tx *gorm.DB, channel *model.Channel, policy AccountPoolModelPolicy, enabled bool) error {
+	if tx == nil || channel == nil || channel.Id <= 0 {
+		return nil
+	}
+	models := accountPoolFixedModelsCSV(policy)
+	if models == "" {
+		return nil
+	}
+	if strings.TrimSpace(channel.Models) != models {
+		if err := tx.Model(&model.Channel{}).
+			Where("id = ?", channel.Id).
+			Updates(map[string]any{
+				"models":       models,
+				"updated_time": common.GetTimestamp(),
+			}).Error; err != nil {
+			return err
+		}
+		channel.Models = models
+	}
+	if err := channel.UpdateAbilities(tx); err != nil {
+		return err
+	}
+	if enabled {
+		return setAccountPoolBindingAbilityEnabled(tx, channel.Id, true)
+	}
+	return nil
+}
+
+func accountPoolFixedModelsCSV(policy AccountPoolModelPolicy) string {
+	if !strings.EqualFold(strings.TrimSpace(policy.Strategy), "fixed") {
+		return ""
+	}
+	models := make([]string, 0, len(policy.FixedModels))
+	seen := make(map[string]struct{}, len(policy.FixedModels))
+	for _, modelName := range policy.FixedModels {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" {
+			continue
+		}
+		if _, exists := seen[modelName]; exists {
+			continue
+		}
+		seen[modelName] = struct{}{}
+		models = append(models, modelName)
+	}
+	return strings.Join(models, ",")
 }
 
 func refreshAccountPoolBindingRoutingCache() {

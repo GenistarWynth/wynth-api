@@ -587,6 +587,43 @@ func TestAccountPoolServiceUpdateBindingConfigPreservesRuntimeStatus(t *testing.
 	assert.True(t, enabled)
 }
 
+func TestAccountPoolServiceUpdateBindingFixedModelsCreatesRoutingAbilities(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	binding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "pool-runtime-channel",
+	})
+	require.NoError(t, err)
+
+	var count int64
+	require.NoError(t, model.DB.Model(&model.Ability{}).Where("channel_id = ?", binding.ChannelID).Count(&count).Error)
+	require.Zero(t, count)
+
+	_, err = service.UpdateBinding(pool.Id, binding.Id, AccountPoolBindingCreateParams{
+		ChannelID: binding.ChannelID,
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5", "gpt-5-mini"},
+		},
+	})
+	require.NoError(t, err)
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, binding.ChannelID).Error)
+	assert.Equal(t, "gpt-5,gpt-5-mini", channel.Models)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+	var gpt5Ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5").First(&gpt5Ability).Error)
+	assert.True(t, gpt5Ability.Enabled)
+	var miniAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5-mini").First(&miniAbility).Error)
+	assert.True(t, miniAbility.Enabled)
+}
+
 func TestAccountPoolServiceUpdateEnabledBindingMovesAbilityToNewChannel(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
