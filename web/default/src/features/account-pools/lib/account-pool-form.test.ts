@@ -4,6 +4,7 @@ import {
   buildAccountPayload,
   buildAccountImportPayload,
   buildAccountPoolProxyOptions,
+  buildBoundChannelPayload,
   buildPoolPayload,
   buildProxyPayload,
   emptyAccountForm,
@@ -147,6 +148,22 @@ describe('account pool form helpers', () => {
       'gpt-5',
       'gpt-4',
     ])
+  })
+
+  test('builds account pool bound channel payload with fixed models in first-seen order', () => {
+    assert.deepEqual(
+      buildBoundChannelPayload({
+        name: '  Codex pool  ',
+        type: 57,
+        fixed_models_text: ' gpt-5, gpt-5-codex\ngpt-5 ',
+      }),
+      {
+        name: 'Codex pool',
+        type: 57,
+        model_strategy: 'fixed',
+        fixed_models: ['gpt-5', 'gpt-5-codex'],
+      }
+    )
   })
 
   test('masks local secret previews', () => {

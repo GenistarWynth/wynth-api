@@ -154,6 +154,7 @@ import {
   buildAccountPayload,
   buildAccountImportPayload,
   buildAccountPoolProxyOptions,
+  buildBoundChannelPayload,
   buildPoolPayload,
   buildProxyPayload,
   emptyAccountForm,
@@ -164,6 +165,7 @@ import {
   poolToFormValues,
   proxyToFormValues,
   type AccountPoolAccountFormValues,
+  type AccountPoolBoundChannelFormValues,
   type AccountImportFormValues,
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
@@ -185,11 +187,6 @@ type BindingFormValues = {
   fixed_models_text: string
   schedule_policy: AccountPoolSchedulePolicy
   account_retry_times: number
-}
-
-type BoundChannelFormValues = {
-  name: string
-  type: number
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -978,14 +975,14 @@ export function AccountPools() {
   })
 
   const createBoundChannelMutation = useMutation({
-    mutationFn: async (values: BoundChannelFormValues) => {
+    mutationFn: async (values: AccountPoolBoundChannelFormValues) => {
       if (!selectedPoolID) {
         throw new Error(t('Select an account pool first'))
       }
-      return createAccountPoolBoundChannel(selectedPoolID, {
-        name: values.name.trim(),
-        type: values.type,
-      })
+      return createAccountPoolBoundChannel(
+        selectedPoolID,
+        buildBoundChannelPayload(values)
+      )
     },
     onSuccess: (result) => {
       if (!result.success) {
@@ -1564,16 +1561,21 @@ function BoundChannelDialog(props: {
   pool?: AccountPool
   isSubmitting: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (values: BoundChannelFormValues) => void
+  onSubmit: (values: AccountPoolBoundChannelFormValues) => void
 }) {
   const { t } = useTranslation()
   const [name, setName] = useState('')
   const [channelType, setChannelType] = useState('1')
+  const [fixedModelsText, setFixedModelsText] = useState('')
+  const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect(
+    props.open
+  )
 
   useEffect(() => {
     if (props.open) {
       setName(props.pool ? `${props.pool.name} Channel` : '')
       setChannelType('1')
+      setFixedModelsText('')
     }
   }, [props.open, props.pool])
 
@@ -1584,15 +1586,21 @@ function BoundChannelDialog(props: {
       toast.error(t('Channel name is required'))
       return
     }
+    const fixedModels = modelListFromText(fixedModelsText)
+    if (fixedModels.length === 0) {
+      toast.error(t('Select at least one model'))
+      return
+    }
     props.onSubmit({
       name: trimmedName,
       type: Number.parseInt(channelType, 10) || 1,
+      fixed_models_text: modelListToText(fixedModels),
     })
   }
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className='sm:max-w-[420px]'>
+      <DialogContent className='sm:max-w-[520px]'>
         <DialogHeader>
           <DialogTitle>{t('Create Account Pool Channel')}</DialogTitle>
           <DialogDescription>
@@ -1636,6 +1644,24 @@ function BoundChannelDialog(props: {
                 </SelectGroup>
               </SelectContent>
             </Select>
+          </FieldBlock>
+          <FieldBlock
+            label={t('Fixed Models')}
+            htmlFor='account-pool-bound-channel-fixed-models'
+          >
+            <MultiSelect
+              id='account-pool-bound-channel-fixed-models'
+              options={modelSelectOptions}
+              selected={modelListFromText(fixedModelsText)}
+              onChange={(values) => setFixedModelsText(modelListToText(values))}
+              placeholder={t('Select models or add custom ones')}
+              allowCreate
+              createLabel='Add custom model "{{value}}"'
+              emptyText={t('No models found')}
+              maxVisibleChips={6}
+              copyChipOnClick
+              disabled={modelsLoading}
+            />
           </FieldBlock>
         </form>
         <DialogFooter>

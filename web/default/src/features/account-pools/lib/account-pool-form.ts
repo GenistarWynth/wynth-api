@@ -22,6 +22,7 @@ import type {
   AccountPoolAccountCreateRequest,
   AccountPoolAccountImportRequest,
   AccountPoolAccountStatus,
+  AccountPoolBoundChannelCreateRequest,
   AccountPoolCreateRequest,
   AccountPoolCredentialType,
   AccountPoolPlatform,
@@ -102,6 +103,12 @@ export type AccountImportFormValues = {
   default_max_concurrency: number
   default_proxy_id: number
   default_supported_models_text: string
+}
+
+export type AccountPoolBoundChannelFormValues = {
+  name: string
+  type: number
+  fixed_models_text: string
 }
 
 export type AccountPoolProxyOption = {
@@ -348,6 +355,17 @@ export function buildAccountImportPayload(
       ),
       model_mapping: {},
     },
+  }
+}
+
+export function buildBoundChannelPayload(
+  values: AccountPoolBoundChannelFormValues
+): AccountPoolBoundChannelCreateRequest {
+  return {
+    name: values.name.trim(),
+    type: toInteger(values.type),
+    model_strategy: 'fixed',
+    fixed_models: normalizeModelListText(values.fixed_models_text),
   }
 }
 
