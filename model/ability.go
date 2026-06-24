@@ -370,7 +370,7 @@ func UpdateAbilityStatus(channelId int, status bool) error {
 func UpdateAbilityStatusByTag(tag string, status bool) error {
 	query := DB.Model(&Ability{}).Where("tag = ?", tag)
 	if status {
-		boundChannelIDs, err := DraftAccountPoolBoundChannelIDs()
+		boundChannelIDs, err := AccountPoolControlledChannelIDs()
 		if err != nil {
 			return err
 		}

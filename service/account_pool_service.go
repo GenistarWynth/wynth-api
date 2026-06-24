@@ -231,6 +231,13 @@ func (s AccountPoolService) DeletePool(id int) error {
 			}).Error; err != nil {
 			return err
 		}
+		if len(channelIDs) > 0 {
+			if err := tx.Model(&model.Ability{}).
+				Where("channel_id IN ?", channelIDs).
+				Update("enabled", false).Error; err != nil {
+				return err
+			}
+		}
 		return tx.Where("pool_id = ?", id).Delete(&model.AccountPoolChannelBinding{}).Error
 	})
 	if err != nil {
@@ -239,6 +246,7 @@ func (s AccountPoolService) DeletePool(id int) error {
 	for _, channelID := range channelIDs {
 		invalidateAccountPoolRuntimeEnabledForChannel(channelID)
 	}
+	refreshAccountPoolBindingRoutingCache()
 	return nil
 }
 
@@ -545,19 +553,33 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 		return AccountPoolBindingView{}, err
 	}
 	oldChannelID := binding.ChannelID
+	oldStatus := binding.Status
 	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
 	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	now := common.GetTimestamp()
-	if err := model.DB.Model(&binding).Updates(map[string]any{
-		"channel_id":            channel.Id,
-		"account_filter_config": accountFilterConfig,
-		"model_policy":          modelPolicy,
-		"schedule_policy":       schedulePolicy,
-		"account_retry_times":   params.AccountRetryTimes,
-		"updated_time":          now,
-	}).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&binding).Updates(map[string]any{
+			"channel_id":            channel.Id,
+			"account_filter_config": accountFilterConfig,
+			"model_policy":          modelPolicy,
+			"schedule_policy":       schedulePolicy,
+			"account_retry_times":   params.AccountRetryTimes,
+			"updated_time":          now,
+		}).Error; err != nil {
+			return err
+		}
+		if oldStatus == model.AccountPoolBindingStatusEnabled && oldChannelID != channel.Id {
+			if err := setAccountPoolBindingAbilityEnabled(tx, oldChannelID, false); err != nil {
+				return err
+			}
+			if err := setAccountPoolBindingAbilityEnabled(tx, channel.Id, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	binding.ChannelID = channel.Id
@@ -568,6 +590,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	binding.UpdatedTime = now
 	invalidateAccountPoolRuntimeEnabledForChannel(oldChannelID)
 	invalidateAccountPoolRuntimeEnabledForChannel(channel.Id)
+	refreshAccountPoolBindingRoutingCache()
 	return buildAccountPoolBindingView(binding, channel), nil
 }
 
@@ -579,10 +602,16 @@ func (s AccountPoolService) DeleteBinding(poolID int, bindingID int) error {
 	if err != nil {
 		return err
 	}
-	if err := model.DB.Delete(&binding).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := setAccountPoolBindingAbilityEnabled(tx, binding.ChannelID, false); err != nil {
+			return err
+		}
+		return tx.Delete(&binding).Error
+	}); err != nil {
 		return err
 	}
 	invalidateAccountPoolRuntimeEnabledForChannel(binding.ChannelID)
+	refreshAccountPoolBindingRoutingCache()
 	return nil
 }
 
@@ -782,16 +811,37 @@ func (s AccountPoolService) setBindingStatus(poolID int, bindingID int, status s
 		return AccountPoolBindingView{}, err
 	}
 	now := common.GetTimestamp()
-	if err := model.DB.Model(&binding).Updates(map[string]any{
-		"status":       status,
-		"updated_time": now,
-	}).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&binding).Updates(map[string]any{
+			"status":       status,
+			"updated_time": now,
+		}).Error; err != nil {
+			return err
+		}
+		return setAccountPoolBindingAbilityEnabled(tx, binding.ChannelID, status == model.AccountPoolBindingStatusEnabled)
+	}); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	binding.Status = status
 	binding.UpdatedTime = now
 	invalidateAccountPoolRuntimeEnabledForChannel(binding.ChannelID)
+	refreshAccountPoolBindingRoutingCache()
 	return buildAccountPoolBindingView(binding, channel), nil
+}
+
+func setAccountPoolBindingAbilityEnabled(tx *gorm.DB, channelID int, enabled bool) error {
+	if channelID <= 0 {
+		return nil
+	}
+	return tx.Model(&model.Ability{}).
+		Where("channel_id = ?", channelID).
+		Update("enabled", enabled).Error
+}
+
+func refreshAccountPoolBindingRoutingCache() {
+	if common.MemoryCacheEnabled {
+		model.InitChannelCache()
+	}
 }
 
 func normalizeAccountPoolPlatform(platform string) (string, error) {

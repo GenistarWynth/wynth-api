@@ -216,6 +216,84 @@ func TestAccountPoolServiceCreateBoundChannelRejectsBlankName(t *testing.T) {
 	require.ErrorContains(t, err, "account pool channel name is required")
 }
 
+func TestAccountPoolServiceActivateBindingEnablesAbilitiesButNotChannel(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	binding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "pool-runtime-channel",
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5"},
+		},
+	})
+	require.NoError(t, err)
+
+	var ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5").First(&ability).Error)
+	assert.False(t, ability.Enabled)
+
+	activated, err := service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, activated.Status)
+
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5").First(&ability).Error)
+	assert.True(t, ability.Enabled)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, binding.ChannelID).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+
+	disabled, err := service.DisableBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusDisabled, disabled.Status)
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5").First(&ability).Error)
+	assert.False(t, ability.Enabled)
+
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	require.NoError(t, service.DeleteBinding(pool.Id, binding.Id))
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5").First(&ability).Error)
+	assert.False(t, ability.Enabled)
+}
+
+func TestAccountPoolServiceActivateBindingEnablesMemoryCacheRoutingButNotChannel(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		model.InitChannelCache()
+	})
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	binding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "pool-cache-runtime-channel",
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5"},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	model.InitChannelCache()
+	channel, err := model.GetRandomSatisfiedChannel("default", "gpt-5", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, binding.ChannelID, channel.Id)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+
+	_, err = service.DisableBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	model.InitChannelCache()
+	channel, err = model.GetRandomSatisfiedChannel("default", "gpt-5", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	assert.Nil(t, channel)
+}
+
 func TestAccountPoolServiceCreateBindingUsesPoolDefaultSchedulePolicy(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -367,7 +445,9 @@ func TestAccountPoolServiceActivateBindingEnablesRuntimeButNotChannel(t *testing
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
-	assert.True(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "manual enable after account pool activation"))
+	assert.False(t, model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusEnabled, "manual enable after account pool activation"))
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 
 	again, err := service.ActivateBinding(pool.Id, binding.Id)
 	require.NoError(t, err)
@@ -483,6 +563,51 @@ func TestAccountPoolServiceUpdateBindingConfigPreservesRuntimeStatus(t *testing.
 	enabled, err = AccountPoolRuntimeEnabledForChannel(newChannel.Id)
 	require.NoError(t, err)
 	assert.True(t, enabled)
+}
+
+func TestAccountPoolServiceUpdateEnabledBindingMovesAbilityToNewChannel(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	binding, err := service.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "old-runtime-channel",
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5"},
+		},
+	})
+	require.NoError(t, err)
+	_, err = service.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+	newChannel := model.Channel{
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "new-runtime-key",
+		Name:   "new-runtime-channel",
+		Status: common.ChannelStatusManuallyDisabled,
+		Group:  "default",
+		Models: "gpt-5",
+	}
+	require.NoError(t, model.DB.Create(&newChannel).Error)
+	require.NoError(t, newChannel.AddAbilities(nil))
+
+	updated, err := service.UpdateBinding(pool.Id, binding.Id, AccountPoolBindingCreateParams{
+		ChannelID: newChannel.Id,
+		ModelPolicy: AccountPoolModelPolicy{
+			Strategy:    "fixed",
+			FixedModels: []string{"gpt-5"},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolBindingStatusEnabled, updated.Status)
+	assert.Equal(t, newChannel.Id, updated.ChannelID)
+	var oldAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", binding.ChannelID, "gpt-5").First(&oldAbility).Error)
+	assert.False(t, oldAbility.Enabled)
+	var newAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ? AND model = ?", newChannel.Id, "gpt-5").First(&newAbility).Error)
+	assert.True(t, newAbility.Enabled)
 }
 
 func TestAccountPoolServiceBindingActivationRejectsWrongPoolAndUnsupportedChannel(t *testing.T) {

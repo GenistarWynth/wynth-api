@@ -806,7 +806,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
-	boundChannelIDs, err := DraftAccountPoolBoundChannelIDs()
+	boundChannelIDs, err := AccountPoolControlledChannelIDs()
 	if err != nil {
 		return err
 	}

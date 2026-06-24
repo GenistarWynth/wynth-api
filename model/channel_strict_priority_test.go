@@ -263,3 +263,65 @@ func TestGetRandomSatisfiedChannelDatabasePathFiltersAttemptedChannels(t *testin
 	require.NotNil(t, channel)
 	assert.Equal(t, 2, channel.Id)
 }
+
+func TestCacheUpdateChannelStatusKeepsEnabledAccountPoolRuntimeChannelRoutable(t *testing.T) {
+	clearStrictPriorityTables(t)
+	withMemoryCacheForStrictPriority(t, true)
+	require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolChannelBinding{}))
+	require.NoError(t, DB.Exec("DELETE FROM account_pool_channel_bindings").Error)
+	require.NoError(t, DB.Exec("DELETE FROM account_pools").Error)
+
+	priority := int64(100)
+	weight := uint(100)
+	channel := Channel{
+		Id:       42,
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "account-pool-cache-key",
+		Status:   common.ChannelStatusManuallyDisabled,
+		Name:     "account-pool-cache-channel",
+		Group:    "default",
+		Models:   "gpt-runtime",
+		Priority: &priority,
+		Weight:   &weight,
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, DB.Create(&Ability{
+		Group:     "default",
+		Model:     "gpt-runtime",
+		ChannelId: channel.Id,
+		Enabled:   true,
+		Priority:  &priority,
+		Weight:    weight,
+	}).Error)
+	pool := AccountPool{Name: "runtime-pool", Platform: AccountPoolPlatformOpenAI}
+	require.NoError(t, DB.Create(&pool).Error)
+	require.NoError(t, DB.Create(&AccountPoolChannelBinding{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+		Status:    AccountPoolBindingStatusEnabled,
+	}).Error)
+	InitChannelCache()
+
+	selected, err := GetRandomSatisfiedChannel("default", "gpt-runtime", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	require.Equal(t, channel.Id, selected.Id)
+
+	CacheUpdateChannelStatus(channel.Id, common.ChannelStatusAutoDisabled)
+	selected, err = GetRandomSatisfiedChannel("default", "gpt-runtime", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, channel.Id, selected.Id)
+
+	oldDB := DB
+	DB = nil
+	t.Cleanup(func() {
+		DB = oldDB
+	})
+
+	CacheUpdateChannelStatus(channel.Id, common.ChannelStatusAutoDisabled)
+	selected, err = GetRandomSatisfiedChannel("default", "gpt-runtime", 0, "/v1/chat/completions")
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, channel.Id, selected.Id)
+}

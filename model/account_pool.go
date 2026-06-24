@@ -217,7 +217,7 @@ func RejectAccountPoolBoundChannelEnable(channelID int, status int) error {
 	if status != common.ChannelStatusEnabled || channelID <= 0 || DB == nil {
 		return nil
 	}
-	bound, err := HasDraftAccountPoolChannelBinding(channelID)
+	bound, err := HasAccountPoolControlledChannelBinding(channelID)
 	if err != nil {
 		return err
 	}
@@ -227,29 +227,48 @@ func RejectAccountPoolBoundChannelEnable(channelID int, status int) error {
 	return nil
 }
 
-func HasDraftAccountPoolChannelBinding(channelID int) (bool, error) {
+func HasAccountPoolControlledChannelBinding(channelID int) (bool, error) {
 	if channelID <= 0 || DB == nil {
 		return false, nil
 	}
 	if !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
 		return false, nil
 	}
-	// Activation must extend this guard before enabled bindings can be exposed to admins.
 	var count int64
 	err := DB.Model(&AccountPoolChannelBinding{}).
-		Where("channel_id = ? AND status = ?", channelID, AccountPoolBindingStatusDraft).
+		Where("channel_id = ? AND status IN ?", channelID, []string{AccountPoolBindingStatusDraft, AccountPoolBindingStatusEnabled}).
 		Count(&count).Error
 	return count > 0, err
 }
 
-func DraftAccountPoolBoundChannelIDs() ([]int, error) {
+func AccountPoolControlledChannelIDs() ([]int, error) {
 	if DB == nil || !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
 		return nil, nil
 	}
-	// Activation must include enabled bindings before live account-pool traffic is allowed.
 	var channelIDs []int
 	err := DB.Model(&AccountPoolChannelBinding{}).
-		Where("status = ?", AccountPoolBindingStatusDraft).
+		Distinct("channel_id").
+		Where("status IN ?", []string{AccountPoolBindingStatusDraft, AccountPoolBindingStatusEnabled}).
 		Pluck("channel_id", &channelIDs).Error
 	return channelIDs, err
+}
+
+func EnabledAccountPoolRuntimeChannelIDs() (map[int]struct{}, error) {
+	channelIDs := make(map[int]struct{})
+	if DB == nil || !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
+		return channelIDs, nil
+	}
+	var ids []int
+	if err := DB.Model(&AccountPoolChannelBinding{}).
+		Where("status = ?", AccountPoolBindingStatusEnabled).
+		Pluck("channel_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		channelIDs[id] = struct{}{}
+	}
+	return channelIDs, nil
 }

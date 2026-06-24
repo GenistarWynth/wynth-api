@@ -75,6 +75,7 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 		&model.AccountPoolProxy{},
 		&model.AccountPoolChannelBinding{},
 		&model.Channel{},
+		&model.Ability{},
 		&model.User{},
 		&model.Log{},
 	))
