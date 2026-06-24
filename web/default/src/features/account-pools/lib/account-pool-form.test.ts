@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   buildAccountPayload,
+  buildAccountImportPayload,
   buildAccountPoolProxyOptions,
   buildPoolPayload,
   buildProxyPayload,
   emptyAccountForm,
+  emptyAccountImportForm,
   emptyPoolForm,
   emptyProxyForm,
   maskSecretPreview,
@@ -170,6 +172,31 @@ describe('account pool form helpers', () => {
         { value: '12', label: '香港代理' },
         { value: '18', label: '日本代理' },
       ]
+    )
+  })
+
+  test('builds import payload with selected default proxy', () => {
+    assert.deepEqual(
+      buildAccountImportPayload({
+        ...emptyAccountImportForm(),
+        content: 'accounts: []',
+        default_proxy_id: 12,
+        default_supported_models_text: 'gpt-5, gpt-4\ngpt-5',
+      }),
+      {
+        format: 'sub2api',
+        content: 'accounts: []',
+        dry_run: false,
+        defaults: {
+          status: 'enabled',
+          priority: 0,
+          weight: 0,
+          max_concurrency: 1,
+          proxy_id: 12,
+          supported_models: ['gpt-5', 'gpt-4'],
+          model_mapping: {},
+        },
+      }
     )
   })
 })

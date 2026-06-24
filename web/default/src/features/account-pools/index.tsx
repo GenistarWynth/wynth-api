@@ -146,22 +146,24 @@ import {
 import {
   accountToFormValues,
   buildAccountPayload,
+  buildAccountImportPayload,
   buildAccountPoolProxyOptions,
   buildPoolPayload,
   buildProxyPayload,
   emptyAccountForm,
+  emptyAccountImportForm,
   emptyPoolForm,
   emptyProxyForm,
   poolToFormValues,
   proxyToFormValues,
   type AccountPoolAccountFormValues,
+  type AccountImportFormValues,
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
 } from './lib/account-pool-form'
 import type {
   AccountPool,
   AccountPoolAccount,
-  AccountPoolAccountImportRequest,
   AccountPoolBinding,
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
@@ -175,15 +177,6 @@ type BindingFormValues = {
   fixed_models_text: string
   schedule_policy: string
   account_retry_times: number
-}
-
-type AccountImportFormValues = {
-  format: 'sub2api' | 'cpa'
-  content: string
-  default_priority: number
-  default_weight: number
-  default_max_concurrency: number
-  default_supported_models_text: string
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -233,36 +226,6 @@ function emptyBindingForm(): BindingFormValues {
     fixed_models_text: '',
     schedule_policy: 'round_robin',
     account_retry_times: 0,
-  }
-}
-
-function emptyAccountImportForm(): AccountImportFormValues {
-  return {
-    format: 'sub2api',
-    content: '',
-    default_priority: 0,
-    default_weight: 0,
-    default_max_concurrency: 1,
-    default_supported_models_text: '',
-  }
-}
-
-function buildAccountImportPayload(
-  values: AccountImportFormValues
-): AccountPoolAccountImportRequest {
-  return {
-    format: values.format,
-    content: values.content,
-    dry_run: false,
-    defaults: {
-      status: 'enabled',
-      priority: values.default_priority,
-      weight: values.default_weight,
-      max_concurrency: values.default_max_concurrency,
-      proxy_id: 0,
-      supported_models: modelListFromText(values.default_supported_models_text),
-      model_mapping: {},
-    },
   }
 }
 
@@ -1169,6 +1132,7 @@ export function AccountPools() {
       <AccountImportDialog
         open={accountImportOpen}
         pool={selectedPool}
+        proxies={proxiesQuery.data ?? EMPTY_PROXIES}
         isSubmitting={importAccountsMutation.isPending}
         onOpenChange={setAccountImportOpen}
         onSubmit={(values) => importAccountsMutation.mutate(values)}
@@ -2244,6 +2208,7 @@ function ProxyRowActions(props: {
 function AccountImportDialog(props: {
   open: boolean
   pool?: AccountPool
+  proxies: AccountPoolProxy[]
   isSubmitting: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (values: AccountImportFormValues) => void
@@ -2258,6 +2223,10 @@ function AccountImportDialog(props: {
       { value: 'cpa', label: t('CPA config or auth') },
     ],
     [t]
+  )
+  const proxyOptions = useMemo(
+    () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
+    [props.proxies, t]
   )
 
   useEffect(() => {
@@ -2347,6 +2316,31 @@ function AccountImportDialog(props: {
               value={form.default_max_concurrency}
               onChange={(value) => setField('default_max_concurrency', value)}
             />
+            <FieldBlock
+              label={t('Default Proxy')}
+              htmlFor='account-pool-import-default-proxy'
+            >
+              <Select
+                items={proxyOptions}
+                value={String(form.default_proxy_id)}
+                onValueChange={(value) =>
+                  setField('default_proxy_id', value ? Number(value) : 0)
+                }
+              >
+                <SelectTrigger id='account-pool-import-default-proxy'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {proxyOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </FieldBlock>
           </FieldGroup>
           <FieldBlock
             label={t('Default Supported Models')}

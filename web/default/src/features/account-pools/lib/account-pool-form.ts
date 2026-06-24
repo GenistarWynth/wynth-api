@@ -20,6 +20,7 @@ import type {
   AccountPool,
   AccountPoolAccount,
   AccountPoolAccountCreateRequest,
+  AccountPoolAccountImportRequest,
   AccountPoolAccountStatus,
   AccountPoolCreateRequest,
   AccountPoolCredentialType,
@@ -76,6 +77,16 @@ export type AccountPoolProxyFormValues = {
   password: string
   status: AccountPoolProxyStatus | string
   fallback_proxy_id: number
+}
+
+export type AccountImportFormValues = {
+  format: 'sub2api' | 'cpa'
+  content: string
+  default_priority: number
+  default_weight: number
+  default_max_concurrency: number
+  default_proxy_id: number
+  default_supported_models_text: string
 }
 
 export type AccountPoolProxyOption = {
@@ -285,6 +296,39 @@ export function buildProxyPayload(
     password: values.password.trim(),
     status: values.status || 'enabled',
     fallback_proxy_id: toInteger(values.fallback_proxy_id),
+  }
+}
+
+export function emptyAccountImportForm(): AccountImportFormValues {
+  return {
+    format: 'sub2api',
+    content: '',
+    default_priority: 0,
+    default_weight: 0,
+    default_max_concurrency: 1,
+    default_proxy_id: 0,
+    default_supported_models_text: '',
+  }
+}
+
+export function buildAccountImportPayload(
+  values: AccountImportFormValues
+): AccountPoolAccountImportRequest {
+  return {
+    format: values.format,
+    content: values.content,
+    dry_run: false,
+    defaults: {
+      status: 'enabled',
+      priority: toInteger(values.default_priority),
+      weight: toInteger(values.default_weight),
+      max_concurrency: Math.max(1, toInteger(values.default_max_concurrency)),
+      proxy_id: toInteger(values.default_proxy_id),
+      supported_models: normalizeModelListText(
+        values.default_supported_models_text
+      ),
+      model_mapping: {},
+    },
   }
 }
 
