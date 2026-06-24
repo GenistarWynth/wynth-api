@@ -1840,6 +1840,7 @@
     "Failed to load image": "Không thể tải ảnh",
     "Failed to load key status": "Không thể tải trạng thái khóa",
     "Failed to load logs": "Không tải được nhật ký",
+    "Failed to load models": "Không thể tải mô hình",
     "Failed to load monitor data": "Không tải được dữ liệu giám sát",
     "Failed to load Passkey status": "Không thể tải trạng thái Passkey",
     "Failed to load pool accounts": "Không thể tải tài khoản trong nhóm",

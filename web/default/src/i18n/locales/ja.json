@@ -1840,6 +1840,7 @@
     "Failed to load image": "画像の読み込みに失敗しました",
     "Failed to load key status": "キー状態の読み込みに失敗しました",
     "Failed to load logs": "ログの読み込みに失敗しました",
+    "Failed to load models": "モデルの読み込みに失敗しました",
     "Failed to load monitor data": "監視データの読み込みに失敗しました",
     "Failed to load Passkey status": "Passkeyのステータスの読み込みに失敗しました",
     "Failed to load pool accounts": "プールアカウントの読み込みに失敗しました",

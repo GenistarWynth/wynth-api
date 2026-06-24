@@ -1840,6 +1840,7 @@
     "Failed to load image": "无法加载图像",
     "Failed to load key status": "加载密钥状态失败",
     "Failed to load logs": "加载日志失败",
+    "Failed to load models": "加载模型失败",
     "Failed to load monitor data": "监控数据加载失败",
     "Failed to load Passkey status": "加载 Passkey 状态失败",
     "Failed to load pool accounts": "加载账号池账号失败",

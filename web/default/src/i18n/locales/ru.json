@@ -1840,6 +1840,7 @@
     "Failed to load image": "Не удалось загрузить изображение",
     "Failed to load key status": "Не удалось загрузить статус ключей",
     "Failed to load logs": "Не удалось загрузить логи",
+    "Failed to load models": "Не удалось загрузить модели",
     "Failed to load monitor data": "Не удалось загрузить данные мониторинга",
     "Failed to load Passkey status": "Не удалось загрузить статус Passkey",
     "Failed to load pool accounts": "Не удалось загрузить аккаунты пула",

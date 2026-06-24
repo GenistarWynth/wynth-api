@@ -1840,6 +1840,7 @@
     "Failed to load image": "Échec du chargement de l'image",
     "Failed to load key status": "Échec du chargement du statut des clés",
     "Failed to load logs": "Échec du chargement des journaux",
+    "Failed to load models": "Échec du chargement des modèles",
     "Failed to load monitor data": "Échec du chargement des données de surveillance",
     "Failed to load Passkey status": "Échec du chargement du statut Passkey",
     "Failed to load pool accounts": "Échec du chargement des comptes du pool",

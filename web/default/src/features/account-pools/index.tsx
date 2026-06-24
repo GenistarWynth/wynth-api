@@ -40,6 +40,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useMediaQuery } from '@/hooks'
+import { getUserModels } from '@/lib/api'
 import { formatTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -114,6 +115,7 @@ import {
 } from '@/components/drawer-layout'
 import { SectionPageLayout } from '@/components/layout'
 import { LongText } from '@/components/long-text'
+import { MultiSelect } from '@/components/multi-select'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { getChannels } from '@/features/channels/api'
@@ -2076,7 +2078,19 @@ function BindingForm(props: {
       return result.data?.items ?? []
     },
   })
+  const modelsQuery = useQuery({
+    queryKey: ['user-models', 'account-pool-bindings'],
+    queryFn: getUserModels,
+  })
   const disabledChannels = disabledChannelsQuery.data ?? EMPTY_CHANNELS
+  const modelSelectOptions = useMemo(
+    () =>
+      (modelsQuery.data?.data ?? []).map((model) => ({
+        value: model,
+        label: model,
+      })),
+    [modelsQuery.data]
+  )
   const boundChannelIDs = useMemo(
     () =>
       new Set(
@@ -2116,6 +2130,12 @@ function BindingForm(props: {
       toast.error(disabledChannelsQuery.error.message)
     }
   }, [disabledChannelsQuery.error])
+
+  useEffect(() => {
+    if (modelsQuery.error) {
+      toast.error(t('Failed to load models'))
+    }
+  }, [modelsQuery.error, t])
 
   useEffect(() => {
     setForm(
@@ -2214,13 +2234,20 @@ function BindingForm(props: {
             label={t('Fixed Models')}
             htmlFor='account-pool-binding-fixed-models'
           >
-            <Input
+            <MultiSelect
               id='account-pool-binding-fixed-models'
-              value={form.fixed_models_text}
-              onChange={(event) =>
-                setField('fixed_models_text', event.target.value)
+              options={modelSelectOptions}
+              selected={modelListFromText(form.fixed_models_text)}
+              onChange={(values) =>
+                setField('fixed_models_text', values.join(', '))
               }
-              placeholder={t('Comma-separated model names')}
+              placeholder={t('Select models or add custom ones')}
+              allowCreate
+              createLabel='Add custom model "{{value}}"'
+              emptyText={t('No models found')}
+              maxVisibleChips={8}
+              copyChipOnClick
+              disabled={modelsQuery.isLoading}
             />
           </FieldBlock>
           <FieldBlock
