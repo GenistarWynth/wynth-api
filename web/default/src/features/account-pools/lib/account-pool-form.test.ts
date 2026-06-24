@@ -97,6 +97,16 @@ describe('account pool form helpers', () => {
     )
   })
 
+  test('preserves zero max concurrency as unlimited for account payloads', () => {
+    assert.equal(
+      buildAccountPayload({
+        ...emptyAccountForm(),
+        max_concurrency: 0,
+      }).max_concurrency,
+      0
+    )
+  })
+
   test('rejects invalid model mapping text instead of silently dropping it', () => {
     assert.throws(
       () =>
@@ -182,6 +192,16 @@ describe('account pool form helpers', () => {
         { value: '12', label: '香港代理' },
         { value: '18', label: '日本代理' },
       ]
+    )
+  })
+
+  test('preserves zero default max concurrency as unlimited for import payloads', () => {
+    assert.equal(
+      buildAccountImportPayload({
+        ...emptyAccountImportForm(),
+        default_max_concurrency: 0,
+      }).defaults.max_concurrency,
+      0
     )
   })
 

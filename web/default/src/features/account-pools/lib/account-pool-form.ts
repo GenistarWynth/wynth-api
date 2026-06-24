@@ -210,7 +210,7 @@ export function buildAccountPayload(
     status: values.status || 'enabled',
     priority: toInteger(values.priority),
     weight: toInteger(values.weight),
-    max_concurrency: Math.max(1, toInteger(values.max_concurrency)),
+    max_concurrency: Math.max(0, toInteger(values.max_concurrency)),
     proxy_id: toInteger(values.proxy_id),
     supported_models: normalizeModelListText(values.supported_models_text),
     model_mapping: parseModelMapping(values.model_mapping_text),
@@ -341,7 +341,7 @@ export function buildAccountImportPayload(
       status: 'enabled',
       priority: toInteger(values.default_priority),
       weight: toInteger(values.default_weight),
-      max_concurrency: Math.max(1, toInteger(values.default_max_concurrency)),
+      max_concurrency: Math.max(0, toInteger(values.default_max_concurrency)),
       proxy_id: toInteger(values.default_proxy_id),
       supported_models: normalizeModelListText(
         values.default_supported_models_text

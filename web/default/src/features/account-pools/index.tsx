@@ -2626,7 +2626,7 @@ function AccountImportDialog(props: {
             <NumericField
               id='account-pool-import-default-concurrency'
               label={t('Default Max Concurrency')}
-              min={1}
+              min={0}
               value={form.default_max_concurrency}
               onChange={(value) => setField('default_max_concurrency', value)}
             />
@@ -2872,7 +2872,7 @@ function AccountFormSheet(props: {
               <NumericField
                 id='account-pool-account-max-concurrency'
                 label={t('Max Concurrency')}
-                min={1}
+                min={0}
                 value={form.max_concurrency}
                 onChange={(value) => setField('max_concurrency', value)}
               />
