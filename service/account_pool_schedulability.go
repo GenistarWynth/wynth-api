@@ -49,13 +49,13 @@ func CheckAccountPoolChannelSchedulability(req AccountPoolSchedulabilityRequest)
 		PoolID:         binding.PoolID,
 		BindingID:      binding.Id,
 	}
-	_, err = SelectAccountPoolAccount(AccountPoolSelectionRequest{
+	_, release, err := selectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
 		ChannelID:            req.ChannelID,
 		BindingID:            binding.Id,
 		RequestModel:         req.RequestModel,
 		ChannelUpstreamModel: req.ChannelUpstreamModel,
 		Now:                  now,
-	})
+	}, false)
 	if err != nil {
 		if errors.Is(err, ErrAccountPoolNoSchedulableAccount) {
 			result.Reason = AccountPoolSchedulabilityReasonNoSchedulableAccount
@@ -63,6 +63,8 @@ func CheckAccountPoolChannelSchedulability(req AccountPoolSchedulabilityRequest)
 		}
 		return result, err
 	}
+	// This is a probe, not a reservation for the next request.
+	defer release()
 	result.Schedulable = true
 	result.Reason = AccountPoolSchedulabilityReasonReady
 	return result, nil

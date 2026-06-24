@@ -164,6 +164,10 @@ func selectAccountPoolAffinityCandidate(key string, bindingID int, candidates []
 }
 
 func SelectAccountPoolAccountWithLease(req AccountPoolSelectionRequest) (AccountPoolSelectionResult, accountPoolRuntimeReleaseFunc, error) {
+	return selectAccountPoolAccountWithLease(req, true)
+}
+
+func selectAccountPoolAccountWithLease(req AccountPoolSelectionRequest, rememberSelection bool) (AccountPoolSelectionResult, accountPoolRuntimeReleaseFunc, error) {
 	attempted := make(map[int]struct{}, len(req.AttemptedAccountIDs)+1)
 	for accountID := range req.AttemptedAccountIDs {
 		attempted[accountID] = struct{}{}
@@ -176,7 +180,9 @@ func SelectAccountPoolAccountWithLease(req AccountPoolSelectionRequest) (Account
 		}
 		release, acquired := tryAcquireAccountPoolRuntimeLease(selection.AccountID, selection.MaxConcurrency)
 		if acquired {
-			rememberAccountPoolRuntimeSelection(selection.AccountID, req.Now)
+			if rememberSelection {
+				rememberAccountPoolRuntimeSelection(selection.AccountID, req.Now)
+			}
 			return selection, release, nil
 		}
 		attempted[selection.AccountID] = struct{}{}
