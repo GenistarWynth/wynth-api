@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type {
+  AccountPoolAccount,
   AccountPoolAccountCreateRequest,
   AccountPoolAccountStatus,
   AccountPoolCreateRequest,
@@ -157,6 +158,38 @@ export function buildAccountPayload(
     temp_disabled_until: toInteger(values.temp_disabled_until),
     temp_disabled_reason: values.temp_disabled_reason.trim(),
     last_error: values.last_error.trim(),
+  }
+}
+
+export function accountToFormValues(
+  account: AccountPoolAccount
+): AccountPoolAccountFormValues {
+  return {
+    name: account.name,
+    account_identifier: account.account_identifier,
+    credential_type: 'api_key',
+    api_key: '',
+    email: '',
+    refresh_token: '',
+    access_token: '',
+    token_refresh_token: '',
+    token_expires_at: 0,
+    token_version: 0,
+    status: account.status,
+    priority: account.priority,
+    weight: account.weight,
+    max_concurrency: account.max_concurrency,
+    proxy_id: account.proxy_id,
+    supported_models_text: account.supported_models.join('\n'),
+    model_mapping_text:
+      Object.keys(account.model_mapping || {}).length > 0
+        ? JSON.stringify(account.model_mapping, null, 2)
+        : '',
+    last_used_at: account.last_used_at,
+    rate_limited_until: account.rate_limited_until,
+    temp_disabled_until: account.temp_disabled_until,
+    temp_disabled_reason: account.temp_disabled_reason,
+    last_error: account.last_error,
   }
 }
 

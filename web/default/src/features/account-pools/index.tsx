@@ -29,8 +29,12 @@ import {
   Link2,
   Loader2,
   MoreHorizontal,
+  Pencil,
   Plus,
+  Power,
+  PowerOff,
   Save,
+  Trash2,
   Upload,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -40,6 +44,7 @@ import { formatTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   Dialog,
   DialogClose,
@@ -123,13 +128,16 @@ import {
   createAccountPoolAccount,
   createAccountPoolBinding,
   createAccountPoolProxy,
+  deleteAccountPoolAccount,
   importAccountPoolAccounts,
   listAccountPoolAccounts,
   listAccountPoolBindings,
   listAccountPoolProxies,
   listAccountPools,
+  updateAccountPoolAccount,
 } from './api'
 import {
+  accountToFormValues,
   buildAccountPayload,
   buildPoolPayload,
   buildProxyPayload,
@@ -509,6 +517,8 @@ export function AccountPools() {
   const [poolSheetOpen, setPoolSheetOpen] = useState(false)
   const [selectedPool, setSelectedPool] = useState<AccountPool>()
   const [accountSheetOpen, setAccountSheetOpen] = useState(false)
+  const [editingAccount, setEditingAccount] = useState<AccountPoolAccount>()
+  const [deletingAccount, setDeletingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
@@ -620,6 +630,83 @@ export function AccountPools() {
       }
       toast.success(t('Account created'))
       setAccountSheetOpen(false)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const updateAccountMutation = useMutation({
+    mutationFn: async (values: AccountPoolAccountFormValues) => {
+      if (!selectedPoolID || !editingAccount) {
+        throw new Error(t('Select an account first'))
+      }
+      return updateAccountPoolAccount(
+        selectedPoolID,
+        editingAccount.id,
+        buildAccountPayload(values)
+      )
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to update account')))
+        return
+      }
+      toast.success(t('Account updated'))
+      setAccountSheetOpen(false)
+      setEditingAccount(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const updateAccountStatusMutation = useMutation({
+    mutationFn: async (params: {
+      account: AccountPoolAccount
+      status: string
+    }) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return updateAccountPoolAccount(
+        selectedPoolID,
+        params.account.id,
+        buildAccountPayload({
+          ...accountToFormValues(params.account),
+          status: params.status,
+        })
+      )
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to update account')))
+        return
+      }
+      toast.success(t('Account updated'))
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: async (account: AccountPoolAccount) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return deleteAccountPoolAccount(selectedPoolID, account.id)
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to delete account')))
+        return
+      }
+      toast.success(t('Account deleted'))
+      setDeletingAccount(undefined)
       invalidatePools()
     },
     onError: (error) => {
@@ -798,8 +885,19 @@ export function AccountPools() {
         bindingFormResetVersion={bindingFormResetVersion}
         bindingSubmitting={createBindingMutation.isPending}
         onOpenChange={(open) => !open && setSelectedPool(undefined)}
-        onCreateAccount={() => setAccountSheetOpen(true)}
+        onCreateAccount={() => {
+          setEditingAccount(undefined)
+          setAccountSheetOpen(true)
+        }}
         onImportAccounts={() => setAccountImportOpen(true)}
+        onEditAccount={(account) => {
+          setEditingAccount(account)
+          setAccountSheetOpen(true)
+        }}
+        onDeleteAccount={setDeletingAccount}
+        onSetAccountStatus={(account, status) =>
+          updateAccountStatusMutation.mutate({ account, status })
+        }
         onCreateProxy={() => setProxySheetOpen(true)}
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
       />
@@ -813,14 +911,20 @@ export function AccountPools() {
       <AccountFormSheet
         key={
           accountSheetOpen && selectedPool
-            ? `account-${selectedPool.id}`
+            ? `account-${selectedPool.id}-${editingAccount?.id ?? 'new'}`
             : 'account-closed'
         }
         open={accountSheetOpen}
         pool={selectedPool}
+        account={editingAccount}
         proxies={proxiesQuery.data ?? EMPTY_PROXIES}
-        isSubmitting={createAccountMutation.isPending}
-        onOpenChange={setAccountSheetOpen}
+        isSubmitting={
+          createAccountMutation.isPending || updateAccountMutation.isPending
+        }
+        onOpenChange={(open) => {
+          setAccountSheetOpen(open)
+          if (!open) setEditingAccount(undefined)
+        }}
         onSubmit={(values) => {
           try {
             buildAccountPayload(values)
@@ -830,7 +934,29 @@ export function AccountPools() {
             )
             return
           }
-          createAccountMutation.mutate(values)
+          if (editingAccount) {
+            updateAccountMutation.mutate(values)
+          } else {
+            createAccountMutation.mutate(values)
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={Boolean(deletingAccount)}
+        onOpenChange={(open) => !open && setDeletingAccount(undefined)}
+        title={t('Delete account?')}
+        desc={
+          deletingAccount
+            ? t('Delete account {{name}} from this pool.', {
+                name: deletingAccount.name,
+              })
+            : ''
+        }
+        destructive
+        confirmText={t('Delete')}
+        isLoading={deleteAccountMutation.isPending}
+        handleConfirm={() => {
+          if (deletingAccount) deleteAccountMutation.mutate(deletingAccount)
         }}
       />
       <ProxyFormSheet
@@ -1022,6 +1148,9 @@ function PoolDetailsSheet(props: {
   onOpenChange: (open: boolean) => void
   onCreateAccount: () => void
   onImportAccounts: () => void
+  onEditAccount: (account: AccountPoolAccount) => void
+  onDeleteAccount: (account: AccountPoolAccount) => void
+  onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onCreateProxy: () => void
   onCreateBinding: (values: BindingFormValues) => void
 }) {
@@ -1071,6 +1200,9 @@ function PoolDetailsSheet(props: {
                 loading={props.accountsLoading}
                 onCreateAccount={props.onCreateAccount}
                 onImportAccounts={props.onImportAccounts}
+                onEditAccount={props.onEditAccount}
+                onDeleteAccount={props.onDeleteAccount}
+                onSetAccountStatus={props.onSetAccountStatus}
               />
             </TabsContent>
             <TabsContent value='bindings' className='min-h-0'>
@@ -1116,6 +1248,9 @@ function AccountListSection(props: {
   loading: boolean
   onCreateAccount: () => void
   onImportAccounts: () => void
+  onEditAccount: (account: AccountPoolAccount) => void
+  onDeleteAccount: (account: AccountPoolAccount) => void
+  onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
 }) {
   const { t } = useTranslation()
 
@@ -1151,12 +1286,13 @@ function AccountListSection(props: {
               <TableHead>{t('Models')}</TableHead>
               <TableHead>{t('Credentials')}</TableHead>
               <TableHead>{t('Last Error')}</TableHead>
+              <TableHead>{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {props.loading && <LoadingRow colSpan={8} />}
+            {props.loading && <LoadingRow colSpan={9} />}
             {!props.loading && props.accounts.length === 0 && (
-              <EmptyRow colSpan={8} label={t('No accounts found')} />
+              <EmptyRow colSpan={9} label={t('No accounts found')} />
             )}
             {props.accounts.map((account) => (
               <TableRow
@@ -1203,12 +1339,67 @@ function AccountListSection(props: {
                     {account.last_error || '-'}
                   </LongText>
                 </TableCell>
+                <TableCell>
+                  <AccountRowActions
+                    account={account}
+                    onEdit={props.onEditAccount}
+                    onDelete={props.onDeleteAccount}
+                    onSetStatus={props.onSetAccountStatus}
+                  />
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </div>
     </SideDrawerSection>
+  )
+}
+
+function AccountRowActions(props: {
+  account: AccountPoolAccount
+  onEdit: (account: AccountPoolAccount) => void
+  onDelete: (account: AccountPoolAccount) => void
+  onSetStatus: (account: AccountPoolAccount, status: string) => void
+}) {
+  const { t } = useTranslation()
+  const disabled = props.account.status === 'disabled'
+  const nextStatus = disabled ? 'enabled' : 'disabled'
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            className='data-popup-open:bg-muted'
+          />
+        }
+      >
+        <MoreHorizontal />
+        <span className='sr-only'>{t('Open menu')}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        <DropdownMenuItem onClick={() => props.onEdit(props.account)}>
+          <Pencil />
+          {t('Edit')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => props.onSetStatus(props.account, nextStatus)}
+        >
+          {disabled ? <Power /> : <PowerOff />}
+          {disabled ? t('Enable') : t('Disable')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className='text-destructive'
+          onClick={() => props.onDelete(props.account)}
+        >
+          <Trash2 />
+          {t('Delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -1736,6 +1927,7 @@ function AccountImportDialog(props: {
 function AccountFormSheet(props: {
   open: boolean
   pool?: AccountPool
+  account?: AccountPoolAccount
   proxies: AccountPoolProxy[]
   isSubmitting: boolean
   onOpenChange: (open: boolean) => void
@@ -1768,9 +1960,11 @@ function AccountFormSheet(props: {
 
   useEffect(() => {
     if (props.open) {
-      setForm(emptyAccountForm())
+      setForm(
+        props.account ? accountToFormValues(props.account) : emptyAccountForm()
+      )
     }
-  }, [props.open])
+  }, [props.account, props.open])
 
   const setField = <K extends keyof AccountPoolAccountFormValues>(
     key: K,
@@ -1790,7 +1984,9 @@ function AccountFormSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent className={sideDrawerContentClassName('sm:max-w-[760px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>{t('Add Account')}</SheetTitle>
+          <SheetTitle>
+            {props.account ? t('Edit Account') : t('Add Account')}
+          </SheetTitle>
           <SheetDescription>{props.pool?.name || t('Account Pool')}</SheetDescription>
         </SheetHeader>
         <form
@@ -1920,11 +2116,14 @@ function AccountFormSheet(props: {
               <FieldBlock label={t('API Key')} htmlFor='account-pool-account-api-key'>
                 <Input
                   id='account-pool-account-api-key'
-                  type='password'
-                  value={form.api_key}
-                  onChange={(event) => setField('api_key', event.target.value)}
-                />
-              </FieldBlock>
+                type='password'
+                value={form.api_key}
+                onChange={(event) => setField('api_key', event.target.value)}
+                placeholder={
+                  props.account?.has_credential ? t('Leave blank to keep') : ''
+                }
+              />
+            </FieldBlock>
               <FieldBlock label={t('Email')} htmlFor='account-pool-account-email'>
                 <Input
                   id='account-pool-account-email'
@@ -1943,6 +2142,11 @@ function AccountFormSheet(props: {
                   onChange={(event) =>
                     setField('refresh_token', event.target.value)
                   }
+                  placeholder={
+                    props.account?.has_credential
+                      ? t('Leave blank to keep')
+                      : ''
+                  }
                 />
               </FieldBlock>
               <FieldBlock
@@ -1956,6 +2160,9 @@ function AccountFormSheet(props: {
                   onChange={(event) =>
                     setField('access_token', event.target.value)
                   }
+                  placeholder={
+                    props.account?.has_token ? t('Leave blank to keep') : ''
+                  }
                 />
               </FieldBlock>
               <FieldBlock
@@ -1968,6 +2175,9 @@ function AccountFormSheet(props: {
                   value={form.token_refresh_token}
                   onChange={(event) =>
                     setField('token_refresh_token', event.target.value)
+                  }
+                  placeholder={
+                    props.account?.has_token ? t('Leave blank to keep') : ''
                   }
                 />
               </FieldBlock>
@@ -2031,7 +2241,7 @@ function AccountFormSheet(props: {
             ) : (
               <Save data-icon='inline-start' />
             )}
-            {t('Create')}
+            {props.account ? t('Save Changes') : t('Create')}
           </Button>
         </SheetFooter>
       </SheetContent>

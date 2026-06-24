@@ -242,6 +242,11 @@ func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 	assert.Equal(t, model.AccountPoolAccountStatusDisabled, updateResult.Response.Data.Status)
 	assert.True(t, updateResult.Response.Data.HasCredential)
 	assert.NotContains(t, string(updateResult.Raw), "sk-account-secret")
+	var updatedStored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&updatedStored, accountID).Error)
+	updatedCredential, err := service.DecryptAccountPoolCredentialConfig(updatedStored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, "sk-account-secret", updatedCredential.APIKey)
 
 	deleteResult := accountPoolAPIRequest[any](t, router, http.MethodDelete, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(accountID), nil)
 	require.True(t, deleteResult.Response.Success, deleteResult.Response.Message)

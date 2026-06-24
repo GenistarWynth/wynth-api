@@ -107,6 +107,30 @@ export async function createAccountPoolAccount(
   return res.data
 }
 
+export async function updateAccountPoolAccount(
+  poolID: number,
+  accountID: number,
+  data: AccountPoolAccountCreateRequest
+): Promise<ApiResponse<AccountPoolAccount>> {
+  const res = await api.put(
+    `/api/account_pools/${poolID}/accounts/${accountID}`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function deleteAccountPoolAccount(
+  poolID: number,
+  accountID: number
+): Promise<ApiResponse<null>> {
+  const res = await api.delete(
+    `/api/account_pools/${poolID}/accounts/${accountID}`,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
 export async function importAccountPoolAccounts(
   id: number,
   data: AccountPoolAccountImportRequest
