@@ -16,11 +16,12 @@ import (
 const accountPoolOAuthRefreshSkewSeconds = int64(60)
 
 type AccountPoolRuntimeCredentialRequest struct {
-	AccountID  int
-	Credential AccountPoolCredentialConfig
-	TokenState AccountPoolTokenState
-	ProxyURL   string
-	Now        int64
+	AccountID         int
+	Credential        AccountPoolCredentialConfig
+	TokenState        AccountPoolTokenState
+	ProxyURL          string
+	Now               int64
+	SkipFailureRecord bool
 }
 
 type accountPoolOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
@@ -59,7 +60,7 @@ func ResolveAccountPoolRuntimeCredential(ctx context.Context, req AccountPoolRun
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return refreshAccountPoolRuntimeOAuthToken(ctx, req.AccountID, req.ProxyURL, now)
+	return refreshAccountPoolRuntimeOAuthToken(ctx, req.AccountID, req.ProxyURL, now, req.SkipFailureRecord)
 }
 
 func accountPoolAccessTokenUsable(state AccountPoolTokenState, now int64) bool {
@@ -86,11 +87,11 @@ func accountPoolRuntimeRefreshToken(credential AccountPoolCredentialConfig, stat
 	return strings.TrimSpace(credential.RefreshToken)
 }
 
-func refreshAccountPoolRuntimeOAuthToken(ctx context.Context, accountID int, proxyURL string, now int64) (string, error) {
-	value, err, _ := accountPoolOAuthRefreshGroup.Do("oauth:"+strconv.Itoa(accountID), func() (any, error) {
+func refreshAccountPoolRuntimeOAuthToken(ctx context.Context, accountID int, proxyURL string, now int64, skipFailureRecord bool) (string, error) {
+	value, err, _ := accountPoolOAuthRefreshGroup.Do(accountPoolOAuthRefreshSingleflightKey(accountID, skipFailureRecord), func() (any, error) {
 		// The first waiter owns the refresh context. If that request is cancelled,
 		// coalesced waiters receive the same cancellation and can retry another account.
-		return refreshAccountPoolRuntimeOAuthTokenOnce(ctx, accountID, proxyURL, now)
+		return refreshAccountPoolRuntimeOAuthTokenOnce(ctx, accountID, proxyURL, now, skipFailureRecord)
 	})
 	if err != nil {
 		return "", err
@@ -102,7 +103,15 @@ func refreshAccountPoolRuntimeOAuthToken(ctx context.Context, accountID int, pro
 	return token, nil
 }
 
-func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int, proxyURL string, now int64) (string, error) {
+func accountPoolOAuthRefreshSingleflightKey(accountID int, skipFailureRecord bool) string {
+	key := "oauth:" + strconv.Itoa(accountID)
+	if skipFailureRecord {
+		return key + ":skip_failure_record"
+	}
+	return key + ":record_failure"
+}
+
+func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int, proxyURL string, now int64, skipFailureRecord bool) (string, error) {
 	account, credential, state, rawTokenState, err := loadAccountPoolRuntimeTokenState(accountID)
 	if err != nil {
 		return "", err
@@ -119,12 +128,16 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	}
 	result, err := accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
 	if err != nil {
-		_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+		if !skipFailureRecord {
+			_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+		}
 		return "", err
 	}
 	if result == nil || strings.TrimSpace(result.AccessToken) == "" {
 		err := errors.New("account pool oauth refresh response missing access_token")
-		_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+		if !skipFailureRecord {
+			_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+		}
 		return "", err
 	}
 

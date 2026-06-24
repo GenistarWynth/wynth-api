@@ -449,6 +449,43 @@ func TestAccountPoolRuntimeReturnsOAuthRefreshError(t *testing.T) {
 	assert.Contains(t, GetAccountPoolAttemptedAccountIDs(ctx), account.Id)
 }
 
+func TestAccountPoolRuntimeChannelTestDoesNotRecordOAuthRefreshFailure(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	ctx := newAccountPoolRuntimeTestContext()
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "runtime-channel-test-refresh-error",
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken:  "access-expired",
+			RefreshToken: "refresh-runtime",
+			ExpiresAt:    1,
+			Version:      1,
+		},
+	})
+	setAccountPoolOAuthRefreshForTest(t, func(context.Context, string, string) (*CodexOAuthTokenResult, error) {
+		return nil, errors.New("oauth endpoint unavailable")
+	})
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "client-gpt-5", "channel-gpt-5")
+	info.IsChannelTest = true
+	request := &dto.GeneralOpenAIRequest{Model: "channel-gpt-5"}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, request)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "oauth endpoint unavailable")
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Empty(t, stored.LastError)
+	assert.Zero(t, stored.TempDisabledUntil)
+	assert.Empty(t, stored.TempDisabledReason)
+}
+
 func TestAccountPoolRuntimeErrorsWhenEnabledAccountHasNoCredential(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	ctx := newAccountPoolRuntimeTestContext()

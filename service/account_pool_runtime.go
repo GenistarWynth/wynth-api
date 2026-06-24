@@ -61,10 +61,11 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 
 	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(accountPoolRuntimeContext(c), AccountPoolRuntimeCredentialRequest{
-		AccountID:  selection.AccountID,
-		Credential: selection.Credential,
-		TokenState: selection.TokenState,
-		ProxyURL:   selection.ProxyURL,
+		AccountID:         selection.AccountID,
+		Credential:        selection.Credential,
+		TokenState:        selection.TokenState,
+		ProxyURL:          selection.ProxyURL,
+		SkipFailureRecord: info.IsChannelTest,
 	})
 	if err != nil {
 		return err

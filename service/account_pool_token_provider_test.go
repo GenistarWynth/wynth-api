@@ -220,6 +220,92 @@ func TestAccountPoolTokenProviderSingleflightsConcurrentRefresh(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
+func TestAccountPoolTokenProviderSeparatesChannelTestRefreshFailureFromNormalRefresh(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "concurrent-refresh-failure",
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			RefreshToken: "refresh-concurrent-failure",
+			ExpiresAt:    900,
+			Version:      1,
+		},
+	})
+
+	var calls atomic.Int32
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	setAccountPoolOAuthRefreshForTest(t, func(context.Context, string, string) (*CodexOAuthTokenResult, error) {
+		switch calls.Add(1) {
+		case 1:
+			close(firstStarted)
+			<-releaseFirst
+			return nil, errors.New("channel test refresh failed")
+		case 2:
+			close(secondStarted)
+			return nil, errors.New("normal refresh failed")
+		default:
+			return nil, errors.New("unexpected extra refresh")
+		}
+	})
+
+	expiredState := AccountPoolTokenState{
+		RefreshToken: "refresh-concurrent-failure",
+		ExpiresAt:    900,
+		Version:      1,
+	}
+	var wg sync.WaitGroup
+	var channelTestErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, channelTestErr = ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+			AccountID:         account.Id,
+			Credential:        AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+			TokenState:        expiredState,
+			Now:               1000,
+			SkipFailureRecord: true,
+		})
+	}()
+	<-firstStarted
+
+	normalErrCh := make(chan error, 1)
+	go func() {
+		_, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+			AccountID:  account.Id,
+			Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+			TokenState: expiredState,
+			Now:        1000,
+		})
+		normalErrCh <- err
+	}()
+
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		close(releaseFirst)
+		t.Fatal("normal refresh shared channel-test singleflight")
+	}
+
+	normalErr := <-normalErrCh
+	close(releaseFirst)
+	wg.Wait()
+
+	require.ErrorContains(t, channelTestErr, "channel test refresh failed")
+	require.ErrorContains(t, normalErr, "normal refresh failed")
+	assert.Equal(t, int32(2), calls.Load())
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Contains(t, stored.LastError, "normal refresh failed")
+	assert.Greater(t, stored.TempDisabledUntil, int64(0))
+}
+
 func TestAccountPoolTokenProviderReturnsLatestTokenWhenOptimisticWriteLoses(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
