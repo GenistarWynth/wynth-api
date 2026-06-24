@@ -296,6 +296,20 @@ function statusVariant(status?: string): StatusVariant {
   }
 }
 
+function schedulePolicyLabel(policy?: string) {
+  const normalized = policy || 'round_robin'
+  return (
+    SCHEDULE_POLICY_OPTIONS.find((option) => option.value === normalized)
+      ?.label ?? normalized
+  )
+}
+
+function proxyReferenceLabel(proxyID: number, proxyNames: Map<number, string>) {
+  if (proxyID <= 0) return '-'
+  const name = proxyNames.get(proxyID)
+  return name ? `${name} (#${proxyID})` : `#${proxyID}`
+}
+
 function modelListFromText(value: string): string[] {
   return value
     .split(/[,，\n\r]+/)
@@ -1727,15 +1741,16 @@ function BindingSection(props: {
                 <TableHead>{t('Channel')}</TableHead>
                 <TableHead>{t('Channel Status')}</TableHead>
                 <TableHead>{t('Binding Status')}</TableHead>
+                <TableHead>{t('Schedule Policy')}</TableHead>
                 <TableHead>{t('Retry Count')}</TableHead>
                 <TableHead>{t('Updated At')}</TableHead>
                 <TableHead>{t('Actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.loading && <LoadingRow colSpan={6} />}
+              {props.loading && <LoadingRow colSpan={7} />}
               {!props.loading && props.bindings.length === 0 && (
-                <EmptyRow colSpan={6} label={t('No bindings found')} />
+                <EmptyRow colSpan={7} label={t('No bindings found')} />
               )}
               {props.bindings.map((binding) => (
                 <TableRow key={binding.id}>
@@ -1756,6 +1771,9 @@ function BindingSection(props: {
                   </TableCell>
                   <TableCell>
                     <StatusPill status={binding.status} />
+                  </TableCell>
+                  <TableCell>
+                    {t(schedulePolicyLabel(binding.schedule_policy))}
                   </TableCell>
                   <TableCell>{binding.account_retry_times}</TableCell>
                   <TableCell>
@@ -2111,6 +2129,10 @@ function ProxyListSection(props: {
   onDeleteProxy: (proxy: AccountPoolProxy) => void
 }) {
   const { t } = useTranslation()
+  const proxyNames = useMemo(
+    () => new Map(props.proxies.map((proxy) => [proxy.id, proxy.name])),
+    [props.proxies]
+  )
 
   return (
     <SideDrawerSection className='pt-4'>
@@ -2129,7 +2151,7 @@ function ProxyListSection(props: {
               <TableHead>{t('Protocol')}</TableHead>
               <TableHead>{t('Status')}</TableHead>
               <TableHead>{t('Password')}</TableHead>
-              <TableHead>{t('Fallback Proxy ID')}</TableHead>
+              <TableHead>{t('Fallback Proxy')}</TableHead>
               <TableHead>{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
@@ -2161,7 +2183,11 @@ function ProxyListSection(props: {
                     falseLabel='No Password'
                   />
                 </TableCell>
-                <TableCell>{proxy.fallback_proxy_id || '-'}</TableCell>
+                <TableCell>
+                  <LongText className='max-w-[180px]'>
+                    {proxyReferenceLabel(proxy.fallback_proxy_id, proxyNames)}
+                  </LongText>
+                </TableCell>
                 <TableCell>
                   <ProxyRowActions
                     proxy={proxy}
