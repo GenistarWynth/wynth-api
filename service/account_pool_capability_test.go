@@ -24,6 +24,12 @@ type accountPoolCapabilityProbeRequestPayload struct {
 	Stream    bool `json:"stream"`
 }
 
+func TestNormalizeAccountPoolCapabilityTimeoutBounds(t *testing.T) {
+	assert.Equal(t, accountPoolCapabilityDefaultTimeout, normalizeAccountPoolCapabilityTimeout(0))
+	assert.Equal(t, 5*time.Second, normalizeAccountPoolCapabilityTimeout(5))
+	assert.Equal(t, accountPoolCapabilityMaxTimeout, normalizeAccountPoolCapabilityTimeout(3600))
+}
+
 func TestAccountPoolCapabilityProbeModelsAppliesOnlySupportedCandidates(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 	setupAccountPoolServiceTestDB(t)

@@ -2253,7 +2253,7 @@ function CapabilityDetectDialog(props: {
               <div className='mt-3 flex max-h-56 flex-col gap-2 overflow-y-auto'>
                 {poolResult.results.map((result) => (
                   <div
-                    key={`${result.account_id}-${result.status}`}
+                    key={String(result.account_id)}
                     className='flex flex-col gap-1 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between'
                   >
                     <div className='min-w-0'>

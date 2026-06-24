@@ -34,6 +34,7 @@ const (
 )
 
 const accountPoolCapabilityDefaultTimeout = 30 * time.Second
+const accountPoolCapabilityMaxTimeout = 300 * time.Second
 const accountPoolCapabilityRequestBodyLimitBytes = 4 << 10
 const accountPoolCapabilityUnsupportedBodyInspectLimitBytes = 4 << 10
 
@@ -528,7 +529,11 @@ func normalizeAccountPoolCapabilityTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
 		return accountPoolCapabilityDefaultTimeout
 	}
-	return time.Duration(seconds) * time.Second
+	timeout := time.Duration(seconds) * time.Second
+	if timeout > accountPoolCapabilityMaxTimeout {
+		return accountPoolCapabilityMaxTimeout
+	}
+	return timeout
 }
 
 func normalizeAccountPoolCapabilityModels(models []string) []string {
