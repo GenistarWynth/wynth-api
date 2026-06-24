@@ -129,6 +129,39 @@ export type AccountPoolAccountCreateRequest = {
   last_error: string
 }
 
+export type AccountPoolAccountImportDefaultsRequest = {
+  status: AccountPoolAccountStatus | string
+  priority: number
+  weight: number
+  max_concurrency: number
+  proxy_id: number
+  supported_models: string[]
+  model_mapping: Record<string, string>
+}
+
+export type AccountPoolAccountImportRequest = {
+  format: 'sub2api' | 'cpa' | string
+  content: string
+  defaults: AccountPoolAccountImportDefaultsRequest
+  dry_run: boolean
+}
+
+export type AccountPoolAccountImportError = {
+  index?: number
+  name?: string
+  message: string
+}
+
+export type AccountPoolAccountImportResponse = {
+  imported: number
+  skipped: number
+  failed: number
+  proxy_created: number
+  proxy_reused: number
+  accounts?: AccountPoolAccount[]
+  errors?: AccountPoolAccountImportError[]
+}
+
 export type AccountPoolBinding = {
   id: number
   pool_id: number

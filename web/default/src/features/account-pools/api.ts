@@ -21,6 +21,8 @@ import type {
   AccountPool,
   AccountPoolAccount,
   AccountPoolAccountCreateRequest,
+  AccountPoolAccountImportRequest,
+  AccountPoolAccountImportResponse,
   AccountPoolBinding,
   AccountPoolBindingCreateRequest,
   AccountPoolCreateRequest,
@@ -99,6 +101,18 @@ export async function createAccountPoolAccount(
 ): Promise<ApiResponse<AccountPoolAccount>> {
   const res = await api.post(
     `/api/account_pools/${id}/accounts`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function importAccountPoolAccounts(
+  id: number,
+  data: AccountPoolAccountImportRequest
+): Promise<ApiResponse<AccountPoolAccountImportResponse>> {
+  const res = await api.post(
+    `/api/account_pools/${id}/accounts/import`,
     data,
     accountPoolActionConfig()
   )

@@ -80,6 +80,39 @@ type AccountPoolAccountResponse struct {
 	UpdatedTime        int64             `json:"updated_time"`
 }
 
+type AccountPoolAccountImportDefaultsRequest struct {
+	Status          string            `json:"status"`
+	Priority        int64             `json:"priority"`
+	Weight          uint              `json:"weight"`
+	MaxConcurrency  int               `json:"max_concurrency"`
+	ProxyID         int               `json:"proxy_id"`
+	SupportedModels []string          `json:"supported_models"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+}
+
+type AccountPoolAccountImportRequest struct {
+	Format   string                                  `json:"format" binding:"required"`
+	Content  string                                  `json:"content" binding:"required"`
+	Defaults AccountPoolAccountImportDefaultsRequest `json:"defaults"`
+	DryRun   bool                                    `json:"dry_run"`
+}
+
+type AccountPoolAccountImportError struct {
+	Index   int    `json:"index,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Message string `json:"message"`
+}
+
+type AccountPoolAccountImportResponse struct {
+	Imported     int                             `json:"imported"`
+	Skipped      int                             `json:"skipped"`
+	Failed       int                             `json:"failed"`
+	ProxyCreated int                             `json:"proxy_created"`
+	ProxyReused  int                             `json:"proxy_reused"`
+	Accounts     []AccountPoolAccountResponse    `json:"accounts,omitempty"`
+	Errors       []AccountPoolAccountImportError `json:"errors,omitempty"`
+}
+
 type AccountPoolBindingCreateRequest struct {
 	ChannelID         int      `json:"channel_id" binding:"required"`
 	AccountIDs        []int    `json:"account_ids"`

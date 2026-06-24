@@ -31,6 +31,7 @@ import {
   MoreHorizontal,
   Plus,
   Save,
+  Upload,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -39,6 +40,15 @@ import { formatTimestamp } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -113,6 +123,7 @@ import {
   createAccountPoolAccount,
   createAccountPoolBinding,
   createAccountPoolProxy,
+  importAccountPoolAccounts,
   listAccountPoolAccounts,
   listAccountPoolBindings,
   listAccountPoolProxies,
@@ -132,6 +143,7 @@ import {
 import type {
   AccountPool,
   AccountPoolAccount,
+  AccountPoolAccountImportRequest,
   AccountPoolBinding,
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
@@ -145,6 +157,15 @@ type BindingFormValues = {
   fixed_models_text: string
   schedule_policy: string
   account_retry_times: number
+}
+
+type AccountImportFormValues = {
+  format: 'sub2api' | 'cpa'
+  content: string
+  default_priority: number
+  default_weight: number
+  default_max_concurrency: number
+  default_supported_models_text: string
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -194,6 +215,36 @@ function emptyBindingForm(): BindingFormValues {
     fixed_models_text: '',
     schedule_policy: 'round_robin',
     account_retry_times: 0,
+  }
+}
+
+function emptyAccountImportForm(): AccountImportFormValues {
+  return {
+    format: 'sub2api',
+    content: '',
+    default_priority: 0,
+    default_weight: 0,
+    default_max_concurrency: 1,
+    default_supported_models_text: '',
+  }
+}
+
+function buildAccountImportPayload(
+  values: AccountImportFormValues
+): AccountPoolAccountImportRequest {
+  return {
+    format: values.format,
+    content: values.content,
+    dry_run: false,
+    defaults: {
+      status: 'enabled',
+      priority: values.default_priority,
+      weight: values.default_weight,
+      max_concurrency: values.default_max_concurrency,
+      proxy_id: 0,
+      supported_models: modelListFromText(values.default_supported_models_text),
+      model_mapping: {},
+    },
   }
 }
 
@@ -458,6 +509,7 @@ export function AccountPools() {
   const [poolSheetOpen, setPoolSheetOpen] = useState(false)
   const [selectedPool, setSelectedPool] = useState<AccountPool>()
   const [accountSheetOpen, setAccountSheetOpen] = useState(false)
+  const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
   const [loadedAccountsByPool, setLoadedAccountsByPool] = useState<
     Record<number, AccountPoolAccount[] | undefined>
@@ -568,6 +620,41 @@ export function AccountPools() {
       }
       toast.success(t('Account created'))
       setAccountSheetOpen(false)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const importAccountsMutation = useMutation({
+    mutationFn: async (values: AccountImportFormValues) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return importAccountPoolAccounts(
+        selectedPoolID,
+        buildAccountImportPayload(values)
+      )
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to import accounts')))
+        return
+      }
+      const data = result.data
+      toast.success(
+        t('Imported {{count}} account(s)', { count: data?.imported ?? 0 })
+      )
+      if (data?.skipped || data?.failed) {
+        toast.warning(
+          t('Skipped {{skipped}} / failed {{failed}}', {
+            skipped: data.skipped,
+            failed: data.failed,
+          })
+        )
+      }
+      setAccountImportOpen(false)
       invalidatePools()
     },
     onError: (error) => {
@@ -712,8 +799,16 @@ export function AccountPools() {
         bindingSubmitting={createBindingMutation.isPending}
         onOpenChange={(open) => !open && setSelectedPool(undefined)}
         onCreateAccount={() => setAccountSheetOpen(true)}
+        onImportAccounts={() => setAccountImportOpen(true)}
         onCreateProxy={() => setProxySheetOpen(true)}
         onCreateBinding={(values) => createBindingMutation.mutate(values)}
+      />
+      <AccountImportDialog
+        open={accountImportOpen}
+        pool={selectedPool}
+        isSubmitting={importAccountsMutation.isPending}
+        onOpenChange={setAccountImportOpen}
+        onSubmit={(values) => importAccountsMutation.mutate(values)}
       />
       <AccountFormSheet
         key={
@@ -926,6 +1021,7 @@ function PoolDetailsSheet(props: {
   bindingSubmitting: boolean
   onOpenChange: (open: boolean) => void
   onCreateAccount: () => void
+  onImportAccounts: () => void
   onCreateProxy: () => void
   onCreateBinding: (values: BindingFormValues) => void
 }) {
@@ -974,6 +1070,7 @@ function PoolDetailsSheet(props: {
                 accounts={props.accounts}
                 loading={props.accountsLoading}
                 onCreateAccount={props.onCreateAccount}
+                onImportAccounts={props.onImportAccounts}
               />
             </TabsContent>
             <TabsContent value='bindings' className='min-h-0'>
@@ -1018,6 +1115,7 @@ function AccountListSection(props: {
   accounts: AccountPoolAccount[]
   loading: boolean
   onCreateAccount: () => void
+  onImportAccounts: () => void
 }) {
   const { t } = useTranslation()
 
@@ -1025,10 +1123,21 @@ function AccountListSection(props: {
     <SideDrawerSection className='pt-4'>
       <div className='flex items-center justify-between gap-3'>
         <SideDrawerSectionHeader title={t('Accounts')} />
-        <Button type='button' size='sm' onClick={props.onCreateAccount}>
-          <Plus data-icon='inline-start' />
-          {t('Add Account')}
-        </Button>
+        <div className='flex items-center gap-2'>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            onClick={props.onImportAccounts}
+          >
+            <Upload data-icon='inline-start' />
+            {t('Import Accounts')}
+          </Button>
+          <Button type='button' size='sm' onClick={props.onCreateAccount}>
+            <Plus data-icon='inline-start' />
+            {t('Add Account')}
+          </Button>
+        </div>
       </div>
       <div className='border-border rounded-lg border'>
         <Table>
@@ -1460,6 +1569,167 @@ function ProxyListSection(props: {
         </Table>
       </div>
     </SideDrawerSection>
+  )
+}
+
+function AccountImportDialog(props: {
+  open: boolean
+  pool?: AccountPool
+  isSubmitting: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (values: AccountImportFormValues) => void
+}) {
+  const { t } = useTranslation()
+  const [form, setForm] = useState<AccountImportFormValues>(
+    emptyAccountImportForm()
+  )
+  const formatOptions = useMemo(
+    () => [
+      { value: 'sub2api', label: t('sub2api export') },
+      { value: 'cpa', label: t('CPA config or auth') },
+    ],
+    [t]
+  )
+
+  useEffect(() => {
+    if (props.open) {
+      setForm(emptyAccountImportForm())
+    }
+  }, [props.open])
+
+  const setField = <K extends keyof AccountImportFormValues>(
+    key: K,
+    value: AccountImportFormValues[K]
+  ) => setForm((previous) => ({ ...previous, [key]: value }))
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!props.pool) {
+      toast.error(t('Select an account pool first'))
+      return
+    }
+    if (!form.content.trim()) {
+      toast.error(t('Import content is required'))
+      return
+    }
+    props.onSubmit(form)
+  }
+
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className='sm:max-w-2xl'>
+        <DialogHeader>
+          <DialogTitle>{t('Import Accounts')}</DialogTitle>
+          <DialogDescription>
+            {props.pool
+              ? t('Import accounts into {{name}}', { name: props.pool.name })
+              : t('Account Pool')}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id='account-pool-import-form'
+          className='flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1'
+          onSubmit={handleSubmit}
+        >
+          <FieldGroup className='gap-4 sm:grid sm:grid-cols-2'>
+            <FieldBlock
+              label={t('Import Format')}
+              htmlFor='account-pool-import-format'
+            >
+              <Select
+                items={formatOptions}
+                value={form.format}
+                onValueChange={(value) =>
+                  value &&
+                  setField('format', value as AccountImportFormValues['format'])
+                }
+              >
+                <SelectTrigger id='account-pool-import-format'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent alignItemWithTrigger={false}>
+                  <SelectGroup>
+                    {formatOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </FieldBlock>
+            <NumericField
+              id='account-pool-import-default-priority'
+              label={t('Default Priority')}
+              value={form.default_priority}
+              onChange={(value) => setField('default_priority', value)}
+            />
+            <NumericField
+              id='account-pool-import-default-weight'
+              label={t('Default Weight')}
+              min={0}
+              value={form.default_weight}
+              onChange={(value) => setField('default_weight', value)}
+            />
+            <NumericField
+              id='account-pool-import-default-concurrency'
+              label={t('Default Max Concurrency')}
+              min={1}
+              value={form.default_max_concurrency}
+              onChange={(value) => setField('default_max_concurrency', value)}
+            />
+          </FieldGroup>
+          <FieldBlock
+            label={t('Default Supported Models')}
+            htmlFor='account-pool-import-default-models'
+            description={t('Used only when the imported account has no model list.')}
+          >
+            <Textarea
+              id='account-pool-import-default-models'
+              value={form.default_supported_models_text}
+              onChange={(event) =>
+                setField('default_supported_models_text', event.target.value)
+              }
+              placeholder={t('Comma-separated model names')}
+            />
+          </FieldBlock>
+          <FieldBlock
+            label={t('Import Content')}
+            htmlFor='account-pool-import-content'
+            description={t('Paste sub2api account export JSON or CPA YAML/JSON.')}
+          >
+            <Textarea
+              id='account-pool-import-content'
+              className='min-h-[260px] font-mono text-xs'
+              value={form.content}
+              onChange={(event) => setField('content', event.target.value)}
+              placeholder={
+                form.format === 'cpa'
+                  ? 'codex-api-key:\n  - api-key: sk-...'
+                  : '{\n  "type": "sub2api-data",\n  "accounts": []\n}'
+              }
+            />
+          </FieldBlock>
+        </form>
+        <DialogFooter>
+          <DialogClose render={<Button type='button' variant='outline' />}>
+            {t('Cancel')}
+          </DialogClose>
+          <Button
+            type='submit'
+            form='account-pool-import-form'
+            disabled={props.isSubmitting}
+          >
+            {props.isSubmitting ? (
+              <Loader2 data-icon='inline-start' className='animate-spin' />
+            ) : (
+              <Upload data-icon='inline-start' />
+            )}
+            {t('Import')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"net/http"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+const maxAccountPoolImportRequestBodyBytes = 16 << 20
 
 func ListAccountPools(c *gin.Context) {
 	pools, err := (&service.AccountPoolService{}).ListPools()
@@ -137,6 +140,32 @@ func CreateAccountPoolAccount(c *gin.Context) {
 		"pool_id": poolID,
 	})
 	common.ApiSuccess(c, accountPoolAccountResponse(account))
+}
+
+func ImportAccountPoolAccounts(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAccountPoolImportRequestBodyBytes)
+	var req dto.AccountPoolAccountImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result, err := (&service.AccountPoolService{}).ImportAccounts(accountPoolAccountImportParams(poolID, req))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.account_import", map[string]interface{}{
+		"pool_id":  poolID,
+		"format":   req.Format,
+		"imported": result.Imported,
+		"skipped":  result.Skipped,
+		"failed":   result.Failed,
+	})
+	common.ApiSuccess(c, accountPoolAccountImportResponse(result))
 }
 
 func UpdateAccountPoolAccount(c *gin.Context) {
@@ -392,6 +421,24 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 	}
 }
 
+func accountPoolAccountImportParams(poolID int, req dto.AccountPoolAccountImportRequest) service.AccountPoolAccountImportParams {
+	return service.AccountPoolAccountImportParams{
+		PoolID:  poolID,
+		Format:  req.Format,
+		Content: req.Content,
+		Defaults: service.AccountPoolAccountImportDefaults{
+			Status:          req.Defaults.Status,
+			Priority:        req.Defaults.Priority,
+			Weight:          req.Defaults.Weight,
+			MaxConcurrency:  req.Defaults.MaxConcurrency,
+			ProxyID:         req.Defaults.ProxyID,
+			SupportedModels: req.Defaults.SupportedModels,
+			ModelMapping:    req.Defaults.ModelMapping,
+		},
+		DryRun: req.DryRun,
+	}
+}
+
 func accountPoolResponse(pool model.AccountPool) dto.AccountPoolResponse {
 	return dto.AccountPoolResponse{
 		Id:                    pool.Id,
@@ -404,6 +451,30 @@ func accountPoolResponse(pool model.AccountPool) dto.AccountPoolResponse {
 		Remark:                pool.Remark,
 		CreatedTime:           pool.CreatedTime,
 		UpdatedTime:           pool.UpdatedTime,
+	}
+}
+
+func accountPoolAccountImportResponse(result service.AccountPoolAccountImportResult) dto.AccountPoolAccountImportResponse {
+	accounts := make([]dto.AccountPoolAccountResponse, 0, len(result.Accounts))
+	for _, account := range result.Accounts {
+		accounts = append(accounts, accountPoolAccountResponse(account))
+	}
+	errors := make([]dto.AccountPoolAccountImportError, 0, len(result.Errors))
+	for _, item := range result.Errors {
+		errors = append(errors, dto.AccountPoolAccountImportError{
+			Index:   item.Index,
+			Name:    item.Name,
+			Message: item.Message,
+		})
+	}
+	return dto.AccountPoolAccountImportResponse{
+		Imported:     result.Imported,
+		Skipped:      result.Skipped,
+		Failed:       result.Failed,
+		ProxyCreated: result.ProxyCreated,
+		ProxyReused:  result.ProxyReused,
+		Accounts:     accounts,
+		Errors:       errors,
 	}
 }
 

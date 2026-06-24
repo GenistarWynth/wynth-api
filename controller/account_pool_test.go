@@ -117,6 +117,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.DELETE("/:id", DeleteAccountPool)
 		group.GET("/:id/accounts", ListAccountPoolAccounts)
 		group.POST("/:id/accounts", CreateAccountPoolAccount)
+		group.POST("/:id/accounts/import", ImportAccountPoolAccounts)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
 		group.GET("/:id/bindings", ListAccountPoolBindings)
@@ -253,6 +254,45 @@ func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 	require.NoError(t, model.DB.First(&stored, accountID).Error)
 	assert.Equal(t, model.AccountPoolAccountStatusDeleted, stored.Status)
 	assert.NotContains(t, stored.CredentialConfig, "sk-account-secret")
+}
+
+func TestAccountPoolAPIImportAccountsRedactsSecrets(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+
+	result := accountPoolAPIRequest[dto.AccountPoolAccountImportResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/import", dto.AccountPoolAccountImportRequest{
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "imported-key",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-import-secret"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.True(t, result.Response.Success, result.Response.Message)
+	assert.Equal(t, 1, result.Response.Data.Imported)
+	require.Len(t, result.Response.Data.Accounts, 1)
+	assert.True(t, result.Response.Data.Accounts[0].HasCredential)
+	raw := string(result.Raw)
+	assert.NotContains(t, raw, "sk-import-secret")
+	assert.NotContains(t, raw, "ciphertext")
+	assert.NotContains(t, raw, "nonce")
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, result.Response.Data.Accounts[0].Id).Error)
+	assert.NotContains(t, stored.CredentialConfig, "sk-import-secret")
+	credential, err := service.DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, "sk-import-secret", credential.APIKey)
 }
 
 func TestAccountPoolAPIBindingRejectsEnabledChannel(t *testing.T) {
