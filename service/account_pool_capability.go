@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,33 +34,33 @@ const (
 const accountPoolCapabilityDefaultTimeout = 30 * time.Second
 
 type AccountPoolCapabilityDetectRequest struct {
-	PoolID          int
-	AccountID       int
-	AccountIDs      []int
-	ChannelID       int
-	Mode            string
-	CandidateModels []string
-	Apply           bool
-	Merge           bool
-	ModelMapping    map[string]string
-	TimeoutSeconds  int
+	PoolID          int               `json:"pool_id"`
+	AccountID       int               `json:"account_id"`
+	AccountIDs      []int             `json:"account_ids"`
+	ChannelID       int               `json:"channel_id"`
+	Mode            string            `json:"mode"`
+	CandidateModels []string          `json:"candidate_models"`
+	Apply           bool              `json:"apply"`
+	Merge           bool              `json:"merge"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+	TimeoutSeconds  int               `json:"timeout_seconds"`
 }
 
 type AccountPoolCapabilityDetectResult struct {
-	AccountID      int
-	Status         string
-	Mode           string
-	DetectedModels []string
-	AppliedModels  []string
-	ModelMapping   map[string]string
-	Errors         []string
+	AccountID      int               `json:"account_id"`
+	Status         string            `json:"status"`
+	Mode           string            `json:"mode"`
+	DetectedModels []string          `json:"detected_models"`
+	AppliedModels  []string          `json:"applied_models"`
+	ModelMapping   map[string]string `json:"model_mapping"`
+	Errors         []string          `json:"errors"`
 }
 
 type AccountPoolCapabilityPoolResult struct {
-	Total     int
-	Succeeded int
-	Failed    int
-	Results   []AccountPoolCapabilityDetectResult
+	Total     int                                 `json:"total"`
+	Succeeded int                                 `json:"succeeded"`
+	Failed    int                                 `json:"failed"`
+	Results   []AccountPoolCapabilityDetectResult `json:"results"`
 }
 
 type accountPoolCapabilityModelsResponse struct {
@@ -69,11 +70,8 @@ type accountPoolCapabilityModelsResponse struct {
 }
 
 func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req AccountPoolCapabilityDetectRequest) (AccountPoolCapabilityDetectResult, error) {
-	result := AccountPoolCapabilityDetectResult{
-		AccountID:    req.AccountID,
-		Mode:         normalizeAccountPoolCapabilityMode(req.Mode),
-		ModelMapping: req.ModelMapping,
-	}
+	result := newAccountPoolCapabilityDetectResult(req)
+	cleanedModelMapping := accountPoolCleanStringMap(req.ModelMapping)
 
 	if req.PoolID <= 0 {
 		return accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "account pool id is required"), nil
@@ -256,36 +254,75 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		detectedModels = append(detectedModels, item.ID)
 	}
 	detectedModels = normalizeAccountPoolCapabilityModels(detectedModels)
+	if len(detectedModels) == 0 {
+		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusUnsupported, "upstream returned no supported models")
+		if req.Apply {
+			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				return result, writeErr
+			}
+		}
+		return result, nil
+	}
+
+	schedulerModels, err := accountPoolCapabilitySchedulerModels(detectedModels, cleanedModelMapping)
+	if err != nil {
+		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
+		if req.Apply {
+			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				return result, writeErr
+			}
+		}
+		return result, nil
+	}
 	if len(req.CandidateModels) > 0 {
-		detectedModels = intersectAccountPoolCapabilityModels(detectedModels, req.CandidateModels)
+		schedulerModels = intersectAccountPoolCapabilityModels(schedulerModels, req.CandidateModels)
+	}
+	if len(schedulerModels) == 0 {
+		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusUnsupported, "no candidate models matched detected account capabilities")
+		if req.Apply {
+			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				return result, writeErr
+			}
+		}
+		return result, nil
 	}
 
 	result.Status = AccountPoolCapabilityStatusSuccess
-	result.DetectedModels = detectedModels
+	if len(cleanedModelMapping) == 0 {
+		result.DetectedModels = schedulerModels
+	} else {
+		result.DetectedModels = detectedModels
+	}
 
 	if !req.Apply {
 		return result, nil
 	}
 
-	appliedModels, err := accountPoolCapabilityAppliedModels(account, detectedModels, req.Merge)
+	appliedModels, err := accountPoolCapabilityAppliedModels(account, schedulerModels, req.Merge)
 	if err != nil {
 		return result, err
 	}
 	result.AppliedModels = appliedModels
 
-	if err := persistAccountPoolCapabilitySuccess(account.Id, appliedModels, result.DetectedModels, req.ModelMapping, result.Status); err != nil {
+	if err := persistAccountPoolCapabilitySuccess(account.Id, appliedModels, result.DetectedModels, cleanedModelMapping, result.Status); err != nil {
 		return result, err
 	}
 	return result, nil
 }
 
 func (s AccountPoolService) DetectPoolCapabilities(ctx context.Context, req AccountPoolCapabilityDetectRequest) (AccountPoolCapabilityPoolResult, error) {
-	result := AccountPoolCapabilityPoolResult{}
+	result := newAccountPoolCapabilityPoolResult()
 	if req.PoolID <= 0 {
 		return result, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if _, err := getAccountPoolExistingPool(req.PoolID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return result, errors.New("account pool not found")
+		}
+		return result, err
 	}
 
 	accountIDs := normalizeAccountPoolCapabilityAccountIDs(req.AccountIDs)
@@ -499,8 +536,29 @@ func accountPoolCapabilityFailResult(result AccountPoolCapabilityDetectResult, s
 	result.Status = status
 	result.Errors = []string{sanitized}
 	result.DetectedModels = []string{}
-	result.AppliedModels = nil
+	result.AppliedModels = []string{}
 	return result
+}
+
+func newAccountPoolCapabilityDetectResult(req AccountPoolCapabilityDetectRequest) AccountPoolCapabilityDetectResult {
+	modelMapping := accountPoolCleanStringMap(req.ModelMapping)
+	if modelMapping == nil {
+		modelMapping = map[string]string{}
+	}
+	return AccountPoolCapabilityDetectResult{
+		AccountID:      req.AccountID,
+		Mode:           normalizeAccountPoolCapabilityMode(req.Mode),
+		DetectedModels: []string{},
+		AppliedModels:  []string{},
+		ModelMapping:   modelMapping,
+		Errors:         []string{},
+	}
+}
+
+func newAccountPoolCapabilityPoolResult() AccountPoolCapabilityPoolResult {
+	return AccountPoolCapabilityPoolResult{
+		Results: []AccountPoolCapabilityDetectResult{},
+	}
 }
 
 func accountPoolCapabilityHTTPErrorMessage(statusCode int, body []byte) string {
@@ -610,6 +668,27 @@ func accountPoolCapabilityAppliedModels(account model.AccountPoolAccount, detect
 		return mergeAccountPoolCapabilityModels(existing, detectedModels), nil
 	}
 	return normalizeAccountPoolCapabilityModels(detectedModels), nil
+}
+
+func accountPoolCapabilitySchedulerModels(detectedModels []string, modelMapping map[string]string) ([]string, error) {
+	if len(modelMapping) == 0 {
+		return normalizeAccountPoolCapabilityModels(detectedModels), nil
+	}
+
+	detectedSet := make(map[string]struct{}, len(detectedModels))
+	for _, detectedModel := range detectedModels {
+		detectedSet[detectedModel] = struct{}{}
+	}
+
+	keys := make([]string, 0, len(modelMapping))
+	for schedulerModel, accountModel := range modelMapping {
+		if _, ok := detectedSet[accountModel]; !ok {
+			return nil, fmt.Errorf("mapped account model %q for scheduler model %q was not detected", accountModel, schedulerModel)
+		}
+		keys = append(keys, schedulerModel)
+	}
+	sort.Strings(keys)
+	return normalizeAccountPoolCapabilityModels(keys), nil
 }
 
 func accountPoolCapabilitySucceeded(status string) bool {

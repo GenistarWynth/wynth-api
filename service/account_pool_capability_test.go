@@ -55,6 +55,8 @@ func TestAccountPoolCapabilityDetectModelsEndpointDryRunDoesNotWrite(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, AccountPoolCapabilityStatusSuccess, result.Status)
 	assert.Equal(t, []string{"gpt-5-mini"}, result.DetectedModels)
+	require.NotNil(t, result.Errors)
+	assert.Empty(t, result.Errors)
 
 	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
 	assert.Equal(t, `["existing"]`, stored.SupportedModels)
@@ -62,6 +64,111 @@ func TestAccountPoolCapabilityDetectModelsEndpointDryRunDoesNotWrite(t *testing.
 	assert.Empty(t, stored.LastCapabilityCheckStatus)
 	assert.Empty(t, stored.LastCapabilityCheckError)
 	assert.Empty(t, stored.LastCapabilityCheckModels)
+}
+
+func TestAccountPoolCapabilityDetectModelsEndpointApplyEmptyDetectedDoesNotOverwriteSupportedModels(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "empty-detected-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-empty-detected",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:    pool.Id,
+		AccountID: account.Id,
+		ChannelID: channel.Id,
+		Mode:      AccountPoolCapabilityModeModelsEndpoint,
+		Apply:     true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusUnsupported, result.Status)
+	require.NotNil(t, result.Errors)
+	assert.NotEmpty(t, result.Errors)
+	assert.Empty(t, result.AppliedModels)
+	assert.Empty(t, result.DetectedModels)
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, `["existing"]`, stored.SupportedModels)
+	assert.Equal(t, AccountPoolCapabilityStatusUnsupported, stored.LastCapabilityCheckStatus)
+	assert.NotEmpty(t, stored.LastCapabilityCheckError)
+	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
+}
+
+func TestAccountPoolCapabilityDetectModelsEndpointApplyCandidateMissDoesNotOverwriteSupportedModels(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "candidate-miss-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-candidate-miss",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"account-gpt-5"}]}`))
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:          pool.Id,
+		AccountID:       account.Id,
+		ChannelID:       channel.Id,
+		Mode:            AccountPoolCapabilityModeModelsEndpoint,
+		CandidateModels: []string{"channel-gpt-5"},
+		Apply:           true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusUnsupported, result.Status)
+	require.NotNil(t, result.Errors)
+	assert.NotEmpty(t, result.Errors)
+	assert.Empty(t, result.AppliedModels)
+	assert.Empty(t, result.DetectedModels)
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, `["existing"]`, stored.SupportedModels)
+	assert.Equal(t, AccountPoolCapabilityStatusUnsupported, stored.LastCapabilityCheckStatus)
+	assert.NotEmpty(t, stored.LastCapabilityCheckError)
+	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
 }
 
 func TestAccountPoolCapabilityDetectDryRunOAuthRefreshDoesNotPersistTokenState(t *testing.T) {
@@ -200,6 +307,114 @@ func TestAccountPoolCapabilityDetectModelsEndpointApplyMergeAndReplace(t *testin
 	assert.Equal(t, []string{"gpt-5", "gpt-5-mini"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.LastCapabilityCheckModels))
 }
 
+func TestAccountPoolCapabilityDetectModelsEndpointApplyStoresMappingKeysAndRawDetectedModels(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "mapping-aware-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-mapping-aware",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"account-gpt-5"}]}`))
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:    pool.Id,
+		AccountID: account.Id,
+		ChannelID: channel.Id,
+		Mode:      AccountPoolCapabilityModeModelsEndpoint,
+		Apply:     true,
+		ModelMapping: map[string]string{
+			"channel-gpt-5": "account-gpt-5",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusSuccess, result.Status)
+	assert.Equal(t, []string{"account-gpt-5"}, result.DetectedModels)
+	assert.Equal(t, []string{"channel-gpt-5"}, result.AppliedModels)
+	require.NotNil(t, result.Errors)
+	assert.Empty(t, result.Errors)
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, []string{"channel-gpt-5"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.SupportedModels))
+	assert.Equal(t, []string{"account-gpt-5"}, mustUnmarshalAccountPoolCapabilityModels(t, stored.LastCapabilityCheckModels))
+	assert.Equal(t, map[string]string{"channel-gpt-5": "account-gpt-5"}, mustUnmarshalAccountPoolCapabilityMapping(t, stored.ModelMapping))
+}
+
+func TestAccountPoolCapabilityDetectModelsEndpointApplyRejectsUndetectedMappingValue(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "mapping-miss-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-mapping-miss",
+		},
+		SupportedModels: []string{"existing"},
+	})
+	require.NoError(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/models", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"account-gpt-5"}]}`))
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err = service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	result, err := service.DetectAccountCapability(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID:    pool.Id,
+		AccountID: account.Id,
+		ChannelID: channel.Id,
+		Mode:      AccountPoolCapabilityModeModelsEndpoint,
+		Apply:     true,
+		ModelMapping: map[string]string{
+			"channel-gpt-5": "account-gpt-5-missing",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCapabilityStatusConfigError, result.Status)
+	require.NotNil(t, result.Errors)
+	assert.NotEmpty(t, result.Errors)
+	assert.Empty(t, result.AppliedModels)
+
+	stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+	assert.Equal(t, `["existing"]`, stored.SupportedModels)
+	assert.Equal(t, AccountPoolCapabilityStatusConfigError, stored.LastCapabilityCheckStatus)
+	assert.NotEmpty(t, stored.LastCapabilityCheckError)
+	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
+}
+
 func TestAccountPoolCapabilityDetectRequiresChannelWhenPoolHasMultipleBindings(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 	setupAccountPoolServiceTestDB(t)
@@ -303,6 +518,32 @@ func TestAccountPoolCapabilityDetectSanitizesAuthErrorsAndDoesNotDisableAccount(
 	assert.Equal(t, "[]", stored.LastCapabilityCheckModels)
 }
 
+func TestAccountPoolCapabilityDetectPoolCapabilitiesDeletedPoolReturnsError(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "deleted-pool-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-deleted-pool",
+		},
+	})
+
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).
+		Where("id = ?", pool.Id).
+		Update("status", model.AccountPoolStatusDeleted).Error)
+
+	result, err := service.DetectPoolCapabilities(context.Background(), AccountPoolCapabilityDetectRequest{
+		PoolID: pool.Id,
+	})
+	require.Error(t, err)
+	assert.Zero(t, result.Total)
+	require.NotNil(t, result.Results)
+	assert.Empty(t, result.Results)
+}
+
 func createAccountPoolCapabilityTestChannel(t *testing.T, baseURL string) model.Channel {
 	t.Helper()
 
@@ -328,4 +569,12 @@ func mustUnmarshalAccountPoolCapabilityModels(t *testing.T, raw string) []string
 	var models []string
 	require.NoError(t, common.UnmarshalJsonStr(raw, &models))
 	return models
+}
+
+func mustUnmarshalAccountPoolCapabilityMapping(t *testing.T, raw string) map[string]string {
+	t.Helper()
+
+	var modelMapping map[string]string
+	require.NoError(t, common.UnmarshalJsonStr(raw, &modelMapping))
+	return modelMapping
 }
