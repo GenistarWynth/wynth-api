@@ -245,3 +245,26 @@ func TestAdminBatchDeleteUserTokens(t *testing.T) {
 	assert.Equal(t, 2, resp.Data, "only the two target-owned tokens are deleted")
 	assert.NoError(t, db.First(&model.Token{}, 20).Error, "bob's token untouched")
 }
+
+func TestAdminCreateUserToken_NoPlaintextInResponse(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+
+	body, _ := common.Marshal(model.Token{Name: "created-by-admin", RemainQuota: 100})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/2/tokens", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "id", Value: "2"}}
+	c.Set("id", 1)
+	c.Set("role", common.RoleAdminUser)
+	AdminCreateUserToken(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	// The full generated key must NOT appear anywhere in the response body.
+	assert.NotContains(t, rec.Body.String(), "sk-")
+	var created model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 2, "created-by-admin").First(&created).Error)
+	assert.NotEmpty(t, created.Key, "token persisted with a real key")
+	assert.NotContains(t, rec.Body.String(), created.Key, "plaintext key must not be returned")
+}

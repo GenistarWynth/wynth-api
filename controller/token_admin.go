@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -188,4 +189,63 @@ func AdminBatchDeleteUserTokens(c *gin.Context) {
 	}
 	recordManageAuditFor(c, targetUser.Id, "user.token.batch_delete", map[string]interface{}{"count": count})
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": count})
+}
+
+func AdminCreateUserToken(c *gin.Context) {
+	targetUser, ok := resolveManageableTargetUser(c)
+	if !ok {
+		return
+	}
+	var token model.Token
+	if err := c.ShouldBindJSON(&token); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !validateTokenWriteInput(c, &token) {
+		return
+	}
+	if token.Group != "" && targetUser.Role < common.RoleAdminUser {
+		if !service.GroupInUserUsableGroups(targetUser.Group, token.Group) {
+			common.ApiError(c, fmt.Errorf("group %q is not available to the target user", token.Group))
+			return
+		}
+	}
+	maxTokens := operation_setting.GetMaxUserTokens()
+	count, err := model.CountUserTokens(targetUser.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if int(count) >= maxTokens {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("已达到最大令牌数量限制 (%d)", maxTokens)})
+		return
+	}
+	key, err := common.GenerateKey()
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgTokenGenerateFailed)
+		common.SysLog("failed to generate token key: " + err.Error())
+		return
+	}
+	cleanToken := model.Token{
+		UserId:             targetUser.Id,
+		Name:               token.Name,
+		Key:                key,
+		CreatedTime:        common.GetTimestamp(),
+		AccessedTime:       common.GetTimestamp(),
+		ExpiredTime:        token.ExpiredTime,
+		RemainQuota:        token.RemainQuota,
+		UnlimitedQuota:     token.UnlimitedQuota,
+		ModelLimitsEnabled: token.ModelLimitsEnabled,
+		ModelLimits:        token.ModelLimits,
+		AllowIps:           token.AllowIps,
+		Group:              token.Group,
+		CrossGroupRetry:    token.CrossGroupRetry,
+	}
+	if err := cleanToken.Insert(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, targetUser.Id, "user.token.create", map[string]interface{}{"token_id": cleanToken.Id, "name": cleanToken.Name})
+	// No plaintext key in the response — only root can reveal it via the reveal endpoint.
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
