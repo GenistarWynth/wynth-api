@@ -192,3 +192,56 @@ func TestAdminUpdateUserToken_RejectsUnusableGroupForCommonTarget(t *testing.T) 
 	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &resp))
 	assert.False(t, resp.Success, "must reject a group the common target cannot use")
 }
+
+func TestAdminDeleteUserToken_ScopedToTarget(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+
+	// Attempt to delete bob's token (id 20) via alice's path (target id 2) → must not delete.
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/api/user/2/tokens/20", nil)
+	c.Params = gin.Params{{Key: "id", Value: "2"}, {Key: "tid", Value: "20"}}
+	c.Set("id", 1)
+	c.Set("role", common.RoleAdminUser)
+	AdminDeleteUserToken(c)
+
+	var bobTok model.Token
+	assert.NoError(t, db.First(&bobTok, 20).Error, "bob's token must survive a cross-user delete attempt")
+
+	// Deleting alice's own token (id 10) succeeds.
+	rec2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(rec2)
+	c2.Request = httptest.NewRequest(http.MethodDelete, "/api/user/2/tokens/10", nil)
+	c2.Params = gin.Params{{Key: "id", Value: "2"}, {Key: "tid", Value: "10"}}
+	c2.Set("id", 1)
+	c2.Set("role", common.RoleAdminUser)
+	AdminDeleteUserToken(c2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+	assert.Error(t, db.First(&model.Token{}, 10).Error, "alice's token should be deleted")
+}
+
+func TestAdminBatchDeleteUserTokens(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+	require.NoError(t, db.Create(&model.Token{Id: 11, UserId: 2, Name: "alice-key-2", Key: "cccccccccccccccccccccccccccccccc", Status: common.TokenStatusEnabled}).Error)
+
+	body, _ := common.Marshal(TokenBatch{Ids: []int{10, 11, 20}}) // 20 belongs to bob, must be ignored
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/2/tokens/batch", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "id", Value: "2"}}
+	c.Set("id", 1)
+	c.Set("role", common.RoleAdminUser)
+	AdminBatchDeleteUserTokens(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Success bool `json:"success"`
+		Data    int  `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, 2, resp.Data, "only the two target-owned tokens are deleted")
+	assert.NoError(t, db.First(&model.Token{}, 20).Error, "bob's token untouched")
+}
