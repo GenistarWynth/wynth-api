@@ -144,7 +144,26 @@ func SetApiRouter(router *gin.Engine) {
 				// Admin 2FA routes
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
+
+				// Admin management of a user's API tokens
+				adminRoute.GET("/:id/tokens", controller.AdminGetUserTokens)
+				adminRoute.GET("/:id/tokens/search", middleware.SearchRateLimit(), controller.AdminSearchUserTokens)
+				adminRoute.GET("/:id/tokens/:tid", controller.AdminGetUserToken)
+				adminRoute.POST("/:id/tokens", controller.AdminCreateUserToken)
+				adminRoute.PUT("/:id/tokens", controller.AdminUpdateUserToken)
+				adminRoute.DELETE("/:id/tokens/:tid", controller.AdminDeleteUserToken)
+				adminRoute.POST("/:id/tokens/batch", controller.AdminBatchDeleteUserTokens)
 			}
+
+			// Root-only: reveal a user's full token plaintext, behind step-up verification
+			// (mirrors POST /api/channel/:id/key).
+			userRoute.POST("/:id/tokens/:tid/key",
+				middleware.RootAuth(),
+				middleware.CriticalRateLimit(),
+				middleware.DisableCache(),
+				middleware.SecureVerificationRequired(),
+				controller.AdminGetUserTokenKey,
+			)
 		}
 
 		// Subscription billing (plans, purchase, admin management)
