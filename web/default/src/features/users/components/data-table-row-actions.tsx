@@ -27,6 +27,7 @@ import {
   ArrowUp,
   ArrowDown,
   KeyRound,
+  KeySquare,
   ShieldAlert,
   Link2,
   CreditCard,
@@ -44,6 +45,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { useAuthStore } from '@/stores/auth-store'
 import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
 import {
   USER_STATUS,
@@ -53,6 +55,7 @@ import {
 } from '../constants'
 import { getUserActionMessage } from '../lib'
 import { type User, type ManageUserAction } from '../types'
+import { UserApiKeysDialog } from './dialogs/user-api-keys-dialog'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
 import { useUsers } from './users-provider'
 
@@ -64,10 +67,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
   const user = row.original
   const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
+  const { user: currentUser } = useAuthStore((state) => state.auth)
+  const currentUserIsRoot = (currentUser?.role ?? 0) === USER_ROLE.ROOT
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
   const [subscriptionsDialogOpen, setSubscriptionsDialogOpen] = useState(false)
+  const [apiKeysOpen, setApiKeysOpen] = useState(false)
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -220,6 +226,18 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
+          <DropdownMenuItem
+            onSelect={(event) => {
+              event.preventDefault()
+              setApiKeysOpen(true)
+            }}
+          >
+            {t('Manage API Keys')}
+            <DropdownMenuShortcut>
+              <KeySquare size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+
           <DropdownMenuSeparator />
 
           <DropdownMenuItem
@@ -293,6 +311,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         onOpenChange={setSubscriptionsDialogOpen}
         user={{ id: user.id, username: user.username }}
         onSuccess={triggerRefresh}
+      />
+
+      <UserApiKeysDialog
+        open={apiKeysOpen}
+        onOpenChange={setApiKeysOpen}
+        user={{ id: user.id, username: user.username }}
+        canRevealKey={currentUserIsRoot}
       />
     </div>
   )
