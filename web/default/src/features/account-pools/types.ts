@@ -63,6 +63,13 @@ export type AccountPool = {
   default_proxy_id: number
   default_monitor_enabled: boolean
   default_schedule_policy: string
+  capability_check_enabled: boolean
+  capability_check_interval_minutes: number
+  capability_check_mode: AccountPoolCapabilityMode | ''
+  capability_check_channel_id: number
+  capability_check_models: string[]
+  capability_check_timeout_seconds: number
+  capability_check_merge: boolean
   remark: string
   created_time: number
   updated_time: number
@@ -74,6 +81,13 @@ export type AccountPoolCreateRequest = {
   default_proxy_id: number
   default_monitor_enabled: boolean
   default_schedule_policy: AccountPoolSchedulePolicy | ''
+  capability_check_enabled: boolean
+  capability_check_interval_minutes: number
+  capability_check_mode: AccountPoolCapabilityMode | ''
+  capability_check_channel_id: number
+  capability_check_models: string[]
+  capability_check_timeout_seconds: number
+  capability_check_merge: boolean
   remark: string
 }
 

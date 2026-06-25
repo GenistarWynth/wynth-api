@@ -23,6 +23,10 @@ const (
 
 	AccountPoolSchedulePolicyRoundRobin = "round_robin"
 	AccountPoolSchedulePolicyRandom     = "random"
+
+	DefaultAccountPoolCapabilityCheckIntervalMinutes = 1440
+	MinimumAccountPoolCapabilityCheckIntervalMinutes = 5
+	DefaultAccountPoolCapabilityCheckTimeoutSeconds  = 30
 )
 
 var (
@@ -31,12 +35,19 @@ var (
 )
 
 type AccountPoolCreateParams struct {
-	Name                  string
-	Platform              string
-	DefaultProxyID        int
-	DefaultMonitorEnabled bool
-	DefaultSchedulePolicy string
-	Remark                string
+	Name                           string
+	Platform                       string
+	DefaultProxyID                 int
+	DefaultMonitorEnabled          bool
+	DefaultSchedulePolicy          string
+	CapabilityCheckEnabled         bool
+	CapabilityCheckIntervalMinutes int
+	CapabilityCheckMode            string
+	CapabilityCheckChannelID       int
+	CapabilityCheckModels          []string
+	CapabilityCheckTimeoutSeconds  int
+	CapabilityCheckMerge           bool
+	Remark                         string
 }
 
 type AccountPoolAccountCreateParams struct {
@@ -182,13 +193,31 @@ func (s AccountPoolService) CreatePool(params AccountPoolCreateParams) (model.Ac
 	if err != nil {
 		return model.AccountPool{}, err
 	}
+	capabilityCheckMode, err := normalizeAccountPoolCapabilityCheckMode(params.CapabilityCheckMode)
+	if err != nil {
+		return model.AccountPool{}, err
+	}
+	if params.CapabilityCheckChannelID < 0 {
+		return model.AccountPool{}, errors.New("account pool capability check channel id cannot be negative")
+	}
+	capabilityCheckModels, err := marshalAccountPoolOptionalJSON(normalizeAccountPoolCapabilityModels(params.CapabilityCheckModels))
+	if err != nil {
+		return model.AccountPool{}, err
+	}
 	pool := model.AccountPool{
-		Name:                  name,
-		Platform:              platform,
-		DefaultProxyID:        params.DefaultProxyID,
-		DefaultMonitorEnabled: params.DefaultMonitorEnabled,
-		DefaultSchedulePolicy: schedulePolicy,
-		Remark:                params.Remark,
+		Name:                           name,
+		Platform:                       platform,
+		DefaultProxyID:                 params.DefaultProxyID,
+		DefaultMonitorEnabled:          params.DefaultMonitorEnabled,
+		DefaultSchedulePolicy:          schedulePolicy,
+		CapabilityCheckEnabled:         params.CapabilityCheckEnabled,
+		CapabilityCheckIntervalMinutes: normalizeAccountPoolCapabilityCheckIntervalMinutes(params.CapabilityCheckEnabled, params.CapabilityCheckIntervalMinutes),
+		CapabilityCheckMode:            capabilityCheckMode,
+		CapabilityCheckChannelID:       params.CapabilityCheckChannelID,
+		CapabilityCheckModels:          capabilityCheckModels,
+		CapabilityCheckTimeoutSeconds:  normalizeAccountPoolCapabilityCheckTimeoutSeconds(params.CapabilityCheckTimeoutSeconds),
+		CapabilityCheckMerge:           params.CapabilityCheckMerge,
+		Remark:                         params.Remark,
 	}
 	return pool, model.DB.Create(&pool).Error
 }
@@ -223,14 +252,32 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 	if err != nil {
 		return model.AccountPool{}, err
 	}
+	capabilityCheckMode, err := normalizeAccountPoolCapabilityCheckMode(params.CapabilityCheckMode)
+	if err != nil {
+		return model.AccountPool{}, err
+	}
+	if params.CapabilityCheckChannelID < 0 {
+		return model.AccountPool{}, errors.New("account pool capability check channel id cannot be negative")
+	}
+	capabilityCheckModels, err := marshalAccountPoolOptionalJSON(normalizeAccountPoolCapabilityModels(params.CapabilityCheckModels))
+	if err != nil {
+		return model.AccountPool{}, err
+	}
 	err = model.DB.Model(&pool).Updates(map[string]any{
-		"name":                    name,
-		"platform":                platform,
-		"default_proxy_id":        params.DefaultProxyID,
-		"default_monitor_enabled": params.DefaultMonitorEnabled,
-		"default_schedule_policy": schedulePolicy,
-		"remark":                  params.Remark,
-		"updated_time":            common.GetTimestamp(),
+		"name":                              name,
+		"platform":                          platform,
+		"default_proxy_id":                  params.DefaultProxyID,
+		"default_monitor_enabled":           params.DefaultMonitorEnabled,
+		"default_schedule_policy":           schedulePolicy,
+		"capability_check_enabled":          params.CapabilityCheckEnabled,
+		"capability_check_interval_minutes": normalizeAccountPoolCapabilityCheckIntervalMinutes(params.CapabilityCheckEnabled, params.CapabilityCheckIntervalMinutes),
+		"capability_check_mode":             capabilityCheckMode,
+		"capability_check_channel_id":       params.CapabilityCheckChannelID,
+		"capability_check_models":           capabilityCheckModels,
+		"capability_check_timeout_seconds":  normalizeAccountPoolCapabilityCheckTimeoutSeconds(params.CapabilityCheckTimeoutSeconds),
+		"capability_check_merge":            params.CapabilityCheckMerge,
+		"remark":                            params.Remark,
+		"updated_time":                      common.GetTimestamp(),
 	}).Error
 	if err != nil {
 		return model.AccountPool{}, err
@@ -949,6 +996,40 @@ func normalizeAccountPoolSchedulePolicy(policy string) (string, error) {
 	default:
 		return "", errors.New("account pool schedule policy must be round_robin or random")
 	}
+}
+
+func normalizeAccountPoolCapabilityCheckMode(mode string) (string, error) {
+	normalized := normalizeAccountPoolCapabilityMode(mode)
+	switch normalized {
+	case AccountPoolCapabilityModeModelsEndpoint, AccountPoolCapabilityModeProbeModels:
+		return normalized, nil
+	default:
+		return "", errors.New("account pool capability check mode must be models_endpoint or probe_models")
+	}
+}
+
+func normalizeAccountPoolCapabilityCheckIntervalMinutes(enabled bool, minutes int) int {
+	if !enabled {
+		return 0
+	}
+	if minutes <= 0 {
+		return DefaultAccountPoolCapabilityCheckIntervalMinutes
+	}
+	if minutes < MinimumAccountPoolCapabilityCheckIntervalMinutes {
+		return MinimumAccountPoolCapabilityCheckIntervalMinutes
+	}
+	return minutes
+}
+
+func normalizeAccountPoolCapabilityCheckTimeoutSeconds(seconds int) int {
+	if seconds <= 0 {
+		return DefaultAccountPoolCapabilityCheckTimeoutSeconds
+	}
+	maxSeconds := int(accountPoolCapabilityMaxTimeout / time.Second)
+	if seconds > maxSeconds {
+		return maxSeconds
+	}
+	return seconds
 }
 
 func resolveAccountPoolSchedulePolicy(policy string, fallback string) (string, error) {

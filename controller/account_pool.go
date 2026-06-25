@@ -551,12 +551,19 @@ func accountPoolProxyIDFromParam(c *gin.Context) (int, bool) {
 
 func accountPoolCreateParams(req dto.AccountPoolCreateRequest) service.AccountPoolCreateParams {
 	return service.AccountPoolCreateParams{
-		Name:                  req.Name,
-		Platform:              req.Platform,
-		DefaultProxyID:        req.DefaultProxyID,
-		DefaultMonitorEnabled: req.DefaultMonitorEnabled,
-		DefaultSchedulePolicy: req.DefaultSchedulePolicy,
-		Remark:                req.Remark,
+		Name:                           req.Name,
+		Platform:                       req.Platform,
+		DefaultProxyID:                 req.DefaultProxyID,
+		DefaultMonitorEnabled:          req.DefaultMonitorEnabled,
+		DefaultSchedulePolicy:          req.DefaultSchedulePolicy,
+		CapabilityCheckEnabled:         req.CapabilityCheckEnabled,
+		CapabilityCheckIntervalMinutes: req.CapabilityCheckIntervalMinutes,
+		CapabilityCheckMode:            req.CapabilityCheckMode,
+		CapabilityCheckChannelID:       req.CapabilityCheckChannelID,
+		CapabilityCheckModels:          req.CapabilityCheckModels,
+		CapabilityCheckTimeoutSeconds:  req.CapabilityCheckTimeoutSeconds,
+		CapabilityCheckMerge:           req.CapabilityCheckMerge,
+		Remark:                         req.Remark,
 	}
 }
 
@@ -668,17 +675,31 @@ func accountPoolProxyCreateParams(req dto.AccountPoolProxyCreateRequest) service
 }
 
 func accountPoolResponse(pool model.AccountPool) dto.AccountPoolResponse {
+	capabilityCheckModels := []string{}
+	if pool.CapabilityCheckModels != "" {
+		if err := common.UnmarshalJsonStr(pool.CapabilityCheckModels, &capabilityCheckModels); err != nil {
+			common.SysError("failed to unmarshal account pool capability check models: pool_id=" + strconv.Itoa(pool.Id) + ", error=" + err.Error())
+			capabilityCheckModels = []string{}
+		}
+	}
 	return dto.AccountPoolResponse{
-		Id:                    pool.Id,
-		Name:                  pool.Name,
-		Platform:              pool.Platform,
-		Status:                pool.Status,
-		DefaultProxyID:        pool.DefaultProxyID,
-		DefaultMonitorEnabled: pool.DefaultMonitorEnabled,
-		DefaultSchedulePolicy: pool.DefaultSchedulePolicy,
-		Remark:                pool.Remark,
-		CreatedTime:           pool.CreatedTime,
-		UpdatedTime:           pool.UpdatedTime,
+		Id:                             pool.Id,
+		Name:                           pool.Name,
+		Platform:                       pool.Platform,
+		Status:                         pool.Status,
+		DefaultProxyID:                 pool.DefaultProxyID,
+		DefaultMonitorEnabled:          pool.DefaultMonitorEnabled,
+		DefaultSchedulePolicy:          pool.DefaultSchedulePolicy,
+		CapabilityCheckEnabled:         pool.CapabilityCheckEnabled,
+		CapabilityCheckIntervalMinutes: pool.CapabilityCheckIntervalMinutes,
+		CapabilityCheckMode:            pool.CapabilityCheckMode,
+		CapabilityCheckChannelID:       pool.CapabilityCheckChannelID,
+		CapabilityCheckModels:          capabilityCheckModels,
+		CapabilityCheckTimeoutSeconds:  pool.CapabilityCheckTimeoutSeconds,
+		CapabilityCheckMerge:           pool.CapabilityCheckMerge,
+		Remark:                         pool.Remark,
+		CreatedTime:                    pool.CreatedTime,
+		UpdatedTime:                    pool.UpdatedTime,
 	}
 }
 

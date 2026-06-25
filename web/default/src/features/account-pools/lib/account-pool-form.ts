@@ -23,6 +23,7 @@ import type {
   AccountPoolAccountImportRequest,
   AccountPoolAccountStatus,
   AccountPoolBoundChannelCreateRequest,
+  AccountPoolCapabilityMode,
   AccountPoolCreateRequest,
   AccountPoolCredentialType,
   AccountPoolPlatform,
@@ -56,6 +57,13 @@ export type AccountPoolFormValues = {
   default_proxy_id: number
   default_monitor_enabled: boolean
   default_schedule_policy: AccountPoolSchedulePolicy | ''
+  capability_check_enabled: boolean
+  capability_check_interval_minutes: number
+  capability_check_mode: AccountPoolCapabilityMode
+  capability_check_channel_id: number
+  capability_check_models_text: string
+  capability_check_timeout_seconds: number
+  capability_check_merge: boolean
   remark: string
 }
 
@@ -136,6 +144,13 @@ export function emptyPoolForm(): AccountPoolFormValues {
     default_proxy_id: 0,
     default_monitor_enabled: false,
     default_schedule_policy: '',
+    capability_check_enabled: false,
+    capability_check_interval_minutes: 1440,
+    capability_check_mode: 'models_endpoint',
+    capability_check_channel_id: 0,
+    capability_check_models_text: '',
+    capability_check_timeout_seconds: 30,
+    capability_check_merge: false,
     remark: '',
   }
 }
@@ -149,6 +164,15 @@ export function poolToFormValues(pool: AccountPool): AccountPoolFormValues {
     default_schedule_policy: normalizeOptionalAccountPoolSchedulePolicy(
       pool.default_schedule_policy
     ),
+    capability_check_enabled: pool.capability_check_enabled,
+    capability_check_interval_minutes:
+      pool.capability_check_interval_minutes || 1440,
+    capability_check_mode: pool.capability_check_mode || 'models_endpoint',
+    capability_check_channel_id: pool.capability_check_channel_id || 0,
+    capability_check_models_text: pool.capability_check_models.join('\n'),
+    capability_check_timeout_seconds:
+      pool.capability_check_timeout_seconds || 30,
+    capability_check_merge: pool.capability_check_merge === true,
     remark: pool.remark,
   }
 }
@@ -164,6 +188,19 @@ export function buildPoolPayload(
     default_schedule_policy: normalizeOptionalAccountPoolSchedulePolicy(
       values.default_schedule_policy
     ),
+    capability_check_enabled: values.capability_check_enabled === true,
+    capability_check_interval_minutes: toInteger(
+      values.capability_check_interval_minutes
+    ),
+    capability_check_mode: values.capability_check_mode || 'models_endpoint',
+    capability_check_channel_id: toInteger(values.capability_check_channel_id),
+    capability_check_models: normalizeModelListText(
+      values.capability_check_models_text
+    ),
+    capability_check_timeout_seconds: toInteger(
+      values.capability_check_timeout_seconds
+    ),
+    capability_check_merge: values.capability_check_merge === true,
     remark: values.remark.trim(),
   }
 }

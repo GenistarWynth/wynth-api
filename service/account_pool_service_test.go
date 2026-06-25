@@ -222,6 +222,58 @@ func TestAccountPoolServiceCreateBoundChannelCreatesDisabledChannelAndDraftBindi
 	assert.NotEqual(t, channel.Key, secondChannel.Key)
 }
 
+func TestAccountPoolServicePersistsCapabilityAutoDetectSettings(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+
+	disabled, err := service.CreatePool(AccountPoolCreateParams{
+		Name: "capability-disabled",
+	})
+	require.NoError(t, err)
+	assert.False(t, disabled.CapabilityCheckEnabled)
+	assert.Zero(t, disabled.CapabilityCheckIntervalMinutes)
+	assert.Equal(t, AccountPoolCapabilityModeModelsEndpoint, disabled.CapabilityCheckMode)
+	assert.Equal(t, DefaultAccountPoolCapabilityCheckTimeoutSeconds, disabled.CapabilityCheckTimeoutSeconds)
+
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:                           "capability-auto",
+		CapabilityCheckEnabled:         true,
+		CapabilityCheckIntervalMinutes: 30,
+		CapabilityCheckMode:            AccountPoolCapabilityModeProbeModels,
+		CapabilityCheckChannelID:       12,
+		CapabilityCheckModels:          []string{"gpt-5", "gpt-5-mini"},
+		CapabilityCheckTimeoutSeconds:  45,
+		CapabilityCheckMerge:           true,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, pool.CapabilityCheckEnabled)
+	assert.Equal(t, 30, pool.CapabilityCheckIntervalMinutes)
+	assert.Equal(t, AccountPoolCapabilityModeProbeModels, pool.CapabilityCheckMode)
+	assert.Equal(t, 12, pool.CapabilityCheckChannelID)
+	assert.Equal(t, `["gpt-5","gpt-5-mini"]`, pool.CapabilityCheckModels)
+	assert.Equal(t, 45, pool.CapabilityCheckTimeoutSeconds)
+	assert.True(t, pool.CapabilityCheckMerge)
+
+	updated, err := service.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:                           "capability-auto-updated",
+		CapabilityCheckEnabled:         true,
+		CapabilityCheckIntervalMinutes: 0,
+		CapabilityCheckMode:            AccountPoolCapabilityModeModelsEndpoint,
+		CapabilityCheckModels:          []string{"gpt-5.1"},
+		CapabilityCheckTimeoutSeconds:  0,
+	})
+	require.NoError(t, err)
+
+	assert.True(t, updated.CapabilityCheckEnabled)
+	assert.Equal(t, DefaultAccountPoolCapabilityCheckIntervalMinutes, updated.CapabilityCheckIntervalMinutes)
+	assert.Equal(t, AccountPoolCapabilityModeModelsEndpoint, updated.CapabilityCheckMode)
+	assert.Zero(t, updated.CapabilityCheckChannelID)
+	assert.Equal(t, `["gpt-5.1"]`, updated.CapabilityCheckModels)
+	assert.Equal(t, DefaultAccountPoolCapabilityCheckTimeoutSeconds, updated.CapabilityCheckTimeoutSeconds)
+	assert.False(t, updated.CapabilityCheckMerge)
+}
+
 func TestAccountPoolServiceCreateBoundChannelUsesFixedModelsWithoutExplicitStrategy(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

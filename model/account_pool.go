@@ -32,16 +32,23 @@ const (
 var ErrAccountPoolBoundChannelEnable = errors.New("account pool bound channel cannot be enabled in phase 1")
 
 type AccountPool struct {
-	Id                    int    `json:"id"`
-	Name                  string `json:"name" gorm:"type:varchar(191);not null;index"`
-	Platform              string `json:"platform" gorm:"type:varchar(32);not null;index"`
-	Status                string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
-	DefaultProxyID        int    `json:"default_proxy_id" gorm:"index"`
-	DefaultMonitorEnabled bool   `json:"default_monitor_enabled" gorm:"not null;default:false"`
-	DefaultSchedulePolicy string `json:"default_schedule_policy" gorm:"type:text"`
-	Remark                string `json:"remark" gorm:"type:varchar(1024)"`
-	CreatedTime           int64  `json:"created_time" gorm:"bigint"`
-	UpdatedTime           int64  `json:"updated_time" gorm:"bigint"`
+	Id                             int    `json:"id"`
+	Name                           string `json:"name" gorm:"type:varchar(191);not null;index"`
+	Platform                       string `json:"platform" gorm:"type:varchar(32);not null;index"`
+	Status                         string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
+	DefaultProxyID                 int    `json:"default_proxy_id" gorm:"index"`
+	DefaultMonitorEnabled          bool   `json:"default_monitor_enabled" gorm:"not null;default:false"`
+	DefaultSchedulePolicy          string `json:"default_schedule_policy" gorm:"type:text"`
+	CapabilityCheckEnabled         bool   `json:"capability_check_enabled" gorm:"not null;default:false"`
+	CapabilityCheckIntervalMinutes int    `json:"capability_check_interval_minutes" gorm:"not null;default:0"`
+	CapabilityCheckMode            string `json:"capability_check_mode" gorm:"type:varchar(32)"`
+	CapabilityCheckChannelID       int    `json:"capability_check_channel_id" gorm:"index"`
+	CapabilityCheckModels          string `json:"capability_check_models" gorm:"type:text"`
+	CapabilityCheckTimeoutSeconds  int    `json:"capability_check_timeout_seconds" gorm:"not null;default:0"`
+	CapabilityCheckMerge           bool   `json:"capability_check_merge" gorm:"not null;default:false"`
+	Remark                         string `json:"remark" gorm:"type:varchar(1024)"`
+	CreatedTime                    int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime                    int64  `json:"updated_time" gorm:"bigint"`
 }
 
 func (p *AccountPool) BeforeCreate(tx *gorm.DB) error {

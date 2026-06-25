@@ -1,27 +1,41 @@
 package dto
 
 type AccountPoolCreateRequest struct {
-	Name                  string `json:"name" binding:"required"`
-	Platform              string `json:"platform"`
-	DefaultProxyID        int    `json:"default_proxy_id"`
-	DefaultMonitorEnabled bool   `json:"default_monitor_enabled"`
-	DefaultSchedulePolicy string `json:"default_schedule_policy"`
-	Remark                string `json:"remark"`
+	Name                           string   `json:"name" binding:"required"`
+	Platform                       string   `json:"platform"`
+	DefaultProxyID                 int      `json:"default_proxy_id"`
+	DefaultMonitorEnabled          bool     `json:"default_monitor_enabled"`
+	DefaultSchedulePolicy          string   `json:"default_schedule_policy"`
+	CapabilityCheckEnabled         bool     `json:"capability_check_enabled"`
+	CapabilityCheckIntervalMinutes int      `json:"capability_check_interval_minutes"`
+	CapabilityCheckMode            string   `json:"capability_check_mode"`
+	CapabilityCheckChannelID       int      `json:"capability_check_channel_id"`
+	CapabilityCheckModels          []string `json:"capability_check_models"`
+	CapabilityCheckTimeoutSeconds  int      `json:"capability_check_timeout_seconds"`
+	CapabilityCheckMerge           bool     `json:"capability_check_merge"`
+	Remark                         string   `json:"remark"`
 }
 
 type AccountPoolUpdateRequest = AccountPoolCreateRequest
 
 type AccountPoolResponse struct {
-	Id                    int    `json:"id"`
-	Name                  string `json:"name"`
-	Platform              string `json:"platform"`
-	Status                string `json:"status"`
-	DefaultProxyID        int    `json:"default_proxy_id"`
-	DefaultMonitorEnabled bool   `json:"default_monitor_enabled"`
-	DefaultSchedulePolicy string `json:"default_schedule_policy"`
-	Remark                string `json:"remark"`
-	CreatedTime           int64  `json:"created_time"`
-	UpdatedTime           int64  `json:"updated_time"`
+	Id                             int      `json:"id"`
+	Name                           string   `json:"name"`
+	Platform                       string   `json:"platform"`
+	Status                         string   `json:"status"`
+	DefaultProxyID                 int      `json:"default_proxy_id"`
+	DefaultMonitorEnabled          bool     `json:"default_monitor_enabled"`
+	DefaultSchedulePolicy          string   `json:"default_schedule_policy"`
+	CapabilityCheckEnabled         bool     `json:"capability_check_enabled"`
+	CapabilityCheckIntervalMinutes int      `json:"capability_check_interval_minutes"`
+	CapabilityCheckMode            string   `json:"capability_check_mode"`
+	CapabilityCheckChannelID       int      `json:"capability_check_channel_id"`
+	CapabilityCheckModels          []string `json:"capability_check_models"`
+	CapabilityCheckTimeoutSeconds  int      `json:"capability_check_timeout_seconds"`
+	CapabilityCheckMerge           bool     `json:"capability_check_merge"`
+	Remark                         string   `json:"remark"`
+	CreatedTime                    int64    `json:"created_time"`
+	UpdatedTime                    int64    `json:"updated_time"`
 }
 
 type AccountPoolCredentialConfigRequest struct {

@@ -122,6 +122,7 @@ func main() {
 	// Upstream source auto-sync task
 	service.StartUpstreamSourceAutoSyncWorker()
 	service.StartUpstreamSourceAutoPriorityWorker()
+	service.StartAccountPoolCapabilityAutoDetectWorker()
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {

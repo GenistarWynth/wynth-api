@@ -1550,6 +1550,16 @@ function PoolFormSheet(props: {
     () => translateOptions(SCHEDULE_POLICY_OPTIONS, t),
     [t]
   )
+  const capabilityModeOptions = useMemo(
+    () =>
+      translateOptions(
+        ACCOUNT_POOL_CAPABILITY_MODE_OPTIONS.filter(
+          (option) => option.value !== 'auto'
+        ),
+        t
+      ),
+    [t]
+  )
   const proxyOptions = useMemo(
     () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
     [props.proxies, t]
@@ -1687,6 +1697,150 @@ function PoolFormSheet(props: {
                   setField('default_monitor_enabled', checked)
                 }
               />
+            </div>
+            <div className='space-y-4 border-t pt-4'>
+              <div className={sideDrawerSwitchItemClassName()}>
+                <div className='min-w-0'>
+                  <FieldLabel htmlFor='account-pool-capability-check'>
+                    {t('Scheduled Capability Detection')}
+                  </FieldLabel>
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    {t('Refresh account supported models automatically')}
+                  </p>
+                </div>
+                <Switch
+                  id='account-pool-capability-check'
+                  checked={form.capability_check_enabled}
+                  onCheckedChange={(checked) =>
+                    setField('capability_check_enabled', checked)
+                  }
+                />
+              </div>
+              {form.capability_check_enabled ? (
+                <div className='grid gap-4 sm:grid-cols-2'>
+                  <FieldBlock
+                    label={t('Detection Interval Minutes')}
+                    htmlFor='account-pool-capability-interval'
+                  >
+                    <Input
+                      id='account-pool-capability-interval'
+                      type='number'
+                      min={5}
+                      value={form.capability_check_interval_minutes}
+                      onChange={(event) =>
+                        setField(
+                          'capability_check_interval_minutes',
+                          Number(event.target.value)
+                        )
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Detection Mode')}
+                    htmlFor='account-pool-capability-mode'
+                  >
+                    <Select
+                      items={capabilityModeOptions}
+                      value={form.capability_check_mode || 'models_endpoint'}
+                      onValueChange={(value) =>
+                        value &&
+                        setField(
+                          'capability_check_mode',
+                          value as AccountPoolCapabilityMode
+                        )
+                      }
+                    >
+                      <SelectTrigger id='account-pool-capability-mode'>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {capabilityModeOptions.map((option) => (
+                            <SelectItem
+                              key={option.value}
+                              value={option.value}
+                            >
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Detection Channel ID')}
+                    htmlFor='account-pool-capability-channel'
+                  >
+                    <Input
+                      id='account-pool-capability-channel'
+                      type='number'
+                      min={0}
+                      value={form.capability_check_channel_id}
+                      onChange={(event) =>
+                        setField(
+                          'capability_check_channel_id',
+                          Number(event.target.value)
+                        )
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Detection Timeout Seconds')}
+                    htmlFor='account-pool-capability-timeout'
+                  >
+                    <Input
+                      id='account-pool-capability-timeout'
+                      type='number'
+                      min={1}
+                      max={300}
+                      value={form.capability_check_timeout_seconds}
+                      onChange={(event) =>
+                        setField(
+                          'capability_check_timeout_seconds',
+                          Number(event.target.value)
+                        )
+                      }
+                    />
+                  </FieldBlock>
+                  <div className='sm:col-span-2'>
+                    <FieldBlock
+                      label={t('Candidate Models')}
+                      htmlFor='account-pool-capability-models'
+                    >
+                      <Textarea
+                        id='account-pool-capability-models'
+                        value={form.capability_check_models_text}
+                        placeholder={'gpt-5\ngpt-5-mini'}
+                        onChange={(event) =>
+                          setField(
+                            'capability_check_models_text',
+                            event.target.value
+                          )
+                        }
+                      />
+                    </FieldBlock>
+                  </div>
+                  <div className='sm:col-span-2'>
+                    <div className={sideDrawerSwitchItemClassName()}>
+                      <div className='min-w-0'>
+                        <FieldLabel htmlFor='account-pool-capability-merge'>
+                          {t('Merge Detected Models')}
+                        </FieldLabel>
+                        <p className='text-muted-foreground mt-1 text-xs'>
+                          {t('Keep existing supported models when applying')}
+                        </p>
+                      </div>
+                      <Switch
+                        id='account-pool-capability-merge'
+                        checked={form.capability_check_merge}
+                        onCheckedChange={(checked) =>
+                          setField('capability_check_merge', checked)
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
             <FieldBlock label={t('Remark')} htmlFor='account-pool-remark'>
               <Textarea
