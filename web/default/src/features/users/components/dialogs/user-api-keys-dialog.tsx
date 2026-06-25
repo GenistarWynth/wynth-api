@@ -40,6 +40,7 @@ import {
   deleteUserToken,
   fetchUserTokenKey,
 } from '../../api'
+import { UserTokenEditDrawer } from './user-token-edit-drawer'
 
 interface UserApiKeysDialogProps {
   open: boolean
@@ -90,6 +91,7 @@ export function UserApiKeysDialog({
   const [tokens, setTokens] = useState<ApiKey[]>([])
   const [loading, setLoading] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
+  const [editTarget, setEditTarget] = useState<ApiKey | null>(null)
   const [togglingId, setTogglingId] = useState<number | null>(null)
   const [pendingRevealToken, setPendingRevealToken] = useState<ApiKey | null>(
     null
@@ -265,6 +267,13 @@ export function UserApiKeysDialog({
                   <Button
                     variant='ghost'
                     size='sm'
+                    onClick={() => setEditTarget(tok)}
+                  >
+                    {t('Edit')}
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    size='sm'
                     className='text-destructive'
                     onClick={() => setDeleteTarget(tok)}
                   >
@@ -276,6 +285,14 @@ export function UserApiKeysDialog({
           </div>
         </SheetContent>
       </Sheet>
+
+      <UserTokenEditDrawer
+        open={!!editTarget}
+        onOpenChange={(o) => !o && setEditTarget(null)}
+        token={editTarget}
+        userId={user.id}
+        onSuccess={() => void load()}
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}
