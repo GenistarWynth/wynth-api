@@ -29,7 +29,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
-import { MaskedValueDisplay } from '@/components/masked-value-display'
 import {
   SecureVerificationDialog,
   useSecureVerification,
@@ -91,6 +90,7 @@ export function UserApiKeysDialog({
   const [tokens, setTokens] = useState<ApiKey[]>([])
   const [loading, setLoading] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
+  const [togglingId, setTogglingId] = useState<number | null>(null)
   const [pendingRevealToken, setPendingRevealToken] = useState<ApiKey | null>(
     null
   )
@@ -129,6 +129,8 @@ export function UserApiKeysDialog({
   }, [load])
 
   const handleToggle = async (tok: ApiKey) => {
+    if (togglingId !== null) return
+    setTogglingId(tok.id)
     const next = tok.status === 1 ? 2 : 1
     try {
       const res = await updateUserTokenStatus(user.id, tok.id, next)
@@ -140,6 +142,8 @@ export function UserApiKeysDialog({
       }
     } catch {
       toast.error(t('An unexpected error occurred'))
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -223,13 +227,9 @@ export function UserApiKeysDialog({
               >
                 <div className='min-w-0 flex-1'>
                   <div className='truncate font-medium text-sm'>{tok.name}</div>
-                  <MaskedValueDisplay
-                    label={t('API Key')}
-                    fullValue={tok.key}
-                    maskedValue={tok.key}
-                    copyTooltip={t('Copy API key')}
-                    copyAriaLabel={t('Copy API key')}
-                  />
+                  <code className='text-muted-foreground font-mono text-xs'>
+                    {tok.key}
+                  </code>
                 </div>
                 <div className='flex items-center gap-2 shrink-0'>
                   <StatusBadge
@@ -241,7 +241,11 @@ export function UserApiKeysDialog({
                     variant='ghost'
                     size='sm'
                     onClick={() => handleToggle(tok)}
-                    disabled={tok.status === 3 || tok.status === 4}
+                    disabled={
+                      tok.status === 3 ||
+                      tok.status === 4 ||
+                      togglingId === tok.id
+                    }
                   >
                     {tok.status === 1 ? t('Disable') : t('Enable')}
                   </Button>
