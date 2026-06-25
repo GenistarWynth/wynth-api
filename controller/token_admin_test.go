@@ -268,3 +268,54 @@ func TestAdminCreateUserToken_NoPlaintextInResponse(t *testing.T) {
 	assert.NotEmpty(t, created.Key, "token persisted with a real key")
 	assert.NotContains(t, rec.Body.String(), created.Key, "plaintext key must not be returned")
 }
+
+func revealCtx(actorRole, targetId, tid int) (*gin.Context, *httptest.ResponseRecorder) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/"+itoa(targetId)+"/tokens/"+itoa(tid)+"/key", nil)
+	c.Params = gin.Params{{Key: "id", Value: itoa(targetId)}, {Key: "tid", Value: itoa(tid)}}
+	c.Set("id", 1)
+	c.Set("role", actorRole)
+	return c, rec
+}
+
+func TestAdminGetUserTokenKey_RootOnly(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+	// actor must outrank/own; set actor 1 to root for the allow case
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 1).Update("role", common.RoleRootUser).Error)
+
+	// Non-root admin → rejected by in-handler check.
+	cAdmin, recAdmin := revealCtx(common.RoleAdminUser, 2, 10)
+	AdminGetUserTokenKey(cAdmin)
+	var adminResp struct{ Success bool `json:"success"` }
+	require.NoError(t, common.Unmarshal(recAdmin.Body.Bytes(), &adminResp))
+	assert.False(t, adminResp.Success, "admins must not reveal plaintext keys")
+
+	// Root → full key returned.
+	cRoot, recRoot := revealCtx(common.RoleRootUser, 2, 10)
+	AdminGetUserTokenKey(cRoot)
+	require.Equal(t, http.StatusOK, recRoot.Code)
+	var rootResp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recRoot.Body.Bytes(), &rootResp))
+	require.True(t, rootResp.Success)
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", rootResp.Data.Key)
+}
+
+func TestAdminGetUserTokenKey_ScopedToTarget(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", 1).Update("role", common.RoleRootUser).Error)
+
+	// Try to read bob's token (20) via alice's path (target 2) → not found, no leak.
+	c, rec := revealCtx(common.RoleRootUser, 2, 20)
+	AdminGetUserTokenKey(c)
+	var resp struct{ Success bool `json:"success"` }
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.Success, "cross-user token id must not resolve")
+}

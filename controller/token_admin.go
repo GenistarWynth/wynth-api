@@ -249,3 +249,28 @@ func AdminCreateUserToken(c *gin.Context) {
 	// No plaintext key in the response — only root can reveal it via the reveal endpoint.
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
+
+func AdminGetUserTokenKey(c *gin.Context) {
+	targetUser, ok := resolveManageableTargetUser(c)
+	if !ok {
+		return
+	}
+	// Defense-in-depth: route also carries RootAuth, but enforce here too so the
+	// behavior is correct and unit-testable without middleware.
+	if c.GetInt("role") != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return
+	}
+	tid, err := strconv.Atoi(c.Param("tid"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	token, err := model.GetTokenByIds(tid, targetUser.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, targetUser.Id, "user.token.key_view", map[string]interface{}{"token_id": token.Id, "name": token.Name})
+	common.ApiSuccess(c, gin.H{"key": token.GetFullKey()})
+}
