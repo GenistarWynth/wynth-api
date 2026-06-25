@@ -27,6 +27,11 @@ import type {
   ManageUserQuotaPayload,
   ApiResponse,
 } from './types'
+import type {
+  ApiKey,
+  ApiKeyFormData,
+  GetApiKeysResponse,
+} from '@/features/keys/types'
 
 // ============================================================================
 // User Management APIs
@@ -191,5 +196,82 @@ export async function adminUnbindCustomOAuth(
   const res = await api.delete(
     `/api/user/${userId}/oauth/bindings/${providerId}`
   )
+  return res.data
+}
+
+// ============================================================================
+// Admin: manage another user's API tokens
+// ============================================================================
+
+export async function getUserTokens(
+  userId: number,
+  params: { p?: number; size?: number } = {}
+): Promise<GetApiKeysResponse> {
+  const { p = 1, size = 10 } = params
+  const res = await api.get(`/api/user/${userId}/tokens?p=${p}&size=${size}`)
+  return res.data
+}
+
+export async function searchUserTokens(
+  userId: number,
+  params: { keyword?: string; token?: string; p?: number; size?: number }
+): Promise<GetApiKeysResponse> {
+  const { keyword = '', token = '', p, size } = params
+  const q = new URLSearchParams()
+  if (keyword) q.set('keyword', keyword)
+  if (token) q.set('token', token)
+  if (p != null) q.set('p', String(p))
+  if (size != null) q.set('size', String(size))
+  const res = await api.get(`/api/user/${userId}/tokens/search?${q.toString()}`)
+  return res.data
+}
+
+export async function createUserToken(
+  userId: number,
+  data: ApiKeyFormData
+): Promise<ApiResponse<ApiKey>> {
+  const res = await api.post(`/api/user/${userId}/tokens`, data)
+  return res.data
+}
+
+export async function updateUserToken(
+  userId: number,
+  data: ApiKeyFormData & { id: number }
+): Promise<ApiResponse<ApiKey>> {
+  const res = await api.put(`/api/user/${userId}/tokens`, data)
+  return res.data
+}
+
+export async function updateUserTokenStatus(
+  userId: number,
+  id: number,
+  status: number
+): Promise<ApiResponse<ApiKey>> {
+  const res = await api.put(`/api/user/${userId}/tokens?status_only=true`, { id, status })
+  return res.data
+}
+
+export async function deleteUserToken(
+  userId: number,
+  id: number
+): Promise<ApiResponse> {
+  const res = await api.delete(`/api/user/${userId}/tokens/${id}`)
+  return res.data
+}
+
+export async function batchDeleteUserTokens(
+  userId: number,
+  ids: number[]
+): Promise<ApiResponse<number>> {
+  const res = await api.post(`/api/user/${userId}/tokens/batch`, { ids })
+  return res.data
+}
+
+// Root-only: reveal the full plaintext key (requires prior step-up verification).
+export async function fetchUserTokenKey(
+  userId: number,
+  id: number
+): Promise<{ success: boolean; message?: string; code?: string; data?: { key: string } }> {
+  const res = await api.post(`/api/user/${userId}/tokens/${id}/key`)
   return res.data
 }
