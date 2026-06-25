@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -83,4 +86,69 @@ func AdminGetUserToken(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, buildMaskedTokenResponse(token))
+}
+
+func AdminUpdateUserToken(c *gin.Context) {
+	targetUser, ok := resolveManageableTargetUser(c)
+	if !ok {
+		return
+	}
+	statusOnly := c.Query("status_only")
+	var token model.Token
+	if err := c.ShouldBindJSON(&token); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !validateTokenWriteInput(c, &token) {
+		return
+	}
+
+	cleanToken, err := model.GetTokenByIds(token.Id, targetUser.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	if token.Status == common.TokenStatusEnabled {
+		if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
+			common.ApiErrorI18n(c, i18n.MsgTokenExpiredCannotEnable)
+			return
+		}
+		if cleanToken.Status == common.TokenStatusExhausted && cleanToken.RemainQuota <= 0 && !cleanToken.UnlimitedQuota {
+			common.ApiErrorI18n(c, i18n.MsgTokenExhaustedCannotEable)
+			return
+		}
+	}
+
+	if statusOnly != "" {
+		cleanToken.Status = token.Status
+	} else {
+		// Group safeguard: when assigning a group to a COMMON user's token, the
+		// group must be in that user's usable set. Admin/root targets bypass this
+		// (mirrors the runtime bypass at middleware/auth.go for admin-owned tokens).
+		if token.Group != "" && targetUser.Role < common.RoleAdminUser {
+			if !service.GroupInUserUsableGroups(targetUser.Group, token.Group) {
+				common.ApiError(c, fmt.Errorf("group %q is not available to the target user", token.Group))
+				return
+			}
+		}
+		// Full-object replacement (parity with self-service UpdateToken).
+		cleanToken.Name = token.Name
+		cleanToken.ExpiredTime = token.ExpiredTime
+		cleanToken.RemainQuota = token.RemainQuota
+		cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
+		cleanToken.ModelLimits = token.ModelLimits
+		cleanToken.AllowIps = token.AllowIps
+		cleanToken.Group = token.Group
+		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+	}
+	if err := cleanToken.Update(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAuditFor(c, targetUser.Id, "user.token.update", map[string]interface{}{
+		"token_id": cleanToken.Id, "name": cleanToken.Name, "status_only": statusOnly != "",
+	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildMaskedTokenResponse(cleanToken)})
 }

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -120,4 +121,74 @@ func TestValidateTokenWriteInput(t *testing.T) {
 			assert.Equal(t, tc.ok, got)
 		})
 	}
+}
+
+func putJSONCtx(t *testing.T, url string, actorRole, targetId int, body any) (*gin.Context, *httptest.ResponseRecorder) {
+	t.Helper()
+	raw, err := common.Marshal(body)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPut, url, bytes.NewReader(raw))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "id", Value: itoa(targetId)}}
+	c.Set("id", 1)
+	c.Set("role", actorRole)
+	return c, rec
+}
+
+func TestAdminUpdateUserToken_FullObjectPreservesFields(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+	// give alice's token an expiry + model limits so we can confirm a full update keeps them
+	require.NoError(t, db.Model(&model.Token{}).Where("id = ?", 10).
+		Updates(map[string]any{"expired_time": int64(9999999999), "remain_quota": 500}).Error)
+
+	c, rec := putJSONCtx(t, "/api/user/2/tokens", common.RoleAdminUser, 2, model.Token{
+		Id: 10, Name: "renamed", ExpiredTime: 9999999999, RemainQuota: 500,
+	})
+	AdminUpdateUserToken(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, 10).Error)
+	assert.Equal(t, "renamed", got.Name)
+	assert.Equal(t, int64(9999999999), got.ExpiredTime)
+	assert.Equal(t, 500, got.RemainQuota)
+
+	// user account quota untouched
+	var alice model.User
+	require.NoError(t, db.First(&alice, 2).Error)
+	assert.Equal(t, 0, alice.Quota)
+}
+
+func TestAdminUpdateUserToken_StatusOnly(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+
+	c, rec := putJSONCtx(t, "/api/user/2/tokens?status_only=true", common.RoleAdminUser, 2, model.Token{
+		Id: 10, Status: common.TokenStatusDisabled,
+	})
+	c.Request.URL.RawQuery = "status_only=true"
+	AdminUpdateUserToken(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, 10).Error)
+	assert.Equal(t, common.TokenStatusDisabled, got.Status)
+}
+
+func TestAdminUpdateUserToken_RejectsUnusableGroupForCommonTarget(t *testing.T) {
+	db := setupTokenAdminTestDB(t)
+	seedUsersAndTokens(t, db)
+	withUserSelectableGroupFixture(t) // "admin_only" exists but is not user-selectable
+
+	c, rec := putJSONCtx(t, "/api/user/2/tokens", common.RoleAdminUser, 2, model.Token{
+		Id: 10, Name: "alice-key", Group: "admin_only",
+	})
+	AdminUpdateUserToken(c)
+
+	var resp struct{ Success bool `json:"success"` }
+	require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.Success, "must reject a group the common target cannot use")
 }
