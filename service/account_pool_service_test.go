@@ -128,6 +128,48 @@ func TestAccountPoolServiceUpdateAccountPreservesSecretsAndSoftDeletes(t *testin
 	assert.Equal(t, model.AccountPoolAccountStatusDeleted, storedAfter.Status)
 }
 
+func TestAccountPoolServiceCreateUpdateAccountPersistsExpiryFields(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Create with expiry fields set.
+	created, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "expiring-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-expiry-test",
+		},
+		ExpiresAt:          9999999,
+		AutoPauseOnExpired: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(9999999), created.ExpiresAt)
+	assert.True(t, created.AutoPauseOnExpired)
+
+	// Verify persisted in DB.
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, created.Id).Error)
+	assert.Equal(t, int64(9999999), stored.ExpiresAt)
+	assert.True(t, stored.AutoPauseOnExpired)
+
+	// Update: change expiry fields.
+	updated, err := service.UpdateAccount(pool.Id, created.Id, AccountPoolAccountCreateParams{
+		Name:               "expiring-account",
+		ExpiresAt:          0,
+		AutoPauseOnExpired: false,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), updated.ExpiresAt)
+	assert.False(t, updated.AutoPauseOnExpired)
+
+	// Verify updated in DB.
+	require.NoError(t, model.DB.First(&stored, created.Id).Error)
+	assert.Equal(t, int64(0), stored.ExpiresAt)
+	assert.False(t, stored.AutoPauseOnExpired)
+}
+
 func TestAccountPoolServiceRejectsEnabledChannelBindingInPhaseOne(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

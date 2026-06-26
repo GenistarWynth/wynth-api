@@ -598,6 +598,8 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 		TempDisabledUntil:  req.TempDisabledUntil,
 		TempDisabledReason: req.TempDisabledReason,
 		LastError:          req.LastError,
+		ExpiresAt:          req.ExpiresAt,
+		AutoPauseOnExpired: req.AutoPauseOnExpired,
 	}
 }
 
@@ -747,6 +749,8 @@ func accountPoolAccountResponse(account service.AccountPoolAccountView) dto.Acco
 		TempDisabledUntil:         account.TempDisabledUntil,
 		TempDisabledReason:        account.TempDisabledReason,
 		LastError:                 account.LastError,
+		ExpiresAt:                 account.ExpiresAt,
+		AutoPauseOnExpired:        account.AutoPauseOnExpired,
 		LastCapabilityCheckAt:     account.LastCapabilityCheckAt,
 		LastCapabilityCheckStatus: account.LastCapabilityCheckStatus,
 		LastCapabilityCheckError:  account.LastCapabilityCheckError,

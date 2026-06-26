@@ -511,6 +511,8 @@ func ensureAccountPoolAccountColumnsSQLite() error {
 		{Name: "overload_until", DDL: "`overload_until` bigint NOT NULL DEFAULT 0"},
 		{Name: "failure_state", DDL: "`failure_state` text"},
 		{Name: "runtime_options", DDL: "`runtime_options` text"},
+		{Name: "expires_at", DDL: "`expires_at` bigint NOT NULL DEFAULT 0"},
+		{Name: "auto_pause_on_expired", DDL: "`auto_pause_on_expired` integer NOT NULL DEFAULT 0"},
 	}
 	for _, col := range required {
 		if _, ok := existing[col.Name]; ok {

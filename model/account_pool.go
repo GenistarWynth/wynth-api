@@ -106,6 +106,8 @@ type AccountPoolAccount struct {
 	RateLimitedUntil             int64  `json:"rate_limited_until" gorm:"bigint;index"`
 	TempDisabledUntil            int64  `json:"temp_disabled_until" gorm:"bigint;index"`
 	OverloadUntil                int64  `json:"overload_until" gorm:"bigint;index"`
+	ExpiresAt                    int64  `json:"expires_at" gorm:"bigint;not null;default:0;index"`
+	AutoPauseOnExpired           bool   `json:"auto_pause_on_expired" gorm:"not null;default:false"`
 	FailureState                 string `json:"-" gorm:"type:text"`
 	RuntimeOptions               string `json:"runtime_options" gorm:"type:text"`
 	TempDisabledReason           string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
@@ -148,6 +150,9 @@ func (a AccountPoolAccount) IsSchedulableAt(now int64) bool {
 		return false
 	}
 	if a.OverloadUntil > now {
+		return false
+	}
+	if a.AutoPauseOnExpired && a.ExpiresAt > 0 && a.ExpiresAt <= now {
 		return false
 	}
 	return true

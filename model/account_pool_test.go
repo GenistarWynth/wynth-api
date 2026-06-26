@@ -210,6 +210,32 @@ func TestAccountPoolAccountIsSchedulableAtOverloadUntil(t *testing.T) {
 	assert.True(t, a.IsSchedulableAt(now))
 }
 
+func TestAccountPoolAccountIsSchedulableAtExpiryAutoPause(t *testing.T) {
+	now := int64(1000000)
+
+	// AutoPauseOnExpired=true, ExpiresAt in the past: not schedulable (expired)
+	a := AccountPoolAccount{
+		Status:             AccountPoolAccountStatusEnabled,
+		AutoPauseOnExpired: true,
+		ExpiresAt:          now - 1,
+	}
+	assert.False(t, a.IsSchedulableAt(now), "expired account with auto-pause enabled must be unschedulable")
+
+	// AutoPauseOnExpired=true, ExpiresAt in the future: schedulable
+	a.ExpiresAt = now + 100
+	assert.True(t, a.IsSchedulableAt(now), "non-expired account with auto-pause enabled must be schedulable")
+
+	// AutoPauseOnExpired=false, ExpiresAt in the past: schedulable (auto-pause off means expiry ignored)
+	a.AutoPauseOnExpired = false
+	a.ExpiresAt = now - 1
+	assert.True(t, a.IsSchedulableAt(now), "auto-pause disabled: expiry must be ignored")
+
+	// AutoPauseOnExpired=true, ExpiresAt=0 (never expires): schedulable
+	a.AutoPauseOnExpired = true
+	a.ExpiresAt = 0
+	assert.True(t, a.IsSchedulableAt(now), "ExpiresAt=0 means never expires and must be schedulable")
+}
+
 func TestAccountPoolProxyRejectsSelfFallback(t *testing.T) {
 	setupAccountPoolTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&AccountPoolProxy{}))

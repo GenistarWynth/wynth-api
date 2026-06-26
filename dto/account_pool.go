@@ -69,6 +69,8 @@ type AccountPoolAccountCreateRequest struct {
 	TempDisabledUntil  int64                              `json:"temp_disabled_until"`
 	TempDisabledReason string                             `json:"temp_disabled_reason"`
 	LastError          string                             `json:"last_error"`
+	ExpiresAt          int64                              `json:"expires_at"`
+	AutoPauseOnExpired bool                               `json:"auto_pause_on_expired"`
 }
 
 type AccountPoolAccountResponse struct {
@@ -88,6 +90,8 @@ type AccountPoolAccountResponse struct {
 	TempDisabledUntil         int64             `json:"temp_disabled_until"`
 	TempDisabledReason        string            `json:"temp_disabled_reason"`
 	LastError                 string            `json:"last_error"`
+	ExpiresAt                 int64             `json:"expires_at"`
+	AutoPauseOnExpired        bool              `json:"auto_pause_on_expired"`
 	LastCapabilityCheckAt     int64             `json:"last_capability_check_at"`
 	LastCapabilityCheckStatus string            `json:"last_capability_check_status"`
 	LastCapabilityCheckError  string            `json:"last_capability_check_error"`

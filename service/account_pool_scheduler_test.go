@@ -592,6 +592,43 @@ func TestSelectAccountPoolAccountWithLeaseReturnsAccountWhenOneAvailable(t *test
 	assert.Equal(t, second.Id, result.AccountID)
 }
 
+// TestAccountPoolSchedulerExcludesExpiredAutoPauseAccounts verifies that an account
+// with AutoPauseOnExpired=true whose ExpiresAt has already passed is excluded from
+// scheduler selection, while a non-expired account is chosen.
+func TestAccountPoolSchedulerExcludesExpiredAutoPauseAccounts(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	now := int64(1000)
+
+	// Expired account with auto-pause: must be excluded.
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:               "expired-auto-pause",
+		AutoPauseOnExpired: true,
+		ExpiresAt:          now - 1, // past
+	})
+
+	// Non-expired account: must be selected.
+	selected := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:               "not-expired",
+		AutoPauseOnExpired: true,
+		ExpiresAt:          now + 100, // future
+	})
+
+	result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  now,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, selected.Id, result.AccountID, "expired auto-pause account must be excluded; only non-expired account should be selected")
+}
+
 func createEnabledAccountPoolSchedulerBinding(
 	t *testing.T,
 	poolID int,

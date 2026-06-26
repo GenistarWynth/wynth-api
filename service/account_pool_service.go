@@ -83,6 +83,8 @@ type AccountPoolAccountCreateParams struct {
 	TempDisabledUntil  int64
 	TempDisabledReason string
 	LastError          string
+	ExpiresAt          int64
+	AutoPauseOnExpired bool
 }
 
 type AccountPoolBindingCreateParams struct {
@@ -153,6 +155,8 @@ type AccountPoolAccountView struct {
 	TempDisabledUntil            int64             `json:"temp_disabled_until"`
 	TempDisabledReason           string            `json:"temp_disabled_reason"`
 	LastError                    string            `json:"last_error"`
+	ExpiresAt                    int64             `json:"expires_at"`
+	AutoPauseOnExpired           bool              `json:"auto_pause_on_expired"`
 	LastCapabilityCheckAt        int64             `json:"last_capability_check_at"`
 	LastCapabilityCheckStatus    string            `json:"last_capability_check_status"`
 	LastCapabilityCheckError     string            `json:"last_capability_check_error"`
@@ -383,6 +387,8 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 		TempDisabledUntil:  params.TempDisabledUntil,
 		TempDisabledReason: params.TempDisabledReason,
 		LastError:          params.LastError,
+		ExpiresAt:          accountPoolNormalizeExpiresAt(params.ExpiresAt),
+		AutoPauseOnExpired: params.AutoPauseOnExpired,
 	}
 	if err := model.DB.Create(&account).Error; err != nil {
 		return AccountPoolAccountView{}, err
@@ -421,21 +427,23 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 		status = model.AccountPoolAccountStatusEnabled
 	}
 	updates := map[string]any{
-		"name":                 name,
-		"account_identifier":   strings.TrimSpace(params.AccountIdentifier),
-		"status":               status,
-		"priority":             params.Priority,
-		"weight":               params.Weight,
-		"max_concurrency":      accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
-		"proxy_id":             params.ProxyID,
-		"supported_models":     supportedModels,
-		"model_mapping":        modelMapping,
-		"last_used_at":         params.LastUsedAt,
-		"rate_limited_until":   params.RateLimitedUntil,
-		"temp_disabled_until":  params.TempDisabledUntil,
-		"temp_disabled_reason": params.TempDisabledReason,
-		"last_error":           params.LastError,
-		"updated_time":         common.GetTimestamp(),
+		"name":                  name,
+		"account_identifier":    strings.TrimSpace(params.AccountIdentifier),
+		"status":                status,
+		"priority":              params.Priority,
+		"weight":                params.Weight,
+		"max_concurrency":       accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
+		"proxy_id":              params.ProxyID,
+		"supported_models":      supportedModels,
+		"model_mapping":         modelMapping,
+		"last_used_at":          params.LastUsedAt,
+		"rate_limited_until":    params.RateLimitedUntil,
+		"temp_disabled_until":   params.TempDisabledUntil,
+		"temp_disabled_reason":  params.TempDisabledReason,
+		"last_error":            params.LastError,
+		"expires_at":            accountPoolNormalizeExpiresAt(params.ExpiresAt),
+		"auto_pause_on_expired": params.AutoPauseOnExpired,
+		"updated_time":          common.GetTimestamp(),
 	}
 	if accountPoolCredentialHasSecret(params.Credential) {
 		credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
@@ -1270,6 +1278,15 @@ func accountPoolNormalizeMaxConcurrency(value int, explicit bool) int {
 	return value
 }
 
+// accountPoolNormalizeExpiresAt clamps negative ExpiresAt to 0.
+// 0 means "never expires"; positive values are Unix seconds.
+func accountPoolNormalizeExpiresAt(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
 func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolAccountView, error) {
 	var supportedModels []string
 	if account.SupportedModels != "" {
@@ -1324,6 +1341,8 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		TempDisabledUntil:            account.TempDisabledUntil,
 		TempDisabledReason:           account.TempDisabledReason,
 		LastError:                    account.LastError,
+		ExpiresAt:                    account.ExpiresAt,
+		AutoPauseOnExpired:           account.AutoPauseOnExpired,
 		LastCapabilityCheckAt:        account.LastCapabilityCheckAt,
 		LastCapabilityCheckStatus:    account.LastCapabilityCheckStatus,
 		LastCapabilityCheckError:     account.LastCapabilityCheckError,
