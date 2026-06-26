@@ -14,13 +14,13 @@ import (
 // These service-local Gin context keys are prefixed with account_pool_ to avoid
 // collisions with the shared constant.ContextKey* namespace.
 const (
-	accountPoolAttemptedAccountIDsContextKey     = "account_pool_attempted_account_ids"
-	accountPoolSelectedPoolIDContextKey          = "account_pool_selected_pool_id"
-	accountPoolSelectedBindingIDContextKey       = "account_pool_selected_binding_id"
-	accountPoolSelectedAccountIDContextKey       = "account_pool_selected_account_id"
-	accountPoolSelectedRetryTimesContextKey      = "account_pool_selected_retry_times"
-	accountPoolSelectedAffinityKeyContextKey     = "account_pool_selected_affinity_key"
-	accountPoolSelectedRuntimeOptionsContextKey  = "account_pool_selected_runtime_options"
+	accountPoolAttemptedAccountIDsContextKey    = "account_pool_attempted_account_ids"
+	accountPoolSelectedPoolIDContextKey         = "account_pool_selected_pool_id"
+	accountPoolSelectedBindingIDContextKey      = "account_pool_selected_binding_id"
+	accountPoolSelectedAccountIDContextKey      = "account_pool_selected_account_id"
+	accountPoolSelectedRetryTimesContextKey     = "account_pool_selected_retry_times"
+	accountPoolSelectedAffinityKeyContextKey    = "account_pool_selected_affinity_key"
+	accountPoolSelectedRuntimeOptionsContextKey = "account_pool_selected_runtime_options"
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {

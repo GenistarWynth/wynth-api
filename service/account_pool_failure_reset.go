@@ -12,9 +12,9 @@ import (
 // resets_at may be a JSON number or string, so json.RawMessage is used.
 type accountPool429ErrorBody struct {
 	Error struct {
-		Type           string          `json:"type"`
-		ResetsAt       json.RawMessage `json:"resets_at"`
-		ResetsInSeconds float64        `json:"resets_in_seconds"`
+		Type            string          `json:"type"`
+		ResetsAt        json.RawMessage `json:"resets_at"`
+		ResetsInSeconds float64         `json:"resets_in_seconds"`
 	} `json:"error"`
 }
 

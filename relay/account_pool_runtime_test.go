@@ -1192,6 +1192,90 @@ func TestRunAccountPoolRuntimeAttemptsPoolMode(t *testing.T) {
 	assert.Greater(t, reloaded.SuccessCount, int64(0), "final success must be recorded")
 }
 
+// TestRunAccountPoolRuntimeAttemptsPoolModePreservesCredentials verifies that on
+// every pool-mode retry the selected account's runtime credentials (ApiKey and
+// UpstreamModelName) are preserved in info — i.e. the pre-selection snapshot
+// does NOT wipe them out between retries. The test also checks that the rebuilt
+// request carries the account's mapped upstream model, not the original channel
+// upstream model.
+func TestRunAccountPoolRuntimeAttemptsPoolModePreservesCredentials(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+
+	// Account with a model mapping so we can assert UpstreamModelName is the
+	// mapped value, not the channel upstream model.
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "pool-mode-cred-account",
+		Priority: 100,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-selected-account",
+		},
+		SupportedModels: []string{"gpt-5"},
+		ModelMapping: map[string]string{
+			"gpt-5": "account-mapped-model",
+		},
+	})
+	runtimeOptionsJSON := `{"pool_mode":true,"pool_mode_retry_count":2,"pool_mode_retry_status_codes":[500]}`
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Update("runtime_options", runtimeOptionsJSON).Error)
+
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	// Recorded per invocation: apiKey seen in info, upstreamModel seen in info,
+	// and the model name set on the request object.
+	type attemptRecord struct {
+		apiKey        string
+		upstreamModel string
+		requestModel  string
+	}
+	records := make([]attemptRecord, 0, 3)
+	callCount := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		callCount++
+		textReq, _ := request.(*dto.GeneralOpenAIRequest)
+		reqModel := ""
+		if textReq != nil {
+			reqModel = textReq.Model
+		}
+		records = append(records, attemptRecord{
+			apiKey:        info.ApiKey,
+			upstreamModel: info.UpstreamModelName,
+			requestModel:  reqModel,
+		})
+		// Fail with 500 on first two calls, succeed on the third.
+		if callCount < 3 {
+			return types.NewErrorWithStatusCode(errors.New("upstream 500"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	require.Equal(t, 3, callCount, "expected 3 attempts (1 initial + 2 pool-mode retries)")
+
+	// All three attempts must use the SELECTED ACCOUNT's credentials.
+	for i, rec := range records {
+		assert.Equal(t, "sk-selected-account", rec.apiKey,
+			"attempt %d: info.ApiKey must be the selected account's key, not the original channel key", i+1)
+		assert.Equal(t, "account-mapped-model", rec.upstreamModel,
+			"attempt %d: info.UpstreamModelName must be the account's mapped model", i+1)
+		assert.Equal(t, "account-mapped-model", rec.requestModel,
+			"attempt %d: request model must be the account's mapped model", i+1)
+	}
+}
+
 // TestRunAccountPoolRuntimeAttemptsPoolModeThenNormalRetry verifies that when a
 // pool-mode account exhausts all pool-mode retries (all return 500), the loop
 // records a failure for that account exactly once, then — because the normal

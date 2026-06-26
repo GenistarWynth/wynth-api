@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -40,9 +41,9 @@ func classifyTransportError(err *types.NewAPIError) bool {
 		"no route to host",
 		"network is unreachable",
 		"no such host",
-		"no such host is known",          // Windows: GetAddrInfoW error
-		"actively refused",               // Windows: connection refused (WSAECONNREFUSED)
-		"unreachable host",               // Windows: WSAEHOSTUNREACH
+		"no such host is known", // Windows: GetAddrInfoW error
+		"actively refused",      // Windows: connection refused (WSAECONNREFUSED)
+		"unreachable host",      // Windows: WSAEHOSTUNREACH
 		"a socket operation was attempted to an unreachable network", // Windows: WSAENETUNREACH
 		"proxy authentication required",
 		"authentication failed",
@@ -285,6 +286,8 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 		isOAuth := false
 		if decryptErr == nil {
 			isOAuth = accountPoolHasOAuthRuntimeCredential(credential, AccountPoolTokenState{})
+		} else {
+			common.SysError(fmt.Sprintf("account pool: failed to decrypt credential for account %d during failure classification: %v", accountID, decryptErr))
 		}
 		updates := classifyAccountPoolFailure(account, err, isOAuth, now)
 		if len(updates) == 0 {
@@ -330,4 +333,3 @@ func truncateAccountPoolFailureMessage(message string, maxLen int) string {
 	}
 	return message[:end]
 }
-

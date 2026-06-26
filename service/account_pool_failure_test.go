@@ -412,9 +412,9 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 		},
 		{
 			// 400 with "identity verification" phrase → expire.
-			name: "400 identity verification phrase expires",
+			name:    "400 identity verification phrase expires",
 			account: baseAccount,
-			err:  makeErr("identity verification required", 400),
+			err:     makeErr("identity verification required", 400),
 			check: func(t *testing.T, got map[string]any) {
 				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 			},
@@ -506,7 +506,7 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			// Monotonic: existing rate_limited_until larger than new → keep existing.
 			name: "monotonic keeps larger existing rate_limited_until for 429",
 			account: model.AccountPoolAccount{
-				Status:          model.AccountPoolAccountStatusEnabled,
+				Status:           model.AccountPoolAccountStatusEnabled,
 				RateLimitedUntil: now + 10000,
 			},
 			err: makeErr("too many requests", 429),
@@ -518,7 +518,7 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			// Monotonic: existing overload_until larger than new → keep existing.
 			name: "monotonic keeps larger existing overload_until for 529",
 			account: model.AccountPoolAccount{
-				Status:       model.AccountPoolAccountStatusEnabled,
+				Status:        model.AccountPoolAccountStatusEnabled,
 				OverloadUntil: now + 10000,
 			},
 			err: makeErr("overloaded", 529),

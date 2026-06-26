@@ -461,10 +461,10 @@ func TestSelectAccountPoolAccountSkipsCorruptRow(t *testing.T) {
 	})
 	require.NoError(t, err)
 	badAccount := model.AccountPoolAccount{
-		PoolID:          pool.Id,
-		Name:            "corrupt-supported-models",
-		Status:          model.AccountPoolAccountStatusEnabled,
-		SupportedModels: `{bad`,
+		PoolID:           pool.Id,
+		Name:             "corrupt-supported-models",
+		Status:           model.AccountPoolAccountStatusEnabled,
+		SupportedModels:  `{bad`,
 		CredentialConfig: badCredential,
 	}
 	require.NoError(t, model.DB.Create(&badAccount).Error)
@@ -491,11 +491,11 @@ func TestSelectAccountPoolAccountSkipsCorruptRow(t *testing.T) {
 
 	t.Run("all corrupt accounts returns ErrAccountPoolNoSchedulableAccount", func(t *testing.T) {
 		_, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
-			ChannelID:   channel.Id,
-			RequestModel: "gpt-5",
+			ChannelID:            channel.Id,
+			RequestModel:         "gpt-5",
 			ChannelUpstreamModel: "gpt-5",
-			AttemptedAccountIDs: map[int]struct{}{goodAccount.Id: {}},
-			Now:         100,
+			AttemptedAccountIDs:  map[int]struct{}{goodAccount.Id: {}},
+			Now:                  100,
 		})
 		require.ErrorIs(t, err, ErrAccountPoolNoSchedulableAccount)
 	})

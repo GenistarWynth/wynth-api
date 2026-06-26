@@ -66,23 +66,50 @@ func runAccountPoolRuntimeAttempts(
 	// ReleaseAccountPoolRuntimeSelection at the top, handing off cleanly.
 	defer service.ReleaseAccountPoolRuntimeSelection(c)
 
-	snapshot := snapshotAccountPoolRuntimeRelay(info)
+	// preSelectionSnapshot captures info state before any account-pool selection.
+	// It is used to reset info at the start of each normal (non-pool-mode) iteration
+	// so that every inter-account retry begins from a clean channel-level state.
+	preSelectionSnapshot := snapshotAccountPoolRuntimeRelay(info)
+	// postSelectionSnapshot captures info state after a successful selection.
+	// Pool-mode same-account retries restore from this snapshot so that the
+	// selected account's ApiKey, UpstreamModelName, RuntimeProxy, and runtime
+	// headers are re-applied before each attempt — the pre-selection snapshot
+	// would otherwise wipe those credentials back to channel-level values.
+	postSelectionSnapshot := preSelectionSnapshot
+	// selectedUpstreamModelName remembers the account's mapped upstream model so
+	// that the rebuilt request can be updated to target the same model on each
+	// pool-mode retry (matching what ApplyAccountPoolRuntimeSelection did on the
+	// initial selection).
+	selectedUpstreamModelName := ""
 	poolModeRetryIndex := 0
 	var poolModeLastAccountID int
-	// FIX 2: normalAttempts counts only inter-account retry iterations (not
-	// pool-mode same-account retries) so that pool-mode retries do not consume
-	// the AccountRetryTimes budget.
+	// normalAttempts counts only inter-account retry iterations (not pool-mode
+	// same-account retries) so that pool-mode retries do not consume the
+	// AccountRetryTimes budget.
 	normalAttempts := 0
 	for {
 		// Pool-mode same-account retry: reuse the previously selected account
-		// without re-running selection. The relay snapshot is restored to undo any
-		// state mutations from the previous attempt, but selection is NOT re-run,
-		// so the same ApiKey/UpstreamModelName/etc. remain from the prior selection.
+		// without re-running selection. Restore from the post-selection snapshot
+		// so that the selected account's ApiKey/UpstreamModelName/RuntimeProxy/
+		// runtime headers are preserved across retries (not wiped by the
+		// pre-selection snapshot).
 		isPoolModeRetry := poolModeRetryIndex > 0 && poolModeLastAccountID > 0
-		restoreAccountPoolRuntimeRelay(info, snapshot)
+		if isPoolModeRetry {
+			restoreAccountPoolRuntimeRelay(info, postSelectionSnapshot)
+		} else {
+			restoreAccountPoolRuntimeRelay(info, preSelectionSnapshot)
+		}
 		request, newAPIError := requestFactory()
 		if newAPIError != nil {
 			return newAPIError
+		}
+		if isPoolModeRetry {
+			// Re-apply the selected account's upstream model to the freshly built
+			// request so the rebuilt request targets the account's model, not the
+			// original channel upstream model.
+			if request != nil && selectedUpstreamModelName != "" {
+				request.SetModelName(selectedUpstreamModelName)
+			}
 		}
 		if !isPoolModeRetry {
 			if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
@@ -98,6 +125,9 @@ func runAccountPoolRuntimeAttempts(
 				normalAttempts++
 				continue
 			}
+			// Capture the post-selection state so pool-mode retries can restore it.
+			postSelectionSnapshot = snapshotAccountPoolRuntimeRelay(info)
+			selectedUpstreamModelName = info.UpstreamModelName
 			poolModeLastAccountID = service.GetSelectedAccountPoolAccountID(c)
 			poolModeRetryIndex = 0
 		}

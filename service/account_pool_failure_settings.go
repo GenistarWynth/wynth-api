@@ -29,7 +29,7 @@ type accountPoolFailureSettings struct {
 	// Window (minutes) within which a re-strike 401 escalates the key to disabled.
 	OAuth401RestrikeWindowMinutes int
 
-	// Cooldown duration (minutes) for overload (503/529) responses.
+	// Cooldown duration (minutes) for overload (529) responses.
 	OverloadCooldownMinutes int
 
 	// Cooldown duration (minutes) for persistent transport errors (e.g. connection refused).
