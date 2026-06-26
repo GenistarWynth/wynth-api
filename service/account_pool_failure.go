@@ -303,6 +303,11 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 	if txErr != nil {
 		return txErr
 	}
+	if len(updates) == 0 {
+		// The failure produced no actionable state change (no cooldown/status update);
+		// do not set an in-process block for a no-op.
+		return nil
+	}
 
 	// Set the in-process fast-path block regardless of transaction outcome visibility.
 	// blockUntil = max cooldown timestamp from the updates, floored at now+floor, capped at now+cap.
@@ -317,9 +322,9 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 	if blockUntil < now+accountPoolRuntimeBlockFloorSeconds {
 		blockUntil = now + accountPoolRuntimeBlockFloorSeconds
 	}
-	cap := now + accountPoolRuntimeBlockCapSeconds
-	if blockUntil > cap {
-		blockUntil = cap
+	blockCap := now + accountPoolRuntimeBlockCapSeconds
+	if blockUntil > blockCap {
+		blockUntil = blockCap
 	}
 	blockAccountPoolRuntime(accountID, blockUntil)
 	return nil
