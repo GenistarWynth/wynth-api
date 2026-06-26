@@ -27,6 +27,13 @@ describe('account pool form helpers', () => {
         default_proxy_id: 0,
         default_monitor_enabled: false,
         default_schedule_policy: '',
+        capability_check_enabled: false,
+        capability_check_interval_minutes: 1440,
+        capability_check_mode: 'models_endpoint',
+        capability_check_channel_id: 0,
+        capability_check_models: [],
+        capability_check_timeout_seconds: 30,
+        capability_check_merge: false,
         remark: '',
       }
     )
@@ -68,6 +75,10 @@ describe('account pool form helpers', () => {
         priority: 0,
         weight: 1,
         max_concurrency: 1,
+        request_quota: 0,
+        request_quota_window_seconds: 0,
+        expires_at: 0,
+        auto_pause_on_expired: false,
         proxy_id: 0,
         supported_models: ['gpt-5', 'gpt-4', 'gpt-4o'],
         model_mapping: {},
@@ -106,6 +117,33 @@ describe('account pool form helpers', () => {
       }).max_concurrency,
       0
     )
+  })
+
+  test('clamps negative quota and expiry account fields to zero and preserves auto pause flag', () => {
+    const payload = buildAccountPayload({
+      ...emptyAccountForm(),
+      request_quota: -5,
+      request_quota_window_seconds: -3600,
+      expires_at: -1,
+      auto_pause_on_expired: true,
+    })
+    assert.equal(payload.request_quota, 0)
+    assert.equal(payload.request_quota_window_seconds, 0)
+    assert.equal(payload.expires_at, 0)
+    assert.equal(payload.auto_pause_on_expired, true)
+  })
+
+  test('preserves explicit positive quota window and expiry account fields', () => {
+    const payload = buildAccountPayload({
+      ...emptyAccountForm(),
+      request_quota: 1000,
+      request_quota_window_seconds: 3600,
+      expires_at: 1893456000,
+    })
+    assert.equal(payload.request_quota, 1000)
+    assert.equal(payload.request_quota_window_seconds, 3600)
+    assert.equal(payload.expires_at, 1893456000)
+    assert.equal(payload.auto_pause_on_expired, false)
   })
 
   test('rejects invalid model mapping text instead of silently dropping it', () => {

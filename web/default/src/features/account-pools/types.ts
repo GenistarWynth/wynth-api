@@ -116,6 +116,10 @@ export type AccountPoolAccount = {
   priority: number
   weight: number
   max_concurrency: number
+  request_quota: number
+  request_quota_window_seconds: number
+  expires_at: number
+  auto_pause_on_expired: boolean
   proxy_id: number
   supported_models: string[]
   model_mapping: Record<string, string>
@@ -161,6 +165,10 @@ export type AccountPoolAccountCreateRequest = {
   priority: number
   weight: number
   max_concurrency: number
+  request_quota: number
+  request_quota_window_seconds: number
+  expires_at: number
+  auto_pause_on_expired: boolean
   proxy_id: number
   supported_models: string[]
   model_mapping: Record<string, string>
@@ -242,6 +250,7 @@ export type AccountPoolBinding = {
   model_policy: string
   schedule_policy: string
   account_retry_times: number
+  max_user_concurrency: number
   status: AccountPoolBindingStatus | string
   runtime_enabled: boolean
   created_time: number
@@ -255,6 +264,7 @@ export type AccountPoolBindingCreateRequest = {
   fixed_models: string[]
   schedule_policy: AccountPoolSchedulePolicy
   account_retry_times: number
+  max_user_concurrency: number
 }
 
 export type AccountPoolBoundChannelCreateRequest = {
@@ -265,6 +275,7 @@ export type AccountPoolBoundChannelCreateRequest = {
   fixed_models?: string[]
   schedule_policy?: AccountPoolSchedulePolicy | ''
   account_retry_times?: number
+  max_user_concurrency?: number
 }
 
 export type AccountPoolProxy = {

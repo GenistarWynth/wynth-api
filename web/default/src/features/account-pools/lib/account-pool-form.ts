@@ -82,6 +82,10 @@ export type AccountPoolAccountFormValues = {
   priority: number
   weight: number
   max_concurrency: number
+  request_quota: number
+  request_quota_window_seconds: number
+  expires_at: number
+  auto_pause_on_expired: boolean
   proxy_id: number
   supported_models_text: string
   model_mapping_text: string
@@ -221,6 +225,10 @@ export function emptyAccountForm(): AccountPoolAccountFormValues {
     priority: 0,
     weight: 1,
     max_concurrency: 1,
+    request_quota: 0,
+    request_quota_window_seconds: 0,
+    expires_at: 0,
+    auto_pause_on_expired: false,
     proxy_id: 0,
     supported_models_text: '',
     model_mapping_text: '',
@@ -255,6 +263,13 @@ export function buildAccountPayload(
     priority: toInteger(values.priority),
     weight: toInteger(values.weight),
     max_concurrency: Math.max(0, toInteger(values.max_concurrency)),
+    request_quota: Math.max(0, toInteger(values.request_quota)),
+    request_quota_window_seconds: Math.max(
+      0,
+      toInteger(values.request_quota_window_seconds)
+    ),
+    expires_at: Math.max(0, toInteger(values.expires_at)),
+    auto_pause_on_expired: values.auto_pause_on_expired === true,
     proxy_id: toInteger(values.proxy_id),
     supported_models: normalizeModelListText(values.supported_models_text),
     model_mapping: parseModelMapping(values.model_mapping_text),
@@ -284,6 +299,10 @@ export function accountToFormValues(
     priority: account.priority,
     weight: account.weight,
     max_concurrency: account.max_concurrency,
+    request_quota: account.request_quota,
+    request_quota_window_seconds: account.request_quota_window_seconds,
+    expires_at: account.expires_at,
+    auto_pause_on_expired: account.auto_pause_on_expired === true,
     proxy_id: account.proxy_id,
     supported_models_text: account.supported_models.join('\n'),
     model_mapping_text:

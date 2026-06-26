@@ -194,6 +194,7 @@ type BindingFormValues = {
   fixed_models_text: string
   schedule_policy: AccountPoolSchedulePolicy
   account_retry_times: number
+  max_user_concurrency: number
 }
 
 type CapabilityDetectFormValues = {
@@ -264,6 +265,7 @@ function emptyBindingForm(defaultSchedulePolicy = ''): BindingFormValues {
     fixed_models_text: '',
     schedule_policy: normalizeAccountPoolSchedulePolicy(defaultSchedulePolicy),
     account_retry_times: 0,
+    max_user_concurrency: 0,
   }
 }
 
@@ -290,6 +292,7 @@ function buildBindingPayload(
     fixed_models: modelListFromText(values.fixed_models_text),
     schedule_policy: normalizeAccountPoolSchedulePolicy(values.schedule_policy),
     account_retry_times: values.account_retry_times,
+    max_user_concurrency: Math.max(0, values.max_user_concurrency),
   }
 }
 
@@ -534,6 +537,7 @@ function bindingToFormValues(binding: AccountPoolBinding): BindingFormValues {
       : '',
     schedule_policy: normalizeAccountPoolSchedulePolicy(binding.schedule_policy),
     account_retry_times: binding.account_retry_times,
+    max_user_concurrency: binding.max_user_concurrency,
   }
 }
 
@@ -3241,6 +3245,20 @@ function BindingForm(props: {
               }
             />
           </FieldBlock>
+          <FieldBlock
+            label={t('Max Per-User Concurrency')}
+            htmlFor='account-pool-binding-max-user-concurrency'
+          >
+            <Input
+              id='account-pool-binding-max-user-concurrency'
+              type='number'
+              min={0}
+              value={form.max_user_concurrency}
+              onChange={(event) =>
+                setField('max_user_concurrency', Number(event.target.value))
+              }
+            />
+          </FieldBlock>
         </FieldGroup>
         <FieldSet>
           <FieldLegend variant='label'>{t('Accounts')}</FieldLegend>
@@ -3771,7 +3789,47 @@ function AccountFormSheet(props: {
                 value={form.max_concurrency}
                 onChange={(value) => setField('max_concurrency', value)}
               />
+              <NumericField
+                id='account-pool-account-request-quota'
+                label={t('Request Quota (0 = unlimited)')}
+                min={0}
+                value={form.request_quota}
+                onChange={(value) => setField('request_quota', value)}
+              />
+              <NumericField
+                id='account-pool-account-request-quota-window'
+                label={t('Request Quota Window (seconds, 0 = lifetime)')}
+                min={0}
+                value={form.request_quota_window_seconds}
+                onChange={(value) =>
+                  setField('request_quota_window_seconds', value)
+                }
+              />
+              <NumericField
+                id='account-pool-account-expires-at'
+                label={t('Expires At (unix seconds, 0 = never)')}
+                min={0}
+                value={form.expires_at}
+                onChange={(value) => setField('expires_at', value)}
+              />
             </FieldGroup>
+            <div className={sideDrawerSwitchItemClassName()}>
+              <div className='min-w-0'>
+                <FieldLabel htmlFor='account-pool-account-auto-pause-on-expired'>
+                  {t('Auto Pause On Expired')}
+                </FieldLabel>
+                <p className='text-muted-foreground mt-1 text-xs'>
+                  {t('Stop scheduling this account once it has expired')}
+                </p>
+              </div>
+              <Switch
+                id='account-pool-account-auto-pause-on-expired'
+                checked={form.auto_pause_on_expired}
+                onCheckedChange={(checked) =>
+                  setField('auto_pause_on_expired', checked)
+                }
+              />
+            </div>
           </SideDrawerSection>
           <SideDrawerSection>
             <SideDrawerSectionHeader title={t('Credentials')} />
