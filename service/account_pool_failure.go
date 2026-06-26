@@ -115,10 +115,12 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 				updates["temp_disabled_until"] = int64(0)
 				updates["overload_until"] = int64(0)
 				updates["temp_disabled_reason"] = ""
+				fs.LastStatus = code
 				writeFS()
 				return updates
 			}
 			disableUntil = now + int64(cfg.TransportPersistentMinutes*60)
+			fs.LastStatus = code
 			writeFS()
 		} else {
 			// Transient errors use a flat cooldown; do NOT increment ConsecutiveFailures.
@@ -145,6 +147,7 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 			} else {
 				// First 401 (or outside window): cool down, record timestamp.
 				fs.Last401At = now
+				fs.LastStatus = code
 				updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, now+int64(cfg.OAuth401CooldownMinutes*60))
 				writeFS()
 			}
@@ -178,6 +181,7 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 			// Under threshold: apply cooldown only.
 			updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, now+int64(cfg.HTTP403CooldownMinutes*60))
 		}
+		fs.LastStatus = code
 		writeFS()
 
 	// Case 3 — Rate limited.
@@ -211,6 +215,7 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 			reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
 			fs.ConsecutiveFailures++
 			tier := cfg.Escalation5xxTiersSeconds[min(fs.ConsecutiveFailures-1, len(cfg.Escalation5xxTiersSeconds)-1)]
+			fs.LastStatus = code
 			if fs.ConsecutiveFailures >= cfg.Escalation5xxHardCapCount {
 				updates["status"] = model.AccountPoolAccountStatusExpired
 				updates["rate_limited_until"] = int64(0)
@@ -309,7 +314,24 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 		return nil
 	}
 
-	// Set the in-process fast-path block regardless of transaction outcome visibility.
+	// Set the in-process fast-path block only when the updates contain a real sidelining
+	// signal (expiry or a non-zero cooldown timestamp). No-cooldown codes (404, 402, etc.)
+	// only write bookkeeping fields and must NOT set a block that contradicts the DB.
+	hasSideliningSignal := false
+	if st, ok := updates["status"]; ok && st == model.AccountPoolAccountStatusExpired {
+		hasSideliningSignal = true
+	}
+	for _, field := range []string{"rate_limited_until", "temp_disabled_until", "overload_until"} {
+		if v, ok := updates[field]; ok {
+			if ts, ok2 := v.(int64); ok2 && ts > now {
+				hasSideliningSignal = true
+			}
+		}
+	}
+	if !hasSideliningSignal {
+		return nil
+	}
+
 	// blockUntil = max cooldown timestamp from the updates, floored at now+floor, capped at now+cap.
 	blockUntil := int64(0)
 	for _, field := range []string{"rate_limited_until", "temp_disabled_until", "overload_until"} {

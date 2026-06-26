@@ -268,6 +268,40 @@ func TestRecordAccountPoolRuntimeAttemptFailureSetsFloorBlockWhenNoSpecificCoold
 	assert.False(t, accountPoolRuntimeBlocked(account.Id, now+accountPoolRuntimeBlockCapSeconds), "block must not exceed cap")
 }
 
+// --- FIX 2: No block for no-cooldown error codes ---
+
+func TestRecordAccountPoolRuntimeAttemptFailureNoBlockFor404(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	resetAccountPoolRuntimeBlocksForTest()
+
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{Name: "not-found"})
+
+	now := int64(1000)
+	err := types.NewErrorWithStatusCode(errors.New("not found"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+
+	// 404 is a no-cooldown code: DB keeps account schedulable, no in-process block must be set.
+	assert.False(t, accountPoolRuntimeBlocked(account.Id, now), "404 must NOT set a runtime block")
+}
+
+func TestRecordAccountPoolRuntimeAttemptFailureBlocksFor500(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	resetAccountPoolRuntimeBlocksForTest()
+
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{Name: "server-error-block"})
+
+	now := int64(1000)
+	err := types.NewErrorWithStatusCode(errors.New("internal server error"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+
+	// 500 sets temp_disabled_until → must set an in-process block (regression guard).
+	assert.True(t, accountPoolRuntimeBlocked(account.Id, now), "500 must set a runtime block")
+}
+
 // --- Success clears the in-process block ---
 
 func TestRecordAccountPoolRuntimeAttemptSuccessClearsRuntimeBlock(t *testing.T) {

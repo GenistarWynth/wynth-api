@@ -537,6 +537,18 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 				assert.Equal(t, now+10000, got["temp_disabled_until"])
 			},
 		},
+		// FIX 4: 500 failure writes LastStatus=500 to failure_state
+		{
+			name:    "500 failure writes LastStatus=500 to failure_state",
+			account: baseAccount,
+			err:     makeErr("internal error", 500),
+			check: func(t *testing.T, got map[string]any) {
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, 500, fs.LastStatus)
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -985,7 +985,7 @@ func setupAccountPoolRelayTestDB(t *testing.T) {
 	model.DB = db
 	common.CryptoSecret = "account-pool-relay-test-secret"
 	common.CryptoSecretStable = true
-	service.ResetAccountPoolRuntimeBlocksForTest()
+	service.ResetAccountPoolRuntimeForTest()
 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},

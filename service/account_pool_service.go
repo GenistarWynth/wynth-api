@@ -434,6 +434,8 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 	if status == "" {
 		status = model.AccountPoolAccountStatusEnabled
 	}
+	// Detect re-enable transition: account was not enabled but is being set to enabled.
+	isReEnable := account.Status != model.AccountPoolAccountStatusEnabled && status == model.AccountPoolAccountStatusEnabled
 	updates := map[string]any{
 		"name":                         name,
 		"account_identifier":           strings.TrimSpace(params.AccountIdentifier),
@@ -455,6 +457,12 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 		"request_quota_window_seconds": accountPoolNormalizeRequestQuota(params.RequestQuotaWindowSeconds),
 		"updated_time":                 common.GetTimestamp(),
 	}
+	if isReEnable {
+		// Clear failure-escalation state so the account starts fresh after admin re-enable.
+		// Quota counters are NOT reset.
+		updates["failure_state"] = ""
+		updates["overload_until"] = int64(0)
+	}
 	if accountPoolCredentialHasSecret(params.Credential) {
 		credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
 		if err != nil {
@@ -471,6 +479,9 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 	}
 	if err := model.DB.Model(&account).Updates(updates).Error; err != nil {
 		return AccountPoolAccountView{}, err
+	}
+	if isReEnable {
+		clearAccountPoolRuntimeBlock(accountID)
 	}
 	if err := model.DB.First(&account, accountID).Error; err != nil {
 		return AccountPoolAccountView{}, err
@@ -1435,4 +1446,18 @@ func marshalAccountPoolOptionalJSON(value any) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ResetAccountPoolRuntimeForTest resets all process-global singletons used by the account-pool
+// runtime to a clean zero state. It must only be called from tests.
+func ResetAccountPoolRuntimeForTest() {
+	resetAccountPoolRuntimeLeasesForTest()
+	resetAccountPoolRuntimeSelectionRecencyForTest()
+	resetAccountPoolRuntimeBlocksForTest()
+	resetAccountPoolUserConcurrencyForTest()
+	resetAccountPoolRuntimeAffinitiesForTest()
+	accountPoolRuntimeEnabledCache = nil
+	accountPoolRuntimeEnabledCacheOnce = sync.Once{}
+	accountPoolRuntimeConcurrencyCache = nil
+	accountPoolRuntimeConcurrencyCacheOnce = sync.Once{}
 }

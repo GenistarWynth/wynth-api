@@ -1536,6 +1536,103 @@ func TestAccountPoolBindingNegativeMaxUserConcurrencyClampsToZero(t *testing.T) 
 	assert.Equal(t, 0, stored2.MaxUserConcurrency, "negative MaxUserConcurrency must be persisted as 0 on update")
 }
 
+// TestUpdateAccountReEnableClearsEscalationState asserts that re-enabling an account
+// (status transition from expired/disabled to enabled) resets failure_state and overload_until,
+// clears the runtime block, and does NOT reset quota counters.
+func TestUpdateAccountReEnableClearsEscalationState(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+
+	// Create account with expired status and hard-cap failure state.
+	account, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "escalated-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-escalated",
+		},
+	})
+	require.NoError(t, err)
+
+	// Seed escalation state: status=expired, failure_state at hard cap, overload_until set, quota used.
+	hardCapState := makeFailureStateJSON(t, accountPoolFailureState{ConsecutiveFailures: 6})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"status":             model.AccountPoolAccountStatusExpired,
+			"failure_state":      hardCapState,
+			"overload_until":     int64(99999),
+			"request_quota_used": int64(42),
+		}).Error)
+
+	// Set an in-process runtime block.
+	blockAccountPoolRuntime(account.Id, int64(999999))
+	require.True(t, accountPoolRuntimeBlocked(account.Id, int64(1000)), "sanity: block must be set")
+
+	// Re-enable via UpdateAccount.
+	_, err = svc.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
+		Name:   "escalated-account",
+		Status: model.AccountPoolAccountStatusEnabled,
+	})
+	require.NoError(t, err)
+
+	// Reload from DB and assert escalation state was cleared.
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, reloaded.Status)
+	assert.Empty(t, reloaded.FailureState, "failure_state must be cleared on re-enable")
+	assert.Zero(t, reloaded.OverloadUntil, "overload_until must be zeroed on re-enable")
+
+	// Runtime block must be cleared.
+	assert.False(t, accountPoolRuntimeBlocked(account.Id, int64(1000)), "runtime block must be cleared on re-enable")
+
+	// Quota counters must NOT be reset.
+	assert.Equal(t, int64(42), reloaded.RequestQuotaUsed, "request_quota_used must NOT be reset on re-enable")
+}
+
+// TestUpdateAccountAlreadyEnabledDoesNotClearEscalationState asserts that editing an
+// already-enabled account (no status transition) does NOT clear failure_state or overload_until.
+func TestUpdateAccountAlreadyEnabledDoesNotClearEscalationState(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+
+	account, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "active-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-active",
+		},
+	})
+	require.NoError(t, err)
+
+	// Seed account with active failure_state and overload_until while already enabled.
+	activeState := makeFailureStateJSON(t, accountPoolFailureState{ConsecutiveFailures: 3})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"failure_state":  activeState,
+			"overload_until": int64(99999),
+		}).Error)
+
+	// Update with status=enabled (no transition).
+	_, err = svc.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
+		Name:   "active-account",
+		Status: model.AccountPoolAccountStatusEnabled,
+	})
+	require.NoError(t, err)
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.NotEmpty(t, reloaded.FailureState, "failure_state must NOT be cleared for already-enabled account")
+	fs, err := parseAccountPoolFailureState(reloaded.FailureState)
+	require.NoError(t, err)
+	assert.Equal(t, 3, fs.ConsecutiveFailures, "ConsecutiveFailures must be preserved")
+	assert.Equal(t, int64(99999), reloaded.OverloadUntil, "overload_until must NOT be zeroed for already-enabled account")
+}
+
 func setupAccountPoolServiceTestDB(t *testing.T) {
 	t.Helper()
 
@@ -1551,10 +1648,7 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 	model.DB = db
 	common.CryptoSecret = "account-pool-service-test-secret"
 	common.CryptoSecretStable = true
-	resetAccountPoolRuntimeLeasesForTest()
-	resetAccountPoolRuntimeSelectionRecencyForTest()
-	resetAccountPoolRuntimeAffinitiesForTest()
-	resetAccountPoolRuntimeBlocksForTest()
+	ResetAccountPoolRuntimeForTest()
 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},
