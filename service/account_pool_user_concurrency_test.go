@@ -183,12 +183,16 @@ func TestAccountPoolUserConcurrencyThreadSafe(t *testing.T) {
 			}
 			mu.Unlock()
 
-			// Release first so the slot is freed while current is still incremented,
-			// ensuring maxSeen reflects the true concurrency observed under real load.
-			release()
+			// Decrement the observed-concurrency counter while the manager slot is STILL
+			// held, then release. This keeps `current` <= the manager's held-slot count at
+			// all times, so maxSeen can never exceed maxConc (the manager guarantees at most
+			// maxConc held slots). Releasing before decrementing would let the freed slot be
+			// re-acquired by another goroutine while this one is still counted in `current`,
+			// inflating maxSeen above maxConc (a measurement artifact, not a real breach).
 			mu.Lock()
 			current--
 			mu.Unlock()
+			release()
 		}()
 	}
 	wg.Wait()
