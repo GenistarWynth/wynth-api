@@ -264,6 +264,8 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 		},
 		{
 			// 529 overload must NOT increment ConsecutiveFailures.
+			// 529 must NOT set temp_disabled_reason (overload_until is its own axis;
+			// last_error already records the message — consistent with 429 branch).
 			name:    "529 overload does not increment ConsecutiveFailures",
 			account: baseAccount,
 			err:     makeErr("overloaded", 529),
@@ -272,6 +274,7 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 				assert.NotContains(t, got, "status")
 				assert.NotContains(t, got, "temp_disabled_until")
 				assert.NotContains(t, got, "rate_limited_until")
+				assert.NotContains(t, got, "temp_disabled_reason")
 				// failure_state should not be written (or if written, ConsecutiveFailures=0)
 				if fsRaw, ok := got["failure_state"]; ok {
 					fs, err := parseAccountPoolFailureState(fsRaw.(string))
@@ -438,15 +441,30 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			},
 		},
 		{
-			// Persistent transport errors now use escalation tiering (same as 5xx).
-			// First hit: ConsecutiveFailures becomes 1 → tier index 0 → 60s.
-			// (Previously used flat TransportPersistentMinutes=10min=600s.)
-			name:    "network error persistent connection refused tier-0 60s",
+			// Persistent transport errors use a flat 10-minute (600s) cooldown,
+			// NOT the 5xx escalation tier ladder. First hit → now+600.
+			name:    "network error persistent connection refused flat 10m",
 			account: baseAccount,
 			err:     makeNetworkErr("connection refused"),
 			check: func(t *testing.T, got map[string]any) {
-				assert.Equal(t, now+60, got["temp_disabled_until"])
+				assert.Equal(t, now+600, got["temp_disabled_until"])
 				assert.NotContains(t, got, "status")
+			},
+		},
+		{
+			// Persistent transport error with ConsecutiveFailures already at 5 (one below hard cap).
+			// After incrementing to 6 (>=HardCapCount=6) → status=expired, cooldowns cleared.
+			name: "network error persistent hard cap ConsecutiveFailures=5 expires",
+			account: model.AccountPoolAccount{
+				Status:       model.AccountPoolAccountStatusEnabled,
+				FailureState: makeFailureStateJSON(t, accountPoolFailureState{ConsecutiveFailures: 5}),
+			},
+			err: makeNetworkErr("connection refused"),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
+				assert.Equal(t, int64(0), got["rate_limited_until"])
+				assert.Equal(t, int64(0), got["temp_disabled_until"])
+				assert.Equal(t, int64(0), got["overload_until"])
 			},
 		},
 		{

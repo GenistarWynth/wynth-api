@@ -104,9 +104,10 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 		reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
 		var disableUntil int64
 		if persistent {
-			// Persistent transport errors share the 5xx escalation tier logic.
+			// Persistent transport errors use a flat cooldown of TransportPersistentMinutes*60s,
+			// NOT the 5xx tier ladder. ConsecutiveFailures is still incremented and the hard cap
+			// still applies: once ConsecutiveFailures >= Escalation5xxHardCapCount → expire.
 			fs.ConsecutiveFailures++
-			tier := cfg.Escalation5xxTiersSeconds[min(fs.ConsecutiveFailures-1, len(cfg.Escalation5xxTiersSeconds)-1)]
 			if fs.ConsecutiveFailures >= cfg.Escalation5xxHardCapCount {
 				updates["status"] = model.AccountPoolAccountStatusExpired
 				updates["rate_limited_until"] = int64(0)
@@ -116,7 +117,7 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 				writeFS()
 				return updates
 			}
-			disableUntil = now + int64(tier)
+			disableUntil = now + int64(cfg.TransportPersistentMinutes*60)
 			writeFS()
 		} else {
 			// Transient errors use a flat cooldown; do NOT increment ConsecutiveFailures.
@@ -199,9 +200,9 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 	// Case 5 — Overload (Claude/Anthropic-specific 529).
 	case 529:
 		// 529 does NOT increment ConsecutiveFailures (overload is load-side, not account-health).
-		reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
+		// temp_disabled_reason must NOT be set — overload_until is its own axis and
+		// last_error already records the message (consistent with the 429 branch).
 		updates["overload_until"] = monotonic(account.OverloadUntil, now+int64(cfg.OverloadCooldownMinutes*60))
-		updates["temp_disabled_reason"] = reason
 
 	// Case 6 — Other 5xx (500-599 except 529): escalating tiered cooldown.
 	default:
