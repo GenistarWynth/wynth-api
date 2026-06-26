@@ -96,6 +96,14 @@ type NewAPIError struct {
 	errorCode      ErrorCode
 	StatusCode     int
 	Metadata       json.RawMessage
+
+	// UpstreamHeader, UpstreamBody, and UpstreamStatusCode carry the raw
+	// upstream HTTP response context so that callers (e.g. account-pool
+	// cooldown logic) can inspect rate-limit headers without re-reading the
+	// already-consumed body.
+	UpstreamHeader     http.Header
+	UpstreamBody       []byte
+	UpstreamStatusCode int
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -104,6 +112,46 @@ func (e *NewAPIError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+// SetUpstreamResponse records the raw HTTP response context from the upstream
+// provider onto the error. It is nil-safe: calling it on a nil *NewAPIError is
+// a no-op. The captured status code is the pre-mapping upstream status; any
+// status-code remapping applied later does not affect UpstreamStatusCode.
+func (e *NewAPIError) SetUpstreamResponse(header http.Header, body []byte, statusCode int) {
+	if e == nil {
+		return
+	}
+	e.UpstreamHeader = header
+	e.UpstreamBody = body
+	e.UpstreamStatusCode = statusCode
+}
+
+// GetUpstreamHeader returns the upstream HTTP response headers, or nil if the
+// receiver is nil or no upstream response was recorded.
+func (e *NewAPIError) GetUpstreamHeader() http.Header {
+	if e == nil {
+		return nil
+	}
+	return e.UpstreamHeader
+}
+
+// GetUpstreamBody returns the upstream HTTP response body bytes, or nil if the
+// receiver is nil or no upstream response was recorded.
+func (e *NewAPIError) GetUpstreamBody() []byte {
+	if e == nil {
+		return nil
+	}
+	return e.UpstreamBody
+}
+
+// GetUpstreamStatusCode returns the upstream HTTP response status code, or 0
+// if the receiver is nil or no upstream response was recorded.
+func (e *NewAPIError) GetUpstreamStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	return e.UpstreamStatusCode
 }
 
 func (e *NewAPIError) GetErrorCode() ErrorCode {

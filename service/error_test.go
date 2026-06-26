@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,6 +149,25 @@ func TestRelayErrorHandlerKeepsInvalidJSONBodyInDebugLog(t *testing.T) {
 	require.NotNil(t, newAPIError)
 	require.NotContains(t, logBuffer.String(), "[truncated")
 	require.Contains(t, logBuffer.String(), body)
+}
+
+func TestRelayErrorHandlerCapturesUpstream(t *testing.T) {
+	body := `{"error":{"message":"rate limited","type":"rate_limit_error","code":"rate_limit_error"}}`
+	header := http.Header{
+		"X-Codex-Primary-Reset-After-Seconds": []string{"30"},
+	}
+	resp := &http.Response{
+		StatusCode: 429,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, 429, newAPIError.GetUpstreamStatusCode())
+	assert.Equal(t, "30", newAPIError.GetUpstreamHeader().Get("X-Codex-Primary-Reset-After-Seconds"))
+	assert.Equal(t, []byte(body), newAPIError.GetUpstreamBody())
 }
 
 func withDebugEnabled(t *testing.T, enabled bool) {

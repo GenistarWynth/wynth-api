@@ -141,6 +141,8 @@ func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayI
 		httpResp = resp.(*http.Response)
 
 		if httpResp.StatusCode != http.StatusOK {
+			// RelayErrorHandler is called first so that UpstreamStatusCode on the
+			// returned error reflects the raw upstream status before any mapping.
 			newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)

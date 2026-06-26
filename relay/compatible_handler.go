@@ -213,6 +213,8 @@ func textHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, 
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
+			// RelayErrorHandler is called first so that UpstreamStatusCode on the
+			// returned error reflects the raw upstream status before any mapping.
 			newApiErr := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newApiErr, statusCodeMappingStr)
