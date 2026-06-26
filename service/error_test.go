@@ -170,6 +170,42 @@ func TestRelayErrorHandlerCapturesUpstream(t *testing.T) {
 	assert.Equal(t, []byte(body), newAPIError.GetUpstreamBody())
 }
 
+// errReader returns partialBytes on the first Read call (along with io.ErrUnexpectedEOF),
+// then returns (0, io.ErrUnexpectedEOF) on every subsequent call.
+type errReader struct {
+	partialBytes []byte
+	readOnce     bool
+	readErr      error
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if !r.readOnce {
+		r.readOnce = true
+		n := copy(p, r.partialBytes)
+		return n, r.readErr
+	}
+	return 0, r.readErr
+}
+
+func TestRelayErrorHandlerCapturesUpstreamOnBodyReadError(t *testing.T) {
+	partial := []byte(`{"error":`)
+	header := http.Header{
+		"X-Codex-Primary-Reset-After-Seconds": []string{"10"},
+	}
+	resp := &http.Response{
+		StatusCode: 502,
+		Header:     header,
+		Body:       io.NopCloser(&errReader{partialBytes: partial, readErr: io.ErrUnexpectedEOF}),
+	}
+
+	newAPIError := RelayErrorHandler(context.Background(), resp, false)
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, 502, newAPIError.GetUpstreamStatusCode())
+	assert.Equal(t, "10", newAPIError.GetUpstreamHeader().Get("X-Codex-Primary-Reset-After-Seconds"))
+	assert.Equal(t, partial, newAPIError.GetUpstreamBody())
+}
+
 func withDebugEnabled(t *testing.T, enabled bool) {
 	t.Helper()
 

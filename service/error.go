@@ -97,10 +97,10 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 	}()
 
 	responseBody, err := io.ReadAll(resp.Body)
+	capturedBody = responseBody // capture partial bytes even when err != nil
 	if err != nil {
 		return
 	}
-	capturedBody = responseBody
 	CloseResponseBodyGracefully(resp)
 	var errResponse dto.GeneralErrorResponse
 	responseBodyText := string(responseBody)
