@@ -170,6 +170,9 @@ func runAccountPoolRuntimeAttempts(
 				now := common.GetTimestamp()
 				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, now)
 				service.RememberSelectedAccountPoolRuntimeAffinity(c, now)
+				if service.GetSelectedAccountPoolRequestQuota(c) > 0 {
+					_ = service.IncrementAccountPoolAccountRequestQuota(selectedAccountID, now)
+				}
 			}
 			return nil
 		}

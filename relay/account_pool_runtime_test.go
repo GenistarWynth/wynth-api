@@ -1495,3 +1495,88 @@ func TestAccountPoolRuntimeAttemptsChannelTestSkipsUserConcurrencyEnforcement(t 
 	require.Nil(t, newAPIError)
 	assert.True(t, attemptCalled, "channel-test traffic must not be blocked by per-user concurrency")
 }
+
+// TestAccountPoolRuntimeSuccessIncrementsRequestQuotaWhenConfigured verifies that a
+// successful pooled attempt on a quota-configured account (RequestQuota > 0) increments
+// RequestQuotaUsed by 1 in the database.
+func TestAccountPoolRuntimeSuccessIncrementsRequestQuotaWhenConfigured(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBinding(t, pool.Id, channel.Id)
+
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "quota-configured",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-quota-account",
+		},
+	})
+	// Set a non-zero quota so the increment path fires.
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"request_quota":                int64(100),
+			"request_quota_used":           int64(0),
+			"request_quota_window_start":   int64(0),
+			"request_quota_window_seconds": int64(0),
+		}).Error)
+
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		req, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return req, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, int64(1), reloaded.RequestQuotaUsed, "successful attempt must increment RequestQuotaUsed by 1")
+	assert.NotZero(t, reloaded.RequestQuotaWindowStart, "successful attempt must set RequestQuotaWindowStart")
+}
+
+// TestAccountPoolRuntimeSuccessDoesNotIncrementRequestQuotaWhenQuotaIsZero verifies that
+// an account with RequestQuota=0 (unlimited/default) does NOT trigger the increment path:
+// RequestQuotaUsed stays 0 and RequestQuotaWindowStart stays 0 (no DB work added).
+func TestAccountPoolRuntimeSuccessDoesNotIncrementRequestQuotaWhenQuotaIsZero(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBinding(t, pool.Id, channel.Id)
+
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "quota-unlimited",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-unlimited-account",
+		},
+	})
+	// RequestQuota defaults to 0 (unlimited). No additional setup needed.
+
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		req, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return req, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Zero(t, reloaded.RequestQuotaUsed, "account with quota=0 must NOT have RequestQuotaUsed incremented")
+	assert.Zero(t, reloaded.RequestQuotaWindowStart, "account with quota=0 must NOT have RequestQuotaWindowStart set")
+}

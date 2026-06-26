@@ -65,26 +65,28 @@ type AccountPoolCreateParams struct {
 }
 
 type AccountPoolAccountCreateParams struct {
-	PoolID             int
-	Name               string
-	AccountIdentifier  string
-	Credential         AccountPoolCredentialConfig
-	TokenState         AccountPoolTokenState
-	Status             string
-	Priority           int64
-	Weight             uint
-	MaxConcurrency     int
-	MaxConcurrencySet  bool
-	ProxyID            int
-	SupportedModels    []string
-	ModelMapping       map[string]string
-	LastUsedAt         int64
-	RateLimitedUntil   int64
-	TempDisabledUntil  int64
-	TempDisabledReason string
-	LastError          string
-	ExpiresAt          int64
-	AutoPauseOnExpired bool
+	PoolID                    int
+	Name                      string
+	AccountIdentifier         string
+	Credential                AccountPoolCredentialConfig
+	TokenState                AccountPoolTokenState
+	Status                    string
+	Priority                  int64
+	Weight                    uint
+	MaxConcurrency            int
+	MaxConcurrencySet         bool
+	ProxyID                   int
+	SupportedModels           []string
+	ModelMapping              map[string]string
+	LastUsedAt                int64
+	RateLimitedUntil          int64
+	TempDisabledUntil         int64
+	TempDisabledReason        string
+	LastError                 string
+	ExpiresAt                 int64
+	AutoPauseOnExpired        bool
+	RequestQuota              int64
+	RequestQuotaWindowSeconds int64
 }
 
 type AccountPoolBindingCreateParams struct {
@@ -163,6 +165,10 @@ type AccountPoolAccountView struct {
 	LastCapabilityCheckModels    []string          `json:"last_capability_check_models"`
 	HasCredential                bool              `json:"has_credential"`
 	HasToken                     bool              `json:"has_token"`
+	RequestQuota                 int64             `json:"request_quota"`
+	RequestQuotaUsed             int64             `json:"request_quota_used"`
+	RequestQuotaWindowStart      int64             `json:"request_quota_window_start"`
+	RequestQuotaWindowSeconds    int64             `json:"request_quota_window_seconds"`
 	CreatedTime                  int64             `json:"created_time"`
 	UpdatedTime                  int64             `json:"updated_time"`
 }
@@ -370,25 +376,27 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 		return AccountPoolAccountView{}, err
 	}
 	account := model.AccountPoolAccount{
-		PoolID:             params.PoolID,
-		Name:               name,
-		AccountIdentifier:  params.AccountIdentifier,
-		CredentialConfig:   credentialConfig,
-		TokenState:         tokenState,
-		Status:             params.Status,
-		Priority:           params.Priority,
-		Weight:             params.Weight,
-		MaxConcurrency:     accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
-		ProxyID:            params.ProxyID,
-		SupportedModels:    supportedModels,
-		ModelMapping:       modelMapping,
-		LastUsedAt:         params.LastUsedAt,
-		RateLimitedUntil:   params.RateLimitedUntil,
-		TempDisabledUntil:  params.TempDisabledUntil,
-		TempDisabledReason: params.TempDisabledReason,
-		LastError:          params.LastError,
-		ExpiresAt:          accountPoolNormalizeExpiresAt(params.ExpiresAt),
-		AutoPauseOnExpired: params.AutoPauseOnExpired,
+		PoolID:                    params.PoolID,
+		Name:                      name,
+		AccountIdentifier:         params.AccountIdentifier,
+		CredentialConfig:          credentialConfig,
+		TokenState:                tokenState,
+		Status:                    params.Status,
+		Priority:                  params.Priority,
+		Weight:                    params.Weight,
+		MaxConcurrency:            accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
+		ProxyID:                   params.ProxyID,
+		SupportedModels:           supportedModels,
+		ModelMapping:              modelMapping,
+		LastUsedAt:                params.LastUsedAt,
+		RateLimitedUntil:          params.RateLimitedUntil,
+		TempDisabledUntil:         params.TempDisabledUntil,
+		TempDisabledReason:        params.TempDisabledReason,
+		LastError:                 params.LastError,
+		ExpiresAt:                 accountPoolNormalizeExpiresAt(params.ExpiresAt),
+		AutoPauseOnExpired:        params.AutoPauseOnExpired,
+		RequestQuota:              accountPoolNormalizeRequestQuota(params.RequestQuota),
+		RequestQuotaWindowSeconds: accountPoolNormalizeRequestQuota(params.RequestQuotaWindowSeconds),
 	}
 	if err := model.DB.Create(&account).Error; err != nil {
 		return AccountPoolAccountView{}, err
@@ -427,23 +435,25 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 		status = model.AccountPoolAccountStatusEnabled
 	}
 	updates := map[string]any{
-		"name":                  name,
-		"account_identifier":    strings.TrimSpace(params.AccountIdentifier),
-		"status":                status,
-		"priority":              params.Priority,
-		"weight":                params.Weight,
-		"max_concurrency":       accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
-		"proxy_id":              params.ProxyID,
-		"supported_models":      supportedModels,
-		"model_mapping":         modelMapping,
-		"last_used_at":          params.LastUsedAt,
-		"rate_limited_until":    params.RateLimitedUntil,
-		"temp_disabled_until":   params.TempDisabledUntil,
-		"temp_disabled_reason":  params.TempDisabledReason,
-		"last_error":            params.LastError,
-		"expires_at":            accountPoolNormalizeExpiresAt(params.ExpiresAt),
-		"auto_pause_on_expired": params.AutoPauseOnExpired,
-		"updated_time":          common.GetTimestamp(),
+		"name":                         name,
+		"account_identifier":           strings.TrimSpace(params.AccountIdentifier),
+		"status":                       status,
+		"priority":                     params.Priority,
+		"weight":                       params.Weight,
+		"max_concurrency":              accountPoolNormalizeMaxConcurrency(params.MaxConcurrency, params.MaxConcurrencySet),
+		"proxy_id":                     params.ProxyID,
+		"supported_models":             supportedModels,
+		"model_mapping":                modelMapping,
+		"last_used_at":                 params.LastUsedAt,
+		"rate_limited_until":           params.RateLimitedUntil,
+		"temp_disabled_until":          params.TempDisabledUntil,
+		"temp_disabled_reason":         params.TempDisabledReason,
+		"last_error":                   params.LastError,
+		"expires_at":                   accountPoolNormalizeExpiresAt(params.ExpiresAt),
+		"auto_pause_on_expired":        params.AutoPauseOnExpired,
+		"request_quota":                accountPoolNormalizeRequestQuota(params.RequestQuota),
+		"request_quota_window_seconds": accountPoolNormalizeRequestQuota(params.RequestQuotaWindowSeconds),
+		"updated_time":                 common.GetTimestamp(),
 	}
 	if accountPoolCredentialHasSecret(params.Credential) {
 		credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
@@ -1278,6 +1288,15 @@ func accountPoolNormalizeMaxConcurrency(value int, explicit bool) int {
 	return value
 }
 
+// accountPoolNormalizeRequestQuota clamps negative quota values to 0.
+// 0 means unlimited / unset.
+func accountPoolNormalizeRequestQuota(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
 // accountPoolNormalizeExpiresAt clamps negative ExpiresAt to 0.
 // 0 means "never expires"; positive values are Unix seconds.
 func accountPoolNormalizeExpiresAt(value int64) int64 {
@@ -1349,6 +1368,10 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		LastCapabilityCheckModels:    lastCapabilityCheckModels,
 		HasCredential:                strings.TrimSpace(account.CredentialConfig) != "",
 		HasToken:                     strings.TrimSpace(account.TokenState) != "",
+		RequestQuota:                 account.RequestQuota,
+		RequestQuotaUsed:             account.RequestQuotaUsed,
+		RequestQuotaWindowStart:      account.RequestQuotaWindowStart,
+		RequestQuotaWindowSeconds:    account.RequestQuotaWindowSeconds,
 		CreatedTime:                  account.CreatedTime,
 		UpdatedTime:                  account.UpdatedTime,
 	}, nil

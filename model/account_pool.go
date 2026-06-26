@@ -110,6 +110,10 @@ type AccountPoolAccount struct {
 	AutoPauseOnExpired           bool   `json:"auto_pause_on_expired" gorm:"not null;default:false"`
 	FailureState                 string `json:"-" gorm:"type:text"`
 	RuntimeOptions               string `json:"runtime_options" gorm:"type:text"`
+	RequestQuota                 int64  `json:"request_quota" gorm:"bigint;not null;default:0"`
+	RequestQuotaUsed             int64  `json:"request_quota_used" gorm:"bigint;not null;default:0"`
+	RequestQuotaWindowStart      int64  `json:"request_quota_window_start" gorm:"bigint;not null;default:0"`
+	RequestQuotaWindowSeconds    int64  `json:"request_quota_window_seconds" gorm:"bigint;not null;default:0"`
 	TempDisabledReason           string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
 	LastError                    string `json:"last_error" gorm:"type:varchar(1024)"`
 	LastCapabilityCheckAt        int64  `json:"last_capability_check_at" gorm:"bigint;index"`
@@ -156,6 +160,22 @@ func (a AccountPoolAccount) IsSchedulableAt(now int64) bool {
 		return false
 	}
 	return true
+}
+
+// QuotaExceededAt reports whether this account has exhausted its request quota at the given
+// unix timestamp. Returns false (unlimited) when RequestQuota <= 0.
+// If a rolling window is configured and the window has elapsed, the counter is treated as
+// reset to 0 (the actual DB reset happens in IncrementAccountPoolAccountRequestQuota).
+func (a AccountPoolAccount) QuotaExceededAt(now int64) bool {
+	if a.RequestQuota <= 0 {
+		return false
+	}
+	effectiveUsed := a.RequestQuotaUsed
+	if a.RequestQuotaWindowSeconds > 0 && a.RequestQuotaWindowStart > 0 &&
+		now >= a.RequestQuotaWindowStart+a.RequestQuotaWindowSeconds {
+		effectiveUsed = 0
+	}
+	return effectiveUsed >= a.RequestQuota
 }
 
 type AccountPoolProxy struct {

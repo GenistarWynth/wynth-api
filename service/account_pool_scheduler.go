@@ -39,6 +39,7 @@ type AccountPoolSelectionResult struct {
 	Credential        AccountPoolCredentialConfig
 	TokenState        AccountPoolTokenState
 	RuntimeOptions    string
+	RequestQuota      int64
 }
 
 type accountPoolAccountCandidate struct {
@@ -108,6 +109,9 @@ func loadAccountPoolSelectionContext(req AccountPoolSelectionRequest) (accountPo
 			}
 		}
 		if !account.IsSchedulableAt(now) {
+			continue
+		}
+		if account.QuotaExceededAt(now) {
 			continue
 		}
 		// Fast-path: exclude accounts that are in-process blocked due to a recent failure,
@@ -206,6 +210,7 @@ func buildAccountPoolSelectionResult(
 		Credential:        credential,
 		TokenState:        tokenState,
 		RuntimeOptions:    selected.account.RuntimeOptions,
+		RequestQuota:      selected.account.RequestQuota,
 	}, nil
 }
 

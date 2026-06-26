@@ -68,6 +68,95 @@ func TestRecordAccountPoolRuntimeAttemptSuccessResetsFailureState(t *testing.T) 
 	assert.Equal(t, int64(1), reloaded.SuccessCount)
 }
 
+func TestIncrementAccountPoolAccountRequestQuotaFirstCallSetsWindowStart(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "quota-first",
+	})
+	now := int64(1_000_000)
+
+	require.NoError(t, IncrementAccountPoolAccountRequestQuota(account.Id, now))
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, now, reloaded.RequestQuotaWindowStart, "first call must set WindowStart to now")
+	assert.Equal(t, int64(1), reloaded.RequestQuotaUsed, "first call must set Used=1")
+}
+
+func TestIncrementAccountPoolAccountRequestQuotaSubsequentCallsIncrement(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "quota-increment",
+	})
+	now := int64(1_000_000)
+
+	require.NoError(t, IncrementAccountPoolAccountRequestQuota(account.Id, now))
+	require.NoError(t, IncrementAccountPoolAccountRequestQuota(account.Id, now+1))
+	require.NoError(t, IncrementAccountPoolAccountRequestQuota(account.Id, now+2))
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, int64(3), reloaded.RequestQuotaUsed, "three increments must result in Used=3")
+	assert.Equal(t, now, reloaded.RequestQuotaWindowStart, "WindowStart must not change on subsequent calls")
+}
+
+func TestIncrementAccountPoolAccountRequestQuotaWindowElapsedResetsToOne(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "quota-window-reset",
+	})
+	windowStart := int64(1_000_000)
+	windowSeconds := int64(3600)
+
+	// Manually set up a past window with some usage.
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"request_quota_window_start":   windowStart,
+			"request_quota_window_seconds": windowSeconds,
+			"request_quota_used":           int64(99),
+		}).Error)
+
+	// Increment at a time after the window has elapsed.
+	now := windowStart + windowSeconds + 10
+	require.NoError(t, IncrementAccountPoolAccountRequestQuota(account.Id, now))
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, now, reloaded.RequestQuotaWindowStart, "elapsed window must reset WindowStart to now")
+	assert.Equal(t, int64(1), reloaded.RequestQuotaUsed, "elapsed window must reset Used to 1")
+}
+
+func TestIncrementAccountPoolAccountRequestQuotaLifetimeNoWindowJustIncrements(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "quota-lifetime",
+	})
+	// Set WindowSeconds=0 (lifetime), with some existing usage and a window start already set.
+	now := int64(5_000_000)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"request_quota_window_start":   now - 1000,
+			"request_quota_window_seconds": int64(0), // lifetime: no reset
+			"request_quota_used":           int64(10),
+		}).Error)
+
+	require.NoError(t, IncrementAccountPoolAccountRequestQuota(account.Id, now))
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	// WindowSeconds==0 means the window-elapsed branch never fires; we fall into the
+	// windowNotStarted==false path so Used just increments.
+	assert.Equal(t, int64(11), reloaded.RequestQuotaUsed)
+}
+
 func TestRecordAccountPoolRuntimeAttemptSuccessNoopsForInvalidOrNonEnabledAccount(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

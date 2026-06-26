@@ -629,6 +629,77 @@ func TestAccountPoolSchedulerExcludesExpiredAutoPauseAccounts(t *testing.T) {
 	assert.Equal(t, selected.Id, result.AccountID, "expired auto-pause account must be excluded; only non-expired account should be selected")
 }
 
+func TestAccountPoolSchedulerExcludesQuotaExceededAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	now := int64(1_000_000)
+
+	// Quota-exceeded account: used == quota, no window elapsed.
+	exceeded := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "exceeded",
+		Priority: 100,
+	})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Where("id = ?", exceeded.Id).
+		Updates(map[string]any{
+			"request_quota":                int64(5),
+			"request_quota_used":           int64(5),
+			"request_quota_window_start":   now - 10,
+			"request_quota_window_seconds": int64(100),
+		}).Error)
+
+	// Non-exceeded account: should be selected.
+	available := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "available",
+		Priority: 50,
+	})
+
+	result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  now,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, available.Id, result.AccountID, "quota-exceeded account must be excluded; only available account should be selected")
+}
+
+func TestAccountPoolSchedulerSelectsQuotaWindowElapsedAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	now := int64(1_000_000)
+
+	// Account whose window has elapsed: used == quota, but the window is over.
+	// QuotaExceededAt returns false (counter resets logically), so it must be selected.
+	elapsed := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "window-elapsed",
+		Priority: 100,
+	})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Where("id = ?", elapsed.Id).
+		Updates(map[string]any{
+			"request_quota":                int64(5),
+			"request_quota_used":           int64(5),
+			"request_quota_window_start":   now - 200,
+			"request_quota_window_seconds": int64(100), // window ended at now-100
+		}).Error)
+
+	result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  now,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, elapsed.Id, result.AccountID, "account with elapsed window must be schedulable (quota resets)")
+}
+
 func createEnabledAccountPoolSchedulerBinding(
 	t *testing.T,
 	poolID int,

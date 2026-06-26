@@ -21,6 +21,7 @@ const (
 	accountPoolSelectedRetryTimesContextKey     = "account_pool_selected_retry_times"
 	accountPoolSelectedAffinityKeyContextKey    = "account_pool_selected_affinity_key"
 	accountPoolSelectedRuntimeOptionsContextKey = "account_pool_selected_runtime_options"
+	accountPoolSelectedRequestQuotaContextKey   = "account_pool_selected_request_quota"
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
@@ -60,6 +61,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	c.Set(accountPoolSelectedRetryTimesContextKey, selection.AccountRetryTimes)
 	c.Set(accountPoolSelectedAffinityKeyContextKey, affinityKey)
 	c.Set(accountPoolSelectedRuntimeOptionsContextKey, selection.RuntimeOptions)
+	c.Set(accountPoolSelectedRequestQuotaContextKey, selection.RequestQuota)
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 
 	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(accountPoolRuntimeContext(c), AccountPoolRuntimeCredentialRequest{
@@ -176,6 +178,7 @@ func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
 	c.Set(accountPoolSelectedRetryTimesContextKey, 0)
 	c.Set(accountPoolSelectedAffinityKeyContextKey, "")
 	c.Set(accountPoolSelectedRuntimeOptionsContextKey, "")
+	c.Set(accountPoolSelectedRequestQuotaContextKey, int64(0))
 }
 
 // GetSelectedAccountPoolRuntimeOptions retrieves and parses the runtime options
@@ -190,4 +193,17 @@ func GetSelectedAccountPoolRuntimeOptions(c *gin.Context) accountPoolRuntimeOpti
 		return accountPoolRuntimeOptions{}
 	}
 	return opts
+}
+
+// GetSelectedAccountPoolRequestQuota returns the RequestQuota of the currently selected
+// account pool account. Returns 0 when no account is selected or quota is unset (unlimited).
+func GetSelectedAccountPoolRequestQuota(c *gin.Context) int64 {
+	if c == nil {
+		return 0
+	}
+	v, _ := c.Get(accountPoolSelectedRequestQuotaContextKey)
+	if q, ok := v.(int64); ok {
+		return q
+	}
+	return 0
 }

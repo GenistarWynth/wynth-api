@@ -128,6 +128,55 @@ func TestAccountPoolServiceUpdateAccountPreservesSecretsAndSoftDeletes(t *testin
 	assert.Equal(t, model.AccountPoolAccountStatusDeleted, storedAfter.Status)
 }
 
+func TestAccountPoolServiceCreateUpdateAccountPersistsRequestQuotaFields(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+
+	// Create with quota fields set.
+	created, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "quota-round-trip",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-quota-rt",
+		},
+		RequestQuota:              50,
+		RequestQuotaWindowSeconds: 86400,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(50), created.RequestQuota)
+	assert.Equal(t, int64(86400), created.RequestQuotaWindowSeconds)
+	assert.Zero(t, created.RequestQuotaUsed)
+	assert.Zero(t, created.RequestQuotaWindowStart)
+
+	// Verify persisted in DB.
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, created.Id).Error)
+	assert.Equal(t, int64(50), stored.RequestQuota)
+	assert.Equal(t, int64(86400), stored.RequestQuotaWindowSeconds)
+
+	// Update quota fields.
+	updated, err := svc.UpdateAccount(pool.Id, created.Id, AccountPoolAccountCreateParams{
+		Name:                      "quota-round-trip-updated",
+		RequestQuota:              100,
+		RequestQuotaWindowSeconds: 3600,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), updated.RequestQuota)
+	assert.Equal(t, int64(3600), updated.RequestQuotaWindowSeconds)
+
+	// Clamp negative quota to 0.
+	clamped, err := svc.UpdateAccount(pool.Id, created.Id, AccountPoolAccountCreateParams{
+		Name:                      "quota-clamped",
+		RequestQuota:              -5,
+		RequestQuotaWindowSeconds: -1,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, clamped.RequestQuota, "negative RequestQuota must be clamped to 0")
+	assert.Zero(t, clamped.RequestQuotaWindowSeconds, "negative RequestQuotaWindowSeconds must be clamped to 0")
+}
+
 func TestAccountPoolServiceCreateUpdateAccountPersistsExpiryFields(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

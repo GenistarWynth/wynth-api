@@ -236,6 +236,80 @@ func TestAccountPoolAccountIsSchedulableAtExpiryAutoPause(t *testing.T) {
 	assert.True(t, a.IsSchedulableAt(now), "ExpiresAt=0 means never expires and must be schedulable")
 }
 
+func TestAccountPoolAccountQuotaExceededAt(t *testing.T) {
+	now := int64(1_000_000)
+
+	cases := []struct {
+		name     string
+		account  AccountPoolAccount
+		now      int64
+		exceeded bool
+	}{
+		{
+			name:     "quota 0 is unlimited, never exceeded",
+			account:  AccountPoolAccount{RequestQuota: 0, RequestQuotaUsed: 999},
+			now:      now,
+			exceeded: false,
+		},
+		{
+			name:     "used < quota, no window, not exceeded",
+			account:  AccountPoolAccount{RequestQuota: 10, RequestQuotaUsed: 5},
+			now:      now,
+			exceeded: false,
+		},
+		{
+			name:     "used == quota, no window, exceeded",
+			account:  AccountPoolAccount{RequestQuota: 10, RequestQuotaUsed: 10},
+			now:      now,
+			exceeded: true,
+		},
+		{
+			name:     "used > quota, no window, exceeded",
+			account:  AccountPoolAccount{RequestQuota: 10, RequestQuotaUsed: 15},
+			now:      now,
+			exceeded: true,
+		},
+		{
+			name: "window elapsed: counter resets logically to 0, not exceeded",
+			account: AccountPoolAccount{
+				RequestQuota:              5,
+				RequestQuotaUsed:          5,
+				RequestQuotaWindowStart:   now - 100,
+				RequestQuotaWindowSeconds: 50, // window ended at now-50
+			},
+			now:      now,
+			exceeded: false,
+		},
+		{
+			name: "within window, used >= quota, exceeded",
+			account: AccountPoolAccount{
+				RequestQuota:              5,
+				RequestQuotaUsed:          5,
+				RequestQuotaWindowStart:   now - 10,
+				RequestQuotaWindowSeconds: 100, // window ends at now+90
+			},
+			now:      now,
+			exceeded: true,
+		},
+		{
+			name: "window seconds > 0 but window start is 0, uses actual used count",
+			account: AccountPoolAccount{
+				RequestQuota:              5,
+				RequestQuotaUsed:          5,
+				RequestQuotaWindowStart:   0,
+				RequestQuotaWindowSeconds: 100,
+			},
+			now:      now,
+			exceeded: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.exceeded, tc.account.QuotaExceededAt(tc.now))
+		})
+	}
+}
+
 func TestAccountPoolProxyRejectsSelfFallback(t *testing.T) {
 	setupAccountPoolTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&AccountPoolProxy{}))

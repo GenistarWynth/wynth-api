@@ -513,6 +513,10 @@ func ensureAccountPoolAccountColumnsSQLite() error {
 		{Name: "runtime_options", DDL: "`runtime_options` text"},
 		{Name: "expires_at", DDL: "`expires_at` bigint NOT NULL DEFAULT 0"},
 		{Name: "auto_pause_on_expired", DDL: "`auto_pause_on_expired` integer NOT NULL DEFAULT 0"},
+		{Name: "request_quota", DDL: "`request_quota` bigint NOT NULL DEFAULT 0"},
+		{Name: "request_quota_used", DDL: "`request_quota_used` bigint NOT NULL DEFAULT 0"},
+		{Name: "request_quota_window_start", DDL: "`request_quota_window_start` bigint NOT NULL DEFAULT 0"},
+		{Name: "request_quota_window_seconds", DDL: "`request_quota_window_seconds` bigint NOT NULL DEFAULT 0"},
 	}
 	for _, col := range required {
 		if _, ok := existing[col.Name]; ok {
