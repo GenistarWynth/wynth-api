@@ -98,6 +98,11 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		if !account.IsSchedulableAt(now) {
 			continue
 		}
+		// Fast-path: exclude accounts that are in-process blocked due to a recent failure,
+		// bridging the DB cooldown read-propagation window without a DB round-trip.
+		if accountPoolRuntimeBlocked(account.Id, now) {
+			continue
+		}
 		supportedModels, err := parseAccountPoolSupportedModels(account.SupportedModels)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("account pool: skipping account id=%d name=%q due to invalid supported_models: %v", account.Id, account.Name, err))

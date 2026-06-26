@@ -269,7 +269,9 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 }
 
 // RecordAccountPoolRuntimeAttemptFailure loads the account inside a transaction,
-// classifies the upstream error, and applies the resulting updates atomically.
+// classifies the upstream error, applies the resulting updates atomically, and sets
+// an in-process fast-path block so the just-failed account is excluded immediately
+// by the scheduler without waiting for DB cooldown reads to propagate.
 func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIError, now int64) error {
 	if accountID <= 0 || err == nil {
 		return nil
@@ -277,7 +279,8 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 	if now <= 0 {
 		now = common.GetTimestamp()
 	}
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	var updates map[string]any
+	txErr := model.DB.Transaction(func(tx *gorm.DB) error {
 		var account model.AccountPoolAccount
 		if err2 := tx.First(&account, accountID).Error; err2 != nil {
 			return err2
@@ -289,7 +292,7 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 		} else {
 			common.SysError(fmt.Sprintf("account pool: failed to decrypt credential for account %d during failure classification: %v", accountID, decryptErr))
 		}
-		updates := classifyAccountPoolFailure(account, err, isOAuth, now)
+		updates = classifyAccountPoolFailure(account, err, isOAuth, now)
 		if len(updates) == 0 {
 			return nil
 		}
@@ -297,6 +300,29 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 			Where("id = ?", accountID).
 			Updates(updates).Error
 	})
+	if txErr != nil {
+		return txErr
+	}
+
+	// Set the in-process fast-path block regardless of transaction outcome visibility.
+	// blockUntil = max cooldown timestamp from the updates, floored at now+floor, capped at now+cap.
+	blockUntil := int64(0)
+	for _, field := range []string{"rate_limited_until", "temp_disabled_until", "overload_until"} {
+		if v, ok := updates[field]; ok {
+			if ts, ok2 := v.(int64); ok2 && ts > blockUntil {
+				blockUntil = ts
+			}
+		}
+	}
+	if blockUntil < now+accountPoolRuntimeBlockFloorSeconds {
+		blockUntil = now + accountPoolRuntimeBlockFloorSeconds
+	}
+	cap := now + accountPoolRuntimeBlockCapSeconds
+	if blockUntil > cap {
+		blockUntil = cap
+	}
+	blockAccountPoolRuntime(accountID, blockUntil)
+	return nil
 }
 
 func sanitizeAccountPoolFailureMessage(err *types.NewAPIError, maxLen int) string {

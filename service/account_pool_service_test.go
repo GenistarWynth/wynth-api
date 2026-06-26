@@ -1383,6 +1383,7 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 	resetAccountPoolRuntimeLeasesForTest()
 	resetAccountPoolRuntimeSelectionRecencyForTest()
 	resetAccountPoolRuntimeAffinitiesForTest()
+	resetAccountPoolRuntimeBlocksForTest()
 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.Channel{},

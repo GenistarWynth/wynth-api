@@ -14,6 +14,8 @@ func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64) error {
 	if now <= 0 {
 		now = common.GetTimestamp()
 	}
+	// Clear the in-process fast-path block so a recovered account is immediately eligible.
+	clearAccountPoolRuntimeBlock(accountID)
 	return model.DB.Model(&model.AccountPoolAccount{}).
 		Where("id = ? AND status = ?", accountID, model.AccountPoolAccountStatusEnabled).
 		Updates(map[string]any{
