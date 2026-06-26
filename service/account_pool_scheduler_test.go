@@ -511,6 +511,87 @@ func TestSelectAccountPoolAccountSkipsCorruptRow(t *testing.T) {
 	})
 }
 
+// TestSelectAccountPoolAccountWithLeaseExhaustsAllAtCapacityAccounts verifies that
+// selectAccountPoolAccountWithLease returns ErrAccountPoolNoSchedulableAccount without panic or
+// hang when every enabled account already holds a lease at max concurrency.
+//
+// After the refactor this also proves the single-DB-query structural contract: the implementation
+// must call loadAccountPoolSelectionContext once, then loop over the already-loaded candidate slice
+// in memory. Reviewers should confirm that the loop contains no DB query (the DB is only queried
+// inside loadAccountPoolSelectionContext, which is called before the loop).
+func TestSelectAccountPoolAccountWithLeaseExhaustsAllAtCapacityAccounts(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	// Two accounts each with MaxConcurrency=1, both fully leased before the call.
+	first := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "first-at-capacity",
+		Priority:       100,
+		MaxConcurrency: 1,
+	})
+	second := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "second-at-capacity",
+		Priority:       100,
+		MaxConcurrency: 1,
+	})
+	releaseFirst, acquired := tryAcquireAccountPoolRuntimeLease(first.Id, first.MaxConcurrency)
+	require.True(t, acquired, "first lease must be acquired for the test setup to be valid")
+	defer releaseFirst()
+	releaseSecond, acquired := tryAcquireAccountPoolRuntimeLease(second.Id, second.MaxConcurrency)
+	require.True(t, acquired, "second lease must be acquired for the test setup to be valid")
+	defer releaseSecond()
+
+	_, _, err := selectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  100,
+	}, false)
+
+	require.ErrorIs(t, err, ErrAccountPoolNoSchedulableAccount)
+}
+
+// TestSelectAccountPoolAccountWithLeaseReturnsAccountWhenOneAvailable verifies that
+// selectAccountPoolAccountWithLease successfully acquires a lease and returns a valid result when
+// at least one account has capacity — and that the release function is non-nil and callable.
+func TestSelectAccountPoolAccountWithLeaseReturnsAccountWhenOneAvailable(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	// First account fully leased; second has capacity.
+	first := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "first-at-capacity",
+		Priority:       100,
+		MaxConcurrency: 1,
+	})
+	second := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:           "second-available",
+		Priority:       100,
+		MaxConcurrency: 1,
+	})
+	releaseFirst, acquired := tryAcquireAccountPoolRuntimeLease(first.Id, first.MaxConcurrency)
+	require.True(t, acquired, "first lease must be acquired for the test setup to be valid")
+	defer releaseFirst()
+
+	result, release, err := selectAccountPoolAccountWithLease(AccountPoolSelectionRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         "gpt-5",
+		ChannelUpstreamModel: "gpt-5",
+		Now:                  100,
+	}, false)
+
+	require.NoError(t, err)
+	require.NotNil(t, release, "release function must be non-nil on success")
+	defer release()
+	assert.Equal(t, second.Id, result.AccountID)
+}
+
 func createEnabledAccountPoolSchedulerBinding(
 	t *testing.T,
 	poolID int,

@@ -46,7 +46,20 @@ type accountPoolAccountCandidate struct {
 	upstreamModelName string
 }
 
-func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelectionResult, error) {
+// accountPoolSelectionContext holds the pre-loaded, pre-filtered candidate set for one selection
+// request. It is produced by loadAccountPoolSelectionContext and consumed by
+// pickAccountPoolCandidate and buildAccountPoolSelectionResult.
+type accountPoolSelectionContext struct {
+	binding    model.AccountPoolChannelBinding
+	pool       model.AccountPool
+	candidates []accountPoolAccountCandidate // all schedulable candidates; no AttemptedAccountIDs filter applied
+}
+
+// loadAccountPoolSelectionContext runs the expensive part of the pipeline once: it loads the
+// binding, pool, config, and queries the DB for enabled accounts, then builds the full candidate
+// slice applying every filter EXCEPT AttemptedAccountIDs (which is handled per-pick in
+// pickAccountPoolCandidate). Per-account parse errors keep the existing skip+continue behavior.
+func loadAccountPoolSelectionContext(req AccountPoolSelectionRequest) (accountPoolSelectionContext, error) {
 	now := req.Now
 	if now == 0 {
 		now = common.GetTimestamp()
@@ -58,38 +71,37 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 
 	binding, err := loadRuntimeAccountPoolBinding(req)
 	if err != nil {
-		return AccountPoolSelectionResult{}, err
+		return accountPoolSelectionContext{}, err
 	}
 	pool, err := loadEnabledAccountPool(binding.PoolID)
 	if err != nil {
-		return AccountPoolSelectionResult{}, err
+		return accountPoolSelectionContext{}, err
 	}
 
 	filterConfig, err := parseAccountPoolAccountFilterConfig(binding.AccountFilterConfig)
 	if err != nil {
-		return AccountPoolSelectionResult{}, err
+		return accountPoolSelectionContext{}, err
 	}
 	modelPolicy, err := parseAccountPoolModelPolicy(binding.ModelPolicy)
 	if err != nil {
-		return AccountPoolSelectionResult{}, err
+		return accountPoolSelectionContext{}, err
 	}
 	if !accountPoolModelPolicyAllows(modelPolicy, req.RequestModel, upstreamModelName) {
-		return AccountPoolSelectionResult{}, ErrAccountPoolNoSchedulableAccount
+		return accountPoolSelectionContext{}, ErrAccountPoolNoSchedulableAccount
 	}
 
 	var accounts []model.AccountPoolAccount
 	if err := model.DB.Where("pool_id = ? AND status = ?", binding.PoolID, model.AccountPoolAccountStatusEnabled).
 		Order("id asc").
 		Find(&accounts).Error; err != nil {
-		return AccountPoolSelectionResult{}, err
+		return accountPoolSelectionContext{}, err
 	}
 
 	allowedAccountIDs := accountPoolAccountFilterSet(filterConfig)
 	candidates := make([]accountPoolAccountCandidate, 0, len(accounts))
 	for _, account := range accounts {
-		if _, attempted := req.AttemptedAccountIDs[account.Id]; attempted {
-			continue
-		}
+		// NOTE: AttemptedAccountIDs is intentionally NOT filtered here; it is applied per-pick
+		// in pickAccountPoolCandidate so the loaded context can be reused across the lease loop.
 		if len(allowedAccountIDs) > 0 {
 			if _, allowed := allowedAccountIDs[account.Id]; !allowed {
 				continue
@@ -121,14 +133,53 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 			upstreamModelName: accountUpstreamModelName,
 		})
 	}
-	if len(candidates) == 0 {
-		return AccountPoolSelectionResult{}, ErrAccountPoolNoSchedulableAccount
+
+	return accountPoolSelectionContext{
+		binding:    binding,
+		pool:       pool,
+		candidates: candidates,
+	}, nil
+}
+
+// pickAccountPoolCandidate selects one candidate from ctx.candidates minus the attempted set.
+// It applies the same policy selection (highest-priority subset → weighted-random or round-robin)
+// and the same affinity override used by the original SelectAccountPoolAccount. Returns ok=false
+// when no unattempted candidates remain.
+func pickAccountPoolCandidate(
+	ctx accountPoolSelectionContext,
+	attempted map[int]struct{},
+	affinityKey string,
+	now int64,
+) (accountPoolAccountCandidate, bool) {
+	// Build the unattempted candidate slice without allocating unless necessary.
+	available := ctx.candidates
+	if len(attempted) > 0 {
+		filtered := make([]accountPoolAccountCandidate, 0, len(ctx.candidates))
+		for _, c := range ctx.candidates {
+			if _, skip := attempted[c.account.Id]; !skip {
+				filtered = append(filtered, c)
+			}
+		}
+		available = filtered
+	}
+	if len(available) == 0 {
+		return accountPoolAccountCandidate{}, false
 	}
 
-	selected := selectAccountPoolCandidate(candidates, binding.SchedulePolicy)
-	if affinityCandidate, ok := selectAccountPoolAffinityCandidate(req.AffinityKey, binding.Id, candidates, now); ok {
+	selected := selectAccountPoolCandidate(available, ctx.binding.SchedulePolicy)
+	if affinityCandidate, ok := selectAccountPoolAffinityCandidate(affinityKey, ctx.binding.Id, available, now); ok {
 		selected = affinityCandidate
 	}
+	return selected, true
+}
+
+// buildAccountPoolSelectionResult assembles the final AccountPoolSelectionResult for a chosen
+// candidate by decrypting the credential + token state and resolving the proxy URL. This is the
+// expensive tail of the pipeline; it is only called once a lease has been acquired.
+func buildAccountPoolSelectionResult(
+	ctx accountPoolSelectionContext,
+	selected accountPoolAccountCandidate,
+) (AccountPoolSelectionResult, error) {
 	credential, err := DecryptAccountPoolCredentialConfig(selected.account.CredentialConfig)
 	if err != nil {
 		return AccountPoolSelectionResult{}, fmt.Errorf("decrypt account pool credential: %w", err)
@@ -137,25 +188,46 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 	if err != nil {
 		return AccountPoolSelectionResult{}, fmt.Errorf("decrypt account pool token state: %w", err)
 	}
-	proxyURL, err := ResolveAccountPoolRuntimeProxyURL(selected.account.ProxyID, pool.DefaultProxyID)
+	proxyURL, err := ResolveAccountPoolRuntimeProxyURL(selected.account.ProxyID, ctx.pool.DefaultProxyID)
 	if err != nil {
 		return AccountPoolSelectionResult{}, fmt.Errorf("resolve account pool proxy: %w", err)
 	}
 
 	return AccountPoolSelectionResult{
-		PoolID:            binding.PoolID,
-		BindingID:         binding.Id,
+		PoolID:            ctx.binding.PoolID,
+		BindingID:         ctx.binding.Id,
 		AccountID:         selected.account.Id,
 		AccountName:       selected.account.Name,
 		AccountIdentifier: selected.account.AccountIdentifier,
 		MaxConcurrency:    selected.account.MaxConcurrency,
-		AccountRetryTimes: binding.AccountRetryTimes,
+		AccountRetryTimes: ctx.binding.AccountRetryTimes,
 		UpstreamModelName: selected.upstreamModelName,
 		ProxyURL:          proxyURL,
 		Credential:        credential,
 		TokenState:        tokenState,
 		RuntimeOptions:    selected.account.RuntimeOptions,
 	}, nil
+}
+
+// SelectAccountPoolAccount selects one schedulable account for the given request.
+// External behavior is identical to the original implementation.
+func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelectionResult, error) {
+	now := req.Now
+	if now == 0 {
+		now = common.GetTimestamp()
+	}
+
+	ctx, err := loadAccountPoolSelectionContext(req)
+	if err != nil {
+		return AccountPoolSelectionResult{}, err
+	}
+
+	selected, ok := pickAccountPoolCandidate(ctx, req.AttemptedAccountIDs, req.AffinityKey, now)
+	if !ok {
+		return AccountPoolSelectionResult{}, ErrAccountPoolNoSchedulableAccount
+	}
+
+	return buildAccountPoolSelectionResult(ctx, selected)
 }
 
 func selectAccountPoolAffinityCandidate(key string, bindingID int, candidates []accountPoolAccountCandidate, now int64) (accountPoolAccountCandidate, bool) {
@@ -190,25 +262,47 @@ func SelectAccountPoolAccountWithLease(req AccountPoolSelectionRequest) (Account
 	return selectAccountPoolAccountWithLease(req, true)
 }
 
+// selectAccountPoolAccountWithLease loads the candidate pool ONCE, then loops entirely in memory:
+// pick an unattempted candidate → try to acquire its lease → on success decrypt and return;
+// on failure (at capacity) add to local attempted and loop. No additional DB queries occur
+// after the initial loadAccountPoolSelectionContext call.
 func selectAccountPoolAccountWithLease(req AccountPoolSelectionRequest, rememberSelection bool) (AccountPoolSelectionResult, accountPoolRuntimeReleaseFunc, error) {
-	attempted := make(map[int]struct{}, len(req.AttemptedAccountIDs)+1)
+	now := req.Now
+	if now == 0 {
+		now = common.GetTimestamp()
+	}
+
+	ctx, err := loadAccountPoolSelectionContext(req)
+	if err != nil {
+		return AccountPoolSelectionResult{}, nil, err
+	}
+
+	// Seed the local attempted set from the caller's set; we accumulate capacity failures here.
+	attempted := make(map[int]struct{}, len(req.AttemptedAccountIDs)+len(ctx.candidates))
 	for accountID := range req.AttemptedAccountIDs {
 		attempted[accountID] = struct{}{}
 	}
+
 	for {
-		req.AttemptedAccountIDs = attempted
-		selection, err := SelectAccountPoolAccount(req)
-		if err != nil {
-			return AccountPoolSelectionResult{}, nil, err
+		selected, ok := pickAccountPoolCandidate(ctx, attempted, req.AffinityKey, now)
+		if !ok {
+			return AccountPoolSelectionResult{}, nil, ErrAccountPoolNoSchedulableAccount
 		}
-		release, acquired := tryAcquireAccountPoolRuntimeLease(selection.AccountID, selection.MaxConcurrency)
+
+		release, acquired := tryAcquireAccountPoolRuntimeLease(selected.account.Id, selected.account.MaxConcurrency)
 		if acquired {
 			if rememberSelection {
-				rememberAccountPoolRuntimeSelection(selection.AccountID, req.Now)
+				rememberAccountPoolRuntimeSelection(selected.account.Id, now)
 			}
-			return selection, release, nil
+			result, err := buildAccountPoolSelectionResult(ctx, selected)
+			if err != nil {
+				release()
+				return AccountPoolSelectionResult{}, nil, err
+			}
+			return result, release, nil
 		}
-		attempted[selection.AccountID] = struct{}{}
+		// Lease at capacity: exclude this account from subsequent picks in this request.
+		attempted[selected.account.Id] = struct{}{}
 	}
 }
 
