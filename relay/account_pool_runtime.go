@@ -57,32 +57,57 @@ func runAccountPoolRuntimeAttempts(
 	if requestFactory == nil || attempt == nil {
 		return nil
 	}
+	// FIX 3: Function-level deferred release is the panic-safe backstop.  It
+	// releases whatever lease is current when the function returns, covering both
+	// the success path and any non-pool-mode give-up path.  Pool-mode iterations
+	// skip applyAccountPoolRuntimeSelection, so they retain the existing lease
+	// through all same-account retries; the next non-pool-mode iteration calls
+	// applyAccountPoolRuntimeSelection, which itself calls
+	// ReleaseAccountPoolRuntimeSelection at the top, handing off cleanly.
+	defer service.ReleaseAccountPoolRuntimeSelection(c)
+
 	snapshot := snapshotAccountPoolRuntimeRelay(info)
-	for attemptIndex := 0; ; attemptIndex++ {
+	poolModeRetryIndex := 0
+	var poolModeLastAccountID int
+	// FIX 2: normalAttempts counts only inter-account retry iterations (not
+	// pool-mode same-account retries) so that pool-mode retries do not consume
+	// the AccountRetryTimes budget.
+	normalAttempts := 0
+	for {
+		// Pool-mode same-account retry: reuse the previously selected account
+		// without re-running selection. The relay snapshot is restored to undo any
+		// state mutations from the previous attempt, but selection is NOT re-run,
+		// so the same ApiKey/UpstreamModelName/etc. remain from the prior selection.
+		isPoolModeRetry := poolModeRetryIndex > 0 && poolModeLastAccountID > 0
 		restoreAccountPoolRuntimeRelay(info, snapshot)
 		request, newAPIError := requestFactory()
 		if newAPIError != nil {
 			return newAPIError
 		}
-		if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
-			selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
-			accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
-			if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
-				_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
-				service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+		if !isPoolModeRetry {
+			if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
+				selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
+				accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
+				if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
+					service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+				}
+				if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
+					return newAPIError
+				}
+				normalAttempts++
+				continue
 			}
-			if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
-				return newAPIError
-			}
-			continue
+			poolModeLastAccountID = service.GetSelectedAccountPoolAccountID(c)
+			poolModeRetryIndex = 0
 		}
 		selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 		accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
 
-		newAPIError = func() *types.NewAPIError {
-			defer service.ReleaseAccountPoolRuntimeSelection(c)
-			return attempt(request)
-		}()
+		// FIX 3: No per-attempt defer here. The function-level defer above is the
+		// single release point. Pool-mode iterations hold the lease across retries;
+		// non-pool-mode iterations hand off via applyAccountPoolRuntimeSelection.
+		newAPIError = attempt(request)
 		if newAPIError == nil {
 			if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 {
 				now := common.GetTimestamp()
@@ -91,14 +116,48 @@ func runAccountPoolRuntimeAttempts(
 			}
 			return nil
 		}
+
+		// FIX 1: Guard against nil info before calling info.HasSendResponse().
+		// shouldRecordAccountPoolRuntimeAttempt returns true when info==nil, so
+		// info may be nil here; mirror the safe pattern used in
+		// shouldRetryAccountPoolRuntimeAttempt.
+		// Check if pool-mode same-account retry applies for this failure.
+		if shouldRecordAccountPoolRuntimeAttempt(info) && !types.IsSkipRetryError(newAPIError) &&
+			(info == nil || !info.HasSendResponse()) {
+			runtimeOpts := service.GetSelectedAccountPoolRuntimeOptions(c)
+			if runtimeOpts.PoolMode && poolModeRetryIndex < runtimeOpts.PoolModeRetryCount &&
+				accountPoolRuntimeStatusCodeInList(newAPIError.StatusCode, runtimeOpts.PoolModeRetryStatusCodes) {
+				// Pool-mode retry: same account, no failure recorded, no attempted-set update.
+				// normalAttempts is NOT incremented — pool-mode retries don't consume the budget.
+				poolModeRetryIndex++
+				continue
+			}
+		}
+
+		// Normal failure path: record failure and fall through to next-account retry.
+		poolModeRetryIndex = 0
+		poolModeLastAccountID = 0
 		if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
 			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 		}
-		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
+		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
 			return newAPIError
 		}
+		// FIX 2: Advance the normal (inter-account) retry counter only here.
+		normalAttempts++
 	}
+}
+
+// accountPoolRuntimeStatusCodeInList returns true if statusCode is found in codes.
+// If codes is empty, returns false (no match).
+func accountPoolRuntimeStatusCodeInList(statusCode int, codes []int) bool {
+	for _, code := range codes {
+		if code == statusCode {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldRecordAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo) bool {

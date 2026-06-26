@@ -14,12 +14,13 @@ import (
 // These service-local Gin context keys are prefixed with account_pool_ to avoid
 // collisions with the shared constant.ContextKey* namespace.
 const (
-	accountPoolAttemptedAccountIDsContextKey = "account_pool_attempted_account_ids"
-	accountPoolSelectedPoolIDContextKey      = "account_pool_selected_pool_id"
-	accountPoolSelectedBindingIDContextKey   = "account_pool_selected_binding_id"
-	accountPoolSelectedAccountIDContextKey   = "account_pool_selected_account_id"
-	accountPoolSelectedRetryTimesContextKey  = "account_pool_selected_retry_times"
-	accountPoolSelectedAffinityKeyContextKey = "account_pool_selected_affinity_key"
+	accountPoolAttemptedAccountIDsContextKey     = "account_pool_attempted_account_ids"
+	accountPoolSelectedPoolIDContextKey          = "account_pool_selected_pool_id"
+	accountPoolSelectedBindingIDContextKey       = "account_pool_selected_binding_id"
+	accountPoolSelectedAccountIDContextKey       = "account_pool_selected_account_id"
+	accountPoolSelectedRetryTimesContextKey      = "account_pool_selected_retry_times"
+	accountPoolSelectedAffinityKeyContextKey     = "account_pool_selected_affinity_key"
+	accountPoolSelectedRuntimeOptionsContextKey  = "account_pool_selected_runtime_options"
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
@@ -58,6 +59,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	c.Set(accountPoolSelectedAccountIDContextKey, selection.AccountID)
 	c.Set(accountPoolSelectedRetryTimesContextKey, selection.AccountRetryTimes)
 	c.Set(accountPoolSelectedAffinityKeyContextKey, affinityKey)
+	c.Set(accountPoolSelectedRuntimeOptionsContextKey, selection.RuntimeOptions)
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 
 	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(accountPoolRuntimeContext(c), AccountPoolRuntimeCredentialRequest{
@@ -173,4 +175,19 @@ func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
 	c.Set(accountPoolSelectedAccountIDContextKey, 0)
 	c.Set(accountPoolSelectedRetryTimesContextKey, 0)
 	c.Set(accountPoolSelectedAffinityKeyContextKey, "")
+	c.Set(accountPoolSelectedRuntimeOptionsContextKey, "")
+}
+
+// GetSelectedAccountPoolRuntimeOptions retrieves and parses the runtime options
+// for the currently selected account pool account from the gin context.
+func GetSelectedAccountPoolRuntimeOptions(c *gin.Context) accountPoolRuntimeOptions {
+	if c == nil {
+		return accountPoolRuntimeOptions{}
+	}
+	raw := c.GetString(accountPoolSelectedRuntimeOptionsContextKey)
+	opts, err := parseAccountPoolRuntimeOptions(raw)
+	if err != nil {
+		return accountPoolRuntimeOptions{}
+	}
+	return opts
 }

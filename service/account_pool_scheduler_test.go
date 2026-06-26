@@ -447,6 +447,60 @@ func TestAccountPoolSchedulerZeroWeightAccountRemainsSelectable(t *testing.T) {
 	assert.Equal(t, account.Id, result.AccountID)
 }
 
+func TestSelectAccountPoolAccountSkipsCorruptRow(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	// Account A: malformed supported_models JSON — inserted directly to bypass service validation.
+	badCredential, err := EncryptAccountPoolCredentialConfig(AccountPoolCredentialConfig{
+		Type:   AccountPoolCredentialTypeAPIKey,
+		APIKey: "sk-bad-account",
+	})
+	require.NoError(t, err)
+	badAccount := model.AccountPoolAccount{
+		PoolID:          pool.Id,
+		Name:            "corrupt-supported-models",
+		Status:          model.AccountPoolAccountStatusEnabled,
+		SupportedModels: `{bad`,
+		CredentialConfig: badCredential,
+	}
+	require.NoError(t, model.DB.Create(&badAccount).Error)
+
+	// Account B: valid.
+	goodAccount := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "good-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-good",
+		},
+	})
+
+	t.Run("corrupt row is skipped, valid account selected", func(t *testing.T) {
+		result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+			ChannelID:            channel.Id,
+			RequestModel:         "gpt-5",
+			ChannelUpstreamModel: "gpt-5",
+			Now:                  100,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, goodAccount.Id, result.AccountID)
+	})
+
+	t.Run("all corrupt accounts returns ErrAccountPoolNoSchedulableAccount", func(t *testing.T) {
+		_, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+			ChannelID:   channel.Id,
+			RequestModel: "gpt-5",
+			ChannelUpstreamModel: "gpt-5",
+			AttemptedAccountIDs: map[int]struct{}{goodAccount.Id: {}},
+			Now:         100,
+		})
+		require.ErrorIs(t, err, ErrAccountPoolNoSchedulableAccount)
+	})
+}
+
 func createEnabledAccountPoolSchedulerBinding(
 	t *testing.T,
 	poolID int,

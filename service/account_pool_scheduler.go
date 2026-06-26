@@ -38,6 +38,7 @@ type AccountPoolSelectionResult struct {
 	ProxyURL          string
 	Credential        AccountPoolCredentialConfig
 	TokenState        AccountPoolTokenState
+	RuntimeOptions    string
 }
 
 type accountPoolAccountCandidate struct {
@@ -99,14 +100,16 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		}
 		supportedModels, err := parseAccountPoolSupportedModels(account.SupportedModels)
 		if err != nil {
-			return AccountPoolSelectionResult{}, err
+			common.SysLog(fmt.Sprintf("account pool: skipping account id=%d name=%q due to invalid supported_models: %v", account.Id, account.Name, err))
+			continue
 		}
 		if !accountPoolModelListContainsOrEmpty(supportedModels, upstreamModelName) {
 			continue
 		}
 		accountUpstreamModelName, err := mapAccountPoolUpstreamModel(account.ModelMapping, upstreamModelName)
 		if err != nil {
-			return AccountPoolSelectionResult{}, err
+			common.SysLog(fmt.Sprintf("account pool: skipping account id=%d name=%q due to invalid model_mapping: %v", account.Id, account.Name, err))
+			continue
 		}
 		candidates = append(candidates, accountPoolAccountCandidate{
 			account:           account,
@@ -146,6 +149,7 @@ func SelectAccountPoolAccount(req AccountPoolSelectionRequest) (AccountPoolSelec
 		ProxyURL:          proxyURL,
 		Credential:        credential,
 		TokenState:        tokenState,
+		RuntimeOptions:    selected.account.RuntimeOptions,
 	}, nil
 }
 
