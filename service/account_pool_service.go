@@ -78,6 +78,7 @@ type AccountPoolBindingCreateParams struct {
 	ModelPolicy         AccountPoolModelPolicy
 	SchedulePolicy      string
 	AccountRetryTimes   int
+	MaxUserConcurrency  int
 	Status              string
 }
 
@@ -89,6 +90,7 @@ type AccountPoolBoundChannelCreateParams struct {
 	ModelPolicy         AccountPoolModelPolicy
 	SchedulePolicy      string
 	AccountRetryTimes   int
+	MaxUserConcurrency  int
 }
 
 type AccountPoolProxyCreateParams struct {
@@ -157,6 +159,7 @@ type AccountPoolBindingView struct {
 	ModelPolicy         string `json:"model_policy"`
 	SchedulePolicy      string `json:"schedule_policy"`
 	AccountRetryTimes   int    `json:"account_retry_times"`
+	MaxUserConcurrency  int    `json:"max_user_concurrency"`
 	Status              string `json:"status"`
 	RuntimeEnabled      bool   `json:"runtime_enabled"`
 	CreatedTime         int64  `json:"created_time"`
@@ -520,6 +523,7 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 		ModelPolicy:         modelPolicy,
 		SchedulePolicy:      schedulePolicy,
 		AccountRetryTimes:   params.AccountRetryTimes,
+		MaxUserConcurrency:  params.MaxUserConcurrency,
 		Status:              status,
 	}
 	if err := model.DB.Create(&binding).Error; err != nil {
@@ -572,6 +576,7 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 		ModelPolicy:         modelPolicy,
 		SchedulePolicy:      schedulePolicy,
 		AccountRetryTimes:   params.AccountRetryTimes,
+		MaxUserConcurrency:  params.MaxUserConcurrency,
 		Status:              model.AccountPoolBindingStatusDraft,
 	}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -637,6 +642,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 			"model_policy":          modelPolicy,
 			"schedule_policy":       schedulePolicy,
 			"account_retry_times":   params.AccountRetryTimes,
+			"max_user_concurrency":  params.MaxUserConcurrency,
 			"updated_time":          now,
 		}).Error; err != nil {
 			return err
@@ -661,6 +667,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	binding.ModelPolicy = modelPolicy
 	binding.SchedulePolicy = schedulePolicy
 	binding.AccountRetryTimes = params.AccountRetryTimes
+	binding.MaxUserConcurrency = params.MaxUserConcurrency
 	binding.UpdatedTime = now
 	invalidateAccountPoolRuntimeEnabledForChannel(oldChannelID)
 	invalidateAccountPoolRuntimeEnabledForChannel(channel.Id)
@@ -1124,6 +1131,27 @@ func getAccountPoolExistingProxy(proxyID int) (model.AccountPoolProxy, error) {
 	return proxy, err
 }
 
+// GetAccountPoolRuntimeUserConcurrencyConfig returns the binding ID and MaxUserConcurrency
+// for the enabled account-pool binding for the given channel. Returns (0, 0, nil) when
+// no enabled binding exists (channel not under account-pool control).
+func GetAccountPoolRuntimeUserConcurrencyConfig(channelID int) (bindingID int, maxUserConcurrency int, err error) {
+	if channelID <= 0 || model.DB == nil {
+		return 0, 0, nil
+	}
+	var binding model.AccountPoolChannelBinding
+	err = model.DB.
+		Select("id", "max_user_concurrency").
+		Where("channel_id = ? AND status = ?", channelID, model.AccountPoolBindingStatusEnabled).
+		First(&binding).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	return binding.Id, binding.MaxUserConcurrency, nil
+}
+
 func AccountPoolRuntimeEnabledForChannel(channelID int) (bool, error) {
 	if channelID <= 0 || model.DB == nil {
 		return false, nil
@@ -1258,6 +1286,7 @@ func buildAccountPoolBindingView(binding model.AccountPoolChannelBinding, channe
 		ModelPolicy:         binding.ModelPolicy,
 		SchedulePolicy:      binding.SchedulePolicy,
 		AccountRetryTimes:   binding.AccountRetryTimes,
+		MaxUserConcurrency:  binding.MaxUserConcurrency,
 		Status:              binding.Status,
 		RuntimeEnabled:      binding.Status == model.AccountPoolBindingStatusEnabled,
 		CreatedTime:         binding.CreatedTime,

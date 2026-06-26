@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -57,6 +58,32 @@ func runAccountPoolRuntimeAttempts(
 	if requestFactory == nil || attempt == nil {
 		return nil
 	}
+
+	// Per-user concurrency enforcement: acquire once before the attempt loop so
+	// it bounds concurrent REQUESTS per user (not per attempt/retry).
+	// Channel-test traffic is exempt, consistent with shouldRecordAccountPoolRuntimeAttempt.
+	if !shouldSkipAccountPoolUserConcurrency(info) {
+		channelID := accountPoolRuntimeChannelID(c, info)
+		if channelID > 0 {
+			bindingID, maxUserConc, err := service.GetAccountPoolRuntimeUserConcurrencyConfig(channelID)
+			if err == nil && bindingID > 0 && maxUserConc > 0 {
+				userID := 0
+				if info != nil {
+					userID = info.UserId
+				}
+				release, acquired := service.TryAcquireAccountPoolUserSlot(bindingID, userID, maxUserConc)
+				if !acquired {
+					return types.NewErrorWithStatusCode(
+						errors.New("account pool per-user concurrency limit reached"),
+						types.ErrorCodeGetChannelFailed,
+						http.StatusServiceUnavailable,
+					)
+				}
+				defer release()
+			}
+		}
+	}
+
 	// FIX 3: Function-level deferred release is the panic-safe backstop.  It
 	// releases whatever lease is current when the function returns, covering both
 	// the success path and any non-pool-mode give-up path.  Pool-mode iterations
@@ -273,6 +300,13 @@ func shouldRetryAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo, selectedA
 		return true
 	}
 	return statusCode >= http.StatusInternalServerError
+}
+
+// shouldSkipAccountPoolUserConcurrency returns true when per-user concurrency
+// enforcement must be skipped. Channel-test traffic is always exempt so that
+// admin health checks are never blocked by user quota.
+func shouldSkipAccountPoolUserConcurrency(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.IsChannelTest
 }
 
 func accountPoolRuntimeChannelID(c *gin.Context, info *relaycommon.RelayInfo) int {

@@ -639,8 +639,9 @@ func accountPoolBindingCreateParams(poolID int, req dto.AccountPoolBindingCreate
 			Strategy:    req.ModelStrategy,
 			FixedModels: req.FixedModels,
 		},
-		SchedulePolicy:    req.SchedulePolicy,
-		AccountRetryTimes: req.AccountRetryTimes,
+		SchedulePolicy:     req.SchedulePolicy,
+		AccountRetryTimes:  req.AccountRetryTimes,
+		MaxUserConcurrency: req.MaxUserConcurrency,
 	}
 }
 
@@ -656,8 +657,9 @@ func accountPoolBoundChannelCreateParams(poolID int, req dto.AccountPoolBoundCha
 			Strategy:    req.ModelStrategy,
 			FixedModels: req.FixedModels,
 		},
-		SchedulePolicy:    req.SchedulePolicy,
-		AccountRetryTimes: req.AccountRetryTimes,
+		SchedulePolicy:     req.SchedulePolicy,
+		AccountRetryTimes:  req.AccountRetryTimes,
+		MaxUserConcurrency: req.MaxUserConcurrency,
 	}
 }
 
@@ -808,6 +810,7 @@ func accountPoolBindingResponse(binding service.AccountPoolBindingView) dto.Acco
 		ModelPolicy:         binding.ModelPolicy,
 		SchedulePolicy:      binding.SchedulePolicy,
 		AccountRetryTimes:   binding.AccountRetryTimes,
+		MaxUserConcurrency:  binding.MaxUserConcurrency,
 		Status:              binding.Status,
 		RuntimeEnabled:      binding.RuntimeEnabled,
 		CreatedTime:         binding.CreatedTime,

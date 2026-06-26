@@ -1357,3 +1357,141 @@ func TestRunAccountPoolRuntimeAttemptsPoolModeThenNormalRetry(t *testing.T) {
 	require.NoError(t, model.DB.First(&reloadedB, accountB.Id).Error)
 	assert.Greater(t, reloadedB.SuccessCount, int64(0), "account B must record success")
 }
+
+// createAccountPoolRelayTestEnabledBindingWithMaxUserConcurrency creates an enabled binding
+// with the given MaxUserConcurrency. Mirrors createAccountPoolRelayTestEnabledBindingWithRetryTimes.
+func createAccountPoolRelayTestEnabledBindingWithMaxUserConcurrency(t *testing.T, poolID, channelID, maxUserConcurrency int) model.AccountPoolChannelBinding {
+	t.Helper()
+	bindingView, err := service.AccountPoolService{}.CreateBinding(service.AccountPoolBindingCreateParams{
+		PoolID:             poolID,
+		ChannelID:          channelID,
+		MaxUserConcurrency: maxUserConcurrency,
+	})
+	require.NoError(t, err)
+	_, err = service.AccountPoolService{}.ActivateBinding(poolID, bindingView.Id)
+	require.NoError(t, err)
+	var binding model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&binding, bindingView.Id).Error)
+	return binding
+}
+
+// TestAccountPoolRuntimeAttemptsEnforcePerUserConcurrencyLimit verifies that when
+// MaxUserConcurrency=1 is set on the binding and a user already holds a slot, a
+// subsequent runAccountPoolRuntimeAttempts call for the same user returns a retriable
+// 503 error without calling the attempt func. Once the slot is released the next
+// call proceeds normally.
+func TestAccountPoolRuntimeAttemptsEnforcePerUserConcurrencyLimit(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	service.ResetAccountPoolUserConcurrencyForTest()
+
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	binding := createAccountPoolRelayTestEnabledBindingWithMaxUserConcurrency(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "user-concurrency-account",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-account",
+		},
+	})
+
+	const userID = 42
+
+	// Pre-acquire the only slot for this (binding, user) pair.
+	holdRelease, held := service.TryAcquireAccountPoolUserSlotForTest(binding.Id, userID, 1)
+	require.True(t, held, "pre-acquire must succeed")
+
+	// A second call for the same user must be blocked (slot at capacity).
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.UserId = userID
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	attemptCalled := false
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attemptCalled = true
+		return nil
+	})
+
+	require.NotNil(t, newAPIError, "blocked user must receive an error")
+	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
+	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
+	assert.False(t, types.IsSkipRetryError(newAPIError), "error must be retriable so outer loop can try another channel")
+	assert.False(t, attemptCalled, "attempt func must NOT be called when user slot is at capacity")
+
+	// Release the held slot; the next call must succeed.
+	holdRelease()
+
+	ctx2 := newAccountPoolRelayTestContext("/v1/chat/completions")
+	info2 := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info2.UserId = userID
+	attemptCalled2 := false
+
+	newAPIError2 := runAccountPoolRuntimeAttempts(ctx2, info2, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attemptCalled2 = true
+		return nil
+	})
+
+	require.Nil(t, newAPIError2, "after release, next call must succeed")
+	assert.True(t, attemptCalled2, "attempt func must be called after slot was released")
+}
+
+// TestAccountPoolRuntimeAttemptsChannelTestSkipsUserConcurrencyEnforcement verifies
+// that channel-test traffic (IsChannelTest=true) is not blocked by per-user concurrency,
+// consistent with how shouldRecordAccountPoolRuntimeAttempt works.
+func TestAccountPoolRuntimeAttemptsChannelTestSkipsUserConcurrencyEnforcement(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	service.ResetAccountPoolUserConcurrencyForTest()
+
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	binding := createAccountPoolRelayTestEnabledBindingWithMaxUserConcurrency(t, pool.Id, channel.Id, 1)
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "channel-test-account",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-account",
+		},
+	})
+
+	const userID = 99
+
+	// Pre-occupy the slot.
+	holdRelease, held := service.TryAcquireAccountPoolUserSlotForTest(binding.Id, userID, 1)
+	require.True(t, held)
+	defer holdRelease()
+
+	// Channel-test request for same user must NOT be blocked.
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.UserId = userID
+	info.IsChannelTest = true
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	attemptCalled := false
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attemptCalled = true
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.True(t, attemptCalled, "channel-test traffic must not be blocked by per-user concurrency")
+}

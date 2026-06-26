@@ -221,6 +221,7 @@ type AccountPoolChannelBinding struct {
 	ModelPolicy         string `json:"model_policy" gorm:"type:text"`
 	SchedulePolicy      string `json:"schedule_policy" gorm:"type:text"`
 	AccountRetryTimes   int    `json:"account_retry_times" gorm:"not null;default:0"`
+	MaxUserConcurrency  int    `json:"max_user_concurrency" gorm:"not null;default:0"`
 	Status              string `json:"status" gorm:"type:varchar(32);not null;default:'draft';index"`
 	CreatedTime         int64  `json:"created_time" gorm:"bigint"`
 	UpdatedTime         int64  `json:"updated_time" gorm:"bigint"`

@@ -160,22 +160,24 @@ type AccountPoolCapabilityPoolResult struct {
 }
 
 type AccountPoolBindingCreateRequest struct {
-	ChannelID         int      `json:"channel_id" binding:"required"`
-	AccountIDs        []int    `json:"account_ids"`
-	ModelStrategy     string   `json:"model_strategy"`
-	FixedModels       []string `json:"fixed_models"`
-	SchedulePolicy    string   `json:"schedule_policy"`
-	AccountRetryTimes int      `json:"account_retry_times"`
+	ChannelID          int      `json:"channel_id" binding:"required"`
+	AccountIDs         []int    `json:"account_ids"`
+	ModelStrategy      string   `json:"model_strategy"`
+	FixedModels        []string `json:"fixed_models"`
+	SchedulePolicy     string   `json:"schedule_policy"`
+	AccountRetryTimes  int      `json:"account_retry_times"`
+	MaxUserConcurrency int      `json:"max_user_concurrency"`
 }
 
 type AccountPoolBoundChannelCreateRequest struct {
-	Name              string   `json:"name" binding:"required"`
-	ChannelType       int      `json:"type"`
-	AccountIDs        []int    `json:"account_ids"`
-	ModelStrategy     string   `json:"model_strategy"`
-	FixedModels       []string `json:"fixed_models"`
-	SchedulePolicy    string   `json:"schedule_policy"`
-	AccountRetryTimes int      `json:"account_retry_times"`
+	Name               string   `json:"name" binding:"required"`
+	ChannelType        int      `json:"type"`
+	AccountIDs         []int    `json:"account_ids"`
+	ModelStrategy      string   `json:"model_strategy"`
+	FixedModels        []string `json:"fixed_models"`
+	SchedulePolicy     string   `json:"schedule_policy"`
+	AccountRetryTimes  int      `json:"account_retry_times"`
+	MaxUserConcurrency int      `json:"max_user_concurrency"`
 }
 
 type AccountPoolBindingResponse struct {
@@ -188,6 +190,7 @@ type AccountPoolBindingResponse struct {
 	ModelPolicy         string `json:"model_policy"`
 	SchedulePolicy      string `json:"schedule_policy"`
 	AccountRetryTimes   int    `json:"account_retry_times"`
+	MaxUserConcurrency  int    `json:"max_user_concurrency"`
 	Status              string `json:"status"`
 	RuntimeEnabled      bool   `json:"runtime_enabled"`
 	CreatedTime         int64  `json:"created_time"`
