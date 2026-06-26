@@ -170,7 +170,13 @@ func TestAccountPoolSchedulerPrefersSchedulableRuntimeAffinityAccount(t *testing
 	assert.Equal(t, sticky.Id, result.AccountID)
 }
 
-func TestAccountPoolSchedulerDropsRuntimeAffinityForUnschedulableAccount(t *testing.T) {
+// TestAccountPoolSchedulerFallsBackButRetainsPinForTransientlyUnschedulableAccount verifies
+// that when the pinned account fails IsSchedulableAt (e.g., it is rate-limited) it is absent
+// from the candidates list, so the scheduler falls back to another account for THIS request.
+// Crucially, the pin must NOT be dropped by the scheduler — eviction is owned by the relay
+// failure path (ForgetSelectedAccountPoolRuntimeAffinity) and the idle/hard TTLs. A transient
+// rate-limit window must not permanently migrate the session to a different account.
+func TestAccountPoolSchedulerFallsBackButRetainsPinForTransientlyUnschedulableAccount(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
 	pool := createAccountPoolServiceTestPool(t, service)
@@ -197,9 +203,13 @@ func TestAccountPoolSchedulerDropsRuntimeAffinityForUnschedulableAccount(t *test
 	})
 
 	require.NoError(t, err)
+	// Fallback account is selected for this request (sticky is rate-limited / unschedulable).
 	assert.Equal(t, fallback.Id, result.AccountID)
-	_, ok := lookupAccountPoolRuntimeAffinity(affinityKey, binding.Id, 102)
-	assert.False(t, ok)
+	// Pin is retained — the scheduler must NOT evict it. Only the relay failure path or TTL
+	// evicts the pin. The session will re-pin to the sticky account once it is schedulable again.
+	gotID, ok := lookupAccountPoolRuntimeAffinity(affinityKey, binding.Id, 102)
+	assert.True(t, ok, "pin must be retained after a transient unschedulability; eviction is the relay failure path's job")
+	assert.Equal(t, sticky.Id, gotID)
 }
 
 func TestAccountPoolSchedulerWithLeaseSkipsSaturatedAccount(t *testing.T) {

@@ -17,10 +17,16 @@ import (
 
 const accountPoolRuntimeAffinityTTLSeconds = int64(30 * 60)
 
+// accountPoolRuntimeAffinityHardCapSeconds is the maximum absolute lifetime of a pinned entry.
+// Even if the session keeps refreshing the sliding idle TTL, the pin is evicted after 4h so
+// that admin rebalancing and newly-added accounts can take effect on active sessions.
+const accountPoolRuntimeAffinityHardCapSeconds = int64(4 * 60 * 60)
+
 type accountPoolRuntimeAffinityEntry struct {
 	bindingID int
 	accountID int
-	expiresAt int64
+	createdAt int64 // wall time when the entry was first created; never updated on refresh
+	expiresAt int64 // sliding idle expiry; refreshed on every remember call
 }
 
 type accountPoolRuntimeAffinityManager struct {
@@ -125,9 +131,16 @@ func (m *accountPoolRuntimeAffinityManager) remember(key string, bindingID int, 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	createdAt := now
+	if existing, ok := m.entries[key]; ok {
+		// Preserve the original birth time so the hard cap is anchored to when the session
+		// was first pinned, not to the most recent refresh.
+		createdAt = existing.createdAt
+	}
 	m.entries[key] = accountPoolRuntimeAffinityEntry{
 		bindingID: bindingID,
 		accountID: accountID,
+		createdAt: createdAt,
 		expiresAt: now + accountPoolRuntimeAffinityTTLSeconds,
 	}
 }
@@ -146,6 +159,12 @@ func (m *accountPoolRuntimeAffinityManager) lookup(key string, bindingID int, no
 		return 0, false
 	}
 	if entry.expiresAt <= now || entry.bindingID != bindingID || entry.accountID <= 0 {
+		delete(m.entries, key)
+		return 0, false
+	}
+	// Hard cap: evict entries that have been alive longer than the absolute lifetime limit,
+	// even if the sliding idle TTL was recently refreshed by a remember() call.
+	if now >= entry.createdAt+accountPoolRuntimeAffinityHardCapSeconds {
 		delete(m.entries, key)
 		return 0, false
 	}

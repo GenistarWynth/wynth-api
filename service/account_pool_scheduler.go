@@ -163,7 +163,21 @@ func selectAccountPoolAffinityCandidate(key string, bindingID int, candidates []
 			return candidate, true
 		}
 	}
-	forgetAccountPoolRuntimeAffinity(key)
+	// Do NOT forget the pin here. The pinned account may be absent from candidates only
+	// transiently (e.g., it is in the per-request AttemptedAccountIDs set, or it failed a
+	// concurrent lease/capacity check). Dropping the pin now would cause the next request to
+	// re-pin to a DIFFERENT account — which for stateful sessions (previous_response_id,
+	// conversation id) does not hold the server-side state and triggers an upstream error.
+	//
+	// Eviction ownership:
+	//   • Relay failure path: ForgetSelectedAccountPoolRuntimeAffinity (relay/account_pool_runtime.go)
+	//     fires when the pinned account actually fails a request — this is the correct trigger.
+	//   • Idle TTL: entries expire after accountPoolRuntimeAffinityTTLSeconds of inactivity.
+	//   • Hard cap: entries expire after accountPoolRuntimeAffinityHardCapSeconds regardless.
+	//
+	// A stale pin to a genuinely dead account is harmless: the dead account never passes
+	// IsSchedulableAt so it never appears in candidates, the pin is never honored, and the
+	// entry expires via TTL. The relay already cleared the pin on the failure that killed it.
 	return accountPoolAccountCandidate{}, false
 }
 
