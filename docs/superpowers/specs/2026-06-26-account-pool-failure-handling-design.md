@@ -137,12 +137,16 @@ unconditionally (§3.D).
 
 ### 3.D Escalation state machine
 
-- **Generic consecutive-failure tiering:** `failure_state.consecutiveFailures` increments **only**
-  on 5xx and persistent-transport failures (the "soft infra" class), resets to 0 on success. It
-  tiers that class's cooldown (default 60s → 5m → 30m by count); at the hard cap (default count
-  `>= 6`) → `status=expired`. Tiers + cap configurable. 429/403/401 do **not** increment it — they
-  use their own dedicated counters (`http403Count`, `last401At`) so a rate-limit cannot inflate the
-  infra-failure tier and vice-versa. Any success resets all counters.
+- **Generic consecutive-failure escalation:** `failure_state.consecutiveFailures` increments **only**
+  on 5xx and persistent-transport failures (the "soft infra" class), resets to 0 on success. At the
+  hard cap (default count `>= 6`) → `status=expired`. The per-hit cooldown differs by sub-class:
+  **5xx** uses the escalating tier ladder (default 60s → 5m → 30m by count); **persistent transport**
+  (connection refused / no route / DNS / proxy-auth) uses a **flat** `TransportPersistentMinutes`
+  (10m) floor each hit — longer than a transient timeout — while still counting toward the shared
+  hard-cap expire. **Transient transport** (e.g. timeout) is a flat `TransportTransientSeconds` (60s)
+  one-off and does **not** increment the counter. 429/403/401 do **not** increment it — they use their
+  own dedicated counters (`http403Count`, `last401At`) so a rate-limit cannot inflate the infra-failure
+  escalation and vice-versa. Any success resets all counters.
 - **403 3-strike:** `http403Count` within a rolling `http403WindowStart`-based 180m window;
   out-of-window resets the count to 1; reaching threshold → `status=expired`.
 - **OAuth 401 two-strike + refresh-race guard:** first 401 → temp cooldown, keep `enabled`,
