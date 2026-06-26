@@ -123,11 +123,20 @@ func TestRecordAccountPoolRuntimeAttemptFailureNoopsWithoutAccountOrError(t *tes
 	assert.Zero(t, reloaded.TempDisabledUntil)
 }
 
+// makeFailureStateJSON returns a marshalled accountPoolFailureState for seeding
+// account.FailureState in unit tests without going through the DB.
+func makeFailureStateJSON(t *testing.T, s accountPoolFailureState) string {
+	t.Helper()
+	raw, err := s.marshal()
+	require.NoError(t, err)
+	return raw
+}
+
 func TestClassifyAccountPoolFailure(t *testing.T) {
 	const now = int64(1000)
 	baseAccount := model.AccountPoolAccount{
 		Status: model.AccountPoolAccountStatusEnabled,
-		// all cooldowns zero
+		// all cooldowns zero, empty FailureState
 	}
 
 	makeErr := func(msg string, code int) *types.NewAPIError {
@@ -145,6 +154,7 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 	tests := []struct {
 		name    string
 		account model.AccountPoolAccount
+		isOAuth bool
 		err     *types.NewAPIError
 		check   func(t *testing.T, got map[string]any)
 	}{
@@ -185,6 +195,15 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			},
 		},
 		{
+			// 429 must NOT set temp_disabled_reason (review fix: last_error already records message)
+			name:    "429 does not set temp_disabled_reason",
+			account: baseAccount,
+			err:     makeErr("too many requests", 429),
+			check: func(t *testing.T, got map[string]any) {
+				assert.NotContains(t, got, "temp_disabled_reason")
+			},
+		},
+		{
 			name:    "408 request timeout",
 			account: baseAccount,
 			err:     makeErr("request timeout", 408),
@@ -194,17 +213,58 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 				assert.NotContains(t, got, "rate_limited_until")
 			},
 		},
+		// 5xx escalation tiering
 		{
-			name:    "500 server error",
+			// ConsecutiveFailures starts at 0; after increment=1, tier index=0 → 60s.
+			name:    "500 first hit tier-0 60s",
 			account: baseAccount,
 			err:     makeErr("internal server error", 500),
 			check: func(t *testing.T, got map[string]any) {
 				assert.Equal(t, now+60, got["temp_disabled_until"])
 				assert.NotContains(t, got, "status")
+				// failure_state must carry incremented ConsecutiveFailures=1
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, 1, fs.ConsecutiveFailures)
 			},
 		},
 		{
-			name:    "529 overload",
+			// Seed ConsecutiveFailures=1; after increment=2, tier index=1 → 300s.
+			name: "500 second hit tier-1 300s",
+			account: model.AccountPoolAccount{
+				Status:       model.AccountPoolAccountStatusEnabled,
+				FailureState: makeFailureStateJSON(t, accountPoolFailureState{ConsecutiveFailures: 1}),
+			},
+			err: makeErr("server error", 500),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, now+300, got["temp_disabled_until"])
+				assert.NotContains(t, got, "status")
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, 2, fs.ConsecutiveFailures)
+			},
+		},
+		{
+			// Seed ConsecutiveFailures=5; after increment=6, >=HardCapCount(6) → expired.
+			name: "500 hard cap expired",
+			account: model.AccountPoolAccount{
+				Status:       model.AccountPoolAccountStatusEnabled,
+				FailureState: makeFailureStateJSON(t, accountPoolFailureState{ConsecutiveFailures: 5}),
+			},
+			err: makeErr("server error", 500),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
+				// cooldowns cleared on hard cap
+				assert.Equal(t, int64(0), got["rate_limited_until"])
+				assert.Equal(t, int64(0), got["temp_disabled_until"])
+				assert.Equal(t, int64(0), got["overload_until"])
+			},
+		},
+		{
+			// 529 overload must NOT increment ConsecutiveFailures.
+			name:    "529 overload does not increment ConsecutiveFailures",
 			account: baseAccount,
 			err:     makeErr("overloaded", 529),
 			check: func(t *testing.T, got map[string]any) {
@@ -212,6 +272,12 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 				assert.NotContains(t, got, "status")
 				assert.NotContains(t, got, "temp_disabled_until")
 				assert.NotContains(t, got, "rate_limited_until")
+				// failure_state should not be written (or if written, ConsecutiveFailures=0)
+				if fsRaw, ok := got["failure_state"]; ok {
+					fs, err := parseAccountPoolFailureState(fsRaw.(string))
+					require.NoError(t, err)
+					assert.Equal(t, 0, fs.ConsecutiveFailures)
+				}
 			},
 		},
 		{
@@ -225,9 +291,11 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 				assert.NotContains(t, got, "status")
 			},
 		},
+		// 401 behavior: non-OAuth → immediate expire; OAuth → two-strike
 		{
-			name:    "401 unauthorized",
+			name:    "401 non-OAuth immediate expire",
 			account: baseAccount,
+			isOAuth: false,
 			err:     makeErr("unauthorized", 401),
 			check: func(t *testing.T, got map[string]any) {
 				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
@@ -237,11 +305,92 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			},
 		},
 		{
-			name:    "403 forbidden",
+			// OAuth 401 first hit: cooldown only, not expired.
+			name:    "401 OAuth first hit cooldown",
+			account: baseAccount,
+			isOAuth: true,
+			err:     makeErr("unauthorized", 401),
+			check: func(t *testing.T, got map[string]any) {
+				assert.NotContains(t, got, "status")
+				// temp_disabled_until = now + OAuth401CooldownMinutes*60 = 1000 + 600 = 1600
+				assert.Equal(t, now+600, got["temp_disabled_until"])
+				// failure_state must record Last401At
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, now, fs.Last401At)
+			},
+		},
+		{
+			// OAuth 401 second hit within restrike window: expire.
+			name: "401 OAuth second hit within window expires",
+			account: model.AccountPoolAccount{
+				Status:       model.AccountPoolAccountStatusEnabled,
+				FailureState: makeFailureStateJSON(t, accountPoolFailureState{Last401At: now - 60}),
+			},
+			isOAuth: true,
+			err:     makeErr("unauthorized", 401),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
+				assert.Equal(t, int64(0), got["rate_limited_until"])
+				assert.Equal(t, int64(0), got["temp_disabled_until"])
+				assert.Equal(t, int64(0), got["overload_until"])
+			},
+		},
+		// 403 three-strike behavior
+		{
+			// 403 first hit: opens new window, count=1, stays enabled with cooldown.
+			name:    "403 first hit opens window cooldown",
 			account: baseAccount,
 			err:     makeErr("forbidden", 403),
 			check: func(t *testing.T, got map[string]any) {
+				assert.NotContains(t, got, "status")
+				// temp_disabled_until = now + HTTP403CooldownMinutes*60 = 1000 + 600 = 1600
+				assert.Equal(t, now+600, got["temp_disabled_until"])
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, 1, fs.HTTP403Count)
+				assert.Equal(t, now, fs.HTTP403WindowStart)
+			},
+		},
+		{
+			// 403 third hit within window: threshold reached → expire.
+			name: "403 third hit within window expires",
+			account: model.AccountPoolAccount{
+				Status: model.AccountPoolAccountStatusEnabled,
+				FailureState: makeFailureStateJSON(t, accountPoolFailureState{
+					HTTP403Count:       2,
+					HTTP403WindowStart: now,
+				}),
+			},
+			err: makeErr("forbidden", 403),
+			check: func(t *testing.T, got map[string]any) {
 				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
+				assert.Equal(t, int64(0), got["rate_limited_until"])
+				assert.Equal(t, int64(0), got["temp_disabled_until"])
+				assert.Equal(t, int64(0), got["overload_until"])
+			},
+		},
+		{
+			// 403 after window expiry (old window start): resets count to 1, stays enabled.
+			name: "403 after window expiry resets count",
+			account: model.AccountPoolAccount{
+				Status: model.AccountPoolAccountStatusEnabled,
+				FailureState: makeFailureStateJSON(t, accountPoolFailureState{
+					HTTP403Count:       2,
+					HTTP403WindowStart: now - 200*60, // 200 minutes ago, outside 180-min window
+				}),
+			},
+			err: makeErr("forbidden", 403),
+			check: func(t *testing.T, got map[string]any) {
+				assert.NotContains(t, got, "status")
+				assert.Equal(t, now+600, got["temp_disabled_until"])
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, 1, fs.HTTP403Count)
+				assert.Equal(t, now, fs.HTTP403WindowStart)
 			},
 		},
 		{
@@ -259,6 +408,15 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			},
 		},
 		{
+			// 400 with "identity verification" phrase → expire.
+			name: "400 identity verification phrase expires",
+			account: baseAccount,
+			err:  makeErr("identity verification required", 400),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
+			},
+		},
+		{
 			name:    "400 plain bad request",
 			account: baseAccount,
 			err:     makeErr("bad request body", 400),
@@ -270,11 +428,24 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			},
 		},
 		{
-			name:    "network error persistent connection refused",
+			// Out-of-range status code → temp disable with tier-0 60s.
+			name:    "out-of-range status 600 temp disable",
+			account: baseAccount,
+			err:     makeErr("unknown error", 600),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, now+60, got["temp_disabled_until"])
+				assert.NotContains(t, got, "status")
+			},
+		},
+		{
+			// Persistent transport errors now use escalation tiering (same as 5xx).
+			// First hit: ConsecutiveFailures becomes 1 → tier index 0 → 60s.
+			// (Previously used flat TransportPersistentMinutes=10min=600s.)
+			name:    "network error persistent connection refused tier-0 60s",
 			account: baseAccount,
 			err:     makeNetworkErr("connection refused"),
 			check: func(t *testing.T, got map[string]any) {
-				assert.Equal(t, now+600, got["temp_disabled_until"])
+				assert.Equal(t, now+60, got["temp_disabled_until"])
 				assert.NotContains(t, got, "status")
 			},
 		},
@@ -288,7 +459,57 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 			},
 		},
 		{
-			name: "monotonic keeps larger existing cooldown",
+			// Persistent transport error increments ConsecutiveFailures (tiered).
+			name:    "network error persistent increments ConsecutiveFailures",
+			account: baseAccount,
+			err:     makeNetworkErr("connection refused"),
+			check: func(t *testing.T, got map[string]any) {
+				require.Contains(t, got, "failure_state")
+				fs, err := parseAccountPoolFailureState(got["failure_state"].(string))
+				require.NoError(t, err)
+				assert.Equal(t, 1, fs.ConsecutiveFailures)
+			},
+		},
+		{
+			// Transient transport error does NOT increment ConsecutiveFailures.
+			name:    "network error transient does not increment ConsecutiveFailures",
+			account: baseAccount,
+			err:     makeNetworkErr("context deadline exceeded"),
+			check: func(t *testing.T, got map[string]any) {
+				// failure_state may or may not be present; if present, ConsecutiveFailures=0
+				if fsRaw, ok := got["failure_state"]; ok {
+					fs, err := parseAccountPoolFailureState(fsRaw.(string))
+					require.NoError(t, err)
+					assert.Equal(t, 0, fs.ConsecutiveFailures)
+				}
+			},
+		},
+		{
+			// Monotonic: existing rate_limited_until larger than new → keep existing.
+			name: "monotonic keeps larger existing rate_limited_until for 429",
+			account: model.AccountPoolAccount{
+				Status:          model.AccountPoolAccountStatusEnabled,
+				RateLimitedUntil: now + 10000,
+			},
+			err: makeErr("too many requests", 429),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, now+10000, got["rate_limited_until"])
+			},
+		},
+		{
+			// Monotonic: existing overload_until larger than new → keep existing.
+			name: "monotonic keeps larger existing overload_until for 529",
+			account: model.AccountPoolAccount{
+				Status:       model.AccountPoolAccountStatusEnabled,
+				OverloadUntil: now + 10000,
+			},
+			err: makeErr("overloaded", 529),
+			check: func(t *testing.T, got map[string]any) {
+				assert.Equal(t, now+10000, got["overload_until"])
+			},
+		},
+		{
+			name: "monotonic keeps larger existing temp_disabled_until for 5xx",
 			account: model.AccountPoolAccount{
 				Status:            model.AccountPoolAccountStatusEnabled,
 				TempDisabledUntil: now + 10000,
@@ -302,7 +523,7 @@ func TestClassifyAccountPoolFailure(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifyAccountPoolFailure(tc.account, tc.err, false, now)
+			got := classifyAccountPoolFailure(tc.account, tc.err, tc.isOAuth, now)
 			tc.check(t, got)
 		})
 	}
@@ -323,6 +544,11 @@ func TestClassifyTransportError(t *testing.T) {
 		{"deadline exceeded is transient", "context deadline exceeded", false},
 		{"eof is transient", "unexpected EOF", false},
 		{"timeout is transient", "i/o timeout", false},
+		// Windows-specific phrasings
+		{"windows actively refused is persistent", "target machine actively refused", true},
+		{"windows no such host is known is persistent", "no such host is known", true},
+		{"windows unreachable host is persistent", "unreachable host", true},
+		{"windows socket unreachable network is persistent", "a socket operation was attempted to an unreachable network", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

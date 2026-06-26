@@ -40,6 +40,10 @@ func classifyTransportError(err *types.NewAPIError) bool {
 		"no route to host",
 		"network is unreachable",
 		"no such host",
+		"no such host is known",          // Windows: GetAddrInfoW error
+		"actively refused",               // Windows: connection refused (WSAECONNREFUSED)
+		"unreachable host",               // Windows: WSAEHOSTUNREACH
+		"a socket operation was attempted to an unreachable network", // Windows: WSAENETUNREACH
 		"proxy authentication required",
 		"authentication failed",
 	}
@@ -83,14 +87,39 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 
 	cfg := accountPoolFailureConfig()
 
+	// Parse the persisted failure state so escalation counters survive restarts.
+	fs, _ := parseAccountPoolFailureState(account.FailureState)
+
+	// writeFS marshals the updated failure state into updates["failure_state"].
+	writeFS := func() {
+		raw, marshalErr := fs.marshal()
+		if marshalErr == nil {
+			updates["failure_state"] = raw
+		}
+	}
+
 	// Case 1 — Network / transport error. Check first because code may be 0.
 	if err.GetErrorCode() == types.ErrorCodeDoRequestFailed {
 		persistent := classifyTransportError(err)
 		reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
 		var disableUntil int64
 		if persistent {
-			disableUntil = now + int64(cfg.TransportPersistentMinutes*60)
+			// Persistent transport errors share the 5xx escalation tier logic.
+			fs.ConsecutiveFailures++
+			tier := cfg.Escalation5xxTiersSeconds[min(fs.ConsecutiveFailures-1, len(cfg.Escalation5xxTiersSeconds)-1)]
+			if fs.ConsecutiveFailures >= cfg.Escalation5xxHardCapCount {
+				updates["status"] = model.AccountPoolAccountStatusExpired
+				updates["rate_limited_until"] = int64(0)
+				updates["temp_disabled_until"] = int64(0)
+				updates["overload_until"] = int64(0)
+				updates["temp_disabled_reason"] = ""
+				writeFS()
+				return updates
+			}
+			disableUntil = now + int64(tier)
+			writeFS()
 		} else {
+			// Transient errors use a flat cooldown; do NOT increment ConsecutiveFailures.
 			disableUntil = now + int64(cfg.TransportTransientSeconds)
 		}
 		updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, disableUntil)
@@ -99,13 +128,55 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 	}
 
 	switch code {
-	// Case 2 — Auth failure: immediately expire the account.
-	case http.StatusUnauthorized, http.StatusForbidden:
-		updates["status"] = model.AccountPoolAccountStatusExpired
-		updates["rate_limited_until"] = int64(0)
-		updates["temp_disabled_until"] = int64(0)
-		updates["overload_until"] = int64(0)
-		updates["temp_disabled_reason"] = ""
+	// Case 2a — 401 Unauthorized: two-strike for OAuth accounts; immediate expire for API-key accounts.
+	case http.StatusUnauthorized:
+		if isOAuth {
+			// Precise token-version threading for refresh-race detection is a documented
+			// future refinement; two-strike provides sufficient tolerance for now.
+			if fs.Last401At > 0 && now-fs.Last401At <= int64(cfg.OAuth401RestrikeWindowMinutes*60) {
+				// Second 401 within the restrike window → expire.
+				updates["status"] = model.AccountPoolAccountStatusExpired
+				updates["rate_limited_until"] = int64(0)
+				updates["temp_disabled_until"] = int64(0)
+				updates["overload_until"] = int64(0)
+				updates["temp_disabled_reason"] = ""
+			} else {
+				// First 401 (or outside window): cool down, record timestamp.
+				fs.Last401At = now
+				updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, now+int64(cfg.OAuth401CooldownMinutes*60))
+				writeFS()
+			}
+		} else {
+			// Non-OAuth (API-key) account: a 401 means the key is invalid → expire immediately.
+			updates["status"] = model.AccountPoolAccountStatusExpired
+			updates["rate_limited_until"] = int64(0)
+			updates["temp_disabled_until"] = int64(0)
+			updates["overload_until"] = int64(0)
+			updates["temp_disabled_reason"] = ""
+		}
+
+	// Case 2b — 403 Forbidden: three-strike within a rolling window before expiry.
+	case http.StatusForbidden:
+		window := int64(cfg.HTTP403WindowMinutes * 60)
+		if fs.HTTP403WindowStart == 0 || now-fs.HTTP403WindowStart > window {
+			// Start a new window.
+			fs.HTTP403WindowStart = now
+			fs.HTTP403Count = 1
+		} else {
+			fs.HTTP403Count++
+		}
+		if fs.HTTP403Count >= cfg.HTTP403Threshold {
+			// Threshold reached → expire and clear cooldowns.
+			updates["status"] = model.AccountPoolAccountStatusExpired
+			updates["rate_limited_until"] = int64(0)
+			updates["temp_disabled_until"] = int64(0)
+			updates["overload_until"] = int64(0)
+			updates["temp_disabled_reason"] = ""
+		} else {
+			// Under threshold: apply cooldown only.
+			updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, now+int64(cfg.HTTP403CooldownMinutes*60))
+		}
+		writeFS()
 
 	// Case 3 — Rate limited.
 	case http.StatusTooManyRequests:
@@ -116,8 +187,8 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 			fb := int64(clampRateLimit429CooldownSeconds(cfg.RateLimit429FallbackSeconds))
 			updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, now+fb)
 		}
-		updates["temp_disabled_reason"] = sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
-		// status stays enabled; do NOT touch temp_disabled_until or overload_until
+		// temp_disabled_reason must NOT be set for 429 — last_error already records the message.
+		// status stays enabled; do NOT touch temp_disabled_until or overload_until.
 
 	// Case 4 — Request timeout: brief temporary disable.
 	case http.StatusRequestTimeout:
@@ -127,16 +198,29 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 
 	// Case 5 — Overload (Claude/Anthropic-specific 529).
 	case 529:
+		// 529 does NOT increment ConsecutiveFailures (overload is load-side, not account-health).
 		reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
 		updates["overload_until"] = monotonic(account.OverloadUntil, now+int64(cfg.OverloadCooldownMinutes*60))
 		updates["temp_disabled_reason"] = reason
 
-	// Case 6 — Other 5xx (500-599 except 529).
+	// Case 6 — Other 5xx (500-599 except 529): escalating tiered cooldown.
 	default:
 		if code >= 500 && code <= 599 {
 			reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
-			updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, now+60)
-			updates["temp_disabled_reason"] = reason
+			fs.ConsecutiveFailures++
+			tier := cfg.Escalation5xxTiersSeconds[min(fs.ConsecutiveFailures-1, len(cfg.Escalation5xxTiersSeconds)-1)]
+			if fs.ConsecutiveFailures >= cfg.Escalation5xxHardCapCount {
+				updates["status"] = model.AccountPoolAccountStatusExpired
+				updates["rate_limited_until"] = int64(0)
+				updates["temp_disabled_until"] = int64(0)
+				updates["overload_until"] = int64(0)
+				updates["temp_disabled_reason"] = ""
+				writeFS()
+			} else {
+				updates["temp_disabled_until"] = monotonic(account.TempDisabledUntil, now+int64(tier))
+				updates["temp_disabled_reason"] = reason
+				writeFS()
+			}
 			break
 		}
 
@@ -245,3 +329,4 @@ func truncateAccountPoolFailureMessage(message string, maxLen int) string {
 	}
 	return message[:end]
 }
+
