@@ -42,6 +42,32 @@ func TestRecordAccountPoolRuntimeAttemptSuccessClearsTransientFailureState(t *te
 	assert.Equal(t, model.AccountPoolAccountStatusEnabled, reloaded.Status)
 }
 
+func TestRecordAccountPoolRuntimeAttemptSuccessResetsFailureState(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	now := int64(3000)
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:              "overloaded-account",
+		TempDisabledUntil: now + 500,
+	})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"overload_until": now + 1000,
+			"failure_state":  `{"consecutive_failures":3,"http403_count":2}`,
+		}).Error)
+
+	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, now))
+
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Zero(t, reloaded.OverloadUntil)
+	assert.Empty(t, reloaded.FailureState)
+	assert.Zero(t, reloaded.TempDisabledUntil)
+	assert.Equal(t, int64(1), reloaded.SuccessCount)
+}
+
 func TestRecordAccountPoolRuntimeAttemptSuccessNoopsForInvalidOrNonEnabledAccount(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

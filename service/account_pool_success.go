@@ -24,5 +24,7 @@ func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64) error {
 			"temp_disabled_until":  int64(0),
 			"temp_disabled_reason": "",
 			"last_error":           "",
+			"overload_until":       int64(0),
+			"failure_state":        "",
 		}).Error
 }
