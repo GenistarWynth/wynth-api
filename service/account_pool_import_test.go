@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/QuantumNous/new-api/model"
@@ -531,6 +532,173 @@ codex-api-key:
 	var proxyCountAfter int64
 	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountAfter).Error)
 	assert.Equal(t, proxyCountBefore, proxyCountAfter, "dry-run must not write proxy rows")
+}
+
+// import-2: orphan proxy cleanup — proxy created for an account that subsequently fails must be deleted.
+func TestAccountPoolServiceImportOrphanProxyDeletedOnAccountFailure(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Inject a hook that makes CreateAccount fail for the first call.
+	callCount := 0
+	accountPoolImportCreateAccountHook = func(s AccountPoolService, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
+		callCount++
+		return AccountPoolAccountView{}, errors.New("injected account creation failure")
+	}
+	t.Cleanup(func() { accountPoolImportCreateAccountHook = nil })
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-orphan",
+					"name": "Orphan Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 9999,
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "orphan-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-orphan"
+					},
+					"proxy_key": "proxy-orphan"
+				}
+			]
+		}`,
+	})
+
+	// The import must not error overall — partial success (Failed=1) is intentional.
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, 1, result.Failed, "account creation failure must be counted as Failed")
+	assert.Equal(t, 1, result.ProxyCreated, "the proxy was created during parse")
+
+	// The proxy that was newly created for this import must be cleaned up as an orphan.
+	var proxyCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCount).Error)
+	assert.Zero(t, proxyCount, "orphan proxy must be deleted after failed account creation")
+}
+
+// import-2: proxy kept on successful account — a created proxy referenced by a successful account must NOT be deleted.
+func TestAccountPoolServiceImportProxyKeptOnAccountSuccess(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-success",
+					"name": "Success Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 8888,
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "success-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-success"
+					},
+					"proxy_key": "proxy-success"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Failed)
+	assert.Equal(t, 1, result.ProxyCreated)
+
+	// Proxy must still exist: it is referenced by the successfully created account.
+	var proxyCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCount).Error)
+	assert.Equal(t, int64(1), proxyCount, "proxy referenced by a successful account must be kept")
+}
+
+// import-2: shared proxy kept — one proxy used by both a successful and a failed account must NOT be deleted.
+func TestAccountPoolServiceImportSharedProxyKeptWhenOneAccountSucceeds(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Fail CreateAccount only for the second call (account B), let account A succeed.
+	callCount := 0
+	accountPoolImportCreateAccountHook = func(s AccountPoolService, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
+		callCount++
+		if callCount == 2 {
+			return AccountPoolAccountView{}, errors.New("injected failure for second account")
+		}
+		return s.CreateAccount(params)
+	}
+	t.Cleanup(func() { accountPoolImportCreateAccountHook = nil })
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-shared",
+					"name": "Shared Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 7777,
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "shared-success",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-shared-success"
+					},
+					"proxy_key": "proxy-shared"
+				},
+				{
+					"name": "shared-fail",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-shared-fail"
+					},
+					"proxy_key": "proxy-shared"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 1, result.Failed)
+	assert.Equal(t, 1, result.ProxyCreated)
+
+	// The proxy must be kept: the successful account (account A) still references it.
+	var proxyCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCount).Error)
+	assert.Equal(t, int64(1), proxyCount, "shared proxy referenced by a successful account must be kept")
 }
 
 // import-6: dedup pass with a corrupt CredentialConfig on an existing account does not abort the import.

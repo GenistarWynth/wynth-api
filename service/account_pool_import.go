@@ -19,6 +19,10 @@ const (
 	accountPoolImportFormatCPA     = "cpa"
 )
 
+// accountPoolImportCreateAccountHook is nil in production. Tests may replace it to
+// simulate CreateAccount failures without changing observable DB schema or service code.
+var accountPoolImportCreateAccountHook func(s AccountPoolService, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error)
+
 type AccountPoolAccountImportDefaults struct {
 	Status            string
 	Priority          int64
@@ -61,8 +65,9 @@ type accountPoolImportCandidate struct {
 }
 
 type accountPoolImportProxyStats struct {
-	Created int
-	Reused  int
+	Created         int
+	Reused          int
+	CreatedProxyIDs []int // IDs of proxies newly created (not reused) during this import; used for orphan cleanup.
 }
 
 type accountPoolSub2APIDataPayload struct {
@@ -198,7 +203,12 @@ func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams
 			result.Imported++
 			continue
 		}
-		account, err := s.CreateAccount(candidate.Params)
+		var account AccountPoolAccountView
+		if accountPoolImportCreateAccountHook != nil {
+			account, err = accountPoolImportCreateAccountHook(s, candidate.Params)
+		} else {
+			account, err = s.CreateAccount(candidate.Params)
+		}
 		if err != nil {
 			result.Failed++
 			result.Errors = append(result.Errors, AccountPoolAccountImportError{
@@ -213,6 +223,9 @@ func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams
 	}
 	if result.Imported == 0 && result.Skipped == 0 && result.Failed == 0 {
 		return result, errors.New("no importable account entries found")
+	}
+	if !params.DryRun {
+		accountPoolImportCleanOrphanProxies(stats.CreatedProxyIDs)
 	}
 	return result, nil
 }
@@ -290,6 +303,7 @@ func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportPa
 		proxyIDs[key] = view.Id
 		if created {
 			stats.Created++
+			stats.CreatedProxyIDs = append(stats.CreatedProxyIDs, view.Id)
 		} else {
 			stats.Reused++
 		}
@@ -464,6 +478,7 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 					proxyID = view.Id
 					if created {
 						stats.Created++
+						stats.CreatedProxyIDs = append(stats.CreatedProxyIDs, view.Id)
 					} else {
 						stats.Reused++
 					}
@@ -557,6 +572,7 @@ func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImpo
 					candidate.Params.ProxyID = view.Id
 					if created {
 						stats.Created++
+						stats.CreatedProxyIDs = append(stats.CreatedProxyIDs, view.Id)
 					} else {
 						stats.Reused++
 					}
@@ -867,6 +883,36 @@ func accountPoolImportHasDuplicateKey(keys []string, existing map[string]struct{
 		}
 	}
 	return false
+}
+
+// accountPoolImportCleanOrphanProxies deletes any newly-created proxy (from this import) that
+// ended up with no account referencing it — i.e. the proxy was created during the parse phase
+// but all accounts that were supposed to use it failed during CreateAccount.
+// Only proxies from createdProxyIDs are ever touched; pre-existing (reused) proxies are never deleted.
+func accountPoolImportCleanOrphanProxies(createdProxyIDs []int) {
+	if len(createdProxyIDs) == 0 {
+		return
+	}
+	cleaned := 0
+	for _, id := range createdProxyIDs {
+		var n int64
+		if err := model.DB.Model(&model.AccountPoolAccount{}).Where("proxy_id = ?", id).Count(&n).Error; err != nil {
+			common.SysError(fmt.Sprintf("account pool import orphan check: count failed for proxy id=%d: %v", id, err))
+			continue
+		}
+		if n > 0 {
+			// Proxy is referenced by at least one successfully-created account; keep it.
+			continue
+		}
+		if err := model.DB.Where("id = ?", id).Delete(&model.AccountPoolProxy{}).Error; err != nil {
+			common.SysError(fmt.Sprintf("account pool import orphan cleanup: delete failed for proxy id=%d: %v", id, err))
+			continue
+		}
+		cleaned++
+	}
+	if cleaned > 0 {
+		common.SysLog(fmt.Sprintf("account pool import: cleaned up %d orphan proxy row(s) left by partially-failed import", cleaned))
+	}
 }
 
 func accountPoolSub2APIProxyDedupeKey(proxy accountPoolSub2APIProxy) string {
