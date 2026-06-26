@@ -195,6 +195,21 @@ func TestAccountPoolAccountSchedulabilityDerivesTransientState(t *testing.T) {
 	assert.False(t, account.IsSchedulableAt(now+61))
 }
 
+func TestAccountPoolAccountIsSchedulableAtOverloadUntil(t *testing.T) {
+	now := int64(1000000)
+
+	// Enabled account with OverloadUntil in the future: not schedulable
+	a := AccountPoolAccount{
+		Status:        AccountPoolAccountStatusEnabled,
+		OverloadUntil: now + 10,
+	}
+	require.False(t, a.IsSchedulableAt(now))
+
+	// OverloadUntil in the past: schedulable
+	a.OverloadUntil = now - 1
+	require.True(t, a.IsSchedulableAt(now))
+}
+
 func TestAccountPoolProxyRejectsSelfFallback(t *testing.T) {
 	setupAccountPoolTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&AccountPoolProxy{}))

@@ -105,6 +105,9 @@ type AccountPoolAccount struct {
 	LastFirstTokenLatencyMS      int64  `json:"last_first_token_latency_ms" gorm:"bigint;not null;default:0"`
 	RateLimitedUntil             int64  `json:"rate_limited_until" gorm:"bigint;index"`
 	TempDisabledUntil            int64  `json:"temp_disabled_until" gorm:"bigint;index"`
+	OverloadUntil                int64  `json:"overload_until" gorm:"bigint;index"`
+	FailureState                 string `json:"-" gorm:"type:text"`
+	RuntimeOptions               string `json:"runtime_options" gorm:"type:text"`
 	TempDisabledReason           string `json:"temp_disabled_reason" gorm:"type:varchar(512)"`
 	LastError                    string `json:"last_error" gorm:"type:varchar(1024)"`
 	LastCapabilityCheckAt        int64  `json:"last_capability_check_at" gorm:"bigint;index"`
@@ -142,6 +145,9 @@ func (a AccountPoolAccount) IsSchedulableAt(now int64) bool {
 		return false
 	}
 	if a.TempDisabledUntil > now {
+		return false
+	}
+	if a.OverloadUntil > now {
 		return false
 	}
 	return true

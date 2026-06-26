@@ -301,6 +301,9 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := ensureAccountPoolAccountColumnsSQLite(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -376,6 +379,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := ensureAccountPoolAccountColumnsSQLite(); err != nil {
+		return err
 	}
 	common.SysLog("database migrated")
 	return nil
@@ -461,6 +467,44 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
 		{Name: "created_at", DDL: "`created_at` bigint"},
 		{Name: "updated_at", DDL: "`updated_at` bigint"},
+	}
+	for _, col := range required {
+		if _, ok := existing[col.Name]; ok {
+			continue
+		}
+		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureAccountPoolAccountColumnsSQLite idempotently adds columns introduced in the
+// failure-handling / overload-management slice to account_pool_accounts.
+// For MySQL and PostgreSQL, GORM AutoMigrate already handles column additions, so we
+// only run the manual ALTER for SQLite (which cannot ALTER COLUMN but can ADD COLUMN).
+func ensureAccountPoolAccountColumnsSQLite() error {
+	if !common.UsingSQLite {
+		return nil
+	}
+	tableName := "account_pool_accounts"
+	if !DB.Migrator().HasTable(tableName) {
+		return nil
+	}
+	var cols []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := DB.Raw("PRAGMA table_info(`" + tableName + "`)").Scan(&cols).Error; err != nil {
+		return err
+	}
+	existing := make(map[string]struct{}, len(cols))
+	for _, c := range cols {
+		existing[c.Name] = struct{}{}
+	}
+	required := []sqliteColumnDef{
+		{Name: "overload_until", DDL: "`overload_until` bigint NOT NULL DEFAULT 0"},
+		{Name: "failure_state", DDL: "`failure_state` text"},
+		{Name: "runtime_options", DDL: "`runtime_options` text"},
 	}
 	for _, col := range required {
 		if _, ok := existing[col.Name]; ok {
