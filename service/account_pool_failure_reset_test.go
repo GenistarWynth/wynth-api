@@ -90,6 +90,34 @@ func TestParseAccountPool429ResetAt(t *testing.T) {
 			wantResetAt: 0,
 			wantOK:      false,
 		},
+		{
+			// Primary window is exhausted (100%) but has NO reset-after header.
+			// Secondary window is NOT exhausted (10%) but has a reset-after of 30s.
+			// Per spec: must NOT fall back to a non-exhausted window's reset when a window is exhausted.
+			// Expected: (0, false) — header path yields nothing usable, body is empty.
+			name: "exhausted window without reset-after must not use non-exhausted window reset",
+			header: http.Header{
+				"X-Codex-Primary-Used-Percent":        []string{"100"},
+				"X-Codex-Secondary-Used-Percent":      []string{"10"},
+				"X-Codex-Secondary-Reset-After-Seconds": []string{"30"},
+			},
+			body:        nil,
+			wantResetAt: 0,
+			wantOK:      false,
+		},
+		{
+			// Primary exhausted WITH reset 60s; secondary exhausted WITHOUT reset.
+			// Expected: now+60 (max of exhausted windows that have a reset-after).
+			name: "two exhausted windows only one has reset-after picks that one",
+			header: http.Header{
+				"X-Codex-Primary-Used-Percent":        []string{"100"},
+				"X-Codex-Primary-Reset-After-Seconds": []string{"60"},
+				"X-Codex-Secondary-Used-Percent":      []string{"100"},
+			},
+			body:        nil,
+			wantResetAt: now + 60,
+			wantOK:      true,
+		},
 	}
 
 	for _, tc := range tests {

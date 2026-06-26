@@ -68,7 +68,9 @@ func parseAccountPool429ResetAt(header http.Header, body []byte, now int64) (res
 			return w.hasUsed && w.usedPct >= exhaustedThreshold
 		}
 
-		// Collect exhausted windows that have a reset-after value.
+		// Collect exhausted windows that have a reset-after value, and track
+		// whether ANY window is exhausted (regardless of having a reset-after).
+		anyExhausted := isExhausted(primary) || isExhausted(secondary)
 		var exhaustedResets []float64
 		if isExhausted(primary) && primary.hasReset {
 			exhaustedResets = append(exhaustedResets, primary.resetAfter)
@@ -78,6 +80,7 @@ func parseAccountPool429ResetAt(header http.Header, body []byte, now int64) (res
 		}
 
 		if len(exhaustedResets) > 0 {
+			// At least one exhausted window carries a reset-after: use max of those.
 			chosen := exhaustedResets[0]
 			for _, v := range exhaustedResets[1:] {
 				if v > chosen {
@@ -87,25 +90,32 @@ func parseAccountPool429ResetAt(header http.Header, body []byte, now int64) (res
 			return now + int64(chosen), true
 		}
 
-		// No exhausted windows; pick min positive reset-after among present values.
-		var positiveResets []float64
-		if primary.hasReset && primary.resetAfter > 0 {
-			positiveResets = append(positiveResets, primary.resetAfter)
-		}
-		if secondary.hasReset && secondary.resetAfter > 0 {
-			positiveResets = append(positiveResets, secondary.resetAfter)
-		}
-		if len(positiveResets) > 0 {
-			chosen := positiveResets[0]
-			for _, v := range positiveResets[1:] {
-				if v < chosen {
-					chosen = v
-				}
+		if anyExhausted {
+			// A window is exhausted but none of the exhausted windows had a reset-after
+			// header.  Using a non-exhausted window's reset would under-cool the account;
+			// fall through to the body-parse path instead.
+			// Reset-after headers were present but unusable; fall through.
+		} else {
+			// No window is exhausted; pick min positive reset-after among present values.
+			var positiveResets []float64
+			if primary.hasReset && primary.resetAfter > 0 {
+				positiveResets = append(positiveResets, primary.resetAfter)
 			}
-			return now + int64(chosen), true
+			if secondary.hasReset && secondary.resetAfter > 0 {
+				positiveResets = append(positiveResets, secondary.resetAfter)
+			}
+			if len(positiveResets) > 0 {
+				chosen := positiveResets[0]
+				for _, v := range positiveResets[1:] {
+					if v < chosen {
+						chosen = v
+					}
+				}
+				return now + int64(chosen), true
+			}
 		}
 
-		// Reset-after headers were present but unparseable or zero; fall through.
+		// Reset-after headers were present but unparseable, zero, or unusable; fall through.
 	}
 
 	// Step 2 — OpenAI error body.
