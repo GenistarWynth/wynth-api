@@ -302,9 +302,10 @@ func shouldRetryAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo, selectedA
 	return statusCode >= http.StatusInternalServerError
 }
 
-// shouldSkipAccountPoolUserConcurrency returns true when per-user concurrency
-// enforcement must be skipped. Channel-test traffic is always exempt so that
-// admin health checks are never blocked by user quota.
+// shouldSkipAccountPoolUserConcurrency reports whether per-user concurrency
+// enforcement must be skipped. A nil info means the request is not a channel-test
+// and enforcement applies; channel-test traffic is always exempt so that admin
+// health checks are never blocked by user quota. Consistent with shouldRecordAccountPoolRuntimeAttempt.
 func shouldSkipAccountPoolUserConcurrency(info *relaycommon.RelayInfo) bool {
 	return info != nil && info.IsChannelTest
 }

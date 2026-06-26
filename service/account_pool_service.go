@@ -21,6 +21,8 @@ const (
 	accountPoolRuntimeEnabledCacheNamespace = "new-api:account_pool_runtime_enabled:v1"
 	accountPoolRuntimeEnabledCacheTTL       = 30 * time.Second
 
+	accountPoolRuntimeConcurrencyCacheNamespace = "new-api:account_pool_runtime_concurrency:v1"
+
 	AccountPoolSchedulePolicyRoundRobin = "round_robin"
 	AccountPoolSchedulePolicyRandom     = "random"
 
@@ -29,9 +31,21 @@ const (
 	DefaultAccountPoolCapabilityCheckTimeoutSeconds  = 30
 )
 
+// accountPoolConcurrencyConfig is the cached value for GetAccountPoolRuntimeUserConcurrencyConfig.
+type accountPoolConcurrencyConfig struct {
+	BindingID          int `json:"binding_id"`
+	MaxUserConcurrency int `json:"max_user_concurrency"`
+}
+
+// accountPoolConcurrencyAbsent is the sentinel stored when no enabled binding exists,
+// so subsequent cache hits skip the DB without returning a result.
+const accountPoolConcurrencyAbsent = -1
+
 var (
-	accountPoolRuntimeEnabledCacheOnce sync.Once
-	accountPoolRuntimeEnabledCache     *cachex.HybridCache[bool]
+	accountPoolRuntimeEnabledCacheOnce     sync.Once
+	accountPoolRuntimeEnabledCache         *cachex.HybridCache[bool]
+	accountPoolRuntimeConcurrencyCacheOnce sync.Once
+	accountPoolRuntimeConcurrencyCache     *cachex.HybridCache[accountPoolConcurrencyConfig]
 )
 
 type AccountPoolCreateParams struct {
@@ -516,6 +530,10 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
+	maxUserConcurrency := params.MaxUserConcurrency
+	if maxUserConcurrency < 0 {
+		maxUserConcurrency = 0
+	}
 	binding := model.AccountPoolChannelBinding{
 		PoolID:              params.PoolID,
 		ChannelID:           params.ChannelID,
@@ -523,7 +541,7 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 		ModelPolicy:         modelPolicy,
 		SchedulePolicy:      schedulePolicy,
 		AccountRetryTimes:   params.AccountRetryTimes,
-		MaxUserConcurrency:  params.MaxUserConcurrency,
+		MaxUserConcurrency:  maxUserConcurrency,
 		Status:              status,
 	}
 	if err := model.DB.Create(&binding).Error; err != nil {
@@ -634,6 +652,10 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
+	maxUserConcurrency := params.MaxUserConcurrency
+	if maxUserConcurrency < 0 {
+		maxUserConcurrency = 0
+	}
 	now := common.GetTimestamp()
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&binding).Updates(map[string]any{
@@ -642,7 +664,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 			"model_policy":          modelPolicy,
 			"schedule_policy":       schedulePolicy,
 			"account_retry_times":   params.AccountRetryTimes,
-			"max_user_concurrency":  params.MaxUserConcurrency,
+			"max_user_concurrency":  maxUserConcurrency,
 			"updated_time":          now,
 		}).Error; err != nil {
 			return err
@@ -667,7 +689,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	binding.ModelPolicy = modelPolicy
 	binding.SchedulePolicy = schedulePolicy
 	binding.AccountRetryTimes = params.AccountRetryTimes
-	binding.MaxUserConcurrency = params.MaxUserConcurrency
+	binding.MaxUserConcurrency = maxUserConcurrency
 	binding.UpdatedTime = now
 	invalidateAccountPoolRuntimeEnabledForChannel(oldChannelID)
 	invalidateAccountPoolRuntimeEnabledForChannel(channel.Id)
@@ -1134,9 +1156,18 @@ func getAccountPoolExistingProxy(proxyID int) (model.AccountPoolProxy, error) {
 // GetAccountPoolRuntimeUserConcurrencyConfig returns the binding ID and MaxUserConcurrency
 // for the enabled account-pool binding for the given channel. Returns (0, 0, nil) when
 // no enabled binding exists (channel not under account-pool control).
+// Results are cached with the same TTL as AccountPoolRuntimeEnabledForChannel and
+// are invalidated whenever the binding is mutated or its status changes.
 func GetAccountPoolRuntimeUserConcurrencyConfig(channelID int) (bindingID int, maxUserConcurrency int, err error) {
 	if channelID <= 0 || model.DB == nil {
 		return 0, 0, nil
+	}
+	cacheKey := strconv.Itoa(channelID)
+	if cached, found, cerr := getAccountPoolRuntimeConcurrencyCache().Get(cacheKey); cerr == nil && found {
+		if cached.BindingID == accountPoolConcurrencyAbsent {
+			return 0, 0, nil
+		}
+		return cached.BindingID, cached.MaxUserConcurrency, nil
 	}
 	var binding model.AccountPoolChannelBinding
 	err = model.DB.
@@ -1145,10 +1176,16 @@ func GetAccountPoolRuntimeUserConcurrencyConfig(channelID int) (bindingID int, m
 		First(&binding).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			_ = getAccountPoolRuntimeConcurrencyCache().SetWithTTL(cacheKey,
+				accountPoolConcurrencyConfig{BindingID: accountPoolConcurrencyAbsent},
+				accountPoolRuntimeEnabledCacheTTL)
 			return 0, 0, nil
 		}
 		return 0, 0, err
 	}
+	_ = getAccountPoolRuntimeConcurrencyCache().SetWithTTL(cacheKey,
+		accountPoolConcurrencyConfig{BindingID: binding.Id, MaxUserConcurrency: binding.MaxUserConcurrency},
+		accountPoolRuntimeEnabledCacheTTL)
 	return binding.Id, binding.MaxUserConcurrency, nil
 }
 
@@ -1192,12 +1229,35 @@ func getAccountPoolRuntimeEnabledCache() *cachex.HybridCache[bool] {
 	return accountPoolRuntimeEnabledCache
 }
 
+func getAccountPoolRuntimeConcurrencyCache() *cachex.HybridCache[accountPoolConcurrencyConfig] {
+	accountPoolRuntimeConcurrencyCacheOnce.Do(func() {
+		accountPoolRuntimeConcurrencyCache = cachex.NewHybridCache[accountPoolConcurrencyConfig](
+			cachex.HybridCacheConfig[accountPoolConcurrencyConfig]{
+				Namespace:  cachex.Namespace(accountPoolRuntimeConcurrencyCacheNamespace),
+				Redis:      common.RDB,
+				RedisCodec: cachex.JSONCodec[accountPoolConcurrencyConfig]{},
+				RedisEnabled: func() bool {
+					return common.RedisEnabled && common.RDB != nil
+				},
+				Memory: func() *hot.HotCache[string, accountPoolConcurrencyConfig] {
+					return hot.NewHotCache[string, accountPoolConcurrencyConfig](hot.LRU, 1024).
+						WithTTL(accountPoolRuntimeEnabledCacheTTL).
+						WithJanitor().
+						Build()
+				},
+			})
+	})
+	return accountPoolRuntimeConcurrencyCache
+}
+
 func invalidateAccountPoolRuntimeEnabledForChannel(channelID int) {
 	if channelID <= 0 {
 		return
 	}
+	key := strconv.Itoa(channelID)
 	// HybridCache.DeleteMany accepts raw keys and applies the namespace internally.
-	_, _ = getAccountPoolRuntimeEnabledCache().DeleteMany([]string{strconv.Itoa(channelID)})
+	_, _ = getAccountPoolRuntimeEnabledCache().DeleteMany([]string{key})
+	_, _ = getAccountPoolRuntimeConcurrencyCache().DeleteMany([]string{key})
 }
 
 func accountPoolNormalizeMaxConcurrency(value int, explicit bool) int {

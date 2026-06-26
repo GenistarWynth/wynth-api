@@ -183,11 +183,12 @@ func TestAccountPoolUserConcurrencyThreadSafe(t *testing.T) {
 			}
 			mu.Unlock()
 
-			// Simulate work
+			// Release first so the slot is freed while current is still incremented,
+			// ensuring maxSeen reflects the true concurrency observed under real load.
+			release()
 			mu.Lock()
 			current--
 			mu.Unlock()
-			release()
 		}()
 	}
 	wg.Wait()

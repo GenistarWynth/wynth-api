@@ -1365,6 +1365,86 @@ func TestAccountPoolServiceDraftBindingBlocksChannelEnable(t *testing.T) {
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloaded.Status)
 }
 
+// TestAccountPoolUserConcurrencyConfigCacheInvalidatesOnBindingUpdate asserts that
+// GetAccountPoolRuntimeUserConcurrencyConfig reflects a new MaxUserConcurrency value
+// immediately after UpdateBinding (i.e. the cache is invalidated on mutation).
+func TestAccountPoolUserConcurrencyConfigCacheInvalidatesOnBindingUpdate(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+
+	binding, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:             pool.Id,
+		ChannelID:          channel.Id,
+		MaxUserConcurrency: 5,
+	})
+	require.NoError(t, err)
+	_, err = svc.ActivateBinding(pool.Id, binding.Id)
+	require.NoError(t, err)
+
+	// Warm up the cache with the initial value.
+	bindingID1, maxConc1, err := GetAccountPoolRuntimeUserConcurrencyConfig(channel.Id)
+	require.NoError(t, err)
+	require.Equal(t, binding.Id, bindingID1)
+	require.Equal(t, 5, maxConc1)
+
+	// Update MaxUserConcurrency — this must invalidate the cache.
+	_, err = svc.UpdateBinding(pool.Id, binding.Id, AccountPoolBindingCreateParams{
+		ChannelID:          channel.Id,
+		MaxUserConcurrency: 10,
+	})
+	require.NoError(t, err)
+
+	// The next call must return the new value (not the stale cached one).
+	bindingID2, maxConc2, err := GetAccountPoolRuntimeUserConcurrencyConfig(channel.Id)
+	require.NoError(t, err)
+	assert.Equal(t, binding.Id, bindingID2)
+	assert.Equal(t, 10, maxConc2, "cache must be invalidated after UpdateBinding")
+}
+
+// TestAccountPoolBindingNegativeMaxUserConcurrencyClampsToZero asserts that a negative
+// MaxUserConcurrency value is clamped to 0 on both CreateBinding and UpdateBinding.
+func TestAccountPoolBindingNegativeMaxUserConcurrencyClampsToZero(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	channel2 := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+
+	// CreateBinding with negative MaxUserConcurrency.
+	binding, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:             pool.Id,
+		ChannelID:          channel.Id,
+		MaxUserConcurrency: -3,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, binding.MaxUserConcurrency, "negative MaxUserConcurrency must be clamped to 0 on create")
+
+	var stored model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&stored, binding.Id).Error)
+	assert.Equal(t, 0, stored.MaxUserConcurrency, "negative MaxUserConcurrency must be persisted as 0")
+
+	// UpdateBinding with negative MaxUserConcurrency.
+	binding2, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:             pool.Id,
+		ChannelID:          channel2.Id,
+		MaxUserConcurrency: 5,
+	})
+	require.NoError(t, err)
+
+	updated, err := svc.UpdateBinding(pool.Id, binding2.Id, AccountPoolBindingCreateParams{
+		ChannelID:          channel2.Id,
+		MaxUserConcurrency: -7,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, updated.MaxUserConcurrency, "negative MaxUserConcurrency must be clamped to 0 on update")
+
+	var stored2 model.AccountPoolChannelBinding
+	require.NoError(t, model.DB.First(&stored2, binding2.Id).Error)
+	assert.Equal(t, 0, stored2.MaxUserConcurrency, "negative MaxUserConcurrency must be persisted as 0 on update")
+}
+
 func setupAccountPoolServiceTestDB(t *testing.T) {
 	t.Helper()
 
