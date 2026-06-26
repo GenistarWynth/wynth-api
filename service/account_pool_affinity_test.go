@@ -92,7 +92,10 @@ func TestAccountPoolAffinityCreatedAtPreservedAcrossRefreshes(t *testing.T) {
 	const key = "k-birth"
 	const bindingID = 5
 	const accountID = 99
-	const t0 = int64(0)
+	// Non-zero so the now<=0 -> wall-clock fallback in remember() never fires;
+	// otherwise createdAt would be the real clock and the assertions below would
+	// not deterministically exercise the hard-cap branch.
+	const t0 = int64(1_000_000)
 
 	// First remember – establishes createdAt = t0.
 	rememberAccountPoolRuntimeAffinity(key, bindingID, accountID, t0)
@@ -109,10 +112,16 @@ func TestAccountPoolAffinityCreatedAtPreservedAcrossRefreshes(t *testing.T) {
 	})
 
 	t.Run("hard cap cuts off even a freshly refreshed entry", func(t *testing.T) {
-		// Hard cap is relative to createdAt=t0; the refresh at t1 does NOT reset createdAt.
+		// Refresh again right before the hard-cap boundary so the idle window is
+		// genuinely still open at lookup time (expiresAt is in the future). The hard
+		// cap — relative to the preserved createdAt=t0, which the refresh does NOT
+		// reset — must still reject the pin, proving the hard cap (not idle-TTL) fires.
+		tNear := t0 + accountPoolRuntimeAffinityHardCapSeconds - 1
+		rememberAccountPoolRuntimeAffinity(key, bindingID, accountID, tNear)
 		hardCapBoundary := t0 + accountPoolRuntimeAffinityHardCapSeconds
-		_, ok := lookupAccountPoolRuntimeAffinity(key, bindingID, hardCapBoundary)
+		got, ok := lookupAccountPoolRuntimeAffinity(key, bindingID, hardCapBoundary)
 		assert.False(t, ok, "hard cap must reject the pin even when expiresAt was freshly refreshed")
+		assert.Zero(t, got)
 	})
 }
 
