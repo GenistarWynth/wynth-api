@@ -58,23 +58,34 @@ func runAccountPoolRuntimeAttempts(
 		return nil
 	}
 	snapshot := snapshotAccountPoolRuntimeRelay(info)
+	poolModeRetryIndex := 0
+	var poolModeLastAccountID int
 	for attemptIndex := 0; ; attemptIndex++ {
+		// Pool-mode same-account retry: reuse the previously selected account
+		// without re-running selection. The relay snapshot is restored to undo any
+		// state mutations from the previous attempt, but selection is NOT re-run,
+		// so the same ApiKey/UpstreamModelName/etc. remain from the prior selection.
+		isPoolModeRetry := poolModeRetryIndex > 0 && poolModeLastAccountID > 0
 		restoreAccountPoolRuntimeRelay(info, snapshot)
 		request, newAPIError := requestFactory()
 		if newAPIError != nil {
 			return newAPIError
 		}
-		if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
-			selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
-			accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
-			if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
-				_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
-				service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+		if !isPoolModeRetry {
+			if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
+				selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
+				accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
+				if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
+					service.ForgetSelectedAccountPoolRuntimeAffinity(c)
+				}
+				if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
+					return newAPIError
+				}
+				continue
 			}
-			if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, attemptIndex, newAPIError) {
-				return newAPIError
-			}
-			continue
+			poolModeLastAccountID = service.GetSelectedAccountPoolAccountID(c)
+			poolModeRetryIndex = 0
 		}
 		selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 		accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
@@ -91,6 +102,22 @@ func runAccountPoolRuntimeAttempts(
 			}
 			return nil
 		}
+
+		// Check if pool-mode same-account retry applies for this failure.
+		if shouldRecordAccountPoolRuntimeAttempt(info) && !types.IsSkipRetryError(newAPIError) &&
+			!info.HasSendResponse() {
+			runtimeOpts := service.GetSelectedAccountPoolRuntimeOptions(c)
+			if runtimeOpts.PoolMode && poolModeRetryIndex < runtimeOpts.PoolModeRetryCount &&
+				accountPoolRuntimeStatusCodeInList(newAPIError.StatusCode, runtimeOpts.PoolModeRetryStatusCodes) {
+				// Pool-mode retry: same account, no failure recorded, no attempted-set update.
+				poolModeRetryIndex++
+				continue
+			}
+		}
+
+		// Normal failure path: record failure and fall through to next-account retry.
+		poolModeRetryIndex = 0
+		poolModeLastAccountID = 0
 		if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
 			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
@@ -99,6 +126,17 @@ func runAccountPoolRuntimeAttempts(
 			return newAPIError
 		}
 	}
+}
+
+// accountPoolRuntimeStatusCodeInList returns true if statusCode is found in codes.
+// If codes is empty, returns false (no match).
+func accountPoolRuntimeStatusCodeInList(statusCode int, codes []int) bool {
+	for _, code := range codes {
+		if code == statusCode {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldRecordAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo) bool {

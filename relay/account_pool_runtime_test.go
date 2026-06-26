@@ -1078,3 +1078,68 @@ func setAccountPoolRelayChannelContext(ctx *gin.Context, channelID int) {
 	common.SetContextKey(ctx, constant.ContextKeyChannelKey, "sk-channel")
 	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "client-gpt-5")
 }
+
+// TestRunAccountPoolRuntimeAttemptsPoolMode verifies that when pool_mode is
+// enabled and a 500 error matches pool_mode_retry_status_codes, the same
+// account is retried up to pool_mode_retry_count times without recording a
+// failure and without adding the account to the attempted set. After pool-mode
+// retries succeed the call returns nil error.
+func TestRunAccountPoolRuntimeAttemptsPoolMode(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	// AccountRetryTimes=1 allows normal inter-account retry after pool-mode exhaustion.
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+
+	// Create the pool-mode account and then set RuntimeOptions directly on the DB row.
+	account := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "pool-mode-account",
+		Priority: 100,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-pool-mode",
+		},
+	})
+	runtimeOptionsJSON := `{"pool_mode":true,"pool_mode_retry_count":2,"pool_mode_retry_status_codes":[500]}`
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Update("runtime_options", runtimeOptionsJSON).Error)
+
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	selectedIDs := make([]int, 0, 3)
+	callCount := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		callCount++
+		selectedIDs = append(selectedIDs, service.GetSelectedAccountPoolAccountID(ctx))
+		// Return a 500 error twice, then succeed on the third call.
+		if callCount < 3 {
+			return types.NewErrorWithStatusCode(errors.New("upstream 500"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	// All three attempts must use the same account (pool-mode same-account retry).
+	assert.Equal(t, 3, callCount)
+	assert.Equal(t, []int{account.Id, account.Id, account.Id}, selectedIDs)
+
+	// Pool-mode retries must NOT record a failure on the DB account row.
+	// After the successful third attempt, success is recorded instead.
+	var reloaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
+	assert.Empty(t, reloaded.LastError, "pool-mode retries must not record failure")
+	assert.Zero(t, reloaded.TempDisabledUntil, "pool-mode retries must not temp-disable the account")
+	assert.Zero(t, reloaded.RateLimitedUntil, "pool-mode retries must not rate-limit the account")
+	// The account must NOT be in the attempted set between pool-mode retries.
+	// After success it may be in the attempted set (normal bookkeeping).
+	assert.Greater(t, reloaded.SuccessCount, int64(0), "final success must be recorded")
+}
