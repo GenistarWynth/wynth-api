@@ -253,7 +253,8 @@ func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportPa
 			continue
 		}
 		if params.DryRun {
-			proxyIDs[key] = 0
+			// Mirror the real (non-dry-run) path: if finding the proxy fails, record the error
+			// and do NOT populate proxyIDs[key], so any referencing account is consistently failed.
 			found, findErr := findExistingImportProxy(AccountPoolProxyCreateParams{
 				Protocol: proxy.Protocol,
 				Host:     proxy.Host,
@@ -265,6 +266,7 @@ func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportPa
 				proxyErrors[key] = findErr.Error()
 				continue
 			}
+			proxyIDs[key] = 0
 			if found {
 				stats.Reused++
 			} else {

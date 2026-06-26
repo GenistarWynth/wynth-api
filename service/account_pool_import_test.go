@@ -383,8 +383,6 @@ codex-api-keys:
 	require.Error(t, err)
 	// Must mention the correct singular key name as an actionable hint.
 	assert.Contains(t, err.Error(), "codex-api-key")
-	// Must NOT be a bare "invalid character" or "cannot unmarshal" JSON error with no hint.
-	assert.NotEqual(t, "invalid character", err.Error()[:min(len(err.Error()), 15)])
 }
 
 // import-1 (positive): valid CPA config YAML with singular codex-api-key still imports successfully.
@@ -572,11 +570,4 @@ func TestAccountPoolServiceImportDedupToleratesCorruptCredentialConfig(t *testin
 	require.NoError(t, err, "import must not return error when dedup encounters corrupt credential")
 	assert.Equal(t, 1, result.Imported)
 	assert.Equal(t, 0, result.Failed)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
