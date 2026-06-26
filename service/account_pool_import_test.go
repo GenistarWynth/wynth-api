@@ -360,3 +360,223 @@ func requireAccountPoolAccountByName(t *testing.T, name string) model.AccountPoo
 	require.NoError(t, model.DB.Where("name = ?", name).First(&account).Error)
 	return account
 }
+
+// import-1: CPA YAML with plural mis-keyed field returns actionable error, not raw JSON error.
+func TestAccountPoolServiceImportCPAYAMLMisKeyedPluralReturnsActionableError(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// "codex-api-keys:" (plural) is a common mis-keying; YAML parses fine but produces zero CodexAPIKeys entries.
+	// parseCPAImport falls through to parseCPAAuthJSONImport which previously returned a raw JSON unmarshal error.
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `
+codex-api-keys:
+  - api-key: sk-wrong-plural
+    base-url: https://api.example.com
+    proxy-url: ""
+`,
+	})
+
+	require.Error(t, err)
+	// Must mention the correct singular key name as an actionable hint.
+	assert.Contains(t, err.Error(), "codex-api-key")
+	// Must NOT be a bare "invalid character" or "cannot unmarshal" JSON error with no hint.
+	assert.NotEqual(t, "invalid character", err.Error()[:min(len(err.Error()), 15)])
+}
+
+// import-1 (positive): valid CPA config YAML with singular codex-api-key still imports successfully.
+func TestAccountPoolServiceImportCPAYAMLSingularKeyImportsSuccessfully(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `
+codex-api-key:
+  - api-key: sk-singular-ok
+    base-url: https://api.example.com
+    proxy-url: ""
+`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+}
+
+// import-3: dry-run sub2api import with one pre-existing proxy and one new proxy reports accurate counts.
+func TestAccountPoolServiceImportSub2APIDryRunReportsAccurateProxyCounts(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Pre-create a proxy that will match the first entry in the import.
+	_, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "existing-proxy",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Username: "user1",
+		Password: "pass1",
+	})
+	require.NoError(t, err)
+
+	// Count proxy rows before dry-run.
+	var proxyCountBefore int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountBefore).Error)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		DryRun: true,
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-existing",
+					"name": "Existing Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 8080,
+					"username": "user1",
+					"password": "pass1",
+					"status": "active"
+				},
+				{
+					"proxy_key": "proxy-new",
+					"name": "New Proxy",
+					"protocol": "socks5",
+					"host": "10.0.0.1",
+					"port": 1080,
+					"username": "",
+					"password": "",
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "account-a",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-account-a"
+					},
+					"proxy_key": "proxy-existing"
+				},
+				{
+					"name": "account-b",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-account-b"
+					},
+					"proxy_key": "proxy-new"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Imported)
+	// Accurate: one proxy already existed, one is new.
+	assert.Equal(t, 1, result.ProxyReused, "expected one proxy reused (pre-existing match)")
+	assert.Equal(t, 1, result.ProxyCreated, "expected one proxy created (no match)")
+
+	// No proxy rows should have been written in dry-run.
+	var proxyCountAfter int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountAfter).Error)
+	assert.Equal(t, proxyCountBefore, proxyCountAfter, "dry-run must not write proxy rows")
+}
+
+// import-3 (CPA): dry-run CPA config import reports non-zero proxy count when a matching proxy exists.
+func TestAccountPoolServiceImportCPADryRunReportsNonZeroProxyCount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Pre-create a proxy matching the CPA entry's proxy-url.
+	_, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "cpa-existing-proxy",
+		Protocol: "socks5",
+		Host:     "proxy.example.com",
+		Port:     1080,
+		Username: "user",
+		Password: "pass",
+	})
+	require.NoError(t, err)
+
+	var proxyCountBefore int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountBefore).Error)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		DryRun: true,
+		Content: `
+codex-api-key:
+  - api-key: sk-cpa-dry
+    base-url: https://api.example.com
+    proxy-url: socks5://user:pass@proxy.example.com:1080
+`,
+	})
+
+	require.NoError(t, err)
+	// The CPA dry-run path must report a non-zero proxy count (reused or created).
+	assert.True(t, result.ProxyReused+result.ProxyCreated > 0, "CPA dry-run should report proxy reused=1 for existing proxy")
+	assert.Equal(t, 1, result.ProxyReused, "pre-existing proxy should be counted as reused")
+
+	// No proxy rows should have been written.
+	var proxyCountAfter int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountAfter).Error)
+	assert.Equal(t, proxyCountBefore, proxyCountAfter, "dry-run must not write proxy rows")
+}
+
+// import-6: dedup pass with a corrupt CredentialConfig on an existing account does not abort the import.
+func TestAccountPoolServiceImportDedupToleratesCorruptCredentialConfig(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Seed an existing account with an undecryptable CredentialConfig (corrupt ciphertext).
+	corrupt := model.AccountPoolAccount{
+		PoolID:           pool.Id,
+		Name:             "corrupt-existing",
+		Status:           "enabled",
+		CredentialConfig: "not-valid-ciphertext",
+	}
+	require.NoError(t, model.DB.Create(&corrupt).Error)
+
+	// Import a new, distinct account — the dedup pass must survive the corrupt row.
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "new-clean-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-new-clean"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err, "import must not return error when dedup encounters corrupt credential")
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Failed)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

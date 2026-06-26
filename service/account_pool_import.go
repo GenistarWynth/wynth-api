@@ -254,7 +254,22 @@ func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportPa
 		}
 		if params.DryRun {
 			proxyIDs[key] = 0
-			stats.Created++
+			found, findErr := findExistingImportProxy(AccountPoolProxyCreateParams{
+				Protocol: proxy.Protocol,
+				Host:     proxy.Host,
+				Port:     proxy.Port,
+				Username: proxy.Username,
+				Password: proxy.Password,
+			})
+			if findErr != nil {
+				proxyErrors[key] = findErr.Error()
+				continue
+			}
+			if found {
+				stats.Reused++
+			} else {
+				stats.Created++
+			}
 			continue
 		}
 		view, created, err := s.getOrCreateImportProxy(AccountPoolProxyCreateParams{
@@ -408,7 +423,7 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 			continue
 		}
 		proxyID := params.Defaults.ProxyID
-		if strings.TrimSpace(key.ProxyURL) != "" && !params.DryRun {
+		if strings.TrimSpace(key.ProxyURL) != "" {
 			proxyParams, ok, err := accountPoolProxyCreateParamsFromURL(key.ProxyURL, accountPoolCPAProxyName(key, apiKey))
 			if err != nil {
 				importErrors = append(importErrors, AccountPoolAccountImportError{
@@ -419,20 +434,37 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 				continue
 			}
 			if ok {
-				view, created, err := s.getOrCreateImportProxy(proxyParams)
-				if err != nil {
-					importErrors = append(importErrors, AccountPoolAccountImportError{
-						Index:   index,
-						Name:    accountPoolCPACodexAccountName(key, apiKey),
-						Message: err.Error(),
-					})
-					continue
-				}
-				proxyID = view.Id
-				if created {
-					stats.Created++
+				if params.DryRun {
+					found, findErr := findExistingImportProxy(proxyParams)
+					if findErr != nil {
+						importErrors = append(importErrors, AccountPoolAccountImportError{
+							Index:   index,
+							Name:    accountPoolCPACodexAccountName(key, apiKey),
+							Message: findErr.Error(),
+						})
+						continue
+					}
+					if found {
+						stats.Reused++
+					} else {
+						stats.Created++
+					}
 				} else {
-					stats.Reused++
+					view, created, err := s.getOrCreateImportProxy(proxyParams)
+					if err != nil {
+						importErrors = append(importErrors, AccountPoolAccountImportError{
+							Index:   index,
+							Name:    accountPoolCPACodexAccountName(key, apiKey),
+							Message: err.Error(),
+						})
+						continue
+					}
+					proxyID = view.Id
+					if created {
+						stats.Created++
+					} else {
+						stats.Reused++
+					}
 				}
 			}
 		}
@@ -459,6 +491,15 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImportParams) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
 	var raw any
 	if err := common.UnmarshalJsonStr(params.Content, &raw); err != nil {
+		// If the content looks like YAML (parses without error) but produced no usable
+		// codex-api-key entries (e.g. mis-keyed as "codex-api-keys:" plural), give an
+		// actionable error rather than a raw JSON parse message.
+		var yamlProbe accountPoolCPAConfigPayload
+		if yamlErr := yaml.Unmarshal([]byte(params.Content), &yamlProbe); yamlErr == nil {
+			return nil, accountPoolImportProxyStats{}, nil, fmt.Errorf(
+				"CPA import content is not valid auth JSON and contains no usable 'codex-api-key' entries; "+
+					"if this is a CPA config file, ensure it has a top-level 'codex-api-key:' list (singular): %w", err)
+		}
 		return nil, accountPoolImportProxyStats{}, nil, err
 	}
 	objects := accountPoolImportFlattenObjects(raw)
@@ -475,7 +516,7 @@ func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImpo
 			})
 			continue
 		}
-		if proxyURL != "" && !params.DryRun {
+		if proxyURL != "" {
 			proxyParams, ok, err := accountPoolProxyCreateParamsFromURL(proxyURL, "CPA "+candidate.Params.Name)
 			if err != nil {
 				importErrors = append(importErrors, AccountPoolAccountImportError{
@@ -486,20 +527,37 @@ func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImpo
 				continue
 			}
 			if ok {
-				view, created, err := s.getOrCreateImportProxy(proxyParams)
-				if err != nil {
-					importErrors = append(importErrors, AccountPoolAccountImportError{
-						Index:   index,
-						Name:    candidate.Name,
-						Message: err.Error(),
-					})
-					continue
-				}
-				candidate.Params.ProxyID = view.Id
-				if created {
-					stats.Created++
+				if params.DryRun {
+					found, findErr := findExistingImportProxy(proxyParams)
+					if findErr != nil {
+						importErrors = append(importErrors, AccountPoolAccountImportError{
+							Index:   index,
+							Name:    candidate.Name,
+							Message: findErr.Error(),
+						})
+						continue
+					}
+					if found {
+						stats.Reused++
+					} else {
+						stats.Created++
+					}
 				} else {
-					stats.Reused++
+					view, created, err := s.getOrCreateImportProxy(proxyParams)
+					if err != nil {
+						importErrors = append(importErrors, AccountPoolAccountImportError{
+							Index:   index,
+							Name:    candidate.Name,
+							Message: err.Error(),
+						})
+						continue
+					}
+					candidate.Params.ProxyID = view.Id
+					if created {
+						stats.Created++
+					} else {
+						stats.Reused++
+					}
 				}
 			}
 		}
@@ -560,6 +618,36 @@ func accountPoolCPAAuthCandidate(poolID int, index int, object map[string]any) (
 		},
 	}
 	return candidate, proxyURL, true, ""
+}
+
+// findExistingImportProxy performs a read-only existence check using the same
+// identity logic as getOrCreateImportProxy. Returns (found, error).
+// It does NOT create any proxy rows.
+func findExistingImportProxy(params AccountPoolProxyCreateParams) (bool, error) {
+	params.Protocol = strings.ToLower(strings.TrimSpace(params.Protocol))
+	params.Host = strings.TrimSpace(params.Host)
+	params.Username = strings.TrimSpace(params.Username)
+	if params.Protocol == "" || params.Host == "" || params.Port <= 0 {
+		return false, nil
+	}
+
+	var proxies []model.AccountPoolProxy
+	if err := model.DB.Where(
+		"status <> ? AND protocol = ? AND host = ? AND port = ? AND username = ?",
+		model.AccountPoolProxyStatusDeleted,
+		params.Protocol,
+		params.Host,
+		params.Port,
+		params.Username,
+	).Order("id asc").Find(&proxies).Error; err != nil {
+		return false, err
+	}
+	for _, proxy := range proxies {
+		if accountPoolStoredProxyPasswordMatches(proxy, params.Password) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s AccountPoolService) getOrCreateImportProxy(params AccountPoolProxyCreateParams) (AccountPoolProxyView, bool, error) {
@@ -699,12 +787,16 @@ func accountPoolExistingImportDuplicateKeys(poolID int) (map[string]struct{}, er
 			for _, key := range accountPoolImportCredentialKeys(credential) {
 				keys[key] = struct{}{}
 			}
+		} else {
+			common.SysError(fmt.Sprintf("account pool import dedup: decrypt failed for account id=%d: %v", account.Id, err))
 		}
 		tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
 		if err == nil {
 			for _, key := range accountPoolImportTokenKeys(tokenState) {
 				keys[key] = struct{}{}
 			}
+		} else {
+			common.SysError(fmt.Sprintf("account pool import dedup: decrypt failed for account id=%d: %v", account.Id, err))
 		}
 	}
 	return keys, nil
