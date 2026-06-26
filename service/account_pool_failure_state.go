@@ -44,8 +44,8 @@ func parseAccountPoolFailureState(raw string) (accountPoolFailureState, error) {
 // configuration that influences relay behavior (e.g. pool-mode retry logic).
 // It is serialized to the account_pool_accounts.runtime_options TEXT column.
 type accountPoolRuntimeOptions struct {
-	PoolMode                bool  `json:"pool_mode"`
-	PoolModeRetryCount      int   `json:"pool_mode_retry_count"`
+	PoolMode                 bool  `json:"pool_mode"`
+	PoolModeRetryCount       int   `json:"pool_mode_retry_count"`
 	PoolModeRetryStatusCodes []int `json:"pool_mode_retry_status_codes"`
 }
 

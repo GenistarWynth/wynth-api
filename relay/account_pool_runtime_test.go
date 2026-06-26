@@ -219,6 +219,54 @@ func TestAccountPoolRuntimeAttemptsRetryAnotherAccountBeforeResponse(t *testing.
 	assert.Equal(t, []int{first.Id, second.Id}, selected)
 }
 
+func TestRunAccountPoolRuntimeAttemptsStreamingGuard(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "first",
+		Priority: 100,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-first",
+		},
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "second",
+		Priority: 50,
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-second",
+		},
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	info.StartTime = time.Now()
+	info.FirstResponseTime = info.StartTime.Add(-time.Millisecond)
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5"}
+	selected := make([]int, 0, 1)
+	callCount := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		callCount++
+		selected = append(selected, service.GetSelectedAccountPoolAccountID(ctx))
+		info.FirstResponseTime = info.StartTime.Add(time.Millisecond)
+		return types.NewErrorWithStatusCode(errors.New("streaming upstream 500"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+	})
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, http.StatusInternalServerError, newAPIError.StatusCode)
+	assert.Equal(t, 1, callCount)
+	assert.Equal(t, []int{first.Id}, selected)
+}
+
 func TestAccountPoolRuntimeAttemptsRecordFailureBeforeRetryingNextAccount(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")

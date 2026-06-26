@@ -203,11 +203,11 @@ func TestAccountPoolAccountIsSchedulableAtOverloadUntil(t *testing.T) {
 		Status:        AccountPoolAccountStatusEnabled,
 		OverloadUntil: now + 10,
 	}
-	require.False(t, a.IsSchedulableAt(now))
+	assert.False(t, a.IsSchedulableAt(now))
 
 	// OverloadUntil in the past: schedulable
 	a.OverloadUntil = now - 1
-	require.True(t, a.IsSchedulableAt(now))
+	assert.True(t, a.IsSchedulableAt(now))
 }
 
 func TestAccountPoolProxyRejectsSelfFallback(t *testing.T) {
