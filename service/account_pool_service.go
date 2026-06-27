@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -534,7 +535,7 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
 		return AccountPoolBindingView{}, err
 	}
-	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+	if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	if channel.Status == common.ChannelStatusEnabled {
@@ -590,7 +591,11 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 	}
 	channelType := params.ChannelType
 	if channelType == 0 {
-		channelType = constant.ChannelTypeOpenAI
+		if pool.Platform == model.AccountPoolPlatformAnthropic {
+			channelType = constant.ChannelTypeAnthropic
+		} else {
+			channelType = constant.ChannelTypeOpenAI
+		}
 	}
 	channel := model.Channel{
 		Type:        channelType,
@@ -602,7 +607,7 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 		CreatedTime: common.GetTimestamp(),
 		UpdatedTime: common.GetTimestamp(),
 	}
-	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+	if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
@@ -658,7 +663,7 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
 		return AccountPoolBindingView{}, err
 	}
-	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+	if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	if binding.ChannelID != channel.Id && channel.Status == common.ChannelStatusEnabled {
@@ -923,7 +928,8 @@ func (s AccountPoolService) DisableBinding(poolID int, bindingID int) (AccountPo
 }
 
 func (s AccountPoolService) setBindingStatus(poolID int, bindingID int, status string) (AccountPoolBindingView, error) {
-	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+	pool, err := getAccountPoolExistingPool(poolID)
+	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	binding, err := getAccountPoolBindingForPool(poolID, bindingID)
@@ -935,7 +941,7 @@ func (s AccountPoolService) setBindingStatus(poolID int, bindingID int, status s
 		return AccountPoolBindingView{}, err
 	}
 	if status == model.AccountPoolBindingStatusEnabled {
-		if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+		if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
 			return AccountPoolBindingView{}, err
 		}
 	}
@@ -1112,6 +1118,28 @@ func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 	default:
 		return errors.New("account pool runtime only supports OpenAI-compatible or Anthropic channels in this phase")
 	}
+}
+
+// validateAccountPoolRuntimeChannelForPool extends validateAccountPoolRuntimeChannel with a
+// platform-compatibility check: the channel type must match the pool's declared platform.
+//
+//   - pool platform "openai" (or empty) → channel type must be OpenAI(1) or Codex(57)
+//   - pool platform "anthropic"         → channel type must be Anthropic(14)
+func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel model.Channel) error {
+	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
+		return err
+	}
+	switch pool.Platform {
+	case model.AccountPoolPlatformAnthropic:
+		if channel.Type != constant.ChannelTypeAnthropic {
+			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
+		}
+	default: // openai or empty
+		if channel.Type == constant.ChannelTypeAnthropic {
+			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
+		}
+	}
+	return nil
 }
 
 func validateAccountPoolBindingChannelAvailable(channelID int, excludeBindingID int) error {
