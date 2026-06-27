@@ -96,6 +96,54 @@ func TestApplyAccountPoolRuntimeSelection_CodeAssistProjectDetectedAndCached(t *
 	assert.Equal(t, 1, detectorCalls, "detector must NOT be called again when cache is present")
 }
 
+// TestApplyAccountPoolRuntimeSelection_VertexServiceAccountExcludesOAuthFlag verifies that a
+// Gemini Vertex service-account credential with a CACHED valid token (so no mint is needed)
+// sets the Vertex routing fields but leaves RuntimeGeminiOAuth/RuntimeGeminiOAuthType cleared,
+// keeping the two routing modes mutually exclusive (the cached access token would otherwise make
+// accountPoolHasOAuthRuntimeCredential return true).
+func TestApplyAccountPoolRuntimeSelection_VertexServiceAccountExcludesOAuthFlag(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	saJSON := `{"type":"service_account","project_id":"vertex-proj","client_email":"sa@vertex-proj.iam.gserviceaccount.com","token_uri":"https://oauth2.googleapis.com/token","private_key":"-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"}`
+	createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "vertex-sa-cached",
+		Credential: AccountPoolCredentialConfig{
+			Type:               AccountPoolCredentialTypeServiceAccount,
+			ServiceAccountJSON: saJSON,
+			Location:           "us-central1",
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "ya29.vertex-cached-token", // valid cache → mint (which needs the key) is skipped
+			ExpiresAt:   9999999999,
+		},
+	})
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-2.5-pro",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         channel.Id,
+			ApiKey:            "AIzaSy-channel-key",
+			UpstreamModelName: "gemini-2.5-pro",
+		},
+	}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, nil)
+	require.NoError(t, err)
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+
+	assert.True(t, info.RuntimeVertexServiceAccount, "vertex SA flag must be set")
+	assert.Equal(t, "vertex-proj", info.RuntimeVertexProjectID)
+	assert.Equal(t, "us-central1", info.RuntimeVertexLocation)
+	assert.False(t, info.RuntimeGeminiOAuth, "RuntimeGeminiOAuth must be false for a service-account credential")
+	assert.Equal(t, "", info.RuntimeGeminiOAuthType, "no cloudcode-pa oauth type for a service-account credential")
+	assert.Equal(t, "ya29.vertex-cached-token", info.ApiKey, "cached minted token is carried as ApiKey")
+}
+
 // TestApplyAccountPoolRuntimeSelection_AntigravityProjectDetectedAndTyped verifies that
 // an antigravity OAuth account goes through the SAME cloudcode-pa project detection as
 // code_assist, and that info.RuntimeGeminiOAuthType is set to "antigravity" (the actual

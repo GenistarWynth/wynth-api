@@ -103,7 +103,12 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeAnthropicOAuth = false
 	}
 	// Signal to the Gemini adaptor whether to use OAuth Bearer auth instead of x-goog-api-key.
-	if selection.Platform == model.AccountPoolPlatformGemini {
+	// Service-account (Vertex) credentials are NOT OAuth: they mint a token cached in
+	// token_state, which would otherwise make accountPoolHasOAuthRuntimeCredential true.
+	// Exclude them so RuntimeGeminiOAuth and RuntimeVertexServiceAccount stay mutually
+	// exclusive (the Vertex branch below owns service-account routing).
+	if selection.Platform == model.AccountPoolPlatformGemini &&
+		!accountPoolIsServiceAccountCredential(selection.Credential) {
 		info.RuntimeGeminiOAuth = accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState)
 	} else {
 		info.RuntimeGeminiOAuth = false
