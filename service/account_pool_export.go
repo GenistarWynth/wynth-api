@@ -22,7 +22,13 @@ import (
 // inspection only: the masked values are NOT usable credentials, so it will not
 // re-import working accounts. Non-secret fields (email, oauth_type, project_id,
 // account_id, platform, supported_models, model_mapping) are always emitted.
-func (s AccountPoolService) ExportAccounts(poolID int, includeSecrets bool) (accountPoolSub2APIDataPayload, error) {
+// ExportAccounts returns the export payload plus a count of accounts that were
+// SKIPPED because their stored credential could not be decrypted. The error
+// return is reserved for infrastructure failures (pool lookup, DB query); a
+// single corrupt credential blob must NOT block exporting the rest of the pool
+// (mirrors the importer's skip-and-continue), so per-account decrypt failures are
+// logged + counted, not fatal.
+func (s AccountPoolService) ExportAccounts(poolID int, includeSecrets bool) (accountPoolSub2APIDataPayload, int, error) {
 	payload := accountPoolSub2APIDataPayload{
 		Type:       "sub2api-data",
 		Version:    1,
@@ -33,35 +39,41 @@ func (s AccountPoolService) ExportAccounts(poolID int, includeSecrets bool) (acc
 
 	pool, err := getAccountPoolExistingPool(poolID)
 	if err != nil {
-		return payload, err
+		return payload, 0, err
 	}
 	platform, err := normalizeAccountPoolPlatform(pool.Platform)
 	if err != nil {
-		return payload, err
+		return payload, 0, err
 	}
 
 	var accounts []model.AccountPoolAccount
 	if err := model.DB.Where("pool_id = ? AND status <> ?", poolID, model.AccountPoolAccountStatusDeleted).
 		Order("id asc").Find(&accounts).Error; err != nil {
-		return payload, err
+		return payload, 0, err
 	}
 
 	// Resolve the distinct proxies referenced by these accounts into stable proxy keys.
+	// A corrupt proxy is skipped (logged) rather than failing the whole export.
 	proxyKeyByID, proxies, err := s.exportAccountPoolProxies(accounts, includeSecrets)
 	if err != nil {
-		return payload, err
+		return payload, 0, err
 	}
 	payload.Proxies = proxies
 
+	skipped := 0
 	for _, account := range accounts {
 		exported, err := exportAccountPoolAccount(account, platform, proxyKeyByID, includeSecrets)
 		if err != nil {
-			return payload, err
+			// Skip-and-continue: one undecryptable account must not lock the admin out
+			// of exporting (backing up) every other account in the pool.
+			common.SysError(fmt.Sprintf("account pool export: skipping account id=%d: %v", account.Id, err))
+			skipped++
+			continue
 		}
 		payload.Accounts = append(payload.Accounts, exported)
 	}
 
-	return payload, nil
+	return payload, skipped, nil
 }
 
 // exportAccountPoolProxies loads the distinct proxies referenced by the given accounts and
@@ -109,7 +121,20 @@ func (s AccountPoolService) exportAccountPoolProxies(accounts []model.AccountPoo
 		if name != "" && nameCounts[name] == 1 {
 			key = name
 		}
-		keyByID[proxy.Id] = key
+
+		auth, err := DecryptAccountPoolProxyAuthConfig(proxy.Password)
+		if err != nil {
+			// Skip a corrupt proxy rather than failing the whole export; accounts that
+			// referenced it simply export without a proxy link.
+			common.SysError(fmt.Sprintf("account pool export: skipping proxy id=%d: %v", proxy.Id, err))
+			continue
+		}
+
+		// Prefer the decrypted username; fall back to the plaintext column.
+		username := strings.TrimSpace(proxy.Username)
+		if decrypted := strings.TrimSpace(auth.Username); decrypted != "" {
+			username = decrypted
+		}
 
 		entry := accountPoolSub2APIProxy{
 			ProxyKey: key,
@@ -117,15 +142,8 @@ func (s AccountPoolService) exportAccountPoolProxies(accounts []model.AccountPoo
 			Protocol: proxy.Protocol,
 			Host:     proxy.Host,
 			Port:     proxy.Port,
-			Username: proxy.Username,
+			Username: username,
 			Status:   proxy.Status,
-		}
-		auth, err := DecryptAccountPoolProxyAuthConfig(proxy.Password)
-		if err != nil {
-			return nil, nil, fmt.Errorf("decrypt proxy auth (id=%d): %w", proxy.Id, err)
-		}
-		if strings.TrimSpace(auth.Username) != "" {
-			entry.Username = auth.Username
 		}
 		if password := strings.TrimSpace(auth.Password); password != "" {
 			if includeSecrets {
@@ -134,6 +152,7 @@ func (s AccountPoolService) exportAccountPoolProxies(accounts []model.AccountPoo
 				entry.Password = MaskAccountPoolSecretValue(password)
 			}
 		}
+		keyByID[proxy.Id] = key
 		exported = append(exported, entry)
 	}
 

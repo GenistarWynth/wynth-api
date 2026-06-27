@@ -49,8 +49,9 @@ func TestAccountPoolServiceExportRoundTripsThroughImport(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	payload, err := svc.ExportAccounts(pool.Id, true)
+	payload, skipped, err := svc.ExportAccounts(pool.Id, true)
 	require.NoError(t, err)
+	assert.Equal(t, 0, skipped)
 	require.Len(t, payload.Accounts, 2)
 	require.Len(t, payload.Proxies, 1)
 	assert.Equal(t, "sub2api-data", payload.Type)
@@ -81,12 +82,50 @@ func TestAccountPoolServiceExportRoundTripsThroughImport(t *testing.T) {
 	assert.Equal(t, "at-export", oauthToken.AccessToken)
 	assert.Equal(t, "projects/exp-1", oauthToken.ProjectID)
 
-	// API-key account round-trips its key and proxy linkage.
+	// API-key account round-trips its key, priority, and proxy (recreated + linked).
 	keyAcct := accountByNameInPool(t, pool2.Id, "exp-key")
 	keyCred, err := DecryptAccountPoolCredentialConfig(keyAcct.CredentialConfig)
 	require.NoError(t, err)
 	assert.Equal(t, "sk-export-key", keyCred.APIKey)
-	assert.NotZero(t, keyAcct.ProxyID, "proxy should be recreated and linked on import")
+	assert.Equal(t, int64(5), keyAcct.Priority, "priority survives the round-trip")
+	require.NotZero(t, keyAcct.ProxyID, "proxy should be recreated and linked on import")
+	var reimportedProxy model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&reimportedProxy, keyAcct.ProxyID).Error)
+	assert.Equal(t, "127.0.0.1", reimportedProxy.Host)
+	assert.Equal(t, 8080, reimportedProxy.Port)
+	proxyAuth, err := DecryptAccountPoolProxyAuthConfig(reimportedProxy.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "psecret", proxyAuth.Password)
+}
+
+// A single undecryptable credential blob must be skipped (logged + counted), not
+// fail the whole export — mirroring the importer's skip-and-continue.
+func TestAccountPoolServiceExportSkipsUndecryptableAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+
+	_, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:     pool.Id,
+		Name:       "exp-healthy",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeAPIKey, APIKey: "sk-healthy"},
+	})
+	require.NoError(t, err)
+	corrupt, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:     pool.Id,
+		Name:       "exp-corrupt",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeAPIKey, APIKey: "sk-corrupt"},
+	})
+	require.NoError(t, err)
+	// Corrupt the stored credential so decryption fails on export.
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", corrupt.Id).Update("credential_config", "not-a-valid-encrypted-blob").Error)
+
+	payload, skipped, err := svc.ExportAccounts(pool.Id, true)
+	require.NoError(t, err, "a corrupt account must not fail the whole export")
+	assert.Equal(t, 1, skipped)
+	require.Len(t, payload.Accounts, 1)
+	assert.Equal(t, "exp-healthy", payload.Accounts[0].Name)
 }
 
 // The default (redacted) export must not leak usable secrets, while still emitting
@@ -105,7 +144,7 @@ func TestAccountPoolServiceExportRedactsSecretsByDefault(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	payload, err := svc.ExportAccounts(pool.Id, false)
+	payload, _, err := svc.ExportAccounts(pool.Id, false)
 	require.NoError(t, err)
 	raw, err := common.Marshal(payload)
 	require.NoError(t, err)

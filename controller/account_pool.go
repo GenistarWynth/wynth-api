@@ -179,7 +179,7 @@ func ExportAccountPoolAccounts(c *gin.Context) {
 	}
 	includeSecretsRaw := c.Query("include_secrets")
 	includeSecrets := includeSecretsRaw == "true" || includeSecretsRaw == "1"
-	payload, err := (&service.AccountPoolService{}).ExportAccounts(poolID, includeSecrets)
+	payload, skipped, err := (&service.AccountPoolService{}).ExportAccounts(poolID, includeSecrets)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -188,6 +188,7 @@ func ExportAccountPoolAccounts(c *gin.Context) {
 		"pool_id":         poolID,
 		"include_secrets": includeSecrets,
 		"accounts":        len(payload.Accounts),
+		"skipped":         skipped,
 	})
 	common.ApiSuccess(c, payload)
 }
