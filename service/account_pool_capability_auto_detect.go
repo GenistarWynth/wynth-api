@@ -228,5 +228,13 @@ func runDueAccountPoolCapabilityAutoDetectOnce() {
 	defer accountPoolCapabilityAutoDetectRunning.Store(false)
 
 	now := common.GetTimestamp()
+	// Expiry auto-pause sweep: cheap bulk DB update, run every tick regardless of
+	// per-pool capability-check config so opted-in expired accounts are persistently
+	// paused + visible (runtime selection already excludes them immediately).
+	if paused, err := RunAccountPoolExpiryAutoPause(now); err != nil {
+		logger.LogWarn(context.Background(), fmt.Sprintf("account pool expiry auto-pause sweep failed: %v", err))
+	} else if paused > 0 {
+		logger.LogInfo(context.Background(), fmt.Sprintf("account pool expiry auto-pause: paused %d expired account(s)", paused))
+	}
 	(&AccountPoolService{}).RunDueAccountPoolCapabilityAutoDetect(context.Background(), now)
 }
