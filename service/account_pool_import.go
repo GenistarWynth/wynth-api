@@ -377,6 +377,13 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	refreshToken := accountPoolImportStringFromMap(account.Credentials, "refresh_token")
 	accessToken := accountPoolImportStringFromMap(account.Credentials, "access_token")
 	email := accountPoolImportStringFromMap(account.Credentials, "email")
+	// oauthType distinguishes a Gemini OAuth sub-type (code_assist vs ai_studio).
+	// It is only meaningful for Gemini OAuth accounts; harmless otherwise.
+	oauthType := strings.ToLower(strings.TrimSpace(accountPoolImportStringFromMap(account.Credentials, "oauth_type")))
+	// projectID lets an import pre-seed the GCP project for a Code Assist account,
+	// avoiding a loadCodeAssist round-trip on first use (detection still fills it
+	// in when absent).
+	projectID := accountPoolImportStringFromMap(account.Credentials, "project_id", "project")
 	accountIdentifier := accountPoolImportStringFromMap(account.Credentials, "chatgpt_account_id", "account_id", "id")
 	expiresAt := accountPoolImportInt64FromMap(account.Credentials, "expires_at", "expired")
 	if expiresAt == 0 && account.ExpiresAt != nil {
@@ -423,11 +430,13 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 			Type:         AccountPoolCredentialTypeOAuth,
 			Email:        email,
 			RefreshToken: refreshToken,
+			OAuthType:    oauthType,
 		}
 		candidate.Params.TokenState = AccountPoolTokenState{
 			AccessToken:  accessToken,
 			RefreshToken: refreshToken,
 			ExpiresAt:    expiresAt,
+			ProjectID:    projectID,
 		}
 	default:
 		return accountPoolImportCandidate{}, false, "sub2api account has no supported credential"

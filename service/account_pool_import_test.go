@@ -206,6 +206,46 @@ func TestAccountPoolServiceImportSub2APIGeminiAccountMatchesPlatform(t *testing.
 	assert.Equal(t, "gemini-refresh", cred.RefreshToken)
 }
 
+func TestAccountPoolServiceImportSub2APIGeminiCodeAssistOAuthType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-code-assist",
+					"platform": "gemini",
+					"type": "oauth",
+					"credentials": {
+						"email": "ca@example.com",
+						"refresh_token": "ca-refresh",
+						"access_token": "ca-access",
+						"oauth_type": "code_assist",
+						"project_id": "projects/seed-123"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	acct := requireAccountPoolAccountByName(t, "gemini-code-assist")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, cred.OAuthType, "oauth_type must be imported so Code Assist routing activates")
+	ts, err := DecryptAccountPoolTokenState(acct.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "projects/seed-123", ts.ProjectID, "project_id pre-seed must be imported to skip detection")
+}
+
 func TestAccountPoolServiceImportSub2APIRejectsPlatformMismatch(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	svc := AccountPoolService{}
