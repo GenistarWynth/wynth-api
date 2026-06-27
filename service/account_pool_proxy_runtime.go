@@ -29,7 +29,28 @@ func ResolveAccountPoolRuntimeProxyURL(accountProxyID int, poolDefaultProxyID in
 }
 
 func resolveEnabledAccountPoolRuntimeProxy(proxyID int) (model.AccountPoolProxy, error) {
+	return resolveEnabledAccountPoolRuntimeProxyAt(proxyID, 0)
+}
+
+// resolveEnabledAccountPoolRuntimeProxyAt walks the fallback chain starting at proxyID,
+// skipping proxies that are disabled OR currently known-unhealthy (as reported by the
+// in-memory health store). Unknown/never-probed proxies are treated as healthy (fail-open).
+//
+// When every candidate in the chain is unhealthy (but enabled), the function falls back
+// to the last enabled candidate so the caller always gets a non-empty result — preserving
+// the original contract that a configured proxy is never silently dropped.
+//
+// now is a Unix timestamp (seconds); pass 0 to use the current time.
+func resolveEnabledAccountPoolRuntimeProxyAt(proxyID int, now int64) (model.AccountPoolProxy, error) {
+	if now <= 0 {
+		now = 0 // accountPoolProxyHealthy ignores the value today; keep zero to signal "now"
+	}
 	visited := map[int]struct{}{}
+
+	// lastEnabled holds the final enabled proxy seen so we can fall back to it if all
+	// candidates are unhealthy.
+	var lastEnabled *model.AccountPoolProxy
+
 	for proxyID > 0 {
 		if _, ok := visited[proxyID]; ok {
 			return model.AccountPoolProxy{}, fmt.Errorf("account pool proxy fallback chain contains a cycle at proxy %d", proxyID)
@@ -43,11 +64,27 @@ func resolveEnabledAccountPoolRuntimeProxy(proxyID int) (model.AccountPoolProxy,
 			}
 			return model.AccountPoolProxy{}, err
 		}
+
 		if proxy.Status == model.AccountPoolProxyStatusEnabled {
-			return proxy, nil
+			// Track the last enabled proxy we encountered for the all-unhealthy fallback.
+			proxyCopy := proxy
+			lastEnabled = &proxyCopy
+
+			if accountPoolProxyHealthy(proxy.Id, now) {
+				// Healthy (or unknown) — use it.
+				return proxy, nil
+			}
+			// Unhealthy — continue to fallback.
 		}
 		proxyID = proxy.FallbackProxyID
 	}
+
+	// All enabled proxies in the chain are currently known-unhealthy.
+	// Fall back to the last enabled candidate (never return empty when a proxy is configured).
+	if lastEnabled != nil {
+		return *lastEnabled, nil
+	}
+
 	return model.AccountPoolProxy{}, errors.New("no enabled account pool proxy in fallback chain")
 }
 

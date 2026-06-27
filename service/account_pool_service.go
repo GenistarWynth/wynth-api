@@ -1493,6 +1493,7 @@ func ResetAccountPoolRuntimeForTest() {
 	resetAccountPoolRuntimeBlocksForTest()
 	resetAccountPoolUserConcurrencyForTest()
 	resetAccountPoolRuntimeAffinitiesForTest()
+	resetAccountPoolProxyHealthForTest()
 	accountPoolRuntimeEnabledCache = nil
 	accountPoolRuntimeEnabledCacheOnce = sync.Once{}
 	accountPoolRuntimeConcurrencyCache = nil
