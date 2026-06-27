@@ -42,9 +42,6 @@ func resolveEnabledAccountPoolRuntimeProxy(proxyID int) (model.AccountPoolProxy,
 //
 // now is a Unix timestamp (seconds); pass 0 to use the current time.
 func resolveEnabledAccountPoolRuntimeProxyAt(proxyID int, now int64) (model.AccountPoolProxy, error) {
-	if now <= 0 {
-		now = 0 // accountPoolProxyHealthy ignores the value today; keep zero to signal "now"
-	}
 	visited := map[int]struct{}{}
 
 	// lastEnabled holds the final enabled proxy seen so we can fall back to it if all

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -124,7 +125,7 @@ func tcpProbeAccountPoolProxy(proxy model.AccountPoolProxy, timeoutSeconds int) 
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 10
 	}
-	addr := net.JoinHostPort(proxy.Host, intToString(proxy.Port))
+	addr := net.JoinHostPort(proxy.Host, strconv.Itoa(proxy.Port))
 	start := time.Now()
 	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeoutSeconds)*time.Second)
 	latencyMS := time.Since(start).Milliseconds()
@@ -133,28 +134,6 @@ func tcpProbeAccountPoolProxy(proxy model.AccountPoolProxy, timeoutSeconds int) 
 	}
 	_ = conn.Close()
 	return true, latencyMS
-}
-
-// intToString converts an int to its decimal string representation without importing
-// additional packages beyond what the file already uses.
-func intToString(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	buf := make([]byte, 0, 10)
-	for n > 0 {
-		buf = append([]byte{byte('0' + n%10)}, buf...)
-		n /= 10
-	}
-	if neg {
-		buf = append([]byte{'-'}, buf...)
-	}
-	return string(buf)
 }
 
 // runAccountPoolProxyProbeAndRecord calls the injectable probe function for proxy and
