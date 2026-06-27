@@ -83,11 +83,12 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 	if info.RuntimeAnthropicOAuth {
 		// OAuth path: Bearer token + Claude-Code mimicry headers.
-		// Note: if the client sent its own anthropic-beta (real Claude Code passthrough),
-		// we currently overwrite with the bundle. Merging is a future refinement (TODO).
 		req.Set("Authorization", "Bearer "+info.ApiKey)
 		req.Set("anthropic-version", "2023-06-01")
-		req.Set("anthropic-beta", AnthropicOAuthBetaFeatures)
+		// Merge client-supplied anthropic-beta with the required OAuth bundle flags.
+		// Required OAuth flags come first; any client-supplied flags not already in the
+		// bundle are appended (union, deduplicated, order-preserving).
+		req.Set("anthropic-beta", mergeAnthropicBetaFlags(AnthropicOAuthBetaFeatures, c.Request.Header.Get("anthropic-beta")))
 		for k, v := range claudeCodeMimicryHeaders() {
 			req.Set(k, v)
 		}

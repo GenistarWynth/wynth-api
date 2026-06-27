@@ -304,6 +304,22 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+// finalizeAnthropicOAuthAuthHeader is a defense-in-depth step applied AFTER header
+// overrides for Anthropic OAuth requests. Channel HeadersOverride templates can set
+// x-api-key via the {api_key} placeholder — but for OAuth accounts info.ApiKey holds
+// the OAuth access token, which must travel as Authorization: Bearer, NOT as x-api-key.
+//
+// This finalizer:
+//   - removes any x-api-key / X-Api-Key header injected by overrides
+//   - ensures Authorization: Bearer <apiKey> is present
+//
+// It is a no-op for non-OAuth requests; callers must guard on info.RuntimeAnthropicOAuth.
+func finalizeAnthropicOAuthAuthHeader(header http.Header, apiKey string) {
+	header.Del("x-api-key")
+	header.Del("X-Api-Key")
+	header.Set("Authorization", "Bearer "+apiKey)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -327,6 +343,11 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	// Defense-in-depth: if this is an Anthropic OAuth request, ensure no x-api-key
+	// leakage from HeadersOverride templates (which resolve {api_key} = OAuth token).
+	if info != nil && info.RuntimeAnthropicOAuth {
+		finalizeAnthropicOAuthAuthHeader(req.Header, info.ApiKey)
+	}
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

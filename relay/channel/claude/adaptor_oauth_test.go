@@ -81,3 +81,69 @@ func TestSetupRequestHeaderOAuthBetaContainsAllRequiredFlags(t *testing.T) {
 		assert.Contains(t, beta, flag, "OAuth beta flags must include %q", flag)
 	}
 }
+
+// newAdaptorOAuthTestContextWithBeta returns a test context whose incoming request
+// carries the given anthropic-beta header value (simulating a real client sending it).
+func newAdaptorOAuthTestContextWithBeta(beta string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	if beta != "" {
+		req.Header.Set("anthropic-beta", beta)
+	}
+	ctx.Request = req
+	return ctx
+}
+
+// TestSetupRequestHeaderOAuthMergesClientBeta verifies FIX 3:
+// When the client sends its own anthropic-beta value, the OAuth SetupRequestHeader
+// must MERGE (union, deduplicate) the required OAuth bundle flags with the client-supplied
+// flags rather than overwriting them. Required OAuth flags must always be present.
+func TestSetupRequestHeaderOAuthMergesClientBeta(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := newAdaptorOAuthTestInfo("sk-oauth-token", true)
+
+	t.Run("client flag is preserved alongside OAuth bundle", func(t *testing.T) {
+		c := newAdaptorOAuthTestContextWithBeta("custom-flag-2025")
+		header := make(http.Header)
+
+		require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+
+		beta := header.Get("anthropic-beta")
+		assert.Contains(t, beta, "oauth-2025-04-20",
+			"required OAuth flag must be present after merge")
+		assert.Contains(t, beta, "custom-flag-2025",
+			"client-supplied beta flag must be preserved after merge")
+	})
+
+	t.Run("no client beta uses bundle as-is", func(t *testing.T) {
+		c := newAdaptorOAuthTestContextWithBeta("")
+		header := make(http.Header)
+
+		require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+
+		beta := header.Get("anthropic-beta")
+		for _, flag := range strings.Split(AnthropicOAuthBetaFeatures, ",") {
+			assert.Contains(t, beta, flag,
+				"all required OAuth flags must be present when no client beta sent")
+		}
+	})
+
+	t.Run("duplicate flags are not included twice", func(t *testing.T) {
+		// Client sends a flag that's already in the OAuth bundle.
+		c := newAdaptorOAuthTestContextWithBeta("oauth-2025-04-20")
+		header := make(http.Header)
+
+		require.NoError(t, adaptor.SetupRequestHeader(c, &header, info))
+
+		beta := header.Get("anthropic-beta")
+		// Count occurrences of "oauth-2025-04-20" in the comma-separated list.
+		count := 0
+		for _, f := range strings.Split(beta, ",") {
+			if strings.TrimSpace(f) == "oauth-2025-04-20" {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "duplicate flags must not appear more than once in anthropic-beta")
+	})
+}
