@@ -109,6 +109,103 @@ func TestAccountPoolServiceImportSub2APIDataCreatesAccountsAndReferencedProxy(t 
 	assert.Equal(t, int64(4102444800), tokenState.ExpiresAt)
 }
 
+func TestAccountPoolServiceImportSub2APIAnthropicAccountsMatchAndInheritPlatform(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "claude-explicit",
+					"platform": "anthropic",
+					"type": "oauth",
+					"credentials": {
+						"email": "claude@example.com",
+						"refresh_token": "claude-refresh",
+						"access_token": "claude-access",
+						"expires_at": 4102444800
+					}
+				},
+				{
+					"name": "claude-inherit",
+					"type": "oauth",
+					"credentials": {
+						"email": "claude2@example.com",
+						"refresh_token": "claude-refresh-2",
+						"access_token": "claude-access-2"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+
+	explicit := requireAccountPoolAccountByName(t, "claude-explicit")
+	cred, err := DecryptAccountPoolCredentialConfig(explicit.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Equal(t, "claude-refresh", cred.RefreshToken)
+	ts, err := DecryptAccountPoolTokenState(explicit.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-access", ts.AccessToken)
+
+	// An account that omits platform inherits the pool's platform (anthropic here).
+	requireAccountPoolAccountByName(t, "claude-inherit")
+}
+
+func TestAccountPoolServiceImportSub2APIRejectsPlatformMismatch(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{"name": "wrong-platform", "platform": "openai", "type": "api_key", "credentials": {"api_key": "sk-x"}}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, 1, result.Skipped)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Message, "does not match pool platform")
+}
+
+func TestAccountPoolServiceImportCPARejectsNonOpenAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+
+	_, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: `[{"provider": "codex", "metadata": {"email": "c@example.com", "refresh_token": "r", "access_token": "a"}}]`,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only supported for openai pools")
+}
+
 func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

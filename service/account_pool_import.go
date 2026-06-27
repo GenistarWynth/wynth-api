@@ -135,7 +135,16 @@ type accountPoolCPACodexModel struct {
 
 func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams) (AccountPoolAccountImportResult, error) {
 	result := AccountPoolAccountImportResult{}
-	if _, err := getAccountPoolExistingPool(params.PoolID); err != nil {
+	pool, err := getAccountPoolExistingPool(params.PoolID)
+	if err != nil {
+		return result, err
+	}
+	// Imported accounts inherit the pool's platform at runtime, so an account that
+	// declares a different platform (or a format that only produces one platform's
+	// credentials) must be validated against the pool to avoid importing, e.g.,
+	// OpenAI credentials into an Anthropic pool.
+	poolPlatform, err := normalizeAccountPoolPlatform(pool.Platform)
+	if err != nil {
 		return result, err
 	}
 	if strings.TrimSpace(params.Content) == "" {
@@ -155,9 +164,9 @@ func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams
 	var parseErrors []AccountPoolAccountImportError
 	switch format {
 	case accountPoolImportFormatSub2API:
-		candidates, stats, parseErrors, err = s.parseSub2APIImport(params)
+		candidates, stats, parseErrors, err = s.parseSub2APIImport(params, poolPlatform)
 	case accountPoolImportFormatCPA:
-		candidates, stats, parseErrors, err = s.parseCPAImport(params)
+		candidates, stats, parseErrors, err = s.parseCPAImport(params, poolPlatform)
 	default:
 		err = errors.New("unsupported account import format")
 	}
@@ -242,7 +251,7 @@ func normalizeAccountPoolImportFormat(format string) (string, error) {
 	}
 }
 
-func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportParams) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
+func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportParams, poolPlatform string) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
 	var payload accountPoolSub2APIDataPayload
 	if err := common.UnmarshalJsonStr(params.Content, &payload); err != nil {
 		return nil, accountPoolImportProxyStats{}, nil, err
@@ -312,7 +321,7 @@ func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportPa
 	candidates := make([]accountPoolImportCandidate, 0, len(payload.Accounts))
 	importErrors := make([]AccountPoolAccountImportError, 0)
 	for index, account := range payload.Accounts {
-		candidate, ok, message := accountPoolSub2APIAccountCandidate(params.PoolID, account)
+		candidate, ok, message := accountPoolSub2APIAccountCandidate(params.PoolID, poolPlatform, account)
 		if !ok {
 			importErrors = append(importErrors, AccountPoolAccountImportError{
 				Index:   index,
@@ -348,10 +357,19 @@ func (s AccountPoolService) parseSub2APIImport(params AccountPoolAccountImportPa
 	return candidates, stats, importErrors, nil
 }
 
-func accountPoolSub2APIAccountCandidate(poolID int, account accountPoolSub2APIAccount) (accountPoolImportCandidate, bool, string) {
-	platform := strings.ToLower(strings.TrimSpace(account.Platform))
-	if platform != "" && platform != "openai" {
-		return accountPoolImportCandidate{}, false, "unsupported sub2api account platform"
+func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account accountPoolSub2APIAccount) (accountPoolImportCandidate, bool, string) {
+	// An account may declare its platform (openai/anthropic/gemini). When set it
+	// must match the destination pool; when omitted it inherits the pool platform.
+	// This is what enables importing Anthropic/Gemini accounts (not just OpenAI),
+	// while preventing a cross-platform credential mismatch.
+	if declared := strings.ToLower(strings.TrimSpace(account.Platform)); declared != "" {
+		normalized, err := normalizeAccountPoolPlatform(declared)
+		if err != nil {
+			return accountPoolImportCandidate{}, false, "unsupported sub2api account platform"
+		}
+		if normalized != poolPlatform {
+			return accountPoolImportCandidate{}, false, fmt.Sprintf("sub2api account platform %q does not match pool platform %q", normalized, poolPlatform)
+		}
 	}
 
 	credentialType := strings.ToLower(strings.TrimSpace(account.Type))
@@ -417,7 +435,13 @@ func accountPoolSub2APIAccountCandidate(poolID int, account accountPoolSub2APIAc
 
 	return candidate, true, ""
 }
-func (s AccountPoolService) parseCPAImport(params AccountPoolAccountImportParams) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
+func (s AccountPoolService) parseCPAImport(params AccountPoolAccountImportParams, poolPlatform string) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
+	// The CPA (cliproxyapi) formats only carry Codex/OpenAI credentials, so they
+	// can only populate an OpenAI pool. Reject other pools up front rather than
+	// importing OpenAI credentials that inherit a mismatched platform at runtime.
+	if poolPlatform != model.AccountPoolPlatformOpenAI {
+		return nil, accountPoolImportProxyStats{}, nil, fmt.Errorf("cpa import is only supported for openai pools, not %q", poolPlatform)
+	}
 	var payload accountPoolCPAConfigPayload
 	if err := yaml.Unmarshal([]byte(params.Content), &payload); err == nil && len(payload.CodexAPIKeys) > 0 {
 		return s.parseCPAConfigImport(params, payload)
