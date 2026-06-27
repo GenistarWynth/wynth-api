@@ -267,10 +267,38 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	if newAPIError := rejectUnsupportedAccountPoolRuntime(c, info, "gemini_embedding"); newAPIError != nil {
-		return newAPIError
-	}
+	// NOTE: rejectUnsupportedAccountPoolRuntime("gemini_embedding") removed — the
+	// pool loop handles pooled channels (per-account credential/model selection +
+	// retry). Non-pool channels are a transparent single-attempt pass-through.
+	mappedRequest := req
+	return runAccountPoolRuntimeAttempts(c, info, func() (dto.Request, *types.NewAPIError) {
+		attemptRequest, err := copyGeminiEmbeddingRequest(mappedRequest)
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("failed to copy mapped gemini embedding request: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return attemptRequest, nil
+	}, func(attemptRequest dto.Request) *types.NewAPIError {
+		return geminiEmbeddingHandlerWithRuntimeSelected(c, info, attemptRequest)
+	})
+}
 
+// copyGeminiEmbeddingRequest deep-copies a gemini embedding request by its concrete
+// type so each pool attempt rebuilds a fresh request. Both single and batch shapes
+// implement dto.Request.
+func copyGeminiEmbeddingRequest(req dto.Request) (dto.Request, error) {
+	switch r := req.(type) {
+	case *dto.GeminiEmbeddingRequest:
+		return common.DeepCopy(r)
+	case *dto.GeminiBatchEmbeddingRequest:
+		return common.DeepCopy(r)
+	default:
+		return nil, fmt.Errorf("unexpected gemini embedding request type %T", req)
+	}
+}
+
+func geminiEmbeddingHandlerWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, req dto.Request) *types.NewAPIError {
+	// Re-apply the gemini model prefix from the (possibly per-account re-selected)
+	// upstream model name so each pool attempt targets the correct account model.
 	req.SetModelName("models/" + info.UpstreamModelName)
 
 	adaptor := GetAdaptor(info.ApiType)
@@ -313,7 +341,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	if resp != nil {
 		httpResp = resp.(*http.Response)
 		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError
 		}

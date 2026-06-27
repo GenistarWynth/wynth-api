@@ -951,7 +951,12 @@ func TestAccountPoolRelayUnsupportedGuardUsesContextChannelWhenMetaMissing(t *te
 	assert.False(t, types.IsSkipRetryError(newAPIError))
 }
 
-func TestAccountPoolRelayImageHelperRejectsEnabledBindingBeforeUpstream(t *testing.T) {
+// TestAccountPoolRelayImageHelperRoutesPooledChannelThroughPool verifies that an
+// image channel WITH an enabled pool binding is no longer hard-rejected: it routes
+// into the pool loop. With no schedulable account configured, selection fails before
+// any upstream call and surfaces the retriable pool-exhaustion 503 (distinct from the
+// old "does not support image relay yet" rejection).
+func TestAccountPoolRelayImageHelperRoutesPooledChannelThroughPool(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/images/generations")
 	pool := createAccountPoolRelayTestPool(t)
@@ -965,9 +970,11 @@ func TestAccountPoolRelayImageHelperRejectsEnabledBindingBeforeUpstream(t *testi
 	newAPIError := ImageHelper(ctx, info)
 
 	require.NotNil(t, newAPIError)
+	require.ErrorIs(t, newAPIError, service.ErrAccountPoolNoSchedulableAccount)
 	assert.Equal(t, http.StatusServiceUnavailable, newAPIError.StatusCode)
 	assert.Equal(t, types.ErrorCodeGetChannelFailed, newAPIError.GetErrorCode())
 	assert.False(t, types.IsSkipRetryError(newAPIError))
+	assert.NotContains(t, newAPIError.Error(), "does not support")
 }
 
 func setupAccountPoolRelayTestDB(t *testing.T) {
