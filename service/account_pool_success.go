@@ -51,7 +51,11 @@ func IncrementAccountPoolAccountRequestQuota(accountID int, now int64) error {
 	})
 }
 
-func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64) error {
+// RecordAccountPoolRuntimeAttemptSuccess records a successful attempt for the given account.
+// It clears transient failure state (rate limits, temp disable, overload, failure counters)
+// and, when requestedModel is non-empty, removes that model from the account's per-model
+// rate limit map so the account can serve the same model again immediately.
+func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64, requestedModel string) error {
 	if accountID <= 0 {
 		return nil
 	}
@@ -60,17 +64,36 @@ func RecordAccountPoolRuntimeAttemptSuccess(accountID int, now int64) error {
 	}
 	// Clear the in-process fast-path block so a recovered account is immediately eligible.
 	clearAccountPoolRuntimeBlock(accountID)
+
+	updates := map[string]any{
+		"last_used_at":         now,
+		"last_success_at":      now,
+		"success_count":        gorm.Expr("success_count + ?", 1),
+		"rate_limited_until":   int64(0),
+		"temp_disabled_until":  int64(0),
+		"temp_disabled_reason": "",
+		"last_error":           "",
+		"overload_until":       int64(0),
+		"failure_state":        "",
+	}
+
+	if requestedModel != "" {
+		// Remove the successfully-used model from the per-model rate limit map.
+		// Read-modify-write: load the current map, delete the entry, write back.
+		var account model.AccountPoolAccount
+		if err := model.DB.Select("id", "model_rate_limits").
+			Where("id = ? AND status = ?", accountID, model.AccountPoolAccountStatusEnabled).
+			First(&account).Error; err == nil {
+			mrl, _ := parseAccountPoolModelRateLimits(account.ModelRateLimits)
+			delete(mrl, requestedModel)
+			raw, marshalErr := marshalAccountPoolModelRateLimits(mrl)
+			if marshalErr == nil {
+				updates["model_rate_limits"] = raw
+			}
+		}
+	}
+
 	return model.DB.Model(&model.AccountPoolAccount{}).
 		Where("id = ? AND status = ?", accountID, model.AccountPoolAccountStatusEnabled).
-		Updates(map[string]any{
-			"last_used_at":         now,
-			"last_success_at":      now,
-			"success_count":        gorm.Expr("success_count + ?", 1),
-			"rate_limited_until":   int64(0),
-			"temp_disabled_until":  int64(0),
-			"temp_disabled_reason": "",
-			"last_error":           "",
-			"overload_until":       int64(0),
-			"failure_state":        "",
-		}).Error
+		Updates(updates).Error
 }

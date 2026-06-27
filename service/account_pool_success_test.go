@@ -27,7 +27,7 @@ func TestRecordAccountPoolRuntimeAttemptSuccessClearsTransientFailureState(t *te
 			"failure_count": 5,
 		}).Error)
 
-	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, 2000))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, 2000, ""))
 
 	var reloaded model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
@@ -58,7 +58,7 @@ func TestRecordAccountPoolRuntimeAttemptSuccessResetsFailureState(t *testing.T) 
 			"failure_state":  `{"consecutive_failures":3,"http403_count":2}`,
 		}).Error)
 
-	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, now, ""))
 
 	var reloaded model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)
@@ -171,8 +171,8 @@ func TestRecordAccountPoolRuntimeAttemptSuccessNoopsForInvalidOrNonEnabledAccoun
 		LastError:          "previous error",
 	})
 
-	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(0, 2000))
-	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, 2000))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(0, 2000, ""))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptSuccess(account.Id, 2000, ""))
 
 	var reloaded model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&reloaded, account.Id).Error)

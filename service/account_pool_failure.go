@@ -63,7 +63,11 @@ func classifyTransportError(err *types.NewAPIError) bool {
 //
 // platform selects provider-specific classification logic ("anthropic", "openai", or "").
 // Empty string and "openai" are treated identically (OpenAI/Codex behavior).
-func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.NewAPIError, isOAuth bool, now int64, platform string) map[string]any {
+//
+// requestedModel, when non-empty, is the upstream model name sent to the provider.
+// It is used to detect model-not-found failures and set a per-model rate limit on the
+// account without affecting the account's whole-account schedulability.
+func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.NewAPIError, isOAuth bool, now int64, platform string, requestedModel string) map[string]any {
 	if err == nil {
 		return nil
 	}
@@ -99,6 +103,20 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 		raw, marshalErr := fs.marshal()
 		if marshalErr == nil {
 			updates["failure_state"] = raw
+		}
+	}
+
+	// Case 0 — Model-not-found: the provider signals that the requested model does not exist
+	// on this account. Only the specific model is blocked; the account remains schedulable
+	// for all other models (no whole-account cooldown or status change).
+	if requestedModel != "" && (code == http.StatusNotFound || code == http.StatusBadRequest) {
+		if isModelNotFoundError(err) {
+			existing, _ := parseAccountPoolModelRateLimits(account.ModelRateLimits)
+			existing[requestedModel] = now + int64(cfg.ModelNotFoundCooldownMinutes*60)
+			if raw, marshalErr := marshalAccountPoolModelRateLimits(existing); marshalErr == nil {
+				updates["model_rate_limits"] = raw
+			}
+			return updates
 		}
 	}
 
@@ -328,7 +346,10 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 //
 // platform selects provider-specific classification ("anthropic", "openai", or "").
 // Empty string and "openai" are treated identically.
-func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIError, now int64, platform string) error {
+//
+// requestedModel is the upstream model name that was sent to the provider. When non-empty
+// and the error is a model-not-found signal, only that model is blocked on the account.
+func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIError, now int64, platform string, requestedModel string) error {
 	if accountID <= 0 || err == nil {
 		return nil
 	}
@@ -348,7 +369,7 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 		} else {
 			common.SysError(fmt.Sprintf("account pool: failed to decrypt credential for account %d during failure classification: %v", accountID, decryptErr))
 		}
-		updates = classifyAccountPoolFailure(account, err, isOAuth, now, platform)
+		updates = classifyAccountPoolFailure(account, err, isOAuth, now, platform, requestedModel)
 		if len(updates) == 0 {
 			return nil
 		}
@@ -401,6 +422,43 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 	}
 	blockAccountPoolRuntime(accountID, blockUntil)
 	return nil
+}
+
+// isModelNotFoundError returns true when the upstream error body or message indicates
+// that the requested model does not exist on the provider side. Detection is
+// case-insensitive and covers the common phrasings across OpenAI, Anthropic, and Gemini:
+//
+//   - "model_not_found" (OpenAI error code)
+//   - "does not exist" (OpenAI human message, e.g. "The model 'gpt-x' does not exist")
+//   - "not_found_error" (Anthropic error type)
+//   - "is not found" (Gemini, e.g. "The model 'gemini-x' is not found")
+//   - "model" AND ("not found" OR "not_found") together in the message
+func isModelNotFoundError(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	combined := strings.ToLower(sanitizeAccountPoolFailureMessage(err, accountPoolLastErrorMaxLength))
+	bodyLower := strings.ToLower(string(err.GetUpstreamBody()))
+	check := func(s string) bool {
+		return strings.Contains(combined, s) || strings.Contains(bodyLower, s)
+	}
+	if check("model_not_found") {
+		return true
+	}
+	if check("does not exist") {
+		return true
+	}
+	if check("not_found_error") {
+		return true
+	}
+	if check("is not found") {
+		return true
+	}
+	// "model" AND ("not found" OR "not_found") together
+	if (check("not found") || check("not_found")) && (strings.Contains(combined, "model") || strings.Contains(bodyLower, "model")) {
+		return true
+	}
+	return false
 }
 
 func sanitizeAccountPoolFailureMessage(err *types.NewAPIError, maxLen int) string {

@@ -133,6 +133,11 @@ func loadAccountPoolSelectionContext(req AccountPoolSelectionRequest) (accountPo
 			common.SysLog(fmt.Sprintf("account pool: skipping account id=%d name=%q due to invalid model_mapping: %v", account.Id, account.Name, err))
 			continue
 		}
+		// Exclude accounts that are per-model rate-limited for the specific upstream model
+		// being requested. Other models on this account remain schedulable.
+		if accountPoolModelRateLimited(account.ModelRateLimits, accountUpstreamModelName, now) {
+			continue
+		}
 		candidates = append(candidates, accountPoolAccountCandidate{
 			account:           account,
 			upstreamModelName: accountUpstreamModelName,

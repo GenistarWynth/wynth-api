@@ -144,7 +144,8 @@ func runAccountPoolRuntimeAttempts(
 				selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 				accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
 				if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
-					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c))
+					// Selection failed before we know the upstream model; pass "".
+					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c), "")
 					service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 				}
 				if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
@@ -169,7 +170,11 @@ func runAccountPoolRuntimeAttempts(
 		if newAPIError == nil {
 			if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 {
 				now := common.GetTimestamp()
-				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, now)
+				upstreamModel := ""
+				if info != nil {
+					upstreamModel = info.UpstreamModelName
+				}
+				_ = service.RecordAccountPoolRuntimeAttemptSuccess(selectedAccountID, now, upstreamModel)
 				service.RememberSelectedAccountPoolRuntimeAffinity(c, now)
 				if service.GetSelectedAccountPoolRequestQuota(c) > 0 {
 					_ = service.IncrementAccountPoolAccountRequestQuota(selectedAccountID, now)
@@ -199,7 +204,11 @@ func runAccountPoolRuntimeAttempts(
 		poolModeRetryIndex = 0
 		poolModeLastAccountID = 0
 		if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
-			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c))
+			upstreamModel := ""
+			if info != nil {
+				upstreamModel = info.UpstreamModelName
+			}
+			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c), upstreamModel)
 			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 		}
 		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {

@@ -279,7 +279,7 @@ func TestClassifyAccountPoolFailureAnthropic(t *testing.T) {
 		h.Set("Anthropic-Ratelimit-Unified-5H-Reset", "1001000")
 		err := makeErrWithUpstream("rate limited", 429, h, nil)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 
 		require.Contains(t, got, "rate_limited_until")
 		assert.Equal(t, int64(1001000), got["rate_limited_until"])
@@ -291,7 +291,7 @@ func TestClassifyAccountPoolFailureAnthropic(t *testing.T) {
 		// Anthropic 429 without any reset header → no cooldown (spec says no fallback for Anthropic).
 		err := makeErr("too many requests", 429)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 
 		assert.NotContains(t, got, "rate_limited_until", "Anthropic 429 with no reset header must not set rate_limited_until")
 		assert.NotContains(t, got, "status")
@@ -305,7 +305,7 @@ func TestClassifyAccountPoolFailureAnthropic(t *testing.T) {
 		body := []byte(`{"error":{"message":"Your credit balance is too low"}}`)
 		err := makeErrWithUpstream("bad request", 400, nil, body)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 		assert.Equal(t, int64(0), got["rate_limited_until"])
@@ -316,7 +316,7 @@ func TestClassifyAccountPoolFailureAnthropic(t *testing.T) {
 	t.Run("anthropic 400 account is not active expires account", func(t *testing.T) {
 		err := makeErr("account is not active", 400)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 	})
@@ -324,7 +324,7 @@ func TestClassifyAccountPoolFailureAnthropic(t *testing.T) {
 	t.Run("anthropic 400 plain bad request does not expire", func(t *testing.T) {
 		err := makeErr("invalid request body", 400)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 
 		assert.NotContains(t, got, "status")
 	})
@@ -337,7 +337,7 @@ func TestClassifyAccountPoolFailureAnthropic(t *testing.T) {
 		h.Set("Anthropic-Ratelimit-Unified-7D-Reset", "1050000")
 		err := makeErrWithUpstream("rate limited", 429, h, nil)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 
 		assert.Equal(t, int64(1050000), got["rate_limited_until"])
 	})
@@ -358,7 +358,7 @@ func TestClassifyAccountPoolFailureOpenAIUnchanged(t *testing.T) {
 		// OpenAI 429 with no header should still use fallback (RateLimit429FallbackEnabled=true → 5s).
 		err := makeErr("too many requests", 429)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai", "")
 
 		assert.Contains(t, got, "rate_limited_until", "OpenAI 429 fallback must still set rate_limited_until")
 		assert.Equal(t, now+5, got["rate_limited_until"])
@@ -367,7 +367,7 @@ func TestClassifyAccountPoolFailureOpenAIUnchanged(t *testing.T) {
 	t.Run("openai 400 organization disabled expires", func(t *testing.T) {
 		err := makeErr("Your organization has been disabled", 400)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai", "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 	})
@@ -376,7 +376,7 @@ func TestClassifyAccountPoolFailureOpenAIUnchanged(t *testing.T) {
 		// "credit balance" is in the original OpenAI phrase list too.
 		err := makeErr("credit balance exceeded", 400)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai", "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 	})
@@ -384,7 +384,7 @@ func TestClassifyAccountPoolFailureOpenAIUnchanged(t *testing.T) {
 	t.Run("empty platform same as openai for 429 fallback", func(t *testing.T) {
 		err := makeErr("too many requests", 429)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "", "")
 
 		assert.Contains(t, got, "rate_limited_until")
 		assert.Equal(t, now+5, got["rate_limited_until"])

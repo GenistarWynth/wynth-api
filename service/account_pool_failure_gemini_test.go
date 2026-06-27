@@ -159,7 +159,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 		body := []byte(`{"error":{"code":429,"message":"Resource exhausted","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"10s"}]}}`)
 		err := makeErrWithUpstream("rate limited", 429, nil, body)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		require.Contains(t, got, "rate_limited_until")
 		assert.Equal(t, now+10, got["rate_limited_until"])
@@ -171,7 +171,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 		// No retryDelay, no daily quota phrasing → fallback (RateLimit429FallbackEnabled=true, seconds=5).
 		err := makeErr("too many requests", 429)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		require.Contains(t, got, "rate_limited_until", "Gemini 429 with no parseable reset must use fallback")
 		assert.Equal(t, now+5, got["rate_limited_until"])
@@ -182,7 +182,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 		body := []byte(`{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}`)
 		err := makeErrWithUpstream("bad request", 400, nil, body)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 		assert.Equal(t, int64(0), got["rate_limited_until"])
@@ -194,7 +194,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 		body := []byte(`{"error":{"code":400,"message":"API_KEY_INVALID","status":"INVALID_ARGUMENT"}}`)
 		err := makeErrWithUpstream("bad request", 400, nil, body)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 	})
@@ -204,7 +204,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 		body := []byte(`{"error":{"code":400,"message":"PERMISSION_DENIED: API key does not have access","status":"PERMISSION_DENIED"}}`)
 		err := makeErrWithUpstream("bad request", 400, nil, body)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 	})
@@ -212,7 +212,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 	t.Run("gemini 400 API key expired expires account", func(t *testing.T) {
 		err := makeErr("API key expired", 400)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		assert.Equal(t, model.AccountPoolAccountStatusExpired, got["status"])
 	})
@@ -220,7 +220,7 @@ func TestClassifyAccountPoolFailureGemini(t *testing.T) {
 	t.Run("gemini 400 plain bad request does not expire", func(t *testing.T) {
 		err := makeErr("invalid request body", 400)
 
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini)
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, model.AccountPoolPlatformGemini, "")
 
 		assert.NotContains(t, got, "status")
 	})
@@ -241,28 +241,28 @@ func TestClassifyAccountPoolFailureGeminiPlatformIsolation(t *testing.T) {
 	// "API key not valid" must NOT expire an OpenAI account.
 	t.Run("openai 400 API key not valid does not expire", func(t *testing.T) {
 		err := makeErr("API key not valid", 400)
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai", "")
 		assert.NotContains(t, got, "status")
 	})
 
 	// "API key not valid" must NOT expire an Anthropic account.
 	t.Run("anthropic 400 API key not valid does not expire", func(t *testing.T) {
 		err := makeErr("API key not valid", 400)
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 		assert.NotContains(t, got, "status")
 	})
 
 	// OpenAI 429 fallback still works with Gemini parser in place.
 	t.Run("openai 429 fallback unchanged after gemini added", func(t *testing.T) {
 		err := makeErr("too many requests", 429)
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "openai", "")
 		assert.Equal(t, now+5, got["rate_limited_until"])
 	})
 
 	// Anthropic 429 with no header still does NOT apply fallback.
 	t.Run("anthropic 429 no header no fallback unchanged", func(t *testing.T) {
 		err := makeErr("too many requests", 429)
-		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic")
+		got := classifyAccountPoolFailure(baseAccount, err, false, now, "anthropic", "")
 		assert.NotContains(t, got, "rate_limited_until")
 	})
 }

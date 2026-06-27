@@ -40,6 +40,50 @@ func parseAccountPoolFailureState(raw string) (accountPoolFailureState, error) {
 	return s, nil
 }
 
+// parseAccountPoolModelRateLimits deserializes a JSON map of model→resetAt unix seconds
+// from the model_rate_limits TEXT column. Empty or whitespace-only input returns an empty
+// map and nil error. The map key is the upstream model name; value is the unix timestamp
+// after which the per-model block expires.
+func parseAccountPoolModelRateLimits(raw string) (map[string]int64, error) {
+	if strings.TrimSpace(raw) == "" {
+		return map[string]int64{}, nil
+	}
+	m := map[string]int64{}
+	if err := common.UnmarshalJsonStr(raw, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// marshalAccountPoolModelRateLimits serializes a model→resetAt map to a JSON string
+// suitable for storage in the model_rate_limits TEXT column. An empty or nil map is
+// stored as an empty string (not "{}") so the column is visually blank when unused.
+func marshalAccountPoolModelRateLimits(m map[string]int64) (string, error) {
+	if len(m) == 0 {
+		return "", nil
+	}
+	b, err := common.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// accountPoolModelRateLimited reports whether the given upstream model name is currently
+// rate-limited on an account. Returns true if and only if raw can be parsed, the model
+// key is present, and the stored resetAt timestamp is strictly greater than now.
+func accountPoolModelRateLimited(raw string, model string, now int64) bool {
+	if strings.TrimSpace(raw) == "" || model == "" {
+		return false
+	}
+	m, err := parseAccountPoolModelRateLimits(raw)
+	if err != nil {
+		return false
+	}
+	resetAt, ok := m[model]
+	return ok && resetAt > now
+}
+
 // accountPoolRuntimeOptions carries per-account-pool-account runtime
 // configuration that influences relay behavior (e.g. pool-mode retry logic).
 // It is serialized to the account_pool_accounts.runtime_options TEXT column.

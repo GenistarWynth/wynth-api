@@ -43,6 +43,11 @@ type accountPoolFailureSettings struct {
 
 	// Maximum number of escalation tier advances before the key is hard-disabled.
 	Escalation5xxHardCapCount int
+
+	// Cooldown duration (minutes) applied when a model-not-found error occurs for a specific
+	// model. Only that model is blocked on the account; the account remains schedulable for
+	// other models.
+	ModelNotFoundCooldownMinutes int
 }
 
 // accountPoolFailureConfig returns the default failure-handling configuration.
@@ -66,6 +71,7 @@ func accountPoolFailureConfig() accountPoolFailureSettings {
 		TransportTransientSeconds:     60,
 		Escalation5xxTiersSeconds:     []int{60, 300, 1800},
 		Escalation5xxHardCapCount:     6,
+		ModelNotFoundCooldownMinutes:  30,
 	}
 }
 

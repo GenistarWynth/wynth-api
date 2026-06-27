@@ -111,6 +111,7 @@ type AccountPoolAccount struct {
 	ExpiresAt                    int64  `json:"expires_at" gorm:"bigint;not null;default:0;index"`
 	AutoPauseOnExpired           bool   `json:"auto_pause_on_expired" gorm:"not null;default:false"`
 	FailureState                 string `json:"-" gorm:"type:text"`
+	ModelRateLimits              string `json:"-" gorm:"type:text"`
 	RuntimeOptions               string `json:"runtime_options" gorm:"type:text"`
 	RequestQuota                 int64  `json:"request_quota" gorm:"bigint;not null;default:0"`
 	RequestQuotaUsed             int64  `json:"request_quota_used" gorm:"bigint;not null;default:0"`
