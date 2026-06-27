@@ -1035,13 +1035,14 @@ func refreshAccountPoolBindingRoutingCache() {
 
 func normalizeAccountPoolPlatform(platform string) (string, error) {
 	platform = strings.TrimSpace(platform)
-	if platform == "" {
+	switch platform {
+	case "":
 		return model.AccountPoolPlatformOpenAI, nil
-	}
-	if platform != model.AccountPoolPlatformOpenAI {
+	case model.AccountPoolPlatformOpenAI, model.AccountPoolPlatformAnthropic:
+		return platform, nil
+	default:
 		return "", errors.New("unsupported account pool platform")
 	}
-	return platform, nil
 }
 
 func normalizeAccountPoolSchedulePolicy(policy string) (string, error) {
@@ -1106,7 +1107,7 @@ func resolveAccountPoolSchedulePolicy(policy string, fallback string) (string, e
 
 func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 	switch channel.Type {
-	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex:
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex, constant.ChannelTypeAnthropic:
 		return nil
 	default:
 		return errors.New("account pool runtime only supports OpenAI-compatible channels in this phase")

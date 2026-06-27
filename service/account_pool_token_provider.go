@@ -20,17 +20,20 @@ type AccountPoolRuntimeCredentialRequest struct {
 	Credential        AccountPoolCredentialConfig
 	TokenState        AccountPoolTokenState
 	ProxyURL          string
+	Platform          string
 	Now               int64
 	SkipFailureRecord bool
 }
 
 type accountPoolOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
+type accountPoolClaudeOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
 type accountPoolTokenStateUpdateFunc func(accountID int, oldTokenState string, newTokenState string) (int64, error)
 
 var (
-	accountPoolOAuthRefreshGroup singleflight.Group
-	accountPoolOAuthRefresh      accountPoolOAuthRefreshFunc     = RefreshCodexOAuthTokenWithProxy
-	accountPoolTokenStateUpdate  accountPoolTokenStateUpdateFunc = updateAccountPoolRuntimeTokenState
+	accountPoolOAuthRefreshGroup  singleflight.Group
+	accountPoolOAuthRefresh       accountPoolOAuthRefreshFunc       = RefreshCodexOAuthTokenWithProxy
+	accountPoolClaudeOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshClaudeOAuthTokenWithProxy
+	accountPoolTokenStateUpdate   accountPoolTokenStateUpdateFunc   = updateAccountPoolRuntimeTokenState
 )
 
 func ResolveAccountPoolRuntimeCredential(ctx context.Context, req AccountPoolRuntimeCredentialRequest) (string, error) {
@@ -60,7 +63,7 @@ func ResolveAccountPoolRuntimeCredential(ctx context.Context, req AccountPoolRun
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return refreshAccountPoolRuntimeOAuthToken(ctx, req.AccountID, req.ProxyURL, now, req.SkipFailureRecord)
+	return refreshAccountPoolRuntimeOAuthToken(ctx, req.AccountID, req.ProxyURL, req.Platform, now, req.SkipFailureRecord)
 }
 
 func accountPoolAccessTokenUsable(state AccountPoolTokenState, now int64) bool {
@@ -87,11 +90,11 @@ func accountPoolRuntimeRefreshToken(credential AccountPoolCredentialConfig, stat
 	return strings.TrimSpace(credential.RefreshToken)
 }
 
-func refreshAccountPoolRuntimeOAuthToken(ctx context.Context, accountID int, proxyURL string, now int64, skipFailureRecord bool) (string, error) {
+func refreshAccountPoolRuntimeOAuthToken(ctx context.Context, accountID int, proxyURL string, platform string, now int64, skipFailureRecord bool) (string, error) {
 	value, err, _ := accountPoolOAuthRefreshGroup.Do(accountPoolOAuthRefreshSingleflightKey(accountID, skipFailureRecord), func() (any, error) {
 		// The first waiter owns the refresh context. If that request is cancelled,
 		// coalesced waiters receive the same cancellation and can retry another account.
-		return refreshAccountPoolRuntimeOAuthTokenOnce(ctx, accountID, proxyURL, now, skipFailureRecord)
+		return refreshAccountPoolRuntimeOAuthTokenOnce(ctx, accountID, proxyURL, platform, now, skipFailureRecord)
 	})
 	if err != nil {
 		return "", err
@@ -111,7 +114,7 @@ func accountPoolOAuthRefreshSingleflightKey(accountID int, skipFailureRecord boo
 	return key + ":record_failure"
 }
 
-func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int, proxyURL string, now int64, skipFailureRecord bool) (string, error) {
+func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int, proxyURL string, platform string, now int64, skipFailureRecord bool) (string, error) {
 	account, credential, state, rawTokenState, err := loadAccountPoolRuntimeTokenState(accountID)
 	if err != nil {
 		return "", err
@@ -126,7 +129,14 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	if refreshToken == "" {
 		return "", errors.New("account pool oauth refresh_token is required")
 	}
-	result, err := accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
+
+	// Dispatch to the platform-specific refresh function.
+	var result *CodexOAuthTokenResult
+	if platform == model.AccountPoolPlatformAnthropic {
+		result, err = accountPoolClaudeOAuthRefresh(ctx, refreshToken, proxyURL)
+	} else {
+		result, err = accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
+	}
 	if err != nil {
 		if !skipFailureRecord {
 			_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)

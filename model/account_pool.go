@@ -9,7 +9,8 @@ import (
 )
 
 const (
-	AccountPoolPlatformOpenAI = "openai"
+	AccountPoolPlatformOpenAI    = "openai"
+	AccountPoolPlatformAnthropic = "anthropic"
 
 	AccountPoolStatusEnabled  = "enabled"
 	AccountPoolStatusDisabled = "disabled"

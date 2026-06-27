@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
 	"github.com/gin-gonic/gin"
@@ -69,6 +70,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		Credential:        selection.Credential,
 		TokenState:        selection.TokenState,
 		ProxyURL:          selection.ProxyURL,
+		Platform:          selection.Platform,
 		SkipFailureRecord: info.IsChannelTest,
 	})
 	if err != nil {
@@ -95,6 +97,10 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 func accountPoolRuntimeAccountIdentifier(selection AccountPoolSelectionResult, runtimeCredential string) string {
 	if accountID := strings.TrimSpace(selection.AccountIdentifier); accountID != "" {
 		return accountID
+	}
+	// Only attempt JWT extraction for OpenAI/Codex — other platforms don't embed chatgpt_account_id.
+	if selection.Platform != "" && selection.Platform != model.AccountPoolPlatformOpenAI {
+		return ""
 	}
 	accountID, ok := ExtractCodexAccountIDFromJWT(runtimeCredential)
 	if !ok {
