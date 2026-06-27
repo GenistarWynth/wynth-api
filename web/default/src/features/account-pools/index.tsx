@@ -121,7 +121,6 @@ import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { getChannels } from '@/features/channels/api'
 import {
-  CHANNEL_TYPE_CODEX,
   CHANNEL_TYPES,
   CHANNEL_STATUS_CONFIG,
   CHANNEL_STATUS_LABELS,
@@ -154,17 +153,20 @@ import {
 } from './api'
 import {
   accountToFormValues,
+  allowedChannelTypesForPlatform,
   buildAccountPayload,
   buildAccountImportPayload,
   buildAccountPoolProxyOptions,
   buildBoundChannelPayload,
   buildPoolPayload,
   buildProxyPayload,
+  defaultChannelTypeForPlatform,
   emptyAccountForm,
   emptyAccountImportForm,
   emptyPoolForm,
   emptyProxyForm,
   normalizeAccountPoolSchedulePolicy,
+  platformSupportsOAuthCredential,
   poolToFormValues,
   proxyToFormValues,
   type AccountPoolAccountFormValues,
@@ -210,13 +212,10 @@ const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
 const EMPTY_BINDINGS: AccountPoolBinding[] = []
 const EMPTY_PROXIES: AccountPoolProxy[] = []
 const EMPTY_CHANNELS: Channel[] = []
-const POOL_PLATFORM_OPTIONS = [{ value: 'openai', label: 'OpenAI' }]
-const ACCOUNT_POOL_BOUND_CHANNEL_TYPE_OPTIONS = [
-  { value: '1', label: CHANNEL_TYPES[1] },
-  {
-    value: String(CHANNEL_TYPE_CODEX),
-    label: CHANNEL_TYPES[CHANNEL_TYPE_CODEX],
-  },
+const POOL_PLATFORM_OPTIONS = [
+  { value: 'openai', label: 'OpenAI / Codex' },
+  { value: 'anthropic', label: 'Anthropic (Claude)' },
+  { value: 'gemini', label: 'Google Gemini' },
 ]
 const STATUS_OPTIONS = [
   { value: 'enabled', label: 'Enabled' },
@@ -1885,8 +1884,18 @@ function BoundChannelDialog(props: {
   onSubmit: (values: AccountPoolBoundChannelFormValues) => void
 }) {
   const { t } = useTranslation()
+  const platform = props.pool?.platform ?? 'openai'
+  const defaultChannelType = String(defaultChannelTypeForPlatform(platform))
+  const channelTypeOptions = useMemo(
+    () =>
+      allowedChannelTypesForPlatform(platform).map((type) => ({
+        value: String(type),
+        label: CHANNEL_TYPES[type as keyof typeof CHANNEL_TYPES] ?? String(type),
+      })),
+    [platform]
+  )
   const [name, setName] = useState('')
-  const [channelType, setChannelType] = useState('1')
+  const [channelType, setChannelType] = useState(defaultChannelType)
   const [fixedModelsText, setFixedModelsText] = useState('')
   const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect(
     props.open
@@ -1895,10 +1904,10 @@ function BoundChannelDialog(props: {
   useEffect(() => {
     if (props.open) {
       setName(props.pool ? `${props.pool.name} Channel` : '')
-      setChannelType('1')
+      setChannelType(defaultChannelType)
       setFixedModelsText('')
     }
-  }, [props.open, props.pool])
+  }, [props.open, props.pool, defaultChannelType])
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -1914,7 +1923,9 @@ function BoundChannelDialog(props: {
     }
     props.onSubmit({
       name: trimmedName,
-      type: Number.parseInt(channelType, 10) || 1,
+      type:
+        Number.parseInt(channelType, 10) ||
+        defaultChannelTypeForPlatform(platform),
       fixed_models_text: modelListToText(fixedModels),
     })
   }
@@ -1950,14 +1961,16 @@ function BoundChannelDialog(props: {
           >
             <Select
               value={channelType}
-              onValueChange={(value) => setChannelType(value ?? '1')}
+              onValueChange={(value) =>
+                setChannelType(value ?? defaultChannelType)
+              }
             >
               <SelectTrigger id='account-pool-bound-channel-type'>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  {ACCOUNT_POOL_BOUND_CHANNEL_TYPE_OPTIONS.map((option) => (
+                  {channelTypeOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {t(option.label)}
                     </SelectItem>
@@ -3649,12 +3662,15 @@ function AccountFormSheet(props: {
     () => translateOptions(ACCOUNT_STATUS_OPTIONS, t),
     [t]
   )
+  const oauthSupported = platformSupportsOAuthCredential(
+    props.pool?.platform ?? 'openai'
+  )
   const credentialTypeOptions = useMemo(
     () => [
       { value: 'api_key', label: t('API Key') },
-      { value: 'oauth', label: t('OAuth') },
+      ...(oauthSupported ? [{ value: 'oauth', label: t('OAuth') }] : []),
     ],
-    [t]
+    [t, oauthSupported]
   )
   const proxyOptions = useMemo(
     () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
@@ -3666,11 +3682,16 @@ function AccountFormSheet(props: {
 
   useEffect(() => {
     if (props.open) {
-      setForm(
-        props.account ? accountToFormValues(props.account) : emptyAccountForm()
-      )
+      const next = props.account
+        ? accountToFormValues(props.account)
+        : emptyAccountForm()
+      // Gemini pools do not support OAuth credentials yet; fall back to api_key.
+      if (!oauthSupported && next.credential_type === 'oauth') {
+        next.credential_type = 'api_key'
+      }
+      setForm(next)
     }
-  }, [props.account, props.open])
+  }, [props.account, props.open, oauthSupported])
 
   const setField = <K extends keyof AccountPoolAccountFormValues>(
     key: K,

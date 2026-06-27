@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  allowedChannelTypesForPlatform,
   buildAccountPayload,
   buildAccountImportPayload,
   buildAccountPoolProxyOptions,
   buildBoundChannelPayload,
   buildPoolPayload,
   buildProxyPayload,
+  defaultChannelTypeForPlatform,
   emptyAccountForm,
   emptyAccountImportForm,
   emptyPoolForm,
@@ -15,6 +17,7 @@ import {
   normalizeAccountPoolSchedulePolicy,
   normalizeOptionalAccountPoolSchedulePolicy,
   normalizeModelListText,
+  platformSupportsOAuthCredential,
 } from './account-pool-form'
 
 describe('account pool form helpers', () => {
@@ -202,6 +205,29 @@ describe('account pool form helpers', () => {
         fixed_models: ['gpt-5', 'gpt-5-codex'],
       }
     )
+  })
+
+  test('maps pool platform to the channel types the backend accepts', () => {
+    // Mirrors the backend binding validation: openai pool -> OpenAI(1)/Codex(57),
+    // anthropic -> Anthropic(14), gemini -> Gemini(24).
+    assert.deepEqual(allowedChannelTypesForPlatform('openai'), [1, 57])
+    assert.deepEqual(allowedChannelTypesForPlatform('anthropic'), [14])
+    assert.deepEqual(allowedChannelTypesForPlatform('gemini'), [24])
+    // Unknown/legacy platforms fall back to the OpenAI family.
+    assert.deepEqual(allowedChannelTypesForPlatform('unknown'), [1, 57])
+  })
+
+  test('derives the default bound-channel type from the pool platform', () => {
+    assert.equal(defaultChannelTypeForPlatform('openai'), 1)
+    assert.equal(defaultChannelTypeForPlatform('anthropic'), 14)
+    assert.equal(defaultChannelTypeForPlatform('gemini'), 24)
+  })
+
+  test('gates oauth credential support to platforms with oauth support', () => {
+    assert.equal(platformSupportsOAuthCredential('openai'), true)
+    assert.equal(platformSupportsOAuthCredential('anthropic'), true)
+    // Gemini OAuth is not supported yet, so only api_key is allowed.
+    assert.equal(platformSupportsOAuthCredential('gemini'), false)
   })
 
   test('masks local secret previews', () => {

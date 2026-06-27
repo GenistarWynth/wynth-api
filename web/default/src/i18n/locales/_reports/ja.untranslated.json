@@ -1,7 +1,10 @@
 {
+  "Anthropic (Claude)": "Anthropic (Claude)",
   "Auto Pause On Expired": "Auto Pause On Expired",
   "Expires At (unix seconds, 0 = never)": "Expires At (unix seconds, 0 = never)",
+  "Google Gemini": "Google Gemini",
   "Max Per-User Concurrency": "Max Per-User Concurrency",
+  "OpenAI / Codex": "OpenAI / Codex",
   "Request Quota (0 = unlimited)": "Request Quota (0 = unlimited)",
   "Request Quota Window (seconds, 0 = lifetime)": "Request Quota Window (seconds, 0 = lifetime)",
   "Stop scheduling this account once it has expired": "Stop scheduling this account once it has expired"

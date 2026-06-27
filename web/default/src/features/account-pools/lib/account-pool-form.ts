@@ -37,6 +37,44 @@ import type {
 const MODEL_MAPPING_ERROR =
   'Model mapping must be a JSON object with string values'
 
+// Channel type numbers (mirror web/default/src/features/channels/constants.ts).
+const CHANNEL_TYPE_OPENAI = 1
+const CHANNEL_TYPE_ANTHROPIC = 14
+const CHANNEL_TYPE_GEMINI = 24
+const CHANNEL_TYPE_CODEX_VALUE = 57
+
+// Allowed bound-channel types per pool platform. The backend validates that a
+// binding's channel type matches the pool platform, so the UI mirrors that map
+// to filter the selector and surface the rule before submitting.
+export function allowedChannelTypesForPlatform(
+  platform: AccountPoolPlatform | string
+): number[] {
+  switch (platform) {
+    case 'anthropic':
+      return [CHANNEL_TYPE_ANTHROPIC]
+    case 'gemini':
+      return [CHANNEL_TYPE_GEMINI]
+    case 'openai':
+    default:
+      return [CHANNEL_TYPE_OPENAI, CHANNEL_TYPE_CODEX_VALUE]
+  }
+}
+
+// Default channel type for a new bound channel, derived from the pool platform.
+export function defaultChannelTypeForPlatform(
+  platform: AccountPoolPlatform | string
+): number {
+  return allowedChannelTypesForPlatform(platform)[0]
+}
+
+// Whether the OAuth credential type is supported for the given pool platform.
+// Gemini OAuth is not supported yet, so gemini pools only allow api_key.
+export function platformSupportsOAuthCredential(
+  platform: AccountPoolPlatform | string
+): boolean {
+  return platform !== 'gemini'
+}
+
 export function normalizeAccountPoolSchedulePolicy(
   value: string
 ): AccountPoolSchedulePolicy {
