@@ -364,6 +364,97 @@ func TestAccountPoolTokenProviderReturnsLatestTokenWhenOptimisticWriteLoses(t *t
 	assert.Equal(t, "access-winner", reloadedState.AccessToken)
 }
 
+// TestAccountPoolTokenProviderGeminiOAuthRejectsWithUnsupportedError verifies
+// that a gemini-platform account with OAuth credentials (no api_key, has a
+// refresh_token) returns an error mentioning the platform is not supported,
+// and neither the codex refresh seam nor the claude refresh seam is invoked.
+func TestAccountPoolTokenProviderGeminiOAuthRejectsWithUnsupportedError(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "gemini-oauth",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "gemini-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{
+			ExpiresAt: 900,
+			Version:   1,
+		},
+	})
+
+	var codexCalls int
+	setAccountPoolOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		codexCalls++
+		return nil, errors.New("codex refresh must not be called for gemini")
+	})
+
+	var claudeCalls int
+	oldClaude := accountPoolClaudeOAuthRefresh
+	accountPoolClaudeOAuthRefresh = func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		claudeCalls++
+		return nil, errors.New("claude refresh must not be called for gemini")
+	}
+	t.Cleanup(func() { accountPoolClaudeOAuthRefresh = oldClaude })
+
+	token, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID: account.Id,
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "gemini-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{
+			ExpiresAt: 900,
+			Version:   1,
+		},
+		Platform: model.AccountPoolPlatformGemini,
+		Now:      1000,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gemini")
+	assert.Empty(t, token)
+	assert.Equal(t, 0, codexCalls, "codex refresh seam must NOT be called for gemini OAuth")
+	assert.Equal(t, 0, claudeCalls, "claude refresh seam must NOT be called for gemini OAuth")
+}
+
+// TestAccountPoolTokenProviderGeminiAPIKeyResolvesDirectly verifies that a
+// gemini-platform account with an API key resolves immediately without any
+// OAuth dispatch.
+func TestAccountPoolTokenProviderGeminiAPIKeyResolvesDirectly(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+
+	var codexCalls int
+	setAccountPoolOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		codexCalls++
+		return nil, errors.New("codex refresh must not be called for gemini api-key account")
+	})
+
+	var claudeCalls int
+	oldClaude := accountPoolClaudeOAuthRefresh
+	accountPoolClaudeOAuthRefresh = func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		claudeCalls++
+		return nil, errors.New("claude refresh must not be called for gemini api-key account")
+	}
+	t.Cleanup(func() { accountPoolClaudeOAuthRefresh = oldClaude })
+
+	token, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID: 1,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "AIza-gemini-key",
+		},
+		Platform: model.AccountPoolPlatformGemini,
+		Now:      1000,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "AIza-gemini-key", token)
+	assert.Equal(t, 0, codexCalls, "codex refresh seam must NOT be called")
+	assert.Equal(t, 0, claudeCalls, "claude refresh seam must NOT be called")
+}
+
 func setAccountPoolOAuthRefreshForTest(t *testing.T, refresh accountPoolOAuthRefreshFunc) {
 	t.Helper()
 	oldRefresh := accountPoolOAuthRefresh

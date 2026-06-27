@@ -132,10 +132,13 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 
 	// Dispatch to the platform-specific refresh function.
 	var result *CodexOAuthTokenResult
-	if platform == model.AccountPoolPlatformAnthropic {
+	switch platform {
+	case model.AccountPoolPlatformAnthropic:
 		result, err = accountPoolClaudeOAuthRefresh(ctx, refreshToken, proxyURL)
-	} else {
+	case model.AccountPoolPlatformOpenAI, "":
 		result, err = accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
+	default:
+		return "", fmt.Errorf("account pool oauth refresh is not supported for platform %q", platform)
 	}
 	if err != nil {
 		if !skipFailureRecord {
