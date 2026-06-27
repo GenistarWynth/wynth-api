@@ -56,6 +56,26 @@ func TestParseGemini429ResetAt(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			// Machine-readable metric name 'generate_content_requests_per_day' → daily path.
+			name:   "daily quota machine-readable generate_content_requests_per_day",
+			body:   []byte(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded for quota metric 'generate_content_requests_per_day'"}}`),
+			wantOK: true,
+		},
+		{
+			// Underscore form 'requests_per_day' without surrounding words → daily path.
+			name:   "daily quota underscore form requests_per_day",
+			body:   []byte(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota limit 'requests_per_day' exceeded"}}`),
+			wantOK: true,
+		},
+		{
+			// Generic non-daily RESOURCE_EXHAUSTED: "Resource has been exhausted (e.g. check quota)"
+			// must NOT route to PST-midnight — it has no day/per-day wording.
+			name:        "non-daily resource exhausted generic message uses fallback not daily",
+			body:        []byte(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Resource has been exhausted (e.g. check quota)"}}`),
+			wantResetAt: 0,
+			wantOK:      false,
+		},
+		{
 			// RESOURCE_EXHAUSTED with no delay/daily → (0, false).
 			name:        "resource exhausted no delay no daily",
 			body:        []byte(`{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED","details":[]}}`),
@@ -90,7 +110,11 @@ func TestParseGemini429ResetAt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			resetAt, ok := parseGemini429ResetAt(tc.body, now)
 			assert.Equal(t, tc.wantOK, ok)
-			if tc.name == "daily quota message requests per day" || tc.name == "daily quota message per day" {
+			isDailyCase := tc.name == "daily quota message requests per day" ||
+				tc.name == "daily quota message per day" ||
+				tc.name == "daily quota machine-readable generate_content_requests_per_day" ||
+				tc.name == "daily quota underscore form requests_per_day"
+			if isDailyCase {
 				// Daily quota: only assert the reset is in the future and within 25h.
 				if ok {
 					assert.Greater(t, resetAt, now, "daily reset must be > now")

@@ -338,7 +338,9 @@ func parseAnthropic429ResetAt(header http.Header, now int64) (resetAt int64, ok 
 var geminiRetryInMsgRe = regexp.MustCompile(`(?i)retry\s+in\s+([0-9]+(?:\.[0-9]+)?)s`)
 
 // geminiDailyQuotaRe matches messages that indicate a daily quota cap.
-var geminiDailyQuotaRe = regexp.MustCompile(`(?i)(per\s*day|perday|requests\s+per\s+day|(quota\b.*\bday\b|\bday\b.*\bquota\b))`)
+// It covers both human-readable forms ("per day", "requests per day") and
+// machine-readable metric names that use underscores ("per_day", "requests_per_day").
+var geminiDailyQuotaRe = regexp.MustCompile(`(?i)(per[_\s]*day|requests[_\s]+per[_\s]+day|(quota\b.*\bday\b|\bday\b.*\bquota\b))`)
 
 // nextGeminiDailyResetUnix returns the next 00:00 America/Los_Angeles (Pacific time) after now
 // expressed as a Unix timestamp in seconds. If the timezone cannot be loaded, falls back to now+24h.
