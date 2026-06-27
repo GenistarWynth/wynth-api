@@ -573,12 +573,12 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 		PoolID:            poolID,
 		Name:              req.Name,
 		AccountIdentifier: req.AccountIdentifier,
+		OAuthType:         req.Credential.OAuthType,
 		Credential: service.AccountPoolCredentialConfig{
 			Type:         req.Credential.Type,
 			APIKey:       req.Credential.APIKey,
 			Email:        req.Credential.Email,
 			RefreshToken: req.Credential.RefreshToken,
-			OAuthType:    req.Credential.OAuthType,
 		},
 		TokenState: service.AccountPoolTokenState{
 			AccessToken:  req.TokenState.AccessToken,
@@ -740,6 +740,7 @@ func accountPoolAccountResponse(account service.AccountPoolAccountView) dto.Acco
 		PoolID:                    account.PoolID,
 		Name:                      account.Name,
 		AccountIdentifier:         account.AccountIdentifier,
+		OAuthType:                 account.OAuthType,
 		Status:                    account.Status,
 		Priority:                  account.Priority,
 		Weight:                    account.Weight,

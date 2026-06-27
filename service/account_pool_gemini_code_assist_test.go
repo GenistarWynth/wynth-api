@@ -29,10 +29,10 @@ func TestApplyAccountPoolRuntimeSelection_CodeAssistProjectDetectedAndCached(t *
 	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
 
 	accountView := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
-		Name: "code-assist-no-project",
+		Name:      "code-assist-no-project",
+		OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
 		Credential: AccountPoolCredentialConfig{
-			Type:      AccountPoolCredentialTypeOAuth,
-			OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
+			Type: AccountPoolCredentialTypeOAuth,
 		},
 		TokenState: AccountPoolTokenState{
 			AccessToken: "ya29.code-assist-token",
@@ -107,10 +107,10 @@ func TestApplyAccountPoolRuntimeSelection_CodeAssistDetectionFailureReturnsError
 	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
 
 	createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
-		Name: "code-assist-detect-fail",
+		Name:      "code-assist-detect-fail",
+		OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
 		Credential: AccountPoolCredentialConfig{
-			Type:      AccountPoolCredentialTypeOAuth,
-			OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
+			Type: AccountPoolCredentialTypeOAuth,
 		},
 		TokenState: AccountPoolTokenState{
 			AccessToken: "ya29.fail-token",
@@ -153,10 +153,10 @@ func TestApplyAccountPoolRuntimeSelection_CodeAssistDetectionFailureLeavesOAuthT
 	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
 
 	createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
-		Name: "code-assist-detect-fail-oauthtype",
+		Name:      "code-assist-detect-fail-oauthtype",
+		OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
 		Credential: AccountPoolCredentialConfig{
-			Type:      AccountPoolCredentialTypeOAuth,
-			OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
+			Type: AccountPoolCredentialTypeOAuth,
 		},
 		TokenState: AccountPoolTokenState{
 			AccessToken: "ya29.fail-oauthtype-token",

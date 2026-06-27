@@ -77,6 +77,7 @@ type AccountPoolAccount struct {
 	PoolID                       int    `json:"pool_id" gorm:"not null;index:idx_account_pool_status,priority:1"`
 	Name                         string `json:"name" gorm:"type:varchar(191);not null;index"`
 	AccountIdentifier            string `json:"account_identifier" gorm:"type:varchar(191);index"`
+	OAuthType                    string `json:"oauth_type" gorm:"column:oauth_type;type:varchar(32);not null;default:''"`
 	CredentialConfig             string `json:"-" gorm:"type:text"`
 	TokenState                   string `json:"-" gorm:"type:text"`
 	Status                       string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index:idx_account_pool_status,priority:2"`

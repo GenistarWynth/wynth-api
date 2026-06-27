@@ -110,7 +110,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	// on detection failure the field is left at its reset ("") value.
 	if selection.Platform == model.AccountPoolPlatformGemini &&
 		accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState) &&
-		strings.EqualFold(strings.TrimSpace(selection.Credential.OAuthType), AccountPoolGeminiOAuthTypeCodeAssist) {
+		strings.EqualFold(strings.TrimSpace(selection.OAuthType), AccountPoolGeminiOAuthTypeCodeAssist) {
 
 		projectID := strings.TrimSpace(selection.TokenState.ProjectID)
 		if projectID == "" {

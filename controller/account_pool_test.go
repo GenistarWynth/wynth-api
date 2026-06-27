@@ -45,6 +45,8 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 	oldTranslateMessage := common.TranslateMessage
 	oldCryptoSecret := common.CryptoSecret
 	oldCryptoSecretStable := common.CryptoSecretStable
+	oldUsingSQLite := common.UsingSQLite
+	common.UsingSQLite = true
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -68,6 +70,7 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 		common.TranslateMessage = oldTranslateMessage
 		common.CryptoSecret = oldCryptoSecret
 		common.CryptoSecretStable = oldCryptoSecretStable
+		common.UsingSQLite = oldUsingSQLite
 	})
 
 	require.NoError(t, db.AutoMigrate(
@@ -80,6 +83,9 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 		&model.User{},
 		&model.Log{},
 	))
+	// Mirror the production SQLite migration path: GORM AutoMigrate does not reliably
+	// add the not-null oauth_type column on SQLite, so run the ensure-columns helper.
+	require.NoError(t, model.EnsureAccountPoolAccountColumnsSQLite())
 	require.NoError(t, db.Create(&model.User{
 		Id:       1,
 		Username: "admin",
@@ -258,14 +264,14 @@ func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {
 		},
 	})
 	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
+	// oauth_type must be exposed in the (non-secret) account view/response.
+	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, accountResult.Response.Data.OAuthType)
 
-	// oauth_type from the create API must persist into the encrypted credential so
-	// the runtime can route the account through Code Assist.
+	// oauth_type from the create API must persist into the plaintext column so the
+	// runtime can route the account through Code Assist without decrypting secrets.
 	var stored model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&stored, accountResult.Response.Data.Id).Error)
-	cred, err := service.DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
-	require.NoError(t, err)
-	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, cred.OAuthType)
+	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, stored.OAuthType)
 }
 
 func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {

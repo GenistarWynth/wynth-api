@@ -426,11 +426,11 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 			APIKey: apiKey,
 		}
 	case refreshToken != "" || accessToken != "" || email != "":
+		candidate.Params.OAuthType = oauthType
 		candidate.Params.Credential = AccountPoolCredentialConfig{
 			Type:         AccountPoolCredentialTypeOAuth,
 			Email:        email,
 			RefreshToken: refreshToken,
-			OAuthType:    oauthType,
 		}
 		candidate.Params.TokenState = AccountPoolTokenState{
 			AccessToken:  accessToken,

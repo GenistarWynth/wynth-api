@@ -22,11 +22,6 @@ type AccountPoolCredentialConfig struct {
 	APIKey       string `json:"api_key"`
 	Email        string `json:"email"`
 	RefreshToken string `json:"refresh_token"`
-	// OAuthType narrows the OAuth flow within a given platform.
-	// For Gemini, "code_assist" selects the Code Assist endpoint (cloudcode-pa.googleapis.com);
-	// "ai_studio" selects standard AI Studio OAuth.
-	// Omitempty keeps legacy encrypted blobs backward-compatible (decrypt → empty string).
-	OAuthType string `json:"oauth_type,omitempty"`
 }
 
 type AccountPoolTokenState struct {
@@ -149,4 +144,10 @@ func MaskAccountPoolSecretValue(value string) string {
 
 func accountPoolTokenStateHasSecret(state AccountPoolTokenState) bool {
 	return strings.TrimSpace(state.AccessToken) != "" || strings.TrimSpace(state.RefreshToken) != ""
+}
+
+// NormalizeAccountPoolOAuthType trims and lowercases the plaintext oauth_type value.
+// An empty/whitespace value normalizes to "" (no OAuth sub-type selected).
+func NormalizeAccountPoolOAuthType(oauthType string) string {
+	return strings.ToLower(strings.TrimSpace(oauthType))
 }

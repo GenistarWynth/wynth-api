@@ -33,6 +33,7 @@ type AccountPoolSelectionResult struct {
 	AccountName       string
 	AccountIdentifier string
 	Platform          string
+	OAuthType         string
 	MaxConcurrency    int
 	AccountRetryTimes int
 	UpstreamModelName string
@@ -210,6 +211,7 @@ func buildAccountPoolSelectionResult(
 		AccountName:       selected.account.Name,
 		AccountIdentifier: selected.account.AccountIdentifier,
 		Platform:          ctx.pool.Platform,
+		OAuthType:         selected.account.OAuthType,
 		MaxConcurrency:    selected.account.MaxConcurrency,
 		AccountRetryTimes: ctx.binding.AccountRetryTimes,
 		UpstreamModelName: selected.upstreamModelName,

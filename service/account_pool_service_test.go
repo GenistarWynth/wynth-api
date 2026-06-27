@@ -1633,12 +1633,77 @@ func TestUpdateAccountAlreadyEnabledDoesNotClearEscalationState(t *testing.T) {
 	assert.Equal(t, int64(99999), reloaded.OverloadUntil, "overload_until must NOT be zeroed for already-enabled account")
 }
 
+// TestAccountPoolServiceCreateAndViewExposeOAuthType verifies that oauth_type is stored
+// in the plaintext column on create and surfaced (non-secret) through the account view.
+func TestAccountPoolServiceCreateAndViewExposeOAuthType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+
+	view, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:    pool.Id,
+		Name:      "code-assist-account",
+		OAuthType: "  Code_Assist  ", // normalized: trimmed + lowercased
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "ca-refresh",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, view.OAuthType, "view must expose normalized oauth_type")
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, view.Id).Error)
+	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, stored.OAuthType, "column must hold normalized oauth_type")
+}
+
+// TestAccountPoolServiceUpdateOAuthTypeIndependentOfSecret verifies that an admin can
+// change oauth_type WITHOUT re-entering the credential secret: the oauth_type column is
+// updated while the encrypted credential blob stays byte-identical (masked-secret edit
+// semantics preserved).
+func TestAccountPoolServiceUpdateOAuthTypeIndependentOfSecret(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+
+	created, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:    pool.Id,
+		Name:      "oauth-account",
+		OAuthType: AccountPoolGeminiOAuthTypeAIStudio,
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "do-not-rotate",
+		},
+	})
+	require.NoError(t, err)
+
+	var before model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&before, created.Id).Error)
+	require.Equal(t, AccountPoolGeminiOAuthTypeAIStudio, before.OAuthType)
+	require.NotEmpty(t, before.CredentialConfig)
+
+	// Update WITHOUT supplying any credential secret (masked edit): only oauth_type changes.
+	updated, err := svc.UpdateAccount(pool.Id, created.Id, AccountPoolAccountCreateParams{
+		Name:      "oauth-account",
+		OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, updated.OAuthType)
+
+	var after model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&after, created.Id).Error)
+	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, after.OAuthType, "oauth_type column must change without re-entering the secret")
+	assert.Equal(t, before.CredentialConfig, after.CredentialConfig, "encrypted credential blob must be byte-identical (secret untouched)")
+}
+
 func setupAccountPoolServiceTestDB(t *testing.T) {
 	t.Helper()
 
 	oldDB := model.DB
 	oldSecret := common.CryptoSecret
 	oldStable := common.CryptoSecretStable
+	oldUsingSQLite := common.UsingSQLite
+	common.UsingSQLite = true
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -1658,11 +1723,15 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 		&model.AccountPoolProxy{},
 		&model.AccountPoolChannelBinding{},
 	))
+	// Mirror the production SQLite migration path: GORM AutoMigrate does not reliably
+	// add the not-null oauth_type column on SQLite, so run the ensure-columns helper.
+	require.NoError(t, model.EnsureAccountPoolAccountColumnsSQLite())
 
 	t.Cleanup(func() {
 		model.DB = oldDB
 		common.CryptoSecret = oldSecret
 		common.CryptoSecretStable = oldStable
+		common.UsingSQLite = oldUsingSQLite
 	})
 }
 

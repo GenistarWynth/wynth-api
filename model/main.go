@@ -508,6 +508,7 @@ func ensureAccountPoolAccountColumnsSQLite() error {
 		existing[c.Name] = struct{}{}
 	}
 	required := []sqliteColumnDef{
+		{Name: "oauth_type", DDL: "`oauth_type` varchar(32) NOT NULL DEFAULT ''"},
 		{Name: "overload_until", DDL: "`overload_until` bigint NOT NULL DEFAULT 0"},
 		{Name: "failure_state", DDL: "`failure_state` text"},
 		{Name: "model_rate_limits", DDL: "`model_rate_limits` text"},
@@ -528,6 +529,14 @@ func ensureAccountPoolAccountColumnsSQLite() error {
 		}
 	}
 	return nil
+}
+
+// EnsureAccountPoolAccountColumnsSQLite is an exported wrapper around the SQLite
+// column-ensure migration for account_pool_accounts. It exists so that test setups in
+// other packages can mirror the production migration path (AutoMigrate then ensure
+// columns) on SQLite, where GORM AutoMigrate does not reliably add not-null columns.
+func EnsureAccountPoolAccountColumnsSQLite() error {
+	return ensureAccountPoolAccountColumnsSQLite()
 }
 
 // ensureAccountPoolBindingColumnsSQLite idempotently adds columns introduced in newer

@@ -69,6 +69,7 @@ type AccountPoolAccountCreateParams struct {
 	PoolID                    int
 	Name                      string
 	AccountIdentifier         string
+	OAuthType                 string
 	Credential                AccountPoolCredentialConfig
 	TokenState                AccountPoolTokenState
 	Status                    string
@@ -128,6 +129,7 @@ type AccountPoolAccountView struct {
 	PoolID                       int               `json:"pool_id"`
 	Name                         string            `json:"name"`
 	AccountIdentifier            string            `json:"account_identifier"`
+	OAuthType                    string            `json:"oauth_type"`
 	Status                       string            `json:"status"`
 	Priority                     int64             `json:"priority"`
 	Weight                       uint              `json:"weight"`
@@ -380,6 +382,7 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 		PoolID:                    params.PoolID,
 		Name:                      name,
 		AccountIdentifier:         params.AccountIdentifier,
+		OAuthType:                 NormalizeAccountPoolOAuthType(params.OAuthType),
 		CredentialConfig:          credentialConfig,
 		TokenState:                tokenState,
 		Status:                    params.Status,
@@ -440,6 +443,7 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 	updates := map[string]any{
 		"name":                         name,
 		"account_identifier":           strings.TrimSpace(params.AccountIdentifier),
+		"oauth_type":                   NormalizeAccountPoolOAuthType(params.OAuthType),
 		"status":                       status,
 		"priority":                     params.Priority,
 		"weight":                       params.Weight,
@@ -1414,6 +1418,7 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		LastCapabilityCheckStatus:    account.LastCapabilityCheckStatus,
 		LastCapabilityCheckError:     account.LastCapabilityCheckError,
 		LastCapabilityCheckModels:    lastCapabilityCheckModels,
+		OAuthType:                    account.OAuthType,
 		HasCredential:                strings.TrimSpace(account.CredentialConfig) != "",
 		HasToken:                     strings.TrimSpace(account.TokenState) != "",
 		RequestQuota:                 account.RequestQuota,

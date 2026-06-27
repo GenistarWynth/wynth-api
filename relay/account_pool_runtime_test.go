@@ -983,6 +983,8 @@ func setupAccountPoolRelayTestDB(t *testing.T) {
 	oldDB := model.DB
 	oldSecret := common.CryptoSecret
 	oldStable := common.CryptoSecretStable
+	oldUsingSQLite := common.UsingSQLite
+	common.UsingSQLite = true
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -1002,11 +1004,15 @@ func setupAccountPoolRelayTestDB(t *testing.T) {
 		&model.AccountPoolProxy{},
 		&model.AccountPoolChannelBinding{},
 	))
+	// Mirror the production SQLite migration path: GORM AutoMigrate does not reliably
+	// add the not-null oauth_type column on SQLite, so run the ensure-columns helper.
+	require.NoError(t, model.EnsureAccountPoolAccountColumnsSQLite())
 
 	t.Cleanup(func() {
 		model.DB = oldDB
 		common.CryptoSecret = oldSecret
 		common.CryptoSecretStable = oldStable
+		common.UsingSQLite = oldUsingSQLite
 	})
 }
 

@@ -83,6 +83,7 @@ type AccountPoolAccountResponse struct {
 	PoolID                    int               `json:"pool_id"`
 	Name                      string            `json:"name"`
 	AccountIdentifier         string            `json:"account_identifier"`
+	OAuthType                 string            `json:"oauth_type"`
 	Status                    string            `json:"status"`
 	Priority                  int64             `json:"priority"`
 	Weight                    uint              `json:"weight"`

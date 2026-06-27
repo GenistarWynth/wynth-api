@@ -39,6 +39,37 @@ func TestAccountPoolAutoMigrateSQLite(t *testing.T) {
 	assert.True(t, DB.Migrator().HasIndex(&AccountPoolAccount{}, "idx_account_pool_status"))
 }
 
+// TestAccountPoolAccountOAuthTypeColumnSQLite verifies the production SQLite migration
+// contract for the plaintext oauth_type column: AutoMigrate followed by the
+// ensure-columns helper must leave the column present and writable/readable, so the
+// runtime and account view can route/display oauth_type without decrypting secrets.
+func TestAccountPoolAccountOAuthTypeColumnSQLite(t *testing.T) {
+	setupAccountPoolTestDB(t)
+
+	oldUsingSQLite := common.UsingSQLite
+	common.UsingSQLite = true
+	t.Cleanup(func() { common.UsingSQLite = oldUsingSQLite })
+
+	require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolAccount{}, &AccountPoolProxy{}, &AccountPoolChannelBinding{}))
+	require.NoError(t, EnsureAccountPoolAccountColumnsSQLite())
+
+	require.True(t, DB.Migrator().HasColumn(&AccountPoolAccount{}, "oauth_type"), "oauth_type column must exist after migration")
+
+	pool := AccountPool{Name: "pool-a", Platform: AccountPoolPlatformGemini}
+	require.NoError(t, DB.Create(&pool).Error)
+	account := AccountPoolAccount{PoolID: pool.Id, Name: "ca", OAuthType: "code_assist"}
+	require.NoError(t, DB.Create(&account).Error)
+
+	var reloaded AccountPoolAccount
+	require.NoError(t, DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, "code_assist", reloaded.OAuthType)
+
+	// oauth_type must be independently updatable (drives the no-secret admin edit path).
+	require.NoError(t, DB.Model(&AccountPoolAccount{Id: account.Id}).Update("oauth_type", "ai_studio").Error)
+	require.NoError(t, DB.First(&reloaded, account.Id).Error)
+	assert.Equal(t, "ai_studio", reloaded.OAuthType)
+}
+
 func TestAccountPoolModelDefaults(t *testing.T) {
 	setupAccountPoolTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolAccount{}, &AccountPoolProxy{}, &AccountPoolChannelBinding{}))
