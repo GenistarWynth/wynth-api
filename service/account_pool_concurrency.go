@@ -35,6 +35,22 @@ func newAccountPoolRuntimeSelectionRecencyManager() *accountPoolRuntimeSelection
 }
 
 func tryAcquireAccountPoolRuntimeLease(accountID int, maxConcurrency int) (accountPoolRuntimeReleaseFunc, bool) {
+	if accountID <= 0 {
+		return nil, false
+	}
+	if maxConcurrency <= 0 {
+		return func() {}, true
+	}
+	if accountPoolRedisOn() {
+		release, ok, err := accountPoolRedisAcquireLease(accountPoolLeaseKey(accountID), maxConcurrency)
+		if err == nil {
+			if !ok {
+				return nil, false
+			}
+			return release, true
+		}
+		// Redis error: fall back to per-instance in-memory leasing.
+	}
 	return accountPoolRuntimeLeases.tryAcquire(accountID, maxConcurrency)
 }
 

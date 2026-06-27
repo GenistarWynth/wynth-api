@@ -196,14 +196,43 @@ func accountPoolRuntimeAffinityDigest(value string) string {
 }
 
 func rememberAccountPoolRuntimeAffinity(key string, bindingID int, accountID int, now int64) {
+	if key == "" || bindingID <= 0 || accountID <= 0 {
+		return
+	}
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
+	if accountPoolRedisOn() {
+		if err := accountPoolRedisAffinityRemember(key, bindingID, accountID, now); err == nil {
+			return
+		}
+		// Redis error: fall back to the in-memory pin for this instance.
+	}
 	accountPoolRuntimeAffinities.remember(key, bindingID, accountID, now)
 }
 
 func lookupAccountPoolRuntimeAffinity(key string, bindingID int, now int64) (int, bool) {
+	if key == "" || bindingID <= 0 {
+		return 0, false
+	}
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
+	if accountPoolRedisOn() {
+		accountID, ok, err := accountPoolRedisAffinityLookup(key, bindingID, now)
+		if err == nil {
+			return accountID, ok
+		}
+		// Redis error: fall back to the in-memory view for this instance.
+	}
 	return accountPoolRuntimeAffinities.lookup(key, bindingID, now)
 }
 
 func forgetAccountPoolRuntimeAffinity(key string) {
+	if accountPoolRedisOn() {
+		accountPoolRedisAffinityForget(key)
+	}
+	// Always clear the in-memory entry too; harmless when Redis is authoritative.
 	accountPoolRuntimeAffinities.forget(key)
 }
 

@@ -43,6 +43,16 @@ func tryAcquireAccountPoolUserSlot(bindingID int, userID int, maxConcurrency int
 	if userID <= 0 || bindingID <= 0 {
 		return func() {}, true
 	}
+	if accountPoolRedisOn() {
+		release, ok, err := accountPoolRedisAcquireLease(accountPoolUserConcurrencyRedisKey(bindingID, userID), maxConcurrency)
+		if err == nil {
+			if !ok {
+				return nil, false
+			}
+			return release, true
+		}
+		// Redis error: fall back to per-instance in-memory leasing.
+	}
 	return accountPoolUserConcurrency.tryAcquire(bindingID, userID, maxConcurrency)
 }
 

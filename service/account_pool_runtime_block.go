@@ -33,6 +33,12 @@ func blockAccountPoolRuntime(accountID int, until int64) {
 	if accountID <= 0 || until <= 0 {
 		return
 	}
+	if accountPoolRedisOn() {
+		if err := accountPoolRedisBlockSet(accountID, until); err == nil {
+			return
+		}
+		// Redis error: fall back to the in-memory block for this instance.
+	}
 	accountPoolRuntimeBlocks.mu.Lock()
 	defer accountPoolRuntimeBlocks.mu.Unlock()
 	if existing, ok := accountPoolRuntimeBlocks.blocks[accountID]; !ok || until > existing {
@@ -45,6 +51,13 @@ func blockAccountPoolRuntime(accountID int, until int64) {
 func accountPoolRuntimeBlocked(accountID int, now int64) bool {
 	if accountID <= 0 {
 		return false
+	}
+	if accountPoolRedisOn() {
+		blocked, err := accountPoolRedisBlocked(accountID, now)
+		if err == nil {
+			return blocked
+		}
+		// Redis error: fall back to the in-memory view for this instance.
 	}
 	accountPoolRuntimeBlocks.mu.Lock()
 	defer accountPoolRuntimeBlocks.mu.Unlock()
@@ -65,6 +78,10 @@ func clearAccountPoolRuntimeBlock(accountID int) {
 	if accountID <= 0 {
 		return
 	}
+	if accountPoolRedisOn() {
+		accountPoolRedisBlockClear(accountID)
+	}
+	// Always clear the in-memory entry too; harmless when Redis is authoritative.
 	accountPoolRuntimeBlocks.mu.Lock()
 	defer accountPoolRuntimeBlocks.mu.Unlock()
 	delete(accountPoolRuntimeBlocks.blocks, accountID)
