@@ -251,7 +251,7 @@ func TestRefreshClaudeOAuthTokenWithProxyPostsCorrectRequest(t *testing.T) {
 func TestRefreshClaudeOAuthTokenRejectsNonSuccessStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+		_, _ = w.Write([]byte(`<html>Unauthorized</html>`)) // non-JSON body
 	}))
 	defer srv.Close()
 

@@ -1110,7 +1110,7 @@ func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex, constant.ChannelTypeAnthropic:
 		return nil
 	default:
-		return errors.New("account pool runtime only supports OpenAI-compatible channels in this phase")
+		return errors.New("account pool runtime only supports OpenAI-compatible or Anthropic channels in this phase")
 	}
 }
 

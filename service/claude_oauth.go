@@ -59,6 +59,10 @@ func refreshClaudeOAuthToken(
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("claude oauth refresh failed: status=%d", resp.StatusCode)
+	}
+
 	var payload struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
@@ -67,9 +71,6 @@ func refreshClaudeOAuthToken(
 
 	if err := common.DecodeJson(resp.Body, &payload); err != nil {
 		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("claude oauth refresh failed: status=%d", resp.StatusCode)
 	}
 
 	if strings.TrimSpace(payload.AccessToken) == "" || strings.TrimSpace(payload.RefreshToken) == "" || payload.ExpiresIn <= 0 {
