@@ -465,6 +465,48 @@ func TestAccountPoolTokenProviderGeminiAPIKeyResolvesDirectly(t *testing.T) {
 	assert.Equal(t, 0, claudeCalls, "claude refresh seam must NOT be called")
 }
 
+// TestAccountPoolTokenProviderXAIAPIKeyResolvesDirectly verifies that an xai-platform
+// account with an api_key credential resolves the key immediately without any OAuth
+// dispatch (no call to the xai, codex, claude, or gemini refresh seams).
+func TestAccountPoolTokenProviderXAIAPIKeyResolvesDirectly(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+
+	var xaiCalls, codexCalls, claudeCalls int
+
+	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		xaiCalls++
+		return nil, errors.New("xai oauth refresh must NOT be called for api-key account")
+	})
+
+	setAccountPoolOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		codexCalls++
+		return nil, errors.New("codex refresh must NOT be called for xai api-key account")
+	})
+
+	oldClaude := accountPoolClaudeOAuthRefresh
+	accountPoolClaudeOAuthRefresh = func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		claudeCalls++
+		return nil, errors.New("claude refresh must NOT be called for xai api-key account")
+	}
+	t.Cleanup(func() { accountPoolClaudeOAuthRefresh = oldClaude })
+
+	token, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID: 1,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "xai-sk-direct-key",
+		},
+		Platform: model.AccountPoolPlatformXAI,
+		Now:      1000,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "xai-sk-direct-key", token, "api_key credential must be returned directly")
+	assert.Equal(t, 0, xaiCalls, "xai oauth seam must NOT be called for api-key account")
+	assert.Equal(t, 0, codexCalls, "codex refresh seam must NOT be called for xai api-key account")
+	assert.Equal(t, 0, claudeCalls, "claude refresh seam must NOT be called for xai api-key account")
+}
+
 func setAccountPoolOAuthRefreshForTest(t *testing.T, refresh accountPoolOAuthRefreshFunc) {
 	t.Helper()
 	oldRefresh := accountPoolOAuthRefresh

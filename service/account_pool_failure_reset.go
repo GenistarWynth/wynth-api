@@ -12,6 +12,31 @@ import (
 	"github.com/QuantumNous/new-api/common"
 )
 
+// accountPoolParseRetryAfterHeader parses the standard Retry-After response header
+// and returns an absolute unix-seconds timestamp at which the rate limit resets.
+// Retry-After is either an integer (seconds) or an HTTP-date (RFC 7231).
+// Returns (0, false) if the header is absent, malformed, zero, or in the past.
+func accountPoolParseRetryAfterHeader(header http.Header, now int64) (int64, bool) {
+	raw := strings.TrimSpace(header.Get("Retry-After"))
+	if raw == "" {
+		return 0, false
+	}
+	// Try integer seconds first.
+	if secs, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if secs > 0 {
+			return now + secs, true
+		}
+		return 0, false
+	}
+	// Try HTTP-date (RFC 7231).
+	if t, err := http.ParseTime(raw); err == nil {
+		if unix := t.Unix(); unix > now {
+			return unix, true
+		}
+	}
+	return 0, false
+}
+
 // accountPool429ErrorBody is a minimal local struct for parsing the OpenAI error body shape.
 // resets_at may be a JSON number or string, so json.RawMessage is used.
 type accountPool429ErrorBody struct {
@@ -123,49 +148,56 @@ func parseAccountPool429ResetAt(header http.Header, body []byte, now int64) (res
 	}
 
 	// Step 2 — OpenAI error body.
-	if len(body) == 0 {
-		return 0, false
-	}
+	// Failure paths fall through to Step 3 rather than returning early, so that
+	// the standard Retry-After header can still be honoured when the body is absent
+	// or does not carry recognised reset information.
+	if len(body) > 0 {
+		var parsed accountPool429ErrorBody
+		if err := common.UnmarshalJsonStr(string(body), &parsed); err == nil {
+			errType := parsed.Error.Type
+			if errType == "usage_limit_reached" || errType == "rate_limit_exceeded" {
+				// Try resets_at (number or string).
+				if len(parsed.Error.ResetsAt) > 0 {
+					raw := parsed.Error.ResetsAt
+					// Try as number first.
+					var asNum json.Number
+					if err := common.Unmarshal(raw, &asNum); err == nil {
+						if v, err := asNum.Int64(); err == nil && v > 0 {
+							return v, true
+						}
+						// Could be a float representation like "1777283883.0"
+						if v, err := asNum.Float64(); err == nil && v > 0 {
+							return int64(v), true
+						}
+					}
+					// Try as string.
+					var asStr string
+					if err := common.Unmarshal(raw, &asStr); err == nil {
+						if v, err := strconv.ParseInt(asStr, 10, 64); err == nil && v > 0 {
+							return v, true
+						}
+						if v, err := strconv.ParseFloat(asStr, 64); err == nil && v > 0 {
+							return int64(v), true
+						}
+					}
+				}
 
-	var parsed accountPool429ErrorBody
-	if err := common.UnmarshalJsonStr(string(body), &parsed); err != nil {
-		return 0, false
-	}
-
-	errType := parsed.Error.Type
-	if errType != "usage_limit_reached" && errType != "rate_limit_exceeded" {
-		return 0, false
-	}
-
-	// Try resets_at (number or string).
-	if len(parsed.Error.ResetsAt) > 0 {
-		raw := parsed.Error.ResetsAt
-		// Try as number first.
-		var asNum json.Number
-		if err := common.Unmarshal(raw, &asNum); err == nil {
-			if v, err := asNum.Int64(); err == nil && v > 0 {
-				return v, true
+				// Try resets_in_seconds.
+				if parsed.Error.ResetsInSeconds > 0 {
+					return now + int64(parsed.Error.ResetsInSeconds), true
+				}
 			}
-			// Could be a float representation like "1777283883.0"
-			if v, err := asNum.Float64(); err == nil && v > 0 {
-				return int64(v), true
-			}
+			// errType not recognised or no resets found → fall through to Step 3.
 		}
-		// Try as string.
-		var asStr string
-		if err := common.Unmarshal(raw, &asStr); err == nil {
-			if v, err := strconv.ParseInt(asStr, 10, 64); err == nil && v > 0 {
-				return v, true
-			}
-			if v, err := strconv.ParseFloat(asStr, 64); err == nil && v > 0 {
-				return int64(v), true
-			}
-		}
+		// Unmarshal error → fall through to Step 3.
 	}
+	// Empty body → fall through to Step 3.
 
-	// Try resets_in_seconds.
-	if parsed.Error.ResetsInSeconds > 0 {
-		return now + int64(parsed.Error.ResetsInSeconds), true
+	// Step 3 — generic Retry-After header (RFC 7231: integer seconds or HTTP-date).
+	// This covers providers on the default platform path (e.g. X.AI/Grok) that do
+	// not use Codex headers or the OpenAI error body format.
+	if v, ok := accountPoolParseRetryAfterHeader(header, now); ok {
+		return v, true
 	}
 
 	return 0, false

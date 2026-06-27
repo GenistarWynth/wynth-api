@@ -2,12 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,17 +28,18 @@ func overrideXAIOAuthTokenURLForTest(t *testing.T, serverURL string) {
 func TestRefreshXAIOAuthTokenSuccess(t *testing.T) {
 	var gotForm map[string][]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.NoError(t, r.ParseForm())
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.NoError(t, r.ParseForm())
 		gotForm = map[string][]string(r.Form)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		b, _ := common.Marshal(map[string]any{
 			"access_token":  "xai-access-new",
 			"refresh_token": "xai-refresh-new",
 			"expires_in":    3600,
 		})
+		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 	overrideXAIOAuthTokenURLForTest(t, srv.URL)
@@ -68,10 +69,11 @@ func TestRefreshXAIOAuthTokenDefaultsExpiry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		b, _ := common.Marshal(map[string]any{
 			"access_token":  "xai-access",
 			"refresh_token": "xai-refresh",
 		})
+		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 	overrideXAIOAuthTokenURLForTest(t, srv.URL)
@@ -91,10 +93,11 @@ func TestRefreshXAIOAuthTokenPreservesRefreshTokenWhenOmitted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		b, _ := common.Marshal(map[string]any{
 			"access_token": "xai-access-only",
 			"expires_in":   3600,
 		})
+		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 	overrideXAIOAuthTokenURLForTest(t, srv.URL)
@@ -129,10 +132,11 @@ func TestRefreshXAIOAuthTokenMissingAccessToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		b, _ := common.Marshal(map[string]any{
 			"access_token": "",
 			"expires_in":   3600,
 		})
+		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
 	overrideXAIOAuthTokenURLForTest(t, srv.URL)
