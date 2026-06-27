@@ -59,6 +59,69 @@ func TestRefreshGeminiOAuthTokenSuccess(t *testing.T) {
 		"ExpiresAt should not be far in the future")
 }
 
+// TestRefreshGeminiOAuthTokenForTypeSelectsClient verifies that the OAuth client_id
+// sent in the refresh form is selected by oauth_type: antigravity uses the public
+// antigravity client, while code_assist / ai_studio / google_one / empty use the
+// Gemini CLI client. This is the load-bearing per-type contract for slice 6a.
+func TestRefreshGeminiOAuthTokenForTypeSelectsClient(t *testing.T) {
+	tests := []struct {
+		name           string
+		oauthType      string
+		wantClientID   string
+		wantClientSecr string
+	}{
+		{
+			name:           "antigravity selects the antigravity client",
+			oauthType:      AccountPoolGeminiOAuthTypeAntigravity,
+			wantClientID:   geminiAntigravityDefaultClientID,
+			wantClientSecr: geminiAntigravityDefaultClientSecret,
+		},
+		{
+			name:           "code_assist selects the gemini-cli client",
+			oauthType:      AccountPoolGeminiOAuthTypeCodeAssist,
+			wantClientID:   geminiOAuthDefaultClientID,
+			wantClientSecr: geminiOAuthDefaultClientSecret,
+		},
+		{
+			name:           "google_one selects the gemini-cli client",
+			oauthType:      AccountPoolGeminiOAuthTypeGoogleOne,
+			wantClientID:   geminiOAuthDefaultClientID,
+			wantClientSecr: geminiOAuthDefaultClientSecret,
+		},
+		{
+			name:           "empty oauth_type selects the gemini-cli client",
+			oauthType:      "",
+			wantClientID:   geminiOAuthDefaultClientID,
+			wantClientSecr: geminiOAuthDefaultClientSecret,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotClientID, gotClientSecret string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, r.ParseForm())
+				gotClientID = r.FormValue("client_id")
+				gotClientSecret = r.FormValue("client_secret")
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"access_token": "ya29.new-access-token",
+					"expires_in":   3600,
+				})
+			}))
+			defer srv.Close()
+			overrideGeminiOAuthTokenURLForTest(t, srv.URL)
+
+			result, err := RefreshGeminiOAuthTokenForType(context.Background(), tc.oauthType, "my-refresh-token", "")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.wantClientID, gotClientID, "client_id must be selected by oauth_type")
+			assert.Equal(t, tc.wantClientSecr, gotClientSecret, "client_secret must be selected by oauth_type")
+		})
+	}
+}
+
 // TestRefreshGeminiOAuthTokenNon2xxReturnsError verifies that a non-2xx response
 // returns an error without attempting to decode the body.
 func TestRefreshGeminiOAuthTokenNon2xxReturnsError(t *testing.T) {

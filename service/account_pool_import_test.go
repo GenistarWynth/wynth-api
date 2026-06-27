@@ -244,6 +244,41 @@ func TestAccountPoolServiceImportSub2APIGeminiCodeAssistOAuthType(t *testing.T) 
 	assert.Equal(t, "projects/seed-123", ts.ProjectID, "project_id pre-seed must be imported to skip detection")
 }
 
+func TestAccountPoolServiceImportSub2APIGeminiAntigravityOAuthType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-antigravity",
+					"platform": "gemini",
+					"type": "oauth",
+					"credentials": {
+						"email": "ag@example.com",
+						"refresh_token": "ag-refresh",
+						"access_token": "ag-access",
+						"oauth_type": "antigravity"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	acct := requireAccountPoolAccountByName(t, "gemini-antigravity")
+	assert.Equal(t, AccountPoolGeminiOAuthTypeAntigravity, acct.OAuthType,
+		"oauth_type=antigravity must be imported into the plaintext column so antigravity routing activates")
+}
+
 func TestAccountPoolServiceImportSub2APIRejectsPlatformMismatch(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	svc := AccountPoolService{}

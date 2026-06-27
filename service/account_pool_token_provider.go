@@ -27,13 +27,18 @@ type AccountPoolRuntimeCredentialRequest struct {
 
 type accountPoolOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
 type accountPoolClaudeOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
+
+// accountPoolGeminiOAuthRefreshFunc carries the account's oauth_type so the Gemini
+// refresh can select the correct OAuth client (e.g. antigravity vs gemini-cli).
+type accountPoolGeminiOAuthRefreshFunc func(ctx context.Context, oauthType string, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error)
+
 type accountPoolTokenStateUpdateFunc func(accountID int, oldTokenState string, newTokenState string) (int64, error)
 
 var (
 	accountPoolOAuthRefreshGroup  singleflight.Group
 	accountPoolOAuthRefresh       accountPoolOAuthRefreshFunc       = RefreshCodexOAuthTokenWithProxy
 	accountPoolClaudeOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshClaudeOAuthTokenWithProxy
-	accountPoolGeminiOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshGeminiOAuthTokenWithProxy
+	accountPoolGeminiOAuthRefresh accountPoolGeminiOAuthRefreshFunc = RefreshGeminiOAuthTokenForType
 	accountPoolTokenStateUpdate   accountPoolTokenStateUpdateFunc   = updateAccountPoolRuntimeTokenState
 )
 
@@ -137,7 +142,7 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	case model.AccountPoolPlatformAnthropic:
 		result, err = accountPoolClaudeOAuthRefresh(ctx, refreshToken, proxyURL)
 	case model.AccountPoolPlatformGemini:
-		result, err = accountPoolGeminiOAuthRefresh(ctx, refreshToken, proxyURL)
+		result, err = accountPoolGeminiOAuthRefresh(ctx, account.OAuthType, refreshToken, proxyURL)
 	case model.AccountPoolPlatformOpenAI, "":
 		result, err = accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
 	default:

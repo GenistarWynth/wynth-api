@@ -155,7 +155,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	// Code Assist (cloudcode-pa) routing. Returns before the imagen/embedding/
 	// standard branches so those are bypassed for code_assist chat. The endpoint
 	// has no /models/{model} segment and no version segment.
-	if isGeminiCodeAssist(info) {
+	if isGeminiCloudCodePA(info) {
 		if info.IsStream {
 			info.DisablePing = true
 			return geminiCodeAssistBaseURL + "/v1internal:streamGenerateContent?alt=sse", nil
@@ -270,12 +270,12 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
-	if isGeminiCodeAssist(info) && requestBody != nil {
+	if isGeminiCloudCodePA(info) && requestBody != nil {
 		bodyBytes, err := io.ReadAll(requestBody)
 		if err != nil {
 			return nil, err
 		}
-		wrapped, err := wrapGeminiCodeAssistRequest(bodyBytes, info.RuntimeGeminiProjectID, info.UpstreamModelName)
+		wrapped, err := wrapGeminiCodeAssistRequest(bodyBytes, info.RuntimeGeminiProjectID, info.UpstreamModelName, isGeminiAntigravity(info))
 		if err != nil {
 			return nil, err
 		}
@@ -288,7 +288,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
-	if isGeminiCodeAssist(info) && resp != nil {
+	if isGeminiCloudCodePA(info) && resp != nil {
 		// Unwrap the cloudcode-pa envelope before the existing handler dispatch,
 		// so downstream handlers see a standard Gemini response.
 		if info.IsStream {

@@ -11,6 +11,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/google/uuid"
 )
 
 // geminiCodeAssistBaseURL is the Code Assist (cloudcode-pa) API base URL.
@@ -20,22 +21,60 @@ import (
 // adaptor does not need to reach into the service package for routing.
 var geminiCodeAssistBaseURL = "https://cloudcode-pa.googleapis.com"
 
-// isGeminiCodeAssist reports whether the runtime account uses the Google Code
-// Assist endpoint. Everything in this file is a strict no-op when this is false,
-// preserving the standard / API-key / AI-Studio Gemini path byte-for-byte.
-func isGeminiCodeAssist(info *relaycommon.RelayInfo) bool {
-	return info != nil && info.RuntimeGeminiOAuthType == service.AccountPoolGeminiOAuthTypeCodeAssist
+// isGeminiCloudCodePA reports whether the runtime account routes through the
+// cloudcode-pa (v1internal) endpoint. This is true for Code Assist (code_assist),
+// Antigravity (antigravity) and Google One (google_one) OAuth accounts — they all
+// share the same endpoint, project detection and {project,model,request} wrapper.
+// Everything in this file is a strict no-op when this is false, preserving the
+// standard / API-key / AI-Studio Gemini path byte-for-byte.
+func isGeminiCloudCodePA(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	switch info.RuntimeGeminiOAuthType {
+	case service.AccountPoolGeminiOAuthTypeCodeAssist,
+		service.AccountPoolGeminiOAuthTypeAntigravity,
+		service.AccountPoolGeminiOAuthTypeGoogleOne:
+		return true
+	default:
+		return false
+	}
 }
+
+// isGeminiAntigravity reports whether the runtime account is specifically an
+// Antigravity account. Antigravity is a cloudcode-pa variant whose request wrapper
+// carries the extra requestType / userAgent / requestId fields (V1InternalRequest).
+func isGeminiAntigravity(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.RuntimeGeminiOAuthType == service.AccountPoolGeminiOAuthTypeAntigravity
+}
+
+// antigravityRequestType is the default Antigravity requestType value. The upstream
+// classifies requests (agent / web_search / ...); for the account-pool relay path we
+// always emit the default "agent" classification.
+const antigravityRequestType = "agent"
+
+// antigravityUserAgent is the fixed userAgent value the official Antigravity client
+// places in the V1InternalRequest body (distinct from the HTTP User-Agent header).
+const antigravityUserAgent = "antigravity"
 
 // geminiCodeAssistRequest is the cloudcode-pa request wrapper. The standard
 // Gemini GenerateContentRequest JSON is nested verbatim under "request"; the
 // project id and upstream model name are top-level.
 //
-//	{"project":"<projectID>","model":"<upstreamModel>","request":<standard request>}
+// For code_assist / google_one only the minimal {project,model,request} fields are
+// emitted. For antigravity the requestType / userAgent / requestId fields are also
+// emitted (V1InternalRequest shape); they are omitempty so the minimal shape is
+// byte-identical to the pre-existing code_assist wrapper.
+//
+//	code_assist : {"project":...,"model":...,"request":...}
+//	antigravity : {"project":...,"requestId":...,"userAgent":...,"requestType":...,"model":...,"request":...}
 type geminiCodeAssistRequest struct {
-	Project string          `json:"project"`
-	Model   string          `json:"model"`
-	Request json.RawMessage `json:"request"`
+	Project     string          `json:"project"`
+	RequestID   string          `json:"requestId,omitempty"`
+	UserAgent   string          `json:"userAgent,omitempty"`
+	RequestType string          `json:"requestType,omitempty"`
+	Model       string          `json:"model"`
+	Request     json.RawMessage `json:"request"`
 }
 
 // geminiCodeAssistResponse is the cloudcode-pa response wrapper. The standard
@@ -51,11 +90,22 @@ type geminiCodeAssistResponse struct {
 // wrapGeminiCodeAssistRequest wraps a standard Gemini request body in the
 // cloudcode-pa envelope. requestBody is the marshaled standard request JSON; it
 // is embedded verbatim under "request". Returns the wrapped JSON bytes.
-func wrapGeminiCodeAssistRequest(requestBody []byte, projectID, model string) ([]byte, error) {
+//
+// When antigravity is true the wrapper additionally carries the Antigravity
+// V1InternalRequest fields: requestType ("agent"), userAgent ("antigravity") and a
+// freshly generated requestId ("agent-<uuid>"). When false the wrapper is the
+// minimal {project,model,request} shape, byte-identical to the original code_assist
+// envelope (the extra fields are omitempty).
+func wrapGeminiCodeAssistRequest(requestBody []byte, projectID, model string, antigravity bool) ([]byte, error) {
 	wrapped := geminiCodeAssistRequest{
 		Project: projectID,
 		Model:   model,
 		Request: json.RawMessage(requestBody),
+	}
+	if antigravity {
+		wrapped.RequestType = antigravityRequestType
+		wrapped.UserAgent = antigravityUserAgent
+		wrapped.RequestID = "agent-" + uuid.New().String()
 	}
 	return common.Marshal(wrapped)
 }

@@ -398,7 +398,7 @@ func TestAccountPoolTokenProviderGeminiOAuthDispatchesToGeminiSeam(t *testing.T)
 	}
 	t.Cleanup(func() { accountPoolClaudeOAuthRefresh = oldClaude })
 
-	setAccountPoolGeminiOAuthRefreshForTest(t, func(_ context.Context, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error) {
+	setAccountPoolGeminiOAuthRefreshForTest(t, func(_ context.Context, _ string, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error) {
 		geminiCalls++
 		assert.Equal(t, "gemini-refresh-token", refreshToken)
 		return &CodexOAuthTokenResult{
@@ -483,7 +483,7 @@ func setAccountPoolTokenStateUpdateForTest(t *testing.T, update accountPoolToken
 	})
 }
 
-func setAccountPoolGeminiOAuthRefreshForTest(t *testing.T, refresh accountPoolClaudeOAuthRefreshFunc) {
+func setAccountPoolGeminiOAuthRefreshForTest(t *testing.T, refresh accountPoolGeminiOAuthRefreshFunc) {
 	t.Helper()
 	old := accountPoolGeminiOAuthRefresh
 	accountPoolGeminiOAuthRefresh = refresh

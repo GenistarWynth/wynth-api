@@ -46,6 +46,19 @@ func codeAssistInfo() *relaycommon.RelayInfo {
 	}
 }
 
+func antigravityInfo() *relaycommon.RelayInfo {
+	return &relaycommon.RelayInfo{
+		RuntimeGeminiOAuth:     true,
+		RuntimeGeminiOAuthType: service.AccountPoolGeminiOAuthTypeAntigravity,
+		RuntimeGeminiProjectID: "projects/my-gcp-project",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "ya29.antigravity-token",
+			UpstreamModelName: "gemini-2.5-pro",
+			ChannelBaseUrl:    "https://generativelanguage.googleapis.com",
+		},
+	}
+}
+
 func standardGeminiInfo() *relaycommon.RelayInfo {
 	return &relaycommon.RelayInfo{
 		RuntimeGeminiOAuth: false,
@@ -62,7 +75,7 @@ func standardGeminiInfo() *relaycommon.RelayInfo {
 func TestWrapGeminiCodeAssistRequestShape(t *testing.T) {
 	standard := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"temperature":0}}`
 
-	wrapped, err := wrapGeminiCodeAssistRequest([]byte(standard), "projects/my-gcp-project", "gemini-2.5-pro")
+	wrapped, err := wrapGeminiCodeAssistRequest([]byte(standard), "projects/my-gcp-project", "gemini-2.5-pro", false)
 	require.NoError(t, err)
 
 	var got geminiCodeAssistRequest
@@ -72,6 +85,81 @@ func TestWrapGeminiCodeAssistRequestShape(t *testing.T) {
 	assert.Equal(t, "gemini-2.5-pro", got.Model, "model must be top-level")
 	assert.JSONEq(t, standard, string(got.Request),
 		"the original standard request must be nested verbatim under request")
+
+	// Zero-regression: code_assist wrapper must NOT carry antigravity-only fields.
+	assert.Empty(t, got.RequestType, "code_assist wrapper must not set requestType")
+	assert.Empty(t, got.UserAgent, "code_assist wrapper must not set userAgent")
+	assert.Empty(t, got.RequestID, "code_assist wrapper must not set requestId")
+	assert.NotContains(t, string(wrapped), "requestType",
+		"code_assist wrapper JSON must be the minimal shape (no requestType key)")
+}
+
+// TestWrapGeminiAntigravityRequestShape verifies the antigravity wrapper carries the
+// extra V1InternalRequest fields (requestType / userAgent / requestId) while still
+// nesting the standard request verbatim and keeping project/model top-level.
+func TestWrapGeminiAntigravityRequestShape(t *testing.T) {
+	standard := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"temperature":0}}`
+
+	wrapped, err := wrapGeminiCodeAssistRequest([]byte(standard), "projects/my-gcp-project", "gemini-2.5-pro", true)
+	require.NoError(t, err)
+
+	var got geminiCodeAssistRequest
+	require.NoError(t, common.Unmarshal(wrapped, &got))
+
+	assert.Equal(t, "projects/my-gcp-project", got.Project, "project must be top-level")
+	assert.Equal(t, "gemini-2.5-pro", got.Model, "model must be top-level")
+	assert.JSONEq(t, standard, string(got.Request),
+		"the original standard request must be nested verbatim under request")
+
+	assert.Equal(t, antigravityRequestType, got.RequestType, "antigravity wrapper must set requestType=agent")
+	assert.Equal(t, antigravityUserAgent, got.UserAgent, "antigravity wrapper must set userAgent=antigravity")
+	assert.True(t, strings.HasPrefix(got.RequestID, "agent-"),
+		"antigravity wrapper must set a requestId with the agent- prefix")
+	assert.Greater(t, len(got.RequestID), len("agent-"),
+		"requestId must contain a generated suffix after agent-")
+}
+
+// TestDoRequestWrapsBodyForAntigravity asserts the bytes on the wire for an
+// antigravity account route to /v1internal:generateContent and carry the
+// antigravity wrapper fields.
+func TestDoRequestWrapsBodyForAntigravity(t *testing.T) {
+	service.InitHttpClient()
+
+	standard := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`
+
+	var captured []byte
+	var capturedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path + "?" + r.URL.RawQuery
+		captured, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"response":{"candidates":[]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	withCodeAssistBaseURL(t, srv.URL)
+
+	c := newCodeAssistTestContext(t, http.MethodPost, standard)
+	info := antigravityInfo()
+	a := &Adaptor{}
+
+	resp, err := a.DoRequest(c, info, strings.NewReader(standard))
+	require.NoError(t, err)
+	httpResp, ok := resp.(*http.Response)
+	require.True(t, ok)
+	_ = httpResp.Body.Close()
+
+	assert.Equal(t, "/v1internal:generateContent?", capturedPath,
+		"antigravity non-stream must route to /v1internal:generateContent")
+
+	var wrapper geminiCodeAssistRequest
+	require.NoError(t, common.Unmarshal(captured, &wrapper),
+		"upstream body must be a cloudcode-pa wrapper")
+	assert.Equal(t, "projects/my-gcp-project", wrapper.Project)
+	assert.Equal(t, "gemini-2.5-pro", wrapper.Model)
+	assert.JSONEq(t, standard, string(wrapper.Request))
+	assert.Equal(t, antigravityRequestType, wrapper.RequestType)
+	assert.Equal(t, antigravityUserAgent, wrapper.UserAgent)
+	assert.True(t, strings.HasPrefix(wrapper.RequestID, "agent-"))
 }
 
 // TestDoRequestWrapsBodyForCodeAssist asserts the actual bytes that hit the wire
@@ -229,18 +317,36 @@ func TestUnwrapGeminiCodeAssistResponse(t *testing.T) {
 // guarded by the same predicate, so if it is correct the body is never touched
 // for standard accounts.
 func TestIsGeminiCodeAssistPredicate(t *testing.T) {
-	assert.False(t, isGeminiCodeAssist(nil),
+	assert.False(t, isGeminiCloudCodePA(nil),
 		"nil RelayInfo must be safe and return false")
-	assert.False(t, isGeminiCodeAssist(standardGeminiInfo()),
-		"standard (API-key) account must not be treated as code_assist")
-	assert.True(t, isGeminiCodeAssist(codeAssistInfo()),
-		"account with OAuthType=code_assist must be detected as code_assist")
+	assert.False(t, isGeminiCloudCodePA(standardGeminiInfo()),
+		"standard (API-key) account must not be treated as cloudcode-pa")
+	assert.True(t, isGeminiCloudCodePA(codeAssistInfo()),
+		"account with OAuthType=code_assist must route through cloudcode-pa")
 
-	// Partial state: OAuth but wrong type must not match.
+	// Antigravity and google_one also route through cloudcode-pa.
+	assert.True(t, isGeminiCloudCodePA(antigravityInfo()),
+		"account with OAuthType=antigravity must route through cloudcode-pa")
+	googleOne := codeAssistInfo()
+	googleOne.RuntimeGeminiOAuthType = service.AccountPoolGeminiOAuthTypeGoogleOne
+	assert.True(t, isGeminiCloudCodePA(googleOne),
+		"account with OAuthType=google_one must route through cloudcode-pa")
+
+	// ai_studio (standard endpoint) and API-key must NOT route through cloudcode-pa.
 	partial := codeAssistInfo()
 	partial.RuntimeGeminiOAuthType = "ai_studio"
-	assert.False(t, isGeminiCodeAssist(partial),
-		"OAuthType != code_assist must not be detected as code_assist")
+	assert.False(t, isGeminiCloudCodePA(partial),
+		"OAuthType=ai_studio must not route through cloudcode-pa")
+
+	// isGeminiAntigravity is the narrower predicate: only antigravity matches.
+	assert.True(t, isGeminiAntigravity(antigravityInfo()),
+		"antigravity account must match the antigravity predicate")
+	assert.False(t, isGeminiAntigravity(codeAssistInfo()),
+		"code_assist account must NOT match the antigravity predicate")
+	assert.False(t, isGeminiAntigravity(googleOne),
+		"google_one account must NOT match the antigravity predicate")
+	assert.False(t, isGeminiAntigravity(nil),
+		"nil RelayInfo must be safe for the antigravity predicate")
 }
 
 // --- Stream unwrap reader ---------------------------------------------------

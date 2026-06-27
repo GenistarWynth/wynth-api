@@ -15,6 +15,16 @@ const (
 	AccountPoolGeminiOAuthTypeCodeAssist = "code_assist"
 	// AccountPoolGeminiOAuthTypeAIStudio identifies standard Google AI Studio OAuth accounts.
 	AccountPoolGeminiOAuthTypeAIStudio = "ai_studio"
+	// AccountPoolGeminiOAuthTypeAntigravity identifies Google Antigravity OAuth accounts.
+	// Antigravity is a cloudcode-pa (v1internal) variant of Code Assist: it shares the
+	// same endpoint, project detection and {project,model,request} wrapper, but uses its
+	// own public OAuth client and adds requestType/userAgent/requestId fields to the wrapper.
+	AccountPoolGeminiOAuthTypeAntigravity = "antigravity"
+	// AccountPoolGeminiOAuthTypeGoogleOne identifies Google One AI OAuth accounts.
+	// Per the sub2api reference, google_one uses the SAME built-in Gemini CLI OAuth client
+	// as code_assist and routes through cloudcode-pa with project detection (no antigravity
+	// client, no extra wrapper fields) — it is treated as a code_assist routing variant.
+	AccountPoolGeminiOAuthTypeGoogleOne = "google_one"
 )
 
 type AccountPoolCredentialConfig struct {

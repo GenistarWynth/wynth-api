@@ -105,12 +105,16 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	} else {
 		info.RuntimeGeminiOAuth = false
 	}
-	// For Gemini Code Assist OAuth accounts, detect or reuse the GCP project id.
-	// RuntimeGeminiOAuthType is set ONLY after the project id is resolved so that
-	// on detection failure the field is left at its reset ("") value.
+	// For Gemini cloudcode-pa OAuth accounts (code_assist, antigravity, google_one),
+	// detect or reuse the GCP project id. These types share the same project-detection
+	// (loadCodeAssist/onboardUser) flow and the same cloudcode-pa project. The actual
+	// oauth_type is preserved so the relay adaptor can apply per-type request wrapping.
+	// RuntimeGeminiOAuthType is set ONLY after the project id is resolved so that on
+	// detection failure the field is left at its reset ("") value.
+	oauthType := accountPoolGeminiCloudCodePAOAuthType(selection.OAuthType)
 	if selection.Platform == model.AccountPoolPlatformGemini &&
 		accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState) &&
-		strings.EqualFold(strings.TrimSpace(selection.OAuthType), AccountPoolGeminiOAuthTypeCodeAssist) {
+		oauthType != "" {
 
 		projectID := strings.TrimSpace(selection.TokenState.ProjectID)
 		if projectID == "" {
@@ -127,7 +131,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 			_ = cacheAccountPoolGeminiProject(selection.AccountID, projectID)
 		}
 		// Detection and caching succeeded — now it is safe to mark the type.
-		info.RuntimeGeminiOAuthType = AccountPoolGeminiOAuthTypeCodeAssist
+		info.RuntimeGeminiOAuthType = oauthType
 		info.RuntimeGeminiProjectID = projectID
 	}
 	if request != nil {
@@ -136,6 +140,24 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	setAccountPoolRuntimeLeaseRelease(c, release)
 	releaseStored = true
 	return nil
+}
+
+// accountPoolGeminiCloudCodePAOAuthType returns the normalized oauth_type when it is
+// a cloudcode-pa (v1internal) routing type — code_assist, antigravity, or google_one —
+// and "" otherwise. All three require GCP project detection and route through
+// cloudcode-pa; antigravity additionally adds requestType/userAgent/requestId wrapper
+// fields downstream in the relay adaptor.
+func accountPoolGeminiCloudCodePAOAuthType(oauthType string) string {
+	switch strings.ToLower(strings.TrimSpace(oauthType)) {
+	case AccountPoolGeminiOAuthTypeCodeAssist:
+		return AccountPoolGeminiOAuthTypeCodeAssist
+	case AccountPoolGeminiOAuthTypeAntigravity:
+		return AccountPoolGeminiOAuthTypeAntigravity
+	case AccountPoolGeminiOAuthTypeGoogleOne:
+		return AccountPoolGeminiOAuthTypeGoogleOne
+	default:
+		return ""
+	}
 }
 
 func accountPoolRuntimeAccountIdentifier(selection AccountPoolSelectionResult, runtimeCredential string) string {

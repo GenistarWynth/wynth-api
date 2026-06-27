@@ -96,6 +96,60 @@ func TestApplyAccountPoolRuntimeSelection_CodeAssistProjectDetectedAndCached(t *
 	assert.Equal(t, 1, detectorCalls, "detector must NOT be called again when cache is present")
 }
 
+// TestApplyAccountPoolRuntimeSelection_AntigravityProjectDetectedAndTyped verifies that
+// an antigravity OAuth account goes through the SAME cloudcode-pa project detection as
+// code_assist, and that info.RuntimeGeminiOAuthType is set to "antigravity" (the actual
+// type), so the relay adaptor can apply antigravity-specific request wrapping.
+func TestApplyAccountPoolRuntimeSelection_AntigravityProjectDetectedAndTyped(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:      "antigravity-no-project",
+		OAuthType: AccountPoolGeminiOAuthTypeAntigravity,
+		Credential: AccountPoolCredentialConfig{
+			Type: AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "ya29.antigravity-token",
+			ExpiresAt:   9999999999,
+		},
+	})
+
+	const detectedProject = "projects/antigravity-project-456"
+	detectorCalls := 0
+	origDetector := accountPoolDetectGeminiCodeAssistProject
+	accountPoolDetectGeminiCodeAssistProject = func(_ context.Context, token, _ string) (string, error) {
+		detectorCalls++
+		assert.Equal(t, "ya29.antigravity-token", token, "detector must receive the runtime credential")
+		return detectedProject, nil
+	}
+	t.Cleanup(func() { accountPoolDetectGeminiCodeAssistProject = origDetector })
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-2.5-pro",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         channel.Id,
+			ApiKey:            "AIzaSy-channel-key",
+			UpstreamModelName: "gemini-2.5-pro",
+		},
+	}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, nil)
+	require.NoError(t, err)
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+
+	assert.Equal(t, AccountPoolGeminiOAuthTypeAntigravity, info.RuntimeGeminiOAuthType,
+		"RuntimeGeminiOAuthType must be 'antigravity' (the actual type), not 'code_assist'")
+	assert.Equal(t, detectedProject, info.RuntimeGeminiProjectID)
+	assert.True(t, info.RuntimeGeminiOAuth, "RuntimeGeminiOAuth must be true for OAuth account")
+	assert.Equal(t, 1, detectorCalls, "antigravity must reuse the code_assist detector exactly once")
+}
+
 // TestApplyAccountPoolRuntimeSelection_CodeAssistDetectionFailureReturnsError verifies
 // that when the detector returns an error, ApplyAccountPoolRuntimeSelection propagates
 // the error so the outer pool loop can sideline this account and retry another one.
