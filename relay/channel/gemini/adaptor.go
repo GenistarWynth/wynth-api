@@ -20,6 +20,10 @@ import (
 	"github.com/samber/lo"
 )
 
+// geminiOAuthUserAgent is the User-Agent sent when using OAuth Bearer auth,
+// mimicking the Gemini CLI to maximize endpoint compatibility.
+const geminiOAuthUserAgent = "GeminiCLI/0.1.5 (Windows; AMD64)"
+
 type Adaptor struct {
 }
 
@@ -172,7 +176,15 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	req.Set("x-goog-api-key", info.ApiKey)
+	if info.RuntimeGeminiOAuth {
+		// OAuth path: Bearer token with Gemini CLI User-Agent.
+		// Do NOT set x-goog-api-key — it is mutually exclusive with Bearer auth.
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+		req.Set("User-Agent", geminiOAuthUserAgent)
+	} else {
+		// API key path: unchanged from original behavior.
+		req.Set("x-goog-api-key", info.ApiKey)
+	}
 	return nil
 }
 
