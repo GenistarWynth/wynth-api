@@ -80,3 +80,31 @@ func TestAccountPoolRuntimeRealtimeNilRequestRetriesDialFailure(t *testing.T) {
 	require.NoError(t, model.DB.First(&reloadedFirst, first.Id).Error)
 	assert.NotEmpty(t, reloadedFirst.LastError, "dial-failed account records the failure")
 }
+
+// For a channel with no account-pool binding, WssHelper's loop must be a fully
+// transparent pass-through: exactly one attempt, the channel credential left
+// untouched, and no pooled account selected or recorded.
+func TestAccountPoolRuntimeRealtimeNonPooledChannelIsTransparentPassThrough(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/realtime")
+	channel := createAccountPoolRelayTestChannel(t) // no pool binding
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-realtime", "gpt-4o-realtime")
+
+	attempts := 0
+	sawNilRequest := true
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		return nil, nil
+	}, func(request dto.Request) *types.NewAPIError {
+		attempts++
+		if request != nil {
+			sawNilRequest = false
+		}
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, 1, attempts, "non-pooled channel runs exactly one attempt")
+	assert.True(t, sawNilRequest, "WS attempt receives a nil request")
+	assert.Equal(t, 0, service.GetSelectedAccountPoolAccountID(ctx), "no pooled account selected for a non-pooled channel")
+	assert.Equal(t, "sk-channel", info.ApiKey, "channel credential left untouched")
+}

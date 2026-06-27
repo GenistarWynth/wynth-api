@@ -3,6 +3,7 @@ package relay
 import (
 	"fmt"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
@@ -11,6 +12,16 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+// markSkipRetry flags an error so the account-pool retry loop will not switch
+// pooled accounts. Used once a live upstream socket has been established, after
+// which retrying on a different account would corrupt the client session.
+func markSkipRetry(err *types.NewAPIError) {
+	if err == nil {
+		return
+	}
+	types.ErrOptionWithSkipRetry()(err)
+}
 
 func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
@@ -51,10 +62,18 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.
 		if newAPIError != nil {
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			// The upstream socket was already established by the dial above; any
+			// error from here is mid/post-session, and switching to another pooled
+			// account on a live client socket is never valid. Mark skip-retry so the
+			// invariant holds by construction (not by luck of the pump's return
+			// contract), even if a future change makes the pump return an error.
+			markSkipRetry(newAPIError)
 			return newAPIError
 		}
 		if realtimeUsage, ok := usage.(*dto.RealtimeUsage); ok && realtimeUsage != nil {
 			service.PostWssConsumeQuota(c, info, info.UpstreamModelName, realtimeUsage, "")
+		} else {
+			common.SysError(fmt.Sprintf("realtime usage has unexpected type %T; quota not posted", usage))
 		}
 		return nil
 	})
