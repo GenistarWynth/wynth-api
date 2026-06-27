@@ -282,14 +282,14 @@ func parseAnthropic429ResetAt(header http.Header, now int64) (resetAt int64, ok 
 	reset7d, has7d := get7dReset()
 
 	if ex5h && ex7d {
-		// Both exhausted → prefer 7d reset (longer cooldown).
+		// Both exhausted → must use 7d reset (longer cooldown) or fall through to outer
+		// fallbacks. Falling back to the 5h reset here would under-cool the account:
+		// the 7d window is still exhausted, so the next request would hit another 429.
 		if has7d {
 			return reset7d, true
 		}
-		if has5h {
-			return reset5h, true
-		}
-		// Both exhausted but neither reset usable → fall through to fallbacks.
+		// 7d reset absent or filtered by max-age guard — fall through to outer fallbacks
+		// (aggregated header → Retry-After → (0, false)). Do NOT use the shorter 5h reset.
 	} else if ex5h {
 		if has5h {
 			return reset5h, true

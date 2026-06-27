@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/model"
@@ -185,6 +186,74 @@ func TestParseAnthropic429ResetAt(t *testing.T) {
 		resetAt, ok := parseAnthropic429ResetAt(h, nowReal)
 		assert.True(t, ok, "ok")
 		assert.Equal(t, int64(1_700_001_000), resetAt, "resetAt should be ms/1000")
+	})
+
+	// --- Both-exhausted edge cases (use realistic epoch so max-age guards work) ---
+	// now = 1_700_000_000 (Nov 2023). 5h reset at now+3600 = 1_700_003_600 (within 6h).
+	// 7d reset at now+86400 = 1_700_086_400 (within 8d).
+	const nowBoth = int64(1_700_000_000)
+	const reset5hVal = int64(1_700_003_600) // now + 1h (within 6h max-age guard)
+	const reset7dVal = int64(1_700_086_400) // now + 1d (within 8d max-age guard)
+	// beyond8d = now + 9 days — exceeds 8-day max-age guard.
+	const beyond8dVal = int64(1_700_000_000 + 9*86400) // 1_700_777_600
+
+	t.Run("both exhausted 7d reset present uses 7d reset", func(t *testing.T) {
+		// Regression: both exhausted, both resets present → 7d (not 5h).
+		h := makeAnthropicHeader(
+			"Anthropic-Ratelimit-Unified-5H-Surpassed-Threshold", "true",
+			"Anthropic-Ratelimit-Unified-5H-Reset", strconv.FormatInt(reset5hVal, 10),
+			"Anthropic-Ratelimit-Unified-7D-Surpassed-Threshold", "true",
+			"Anthropic-Ratelimit-Unified-7D-Reset", strconv.FormatInt(reset7dVal, 10),
+		)
+		resetAt, ok := parseAnthropic429ResetAt(h, nowBoth)
+		assert.True(t, ok, "ok")
+		assert.Equal(t, reset7dVal, resetAt, "both exhausted + both resets → 7d reset")
+	})
+
+	t.Run("both exhausted 7d reset absent aggregated header also absent returns false", func(t *testing.T) {
+		// Both windows exhausted but 7d reset header is missing entirely.
+		// 5h reset IS present. No aggregated header, no Retry-After.
+		// Must NOT return now+5h — must return (0, false).
+		h := makeAnthropicHeader(
+			"Anthropic-Ratelimit-Unified-5H-Surpassed-Threshold", "true",
+			"Anthropic-Ratelimit-Unified-5H-Reset", strconv.FormatInt(reset5hVal, 10),
+			"Anthropic-Ratelimit-Unified-7D-Surpassed-Threshold", "true",
+			// No 7D-Reset header.
+		)
+		resetAt, ok := parseAnthropic429ResetAt(h, nowBoth)
+		assert.False(t, ok, "both exhausted with no usable 7d reset and no aggregated header must return false")
+		assert.Equal(t, int64(0), resetAt, "resetAt must be 0 (not now+5h under-cool)")
+	})
+
+	t.Run("both exhausted 7d reset beyond 8d guard aggregated header used", func(t *testing.T) {
+		// Both exhausted. 7d reset is present but beyond the 8-day max-age guard → filtered.
+		// Aggregated header IS present and usable → outer fallback should use it.
+		const aggregatedReset = int64(1_700_007_200) // now+2h, a plausible aggregated value
+		h := makeAnthropicHeader(
+			"Anthropic-Ratelimit-Unified-5H-Surpassed-Threshold", "true",
+			"Anthropic-Ratelimit-Unified-5H-Reset", strconv.FormatInt(reset5hVal, 10),
+			"Anthropic-Ratelimit-Unified-7D-Surpassed-Threshold", "true",
+			"Anthropic-Ratelimit-Unified-7D-Reset", strconv.FormatInt(beyond8dVal, 10),
+			"Anthropic-Ratelimit-Unified-Reset", strconv.FormatInt(aggregatedReset, 10),
+		)
+		resetAt, ok := parseAnthropic429ResetAt(h, nowBoth)
+		assert.True(t, ok, "ok — aggregated header used as outer fallback")
+		assert.Equal(t, aggregatedReset, resetAt, "both exhausted, 7d beyond guard → aggregated reset used (not 5h)")
+	})
+
+	t.Run("both exhausted 7d absent retry-after used as outer fallback", func(t *testing.T) {
+		// Both exhausted. 7d reset absent. No aggregated header. Retry-After: 120 present.
+		// Must use now+120 from outer fallback, NOT now+5h.
+		h := makeAnthropicHeader(
+			"Anthropic-Ratelimit-Unified-5H-Surpassed-Threshold", "true",
+			"Anthropic-Ratelimit-Unified-5H-Reset", strconv.FormatInt(reset5hVal, 10),
+			"Anthropic-Ratelimit-Unified-7D-Surpassed-Threshold", "true",
+			// No 7D-Reset header.
+			"Retry-After", "120",
+		)
+		resetAt, ok := parseAnthropic429ResetAt(h, nowBoth)
+		assert.True(t, ok, "ok — Retry-After used as outer fallback")
+		assert.Equal(t, nowBoth+120, resetAt, "both exhausted, 7d absent → Retry-After outer fallback (not 5h)")
 	})
 }
 
