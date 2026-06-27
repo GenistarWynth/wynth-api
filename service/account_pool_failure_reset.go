@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -162,6 +163,169 @@ func parseAccountPool429ResetAt(header http.Header, body []byte, now int64) (res
 	// Try resets_in_seconds.
 	if parsed.Error.ResetsInSeconds > 0 {
 		return now + int64(parsed.Error.ResetsInSeconds), true
+	}
+
+	return 0, false
+}
+
+// parseAnthropic429ResetAt extracts an absolute unix-seconds reset time from
+// Anthropic per-window rate-limit response headers. It never panics on malformed
+// inputs. Returns (0, false) when no usable reset can be derived — callers MUST
+// NOT apply a cooldown in that case (Anthropic 429 with no reset is often not a
+// real limit exhaustion).
+//
+// Window exhaustion criteria (W ∈ {5h, 7d}):
+//   - anthropic-ratelimit-unified-{W}-surpassed-threshold == "true" (case-insensitive), OR
+//   - anthropic-ratelimit-unified-{W}-utilization parses to >= 1.0 - 1e-9, OR
+//   - for 5h only: anthropic-ratelimit-unified-5h-status == "rejected".
+//
+// Reset header format: unix timestamp; if value > 1e11 it is treated as ms and divided by 1000.
+// Max-age guards: 5h reset ignored if > 6 h in the future; 7d reset ignored if > 8 days in the future.
+//
+// Selection:
+//   - Both 5h and 7d exhausted (with valid resets) → 7d reset.
+//   - Exactly one exhausted (with valid reset) → that window's reset.
+//   - Neither exhausted but resets present → sooner of present resets.
+//   - Fallback: anthropic-ratelimit-unified-reset (aggregated), then Retry-After (integer seconds).
+func parseAnthropic429ResetAt(header http.Header, now int64) (resetAt int64, ok bool) {
+	const (
+		maxAge5hSeconds = int64(6 * 3600)  // 6 hours
+		maxAge7dSeconds = int64(8 * 86400) // 8 days
+		msThreshold     = int64(1e11)      // values above this are milliseconds
+		exhaustedFloor  = 1.0 - 1e-9
+	)
+
+	// parseUnixHeader parses a header value as a unix timestamp (seconds or ms).
+	// Returns (0, false) if the value is missing, malformed, or zero.
+	parseUnixHeader := func(raw string) (int64, bool) {
+		if raw == "" {
+			return 0, false
+		}
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			// Try float (e.g. "1777283883.0")
+			f, ferr := strconv.ParseFloat(raw, 64)
+			if ferr != nil || f <= 0 {
+				return 0, false
+			}
+			v = int64(f)
+		}
+		if v <= 0 {
+			return 0, false
+		}
+		if v > msThreshold {
+			v = v / 1000
+		}
+		return v, true
+	}
+
+	// parseUtilization parses a utilization header value as a float64.
+	parseUtilization := func(raw string) (float64, bool) {
+		if raw == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	}
+
+	// isWindowExhausted checks the surpassed-threshold, utilization, and (5h-only) status headers.
+	isWindowExhausted5h := func() bool {
+		if strings.EqualFold(header.Get("Anthropic-Ratelimit-Unified-5H-Surpassed-Threshold"), "true") {
+			return true
+		}
+		if strings.EqualFold(header.Get("Anthropic-Ratelimit-Unified-5H-Status"), "rejected") {
+			return true
+		}
+		if util, ok2 := parseUtilization(header.Get("Anthropic-Ratelimit-Unified-5H-Utilization")); ok2 && util >= exhaustedFloor {
+			return true
+		}
+		return false
+	}
+	isWindowExhausted7d := func() bool {
+		if strings.EqualFold(header.Get("Anthropic-Ratelimit-Unified-7D-Surpassed-Threshold"), "true") {
+			return true
+		}
+		if util, ok2 := parseUtilization(header.Get("Anthropic-Ratelimit-Unified-7D-Utilization")); ok2 && util >= exhaustedFloor {
+			return true
+		}
+		return false
+	}
+
+	// Parse per-window reset headers and apply max-age guards.
+	get5hReset := func() (int64, bool) {
+		v, ok2 := parseUnixHeader(header.Get("Anthropic-Ratelimit-Unified-5H-Reset"))
+		if !ok2 {
+			return 0, false
+		}
+		if v > now+maxAge5hSeconds {
+			return 0, false // too far in the future — ignore
+		}
+		return v, true
+	}
+	get7dReset := func() (int64, bool) {
+		v, ok2 := parseUnixHeader(header.Get("Anthropic-Ratelimit-Unified-7D-Reset"))
+		if !ok2 {
+			return 0, false
+		}
+		if v > now+maxAge7dSeconds {
+			return 0, false // too far in the future — ignore
+		}
+		return v, true
+	}
+
+	ex5h := isWindowExhausted5h()
+	ex7d := isWindowExhausted7d()
+	reset5h, has5h := get5hReset()
+	reset7d, has7d := get7dReset()
+
+	if ex5h && ex7d {
+		// Both exhausted → prefer 7d reset (longer cooldown).
+		if has7d {
+			return reset7d, true
+		}
+		if has5h {
+			return reset5h, true
+		}
+		// Both exhausted but neither reset usable → fall through to fallbacks.
+	} else if ex5h {
+		if has5h {
+			return reset5h, true
+		}
+		// 5h exhausted but no valid 5h reset → fall through.
+	} else if ex7d {
+		if has7d {
+			return reset7d, true
+		}
+		// 7d exhausted but no valid 7d reset → fall through.
+	} else {
+		// Neither exhausted: pick sooner of present resets.
+		switch {
+		case has5h && has7d:
+			if reset5h <= reset7d {
+				return reset5h, true
+			}
+			return reset7d, true
+		case has5h:
+			return reset5h, true
+		case has7d:
+			return reset7d, true
+		}
+		// No per-window resets present → fall through to fallbacks.
+	}
+
+	// Fallback 1: aggregated anthropic-ratelimit-unified-reset.
+	if v, ok2 := parseUnixHeader(header.Get("Anthropic-Ratelimit-Unified-Reset")); ok2 {
+		return v, true
+	}
+
+	// Fallback 2: Retry-After integer seconds.
+	if raw := header.Get("Retry-After"); raw != "" {
+		if secs, err := strconv.ParseInt(raw, 10, 64); err == nil && secs > 0 {
+			return now + secs, true
+		}
 	}
 
 	return 0, false

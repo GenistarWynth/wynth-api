@@ -23,6 +23,7 @@ const (
 	accountPoolSelectedAffinityKeyContextKey    = "account_pool_selected_affinity_key"
 	accountPoolSelectedRuntimeOptionsContextKey = "account_pool_selected_runtime_options"
 	accountPoolSelectedRequestQuotaContextKey   = "account_pool_selected_request_quota"
+	accountPoolSelectedPlatformContextKey       = "account_pool_selected_platform"
 )
 
 func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) error {
@@ -63,6 +64,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	c.Set(accountPoolSelectedAffinityKeyContextKey, affinityKey)
 	c.Set(accountPoolSelectedRuntimeOptionsContextKey, selection.RuntimeOptions)
 	c.Set(accountPoolSelectedRequestQuotaContextKey, selection.RequestQuota)
+	c.Set(accountPoolSelectedPlatformContextKey, selection.Platform)
 	AddAccountPoolAttemptedAccountID(c, selection.AccountID)
 
 	runtimeCredential, err := ResolveAccountPoolRuntimeCredential(accountPoolRuntimeContext(c), AccountPoolRuntimeCredentialRequest{
@@ -185,6 +187,17 @@ func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
 	c.Set(accountPoolSelectedAffinityKeyContextKey, "")
 	c.Set(accountPoolSelectedRuntimeOptionsContextKey, "")
 	c.Set(accountPoolSelectedRequestQuotaContextKey, int64(0))
+	c.Set(accountPoolSelectedPlatformContextKey, "")
+}
+
+// GetSelectedAccountPoolPlatform returns the platform string of the currently selected
+// account pool account (e.g. "anthropic", "openai", or ""). Returns "" when no account
+// is selected or when the platform was not recorded during selection.
+func GetSelectedAccountPoolPlatform(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	return c.GetString(accountPoolSelectedPlatformContextKey)
 }
 
 // GetSelectedAccountPoolRuntimeOptions retrieves and parses the runtime options

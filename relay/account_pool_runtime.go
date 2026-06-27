@@ -143,7 +143,7 @@ func runAccountPoolRuntimeAttempts(
 				selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 				accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
 				if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
-					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
+					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c))
 					service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 				}
 				if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
@@ -198,7 +198,7 @@ func runAccountPoolRuntimeAttempts(
 		poolModeRetryIndex = 0
 		poolModeLastAccountID = 0
 		if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
-			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp())
+			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c))
 			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 		}
 		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {

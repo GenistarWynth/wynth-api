@@ -60,7 +60,10 @@ func classifyTransportError(err *types.NewAPIError) bool {
 // a GORM Updates map for model.AccountPoolAccount. It always includes the base
 // bookkeeping fields (last_error, last_failure_at, failure_count) and adds
 // cooldown/status fields appropriate to the error's HTTP status code and error code.
-func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.NewAPIError, isOAuth bool, now int64) map[string]any {
+//
+// platform selects provider-specific classification logic ("anthropic", "openai", or "").
+// Empty string and "openai" are treated identically (OpenAI/Codex behavior).
+func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.NewAPIError, isOAuth bool, now int64, platform string) map[string]any {
 	if err == nil {
 		return nil
 	}
@@ -186,12 +189,24 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 
 	// Case 3 — Rate limited.
 	case http.StatusTooManyRequests:
-		resetAt, ok := parseAccountPool429ResetAt(err.GetUpstreamHeader(), err.GetUpstreamBody(), now)
-		if ok {
-			updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, resetAt)
-		} else if cfg.RateLimit429FallbackEnabled {
-			fb := int64(clampRateLimit429CooldownSeconds(cfg.RateLimit429FallbackSeconds))
-			updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, now+fb)
+		if platform == model.AccountPoolPlatformAnthropic {
+			// Anthropic: use per-window header parser. If no usable reset is present,
+			// do NOT set rate_limited_until (no fallback for Anthropic — a 429 without a
+			// reset header is often not a real limit exhaustion).
+			resetAt, ok := parseAnthropic429ResetAt(err.GetUpstreamHeader(), now)
+			if ok {
+				updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, resetAt)
+			}
+			// If !ok: base bookkeeping only — do not apply any cooldown.
+		} else {
+			// OpenAI / Codex / default path (unchanged).
+			resetAt, ok := parseAccountPool429ResetAt(err.GetUpstreamHeader(), err.GetUpstreamBody(), now)
+			if ok {
+				updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, resetAt)
+			} else if cfg.RateLimit429FallbackEnabled {
+				fb := int64(clampRateLimit429CooldownSeconds(cfg.RateLimit429FallbackSeconds))
+				updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, now+fb)
+			}
 		}
 		// temp_disabled_reason must NOT be set for 429 — last_error already records the message.
 		// status stays enabled; do NOT touch temp_disabled_until or overload_until.
@@ -236,12 +251,28 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 			combined := strings.ToLower(sanitizeAccountPoolFailureMessage(err, accountPoolLastErrorMaxLength))
 			bodyLower := strings.ToLower(string(err.GetUpstreamBody()))
 			hasPhrase := false
-			for _, phrase := range []string{
-				"organization has been disabled",
-				"organization disabled",
-				"credit balance",
-				"identity verification",
-			} {
+
+			// Platform-gated phrase lists: Anthropic-specific phrases extend the base set.
+			var phrases []string
+			if platform == model.AccountPoolPlatformAnthropic {
+				phrases = []string{
+					"credit balance is too low",
+					"account is not active",
+					// Also check the generic OpenAI-era phrases in case they appear in Anthropic responses.
+					"organization has been disabled",
+					"organization disabled",
+					"credit balance",
+					"identity verification",
+				}
+			} else {
+				phrases = []string{
+					"organization has been disabled",
+					"organization disabled",
+					"credit balance",
+					"identity verification",
+				}
+			}
+			for _, phrase := range phrases {
 				if strings.Contains(combined, phrase) || strings.Contains(bodyLower, phrase) {
 					hasPhrase = true
 					break
@@ -277,7 +308,10 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 // classifies the upstream error, applies the resulting updates atomically, and sets
 // an in-process fast-path block so the just-failed account is excluded immediately
 // by the scheduler without waiting for DB cooldown reads to propagate.
-func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIError, now int64) error {
+//
+// platform selects provider-specific classification ("anthropic", "openai", or "").
+// Empty string and "openai" are treated identically.
+func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIError, now int64, platform string) error {
 	if accountID <= 0 || err == nil {
 		return nil
 	}
@@ -297,7 +331,7 @@ func RecordAccountPoolRuntimeAttemptFailure(accountID int, err *types.NewAPIErro
 		} else {
 			common.SysError(fmt.Sprintf("account pool: failed to decrypt credential for account %d during failure classification: %v", accountID, decryptErr))
 		}
-		updates = classifyAccountPoolFailure(account, err, isOAuth, now)
+		updates = classifyAccountPoolFailure(account, err, isOAuth, now, platform)
 		if len(updates) == 0 {
 			return nil
 		}

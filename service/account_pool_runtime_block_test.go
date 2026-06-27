@@ -205,7 +205,7 @@ func TestRecordAccountPoolRuntimeAttemptFailureSetsRuntimeBlock429(t *testing.T)
 
 	now := int64(1000)
 	err := types.NewErrorWithStatusCode(errors.New("too many requests"), types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
-	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now, ""))
 
 	assert.True(t, accountPoolRuntimeBlocked(account.Id, now), "account must be runtime-blocked immediately after 429 failure")
 }
@@ -220,7 +220,7 @@ func TestRecordAccountPoolRuntimeAttemptFailureSetsRuntimeBlock5xx(t *testing.T)
 
 	now := int64(1000)
 	err := types.NewErrorWithStatusCode(errors.New("bad gateway"), types.ErrorCodeBadResponseStatusCode, http.StatusBadGateway)
-	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now, ""))
 
 	assert.True(t, accountPoolRuntimeBlocked(account.Id, now), "account must be runtime-blocked immediately after 5xx failure")
 }
@@ -240,7 +240,7 @@ func TestRecordAccountPoolRuntimeAttemptFailureRuntimeBlockCappedAt600s(t *testi
 		Update("rate_limited_until", now+9999).Error)
 
 	err := types.NewErrorWithStatusCode(errors.New("too many requests"), types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
-	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now, ""))
 
 	// Block must be set, and must not be blocked past now+accountPoolRuntimeBlockCapSeconds.
 	assert.True(t, accountPoolRuntimeBlocked(account.Id, now), "account must be blocked")
@@ -258,7 +258,7 @@ func TestRecordAccountPoolRuntimeAttemptFailureSetsFloorBlockWhenNoSpecificCoold
 
 	now := int64(1000)
 	err := types.NewErrorWithStatusCode(errors.New("unauthorized"), types.ErrorCodeBadResponseStatusCode, http.StatusUnauthorized)
-	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now, ""))
 
 	// Account expired: floor block (accountPoolRuntimeBlockFloorSeconds) must still be set.
 	assert.True(t, accountPoolRuntimeBlocked(account.Id, now), "expired account must still get a runtime block")
@@ -280,7 +280,7 @@ func TestRecordAccountPoolRuntimeAttemptFailureNoBlockFor404(t *testing.T) {
 
 	now := int64(1000)
 	err := types.NewErrorWithStatusCode(errors.New("not found"), types.ErrorCodeBadResponseStatusCode, http.StatusNotFound)
-	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now, ""))
 
 	// 404 is a no-cooldown code: DB keeps account schedulable, no in-process block must be set.
 	assert.False(t, accountPoolRuntimeBlocked(account.Id, now), "404 must NOT set a runtime block")
@@ -296,7 +296,7 @@ func TestRecordAccountPoolRuntimeAttemptFailureBlocksFor500(t *testing.T) {
 
 	now := int64(1000)
 	err := types.NewErrorWithStatusCode(errors.New("internal server error"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
-	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now))
+	require.NoError(t, RecordAccountPoolRuntimeAttemptFailure(account.Id, err, now, ""))
 
 	// 500 sets temp_disabled_until → must set an in-process block (regression guard).
 	assert.True(t, accountPoolRuntimeBlocked(account.Id, now), "500 must set a runtime block")
