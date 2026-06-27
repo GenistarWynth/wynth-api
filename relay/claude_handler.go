@@ -22,11 +22,9 @@ import (
 )
 
 func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
-
 	info.InitChannelMeta(c)
 
 	claudeReq, ok := info.Request.(*dto.ClaudeRequest)
-
 	if !ok {
 		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected *dto.ClaudeRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -41,21 +39,8 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	if newAPIError := rejectUnsupportedAccountPoolRuntime(c, info, "claude"); newAPIError != nil {
-		return newAPIError
-	}
-
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-	adaptor.Init(info)
-
-	if request.MaxTokens == nil || *request.MaxTokens == 0 {
-		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
-		request.MaxTokens = &defaultMaxTokens
-	}
-
+	// Apply thinking adapter and model transformations before the pool loop so
+	// they run once and the result is deep-copied for each pool attempt.
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
 		(strings.HasPrefix(request.Model, "claude-opus-4-6") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-7") ||
@@ -90,17 +75,16 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				request.TopP = nil
 				request.TopK = nil
 			} else {
-				// 因为BudgetTokens 必须大于1024
+				// BudgetTokens must be > 1024.
 				if request.MaxTokens == nil || *request.MaxTokens < 1280 {
 					request.MaxTokens = common.GetPointer[uint](1280)
 				}
-
-				// BudgetTokens 为 max_tokens 的 80%
+				// BudgetTokens is 80% of max_tokens.
 				request.Thinking = &dto.Thinking{
 					Type:         "enabled",
 					BudgetTokens: common.GetPointer[int](int(float64(*request.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage)),
 				}
-				// TODO: 临时处理
+				// TODO: temporary workaround
 				// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
 				request.Temperature = common.GetPointer[float64](1.0)
 			}
@@ -136,6 +120,36 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	mappedRequest := request
+	return runAccountPoolRuntimeAttempts(c, info, func() (dto.Request, *types.NewAPIError) {
+		attemptRequest, err := common.DeepCopy(mappedRequest)
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("failed to copy mapped ClaudeRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return attemptRequest, nil
+	}, func(attemptRequest dto.Request) *types.NewAPIError {
+		claudeRequest, ok := attemptRequest.(*dto.ClaudeRequest)
+		if !ok {
+			return types.NewErrorWithStatusCode(fmt.Errorf("invalid mapped request type, expected *dto.ClaudeRequest, got %T", attemptRequest), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return claudeHelperWithRuntimeSelected(c, info, claudeRequest)
+	})
+}
+
+func claudeHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) *types.NewAPIError {
+	adaptor := GetAdaptor(info.ApiType)
+	if adaptor == nil {
+		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+	}
+	adaptor.Init(info)
+
+	if request.MaxTokens == nil || *request.MaxTokens == 0 {
+		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
+		request.MaxTokens = &defaultMaxTokens
+	}
+
+	// TODO: chatCompletionsViaResponses fallback is not pool-wrapped; it bypasses
+	// the account-pool retry loop. Pool-wrapping this path is a future task.
 	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
@@ -208,7 +222,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError

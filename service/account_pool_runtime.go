@@ -31,6 +31,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	clearSelectedAccountPoolRuntimeSelection(c)
 	if info != nil {
 		info.RuntimeAccountID = ""
+		info.RuntimeAnthropicOAuth = false
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -87,6 +88,12 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	info.UpstreamModelName = selection.UpstreamModelName
 	if selection.ProxyURL != "" {
 		info.RuntimeProxy = selection.ProxyURL
+	}
+	// Signal to the Claude adaptor whether to use OAuth Bearer auth instead of x-api-key.
+	if selection.Platform == model.AccountPoolPlatformAnthropic {
+		info.RuntimeAnthropicOAuth = accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState)
+	} else {
+		info.RuntimeAnthropicOAuth = false
 	}
 	if request != nil {
 		request.SetModelName(selection.UpstreamModelName)

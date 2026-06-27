@@ -81,13 +81,26 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	req.Set("x-api-key", info.ApiKey)
-	anthropicVersion := c.Request.Header.Get("anthropic-version")
-	if anthropicVersion == "" {
-		anthropicVersion = "2023-06-01"
+	if info.RuntimeAnthropicOAuth {
+		// OAuth path: Bearer token + Claude-Code mimicry headers.
+		// Note: if the client sent its own anthropic-beta (real Claude Code passthrough),
+		// we currently overwrite with the bundle. Merging is a future refinement (TODO).
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+		req.Set("anthropic-version", "2023-06-01")
+		req.Set("anthropic-beta", AnthropicOAuthBetaFeatures)
+		for k, v := range claudeCodeMimicryHeaders() {
+			req.Set(k, v)
+		}
+	} else {
+		// API key path: unchanged from original.
+		req.Set("x-api-key", info.ApiKey)
+		anthropicVersion := c.Request.Header.Get("anthropic-version")
+		if anthropicVersion == "" {
+			anthropicVersion = "2023-06-01"
+		}
+		req.Set("anthropic-version", anthropicVersion)
+		CommonClaudeHeadersOperation(c, req, info)
 	}
-	req.Set("anthropic-version", anthropicVersion)
-	CommonClaudeHeadersOperation(c, req, info)
 	return nil
 }
 

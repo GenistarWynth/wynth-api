@@ -159,6 +159,10 @@ type RelayInfo struct {
 	// RuntimeAccountID carries the selected upstream account identifier for provider
 	// adaptors that need it in addition to the runtime credential.
 	RuntimeAccountID string
+	// RuntimeAnthropicOAuth signals that the selected account-pool account uses
+	// Anthropic OAuth (Bearer token) rather than an API key. When true, the
+	// Claude adaptor must send Authorization: Bearer <ApiKey> instead of x-api-key.
+	RuntimeAnthropicOAuth bool
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see
