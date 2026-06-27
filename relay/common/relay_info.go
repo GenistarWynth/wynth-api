@@ -163,6 +163,10 @@ type RelayInfo struct {
 	// Anthropic OAuth (Bearer token) rather than an API key. When true, the
 	// Claude adaptor must send Authorization: Bearer <ApiKey> instead of x-api-key.
 	RuntimeAnthropicOAuth bool
+	// RuntimeGeminiOAuth signals that the selected account-pool account uses
+	// Google OAuth (Bearer token) rather than an API key. When true, the
+	// Gemini adaptor must send Authorization: Bearer <ApiKey> instead of x-goog-api-key.
+	RuntimeGeminiOAuth bool
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see

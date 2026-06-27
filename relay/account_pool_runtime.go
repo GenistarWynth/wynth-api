@@ -42,6 +42,7 @@ type accountPoolRuntimeRelaySnapshot struct {
 	runtimeProxy            string
 	runtimeAccountID        string
 	runtimeAnthropicOAuth   bool
+	runtimeGeminiOAuth      bool
 	runtimeHeadersOverride  map[string]interface{}
 	useRuntimeHeaders       bool
 	isStream                bool
@@ -247,6 +248,7 @@ func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRun
 	snapshot.runtimeProxy = info.RuntimeProxy
 	snapshot.runtimeAccountID = info.RuntimeAccountID
 	snapshot.runtimeAnthropicOAuth = info.RuntimeAnthropicOAuth
+	snapshot.runtimeGeminiOAuth = info.RuntimeGeminiOAuth
 	snapshot.runtimeHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(info.RuntimeHeadersOverride)
 	snapshot.useRuntimeHeaders = info.UseRuntimeHeadersOverride
 	snapshot.isStream = info.IsStream
@@ -270,6 +272,7 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 	info.RuntimeProxy = snapshot.runtimeProxy
 	info.RuntimeAccountID = snapshot.runtimeAccountID
 	info.RuntimeAnthropicOAuth = snapshot.runtimeAnthropicOAuth
+	info.RuntimeGeminiOAuth = snapshot.runtimeGeminiOAuth
 	info.RuntimeHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(snapshot.runtimeHeadersOverride)
 	info.UseRuntimeHeadersOverride = snapshot.useRuntimeHeaders
 	info.IsStream = snapshot.isStream

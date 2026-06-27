@@ -32,6 +32,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if info != nil {
 		info.RuntimeAccountID = ""
 		info.RuntimeAnthropicOAuth = false
+		info.RuntimeGeminiOAuth = false
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -94,6 +95,12 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeAnthropicOAuth = accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState)
 	} else {
 		info.RuntimeAnthropicOAuth = false
+	}
+	// Signal to the Gemini adaptor whether to use OAuth Bearer auth instead of x-goog-api-key.
+	if selection.Platform == model.AccountPoolPlatformGemini {
+		info.RuntimeGeminiOAuth = accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState)
+	} else {
+		info.RuntimeGeminiOAuth = false
 	}
 	if request != nil {
 		request.SetModelName(selection.UpstreamModelName)
