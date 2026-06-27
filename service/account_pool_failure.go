@@ -198,6 +198,16 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 				updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, resetAt)
 			}
 			// If !ok: base bookkeeping only — do not apply any cooldown.
+		} else if platform == model.AccountPoolPlatformGemini {
+			// Gemini: parse the JSON body for retryDelay / quotaResetDelay / daily-quota message.
+			// Unlike Anthropic, Gemini DOES use the configurable fallback when no reset is parseable.
+			resetAt, ok := parseGemini429ResetAt(err.GetUpstreamBody(), now)
+			if ok {
+				updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, resetAt)
+			} else if cfg.RateLimit429FallbackEnabled {
+				fb := int64(clampRateLimit429CooldownSeconds(cfg.RateLimit429FallbackSeconds))
+				updates["rate_limited_until"] = monotonic(account.RateLimitedUntil, now+fb)
+			}
 		} else {
 			// OpenAI / Codex / default path (unchanged).
 			resetAt, ok := parseAccountPool429ResetAt(err.GetUpstreamHeader(), err.GetUpstreamBody(), now)
@@ -252,7 +262,7 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 			bodyLower := strings.ToLower(string(err.GetUpstreamBody()))
 			hasPhrase := false
 
-			// Platform-gated phrase lists: Anthropic-specific phrases extend the base set.
+			// Platform-gated phrase lists: Anthropic-specific and Gemini-specific phrases extend the base set.
 			var phrases []string
 			if platform == model.AccountPoolPlatformAnthropic {
 				phrases = []string{
@@ -263,6 +273,13 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 					"organization disabled",
 					"credit balance",
 					"identity verification",
+				}
+			} else if platform == model.AccountPoolPlatformGemini {
+				phrases = []string{
+					"api key not valid",
+					"api_key_invalid",
+					"api key expired",
+					"permission_denied",
 				}
 			} else {
 				phrases = []string{

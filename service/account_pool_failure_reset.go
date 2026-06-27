@@ -2,9 +2,12 @@ package service
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 )
@@ -326,6 +329,90 @@ func parseAnthropic429ResetAt(header http.Header, now int64) (resetAt int64, ok 
 		if secs, err := strconv.ParseInt(raw, 10, 64); err == nil && secs > 0 {
 			return now + secs, true
 		}
+	}
+
+	return 0, false
+}
+
+// geminiRetryInMsgRe matches "retry in <number>s" (case-insensitive) in a Gemini error message.
+var geminiRetryInMsgRe = regexp.MustCompile(`(?i)retry\s+in\s+([0-9]+(?:\.[0-9]+)?)s`)
+
+// geminiDailyQuotaRe matches messages that indicate a daily quota cap.
+var geminiDailyQuotaRe = regexp.MustCompile(`(?i)(per\s*day|perday|requests\s+per\s+day|(quota\b.*\bday\b|\bday\b.*\bquota\b))`)
+
+// nextGeminiDailyResetUnix returns the next 00:00 America/Los_Angeles (Pacific time) after now
+// expressed as a Unix timestamp in seconds. If the timezone cannot be loaded, falls back to now+24h.
+func nextGeminiDailyResetUnix(now int64) int64 {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return now + int64(24*3600)
+	}
+	t := time.Unix(now, 0).In(loc)
+	// Build the next midnight in Pacific time.
+	midnight := time.Date(t.Year(), t.Month(), t.Day()+1, 0, 0, 0, 0, loc)
+	return midnight.Unix()
+}
+
+// geminiDetail is a minimal struct for parsing one element of error.details[].
+type geminiDetail struct {
+	RetryDelay string `json:"retryDelay"`
+	Metadata   struct {
+		QuotaResetDelay string `json:"quotaResetDelay"`
+	} `json:"metadata"`
+}
+
+// geminiErrorBody is a minimal struct for parsing the Gemini/Google error JSON shape.
+type geminiErrorBody struct {
+	Error struct {
+		Message string         `json:"message"`
+		Details []geminiDetail `json:"details"`
+	} `json:"error"`
+}
+
+// parseGemini429ResetAt extracts an absolute unix-seconds reset time from a Gemini
+// 429 response body. Resolution order:
+//  1. Scan error.details[] for a positive Go-duration in retryDelay or metadata.quotaResetDelay.
+//  2. Regex error.message for "retry in <N>s".
+//  3. If error.message indicates a daily quota cap → nextGeminiDailyResetUnix(now).
+//  4. (0, false) otherwise. Never panics on malformed input.
+func parseGemini429ResetAt(body []byte, now int64) (resetAt int64, ok bool) {
+	if len(body) == 0 {
+		return 0, false
+	}
+
+	var parsed geminiErrorBody
+	if err := common.UnmarshalJsonStr(string(body), &parsed); err != nil {
+		return 0, false
+	}
+
+	// Step 1: scan details for retryDelay or metadata.quotaResetDelay.
+	for _, d := range parsed.Error.Details {
+		if d.RetryDelay != "" {
+			if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
+				secs := int64(math.Ceil(dur.Seconds()))
+				return now + secs, true
+			}
+		}
+		if d.Metadata.QuotaResetDelay != "" {
+			if dur, err := time.ParseDuration(d.Metadata.QuotaResetDelay); err == nil && dur > 0 {
+				secs := int64(math.Ceil(dur.Seconds()))
+				return now + secs, true
+			}
+		}
+	}
+
+	// Step 2: regex the message for "retry in Ns".
+	if m := geminiRetryInMsgRe.FindStringSubmatch(parsed.Error.Message); len(m) >= 2 {
+		if f, err := strconv.ParseFloat(m[1], 64); err == nil && f > 0 {
+			secs := int64(math.Ceil(f))
+			return now + secs, true
+		}
+	}
+
+	// Step 3: daily quota message → next Pacific midnight.
+	msgLower := strings.ToLower(parsed.Error.Message)
+	if geminiDailyQuotaRe.MatchString(msgLower) {
+		return nextGeminiDailyResetUnix(now), true
 	}
 
 	return 0, false
