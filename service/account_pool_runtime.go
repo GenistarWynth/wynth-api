@@ -36,6 +36,9 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeGeminiOAuth = false
 		info.RuntimeGeminiOAuthType = ""
 		info.RuntimeGeminiProjectID = ""
+		info.RuntimeVertexServiceAccount = false
+		info.RuntimeVertexProjectID = ""
+		info.RuntimeVertexLocation = ""
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -104,6 +107,25 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeGeminiOAuth = accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState)
 	} else {
 		info.RuntimeGeminiOAuth = false
+	}
+	// Gemini Vertex AI service-account routing: when the selected account is a
+	// service_account credential, set the Vertex endpoint fields (project from the
+	// SA JSON, location from Credential.Location || default). The minted token is
+	// carried in info.ApiKey; the adaptor sends it as a Bearer token to the regional
+	// Vertex endpoint with no x-goog-api-key and no request/response wrapping.
+	if selection.Platform == model.AccountPoolPlatformGemini &&
+		accountPoolIsServiceAccountCredential(selection.Credential) {
+		saInfo, infoErr := ExtractVertexServiceAccountInfo([]byte(selection.Credential.ServiceAccountJSON))
+		if infoErr != nil {
+			return fmt.Errorf("gemini vertex service account parse failed: %w", infoErr)
+		}
+		location := strings.TrimSpace(selection.Credential.Location)
+		if location == "" {
+			location = AccountPoolVertexDefaultLocation
+		}
+		info.RuntimeVertexServiceAccount = true
+		info.RuntimeVertexProjectID = saInfo.ProjectID
+		info.RuntimeVertexLocation = location
 	}
 	// For Gemini cloudcode-pa OAuth accounts (code_assist, antigravity, google_one),
 	// detect or reuse the GCP project id. These types share the same project-detection

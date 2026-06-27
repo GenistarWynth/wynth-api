@@ -244,6 +244,48 @@ func TestAccountPoolServiceImportSub2APIGeminiCodeAssistOAuthType(t *testing.T) 
 	assert.Equal(t, "projects/seed-123", ts.ProjectID, "project_id pre-seed must be imported to skip detection")
 }
 
+func TestAccountPoolServiceImportSub2APIGeminiServiceAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-vertex-sa",
+					"platform": "gemini",
+					"type": "service_account",
+					"credentials": {
+						"service_account_json": "{\"type\":\"service_account\",\"project_id\":\"vertex-proj\",\"client_email\":\"svc@vertex-proj.iam\",\"private_key\":\"pk\"}",
+						"location": "europe-west1"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "gemini-vertex-sa")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeServiceAccount, cred.Type)
+	assert.Equal(t, "europe-west1", cred.Location)
+	assert.Contains(t, cred.ServiceAccountJSON, "vertex-proj")
+
+	// project_id must be extractable from the imported SA JSON.
+	saInfo, err := ExtractVertexServiceAccountInfo([]byte(cred.ServiceAccountJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "vertex-proj", saInfo.ProjectID)
+}
+
 func TestAccountPoolServiceImportSub2APIGeminiAntigravityOAuthType(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	svc := AccountPoolService{}

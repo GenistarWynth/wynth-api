@@ -1469,13 +1469,15 @@ func accountPoolCredentialHasValue(config AccountPoolCredentialConfig) bool {
 	return strings.TrimSpace(config.Type) != "" ||
 		strings.TrimSpace(config.APIKey) != "" ||
 		strings.TrimSpace(config.RefreshToken) != "" ||
-		strings.TrimSpace(config.Email) != ""
+		strings.TrimSpace(config.Email) != "" ||
+		strings.TrimSpace(config.ServiceAccountJSON) != ""
 }
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
 	return strings.TrimSpace(config.APIKey) != "" ||
 		strings.TrimSpace(config.RefreshToken) != "" ||
-		strings.TrimSpace(config.Email) != ""
+		strings.TrimSpace(config.Email) != "" ||
+		strings.TrimSpace(config.ServiceAccountJSON) != ""
 }
 
 func accountPoolTokenStateHasValue(state AccountPoolTokenState) bool {

@@ -374,6 +374,11 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 
 	credentialType := strings.ToLower(strings.TrimSpace(account.Type))
 	apiKey := accountPoolImportStringFromMap(account.Credentials, "api_key", "key")
+	// serviceAccountJSON carries a GCP service-account credential for Gemini Vertex
+	// AI. It may be supplied as a JSON string or an embedded object; location is an
+	// optional Vertex region.
+	serviceAccountJSON := accountPoolImportServiceAccountJSON(account.Credentials, "service_account_json", "service_account")
+	location := accountPoolImportStringFromMap(account.Credentials, "location")
 	refreshToken := accountPoolImportStringFromMap(account.Credentials, "refresh_token")
 	accessToken := accountPoolImportStringFromMap(account.Credentials, "access_token")
 	email := accountPoolImportStringFromMap(account.Credentials, "email")
@@ -417,6 +422,15 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	}
 
 	switch {
+	case serviceAccountJSON != "" || credentialType == AccountPoolCredentialTypeServiceAccount:
+		if serviceAccountJSON == "" {
+			return accountPoolImportCandidate{}, false, "sub2api service_account account is missing service_account_json"
+		}
+		candidate.Params.Credential = AccountPoolCredentialConfig{
+			Type:               AccountPoolCredentialTypeServiceAccount,
+			ServiceAccountJSON: serviceAccountJSON,
+			Location:           location,
+		}
 	case apiKey != "" || credentialType == AccountPoolCredentialTypeAPIKey:
 		if apiKey == "" {
 			return accountPoolImportCandidate{}, false, "sub2api api_key account is missing api_key"
@@ -779,6 +793,8 @@ func accountPoolNormalizeImportAccountParams(params *AccountPoolAccountCreatePar
 	params.Credential.APIKey = strings.TrimSpace(params.Credential.APIKey)
 	params.Credential.Email = strings.TrimSpace(params.Credential.Email)
 	params.Credential.RefreshToken = strings.TrimSpace(params.Credential.RefreshToken)
+	params.Credential.ServiceAccountJSON = strings.TrimSpace(params.Credential.ServiceAccountJSON)
+	params.Credential.Location = strings.TrimSpace(params.Credential.Location)
 	params.TokenState.AccessToken = strings.TrimSpace(params.TokenState.AccessToken)
 	params.TokenState.RefreshToken = strings.TrimSpace(params.TokenState.RefreshToken)
 	params.SupportedModels = accountPoolCleanStringSlice(params.SupportedModels)
@@ -818,6 +834,8 @@ func normalizeAccountPoolImportCredentialType(credentialType string) string {
 		return AccountPoolCredentialTypeAPIKey
 	case AccountPoolCredentialTypeOAuth, "codex", "openai":
 		return AccountPoolCredentialTypeOAuth
+	case AccountPoolCredentialTypeServiceAccount, "service-account", "vertex":
+		return AccountPoolCredentialTypeServiceAccount
 	default:
 		return credentialType
 	}
@@ -869,6 +887,9 @@ func accountPoolImportCredentialKeys(credential AccountPoolCredentialConfig) []s
 		keys = append(keys, key)
 	}
 	if key := accountPoolImportSecretKey("refresh", credential.RefreshToken); key != "" {
+		keys = append(keys, key)
+	}
+	if key := accountPoolImportSecretKey("service_account", credential.ServiceAccountJSON); key != "" {
 		keys = append(keys, key)
 	}
 	return keys
@@ -1098,6 +1119,32 @@ func accountPoolImportFlattenObjects(raw any) []map[string]any {
 	default:
 		return nil
 	}
+}
+
+// accountPoolImportServiceAccountJSON extracts a GCP service-account credential as
+// a raw JSON string. The value may be provided either as a JSON string or as an
+// embedded JSON object (which is re-marshaled to a compact string).
+func accountPoolImportServiceAccountJSON(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if trimmed := strings.TrimSpace(typed); trimmed != "" {
+				return trimmed
+			}
+		case map[string]any:
+			if len(typed) == 0 {
+				continue
+			}
+			if data, err := common.Marshal(typed); err == nil {
+				return string(data)
+			}
+		}
+	}
+	return ""
 }
 
 func accountPoolImportStringFromMap(values map[string]any, keys ...string) string {

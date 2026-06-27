@@ -600,10 +600,12 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 		AccountIdentifier: req.AccountIdentifier,
 		OAuthType:         req.Credential.OAuthType,
 		Credential: service.AccountPoolCredentialConfig{
-			Type:         req.Credential.Type,
-			APIKey:       req.Credential.APIKey,
-			Email:        req.Credential.Email,
-			RefreshToken: req.Credential.RefreshToken,
+			Type:               req.Credential.Type,
+			APIKey:             req.Credential.APIKey,
+			Email:              req.Credential.Email,
+			RefreshToken:       req.Credential.RefreshToken,
+			ServiceAccountJSON: req.Credential.ServiceAccountJSON,
+			Location:           req.Credential.Location,
 		},
 		TokenState: service.AccountPoolTokenState{
 			AccessToken:  req.TokenState.AccessToken,

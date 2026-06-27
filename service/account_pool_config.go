@@ -9,6 +9,15 @@ import (
 const (
 	AccountPoolCredentialTypeAPIKey = "api_key"
 	AccountPoolCredentialTypeOAuth  = "oauth"
+	// AccountPoolCredentialTypeServiceAccount identifies a GCP service-account
+	// credential used for Gemini Vertex AI. The raw service-account JSON is stored
+	// in the encrypted credential blob (ServiceAccountJSON) and a short-lived
+	// access token is minted via the standard SA JWT-bearer flow at runtime.
+	AccountPoolCredentialTypeServiceAccount = "service_account"
+
+	// AccountPoolVertexDefaultLocation is the default Vertex AI region used when a
+	// service-account credential does not specify one.
+	AccountPoolVertexDefaultLocation = "us-central1"
 
 	// AccountPoolGeminiOAuthTypeCodeAssist identifies Google Code Assist (Gemini CLI
 	// code_assist scope) accounts, which additionally require a GCP project id.
@@ -32,6 +41,13 @@ type AccountPoolCredentialConfig struct {
 	APIKey       string `json:"api_key"`
 	Email        string `json:"email"`
 	RefreshToken string `json:"refresh_token"`
+	// ServiceAccountJSON holds the raw GCP service-account JSON for a Vertex AI
+	// service_account credential. It is a SECRET and lives in the encrypted
+	// credential blob. project_id is read from this JSON at runtime.
+	ServiceAccountJSON string `json:"service_account_json,omitempty"`
+	// Location is the Vertex AI region (e.g. us-central1) for a service_account
+	// credential. Defaults to AccountPoolVertexDefaultLocation when empty.
+	Location string `json:"location,omitempty"`
 }
 
 type AccountPoolTokenState struct {

@@ -152,6 +152,27 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		}
 	}
 
+	// Vertex AI service-account routing. Returns before the code_assist/imagen/
+	// embedding/standard branches. Uses the regional aiplatform endpoint with the
+	// project + location + model + action; no request/response wrapping.
+	if isGeminiVertexServiceAccount(info) {
+		action := "generateContent"
+		if info.IsStream {
+			action = "streamGenerateContent?alt=sse"
+			if info.RelayMode == constant.RelayModeGemini {
+				info.DisablePing = true
+			}
+		}
+		return fmt.Sprintf(
+			"%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
+			vertexAIBaseURL(info.RuntimeVertexLocation),
+			info.RuntimeVertexProjectID,
+			vertexAILocation(info.RuntimeVertexLocation),
+			info.UpstreamModelName,
+			action,
+		), nil
+	}
+
 	// Code Assist (cloudcode-pa) routing. Returns before the imagen/embedding/
 	// standard branches so those are bypassed for code_assist chat. The endpoint
 	// has no /models/{model} segment and no version segment.
@@ -191,7 +212,12 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	if info.RuntimeGeminiOAuth {
+	if info.RuntimeVertexServiceAccount {
+		// Vertex AI service-account path: Bearer token (the minted SA access token).
+		// Do NOT set x-goog-api-key — it is mutually exclusive with Bearer auth.
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+		req.Set("User-Agent", geminiOAuthUserAgent)
+	} else if info.RuntimeGeminiOAuth {
 		// OAuth path: Bearer token with Gemini CLI User-Agent.
 		// Do NOT set x-goog-api-key — it is mutually exclusive with Bearer auth.
 		req.Set("Authorization", "Bearer "+info.ApiKey)

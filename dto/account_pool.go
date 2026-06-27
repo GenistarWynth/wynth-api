@@ -46,6 +46,13 @@ type AccountPoolCredentialConfigRequest struct {
 	// OAuthType selects the Gemini OAuth sub-type ("code_assist" or "ai_studio").
 	// Only meaningful for Gemini OAuth accounts; ignored otherwise.
 	OAuthType string `json:"oauth_type"`
+	// ServiceAccountJSON carries the raw GCP service-account JSON for a Gemini
+	// Vertex AI service_account credential (SECRET). Only used when Type is
+	// "service_account".
+	ServiceAccountJSON string `json:"service_account_json"`
+	// Location is the Vertex AI region (e.g. us-central1) for a service_account
+	// credential. Defaults server-side when empty.
+	Location string `json:"location"`
 }
 
 type AccountPoolTokenStateRequest struct {

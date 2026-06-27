@@ -34,13 +34,23 @@ type accountPoolGeminiOAuthRefreshFunc func(ctx context.Context, oauthType strin
 
 type accountPoolTokenStateUpdateFunc func(accountID int, oldTokenState string, newTokenState string) (int64, error)
 
+// accountPoolVertexSATokenMintFunc mints a Vertex AI service-account access token
+// from the raw SA JSON. It is overridable in tests.
+type accountPoolVertexSATokenMintFunc func(ctx context.Context, saJSON []byte, proxyURL string) (*CodexOAuthTokenResult, error)
+
 var (
 	accountPoolOAuthRefreshGroup  singleflight.Group
 	accountPoolOAuthRefresh       accountPoolOAuthRefreshFunc       = RefreshCodexOAuthTokenWithProxy
 	accountPoolClaudeOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshClaudeOAuthTokenWithProxy
 	accountPoolGeminiOAuthRefresh accountPoolGeminiOAuthRefreshFunc = RefreshGeminiOAuthTokenForType
 	accountPoolTokenStateUpdate   accountPoolTokenStateUpdateFunc   = updateAccountPoolRuntimeTokenState
+	accountPoolVertexSATokenMint  accountPoolVertexSATokenMintFunc  = MintVertexServiceAccountToken
 )
+
+func accountPoolIsServiceAccountCredential(credential AccountPoolCredentialConfig) bool {
+	return strings.EqualFold(strings.TrimSpace(credential.Type), AccountPoolCredentialTypeServiceAccount) &&
+		strings.TrimSpace(credential.ServiceAccountJSON) != ""
+}
 
 func ResolveAccountPoolRuntimeCredential(ctx context.Context, req AccountPoolRuntimeCredentialRequest) (string, error) {
 	if token := strings.TrimSpace(req.Credential.APIKey); token != "" {
@@ -49,6 +59,21 @@ func ResolveAccountPoolRuntimeCredential(ctx context.Context, req AccountPoolRun
 	now := req.Now
 	if now <= 0 {
 		now = common.GetTimestamp()
+	}
+	// Vertex AI service-account credentials mint a short-lived access token via the
+	// JWT-bearer flow. A cached, still-valid token is reused; otherwise a fresh
+	// token is minted and persisted into token_state via the CAS update path.
+	if accountPoolIsServiceAccountCredential(req.Credential) {
+		if accountPoolAccessTokenUsable(req.TokenState, now) {
+			return strings.TrimSpace(req.TokenState.AccessToken), nil
+		}
+		if req.AccountID <= 0 {
+			return "", errors.New("account pool account id is required for service account mint")
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		return mintAccountPoolRuntimeServiceAccountToken(ctx, req.AccountID, req.ProxyURL, now, req.SkipFailureRecord)
 	}
 	if accountPoolAccessTokenUsable(req.TokenState, now) {
 		return strings.TrimSpace(req.TokenState.AccessToken), nil
@@ -186,6 +211,86 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 			return strings.TrimSpace(latestState.AccessToken), nil
 		}
 		return "", errors.New("account pool oauth token state changed during refresh")
+	}
+	return nextState.AccessToken, nil
+}
+
+// mintAccountPoolRuntimeServiceAccountToken mints (or reuses a cached) Vertex AI
+// service-account access token for the given account, coalescing concurrent
+// callers via the shared singleflight group and persisting the minted token into
+// token_state via the CAS update path.
+func mintAccountPoolRuntimeServiceAccountToken(ctx context.Context, accountID int, proxyURL string, now int64, skipFailureRecord bool) (string, error) {
+	value, err, _ := accountPoolOAuthRefreshGroup.Do(accountPoolServiceAccountMintSingleflightKey(accountID, skipFailureRecord), func() (any, error) {
+		return mintAccountPoolRuntimeServiceAccountTokenOnce(ctx, accountID, proxyURL, now, skipFailureRecord)
+	})
+	if err != nil {
+		return "", err
+	}
+	token, ok := value.(string)
+	if !ok {
+		return "", errors.New("account pool service account mint returned invalid token")
+	}
+	return token, nil
+}
+
+func accountPoolServiceAccountMintSingleflightKey(accountID int, skipFailureRecord bool) string {
+	key := "vertex_sa:" + strconv.Itoa(accountID)
+	if skipFailureRecord {
+		return key + ":skip_failure_record"
+	}
+	return key + ":record_failure"
+}
+
+func mintAccountPoolRuntimeServiceAccountTokenOnce(ctx context.Context, accountID int, proxyURL string, now int64, skipFailureRecord bool) (string, error) {
+	account, credential, state, rawTokenState, err := loadAccountPoolRuntimeTokenState(accountID)
+	if err != nil {
+		return "", err
+	}
+	if !accountPoolIsServiceAccountCredential(credential) {
+		return "", errors.New("account pool service account credential is missing service_account_json")
+	}
+	if accountPoolAccessTokenUsable(state, now) {
+		return strings.TrimSpace(state.AccessToken), nil
+	}
+
+	result, err := accountPoolVertexSATokenMint(ctx, []byte(credential.ServiceAccountJSON), proxyURL)
+	if err != nil {
+		if !skipFailureRecord {
+			_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+		}
+		return "", err
+	}
+	if result == nil || strings.TrimSpace(result.AccessToken) == "" {
+		err := errors.New("account pool service account mint response missing access_token")
+		if !skipFailureRecord {
+			_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+		}
+		return "", err
+	}
+
+	nextState := state.NextVersion()
+	nextState.AccessToken = strings.TrimSpace(result.AccessToken)
+	// Service-account tokens are minted, not refresh-token-refreshed; clear any
+	// refresh token carried in the cached state.
+	nextState.RefreshToken = ""
+	nextState.ExpiresAt = result.ExpiresAt.Unix()
+	encryptedState, err := EncryptAccountPoolTokenState(nextState)
+	if err != nil {
+		return "", err
+	}
+	rowsAffected, err := accountPoolTokenStateUpdate(account.Id, rawTokenState, encryptedState)
+	if err != nil {
+		return "", err
+	}
+	if rowsAffected == 0 {
+		_, _, latestState, _, loadErr := loadAccountPoolRuntimeTokenState(account.Id)
+		if loadErr != nil {
+			return "", loadErr
+		}
+		if accountPoolAccessTokenUsable(latestState, now) {
+			return strings.TrimSpace(latestState.AccessToken), nil
+		}
+		return "", errors.New("account pool service account token state changed during mint")
 	}
 	return nextState.AccessToken, nil
 }

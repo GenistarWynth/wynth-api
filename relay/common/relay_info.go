@@ -175,6 +175,17 @@ type RelayInfo struct {
 	// RuntimeGeminiProjectID holds the GCP project id for Code Assist accounts.
 	// Only set when RuntimeGeminiOAuthType == "code_assist".
 	RuntimeGeminiProjectID string
+	// RuntimeVertexServiceAccount signals that the selected account-pool account is a
+	// Gemini Vertex AI service-account credential. When true, the Gemini adaptor
+	// routes to the regional Vertex AI endpoint with Bearer auth (no x-goog-api-key)
+	// and performs NO request/response wrapping (standard Gemini body/response).
+	RuntimeVertexServiceAccount bool
+	// RuntimeVertexProjectID holds the GCP project id (from the service-account JSON)
+	// for the Vertex AI endpoint path. Only set when RuntimeVertexServiceAccount.
+	RuntimeVertexProjectID string
+	// RuntimeVertexLocation holds the Vertex AI region (e.g. us-central1) for the
+	// endpoint path. Only set when RuntimeVertexServiceAccount.
+	RuntimeVertexLocation string
 
 	// WsHandshakeStatusCode/Header/Body capture an upstream WebSocket handshake
 	// REJECTION (e.g. 401/429) from the dialer's discarded *http.Response so that
