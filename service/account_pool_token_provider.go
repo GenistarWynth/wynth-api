@@ -33,6 +33,7 @@ var (
 	accountPoolOAuthRefreshGroup  singleflight.Group
 	accountPoolOAuthRefresh       accountPoolOAuthRefreshFunc       = RefreshCodexOAuthTokenWithProxy
 	accountPoolClaudeOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshClaudeOAuthTokenWithProxy
+	accountPoolGeminiOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshGeminiOAuthTokenWithProxy
 	accountPoolTokenStateUpdate   accountPoolTokenStateUpdateFunc   = updateAccountPoolRuntimeTokenState
 )
 
@@ -135,6 +136,8 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	switch platform {
 	case model.AccountPoolPlatformAnthropic:
 		result, err = accountPoolClaudeOAuthRefresh(ctx, refreshToken, proxyURL)
+	case model.AccountPoolPlatformGemini:
+		result, err = accountPoolGeminiOAuthRefresh(ctx, refreshToken, proxyURL)
 	case model.AccountPoolPlatformOpenAI, "":
 		result, err = accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
 	default:

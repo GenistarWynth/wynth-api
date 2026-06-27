@@ -364,16 +364,16 @@ func TestAccountPoolTokenProviderReturnsLatestTokenWhenOptimisticWriteLoses(t *t
 	assert.Equal(t, "access-winner", reloadedState.AccessToken)
 }
 
-// TestAccountPoolTokenProviderGeminiOAuthRejectsWithUnsupportedError verifies
-// that a gemini-platform account with OAuth credentials (no api_key, has a
-// refresh_token) returns an error mentioning the platform is not supported,
-// and neither the codex refresh seam nor the claude refresh seam is invoked.
-func TestAccountPoolTokenProviderGeminiOAuthRejectsWithUnsupportedError(t *testing.T) {
+// TestAccountPoolTokenProviderGeminiOAuthDispatchesToGeminiSeam verifies that a
+// Gemini-platform OAuth account dispatches to accountPoolGeminiOAuthRefresh (not
+// the codex or claude seams) and resolves the token.
+func TestAccountPoolTokenProviderGeminiOAuthDispatchesToGeminiSeam(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
-	service := AccountPoolService{}
-	pool := createAccountPoolServiceTestPool(t, service)
-	account := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
-		Name: "gemini-oauth",
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&pool).Update("platform", model.AccountPoolPlatformGemini).Error)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "gemini-oauth-dispatch",
 		Credential: AccountPoolCredentialConfig{
 			Type:         AccountPoolCredentialTypeOAuth,
 			RefreshToken: "gemini-refresh-token",
@@ -384,19 +384,29 @@ func TestAccountPoolTokenProviderGeminiOAuthRejectsWithUnsupportedError(t *testi
 		},
 	})
 
-	var codexCalls int
+	var codexCalls, claudeCalls, geminiCalls int
+
 	setAccountPoolOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
 		codexCalls++
-		return nil, errors.New("codex refresh must not be called for gemini")
+		return nil, errors.New("codex seam must NOT be called for gemini")
 	})
 
-	var claudeCalls int
 	oldClaude := accountPoolClaudeOAuthRefresh
 	accountPoolClaudeOAuthRefresh = func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
 		claudeCalls++
-		return nil, errors.New("claude refresh must not be called for gemini")
+		return nil, errors.New("claude seam must NOT be called for gemini")
 	}
 	t.Cleanup(func() { accountPoolClaudeOAuthRefresh = oldClaude })
+
+	setAccountPoolGeminiOAuthRefreshForTest(t, func(_ context.Context, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error) {
+		geminiCalls++
+		assert.Equal(t, "gemini-refresh-token", refreshToken)
+		return &CodexOAuthTokenResult{
+			AccessToken:  "ya29.gemini-access-token",
+			RefreshToken: "1//gemini-refresh-next",
+			ExpiresAt:    time.Unix(2000, 0),
+		}, nil
+	})
 
 	token, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
 		AccountID: account.Id,
@@ -412,11 +422,11 @@ func TestAccountPoolTokenProviderGeminiOAuthRejectsWithUnsupportedError(t *testi
 		Now:      1000,
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "gemini")
-	assert.Empty(t, token)
-	assert.Equal(t, 0, codexCalls, "codex refresh seam must NOT be called for gemini OAuth")
-	assert.Equal(t, 0, claudeCalls, "claude refresh seam must NOT be called for gemini OAuth")
+	require.NoError(t, err)
+	assert.Equal(t, "ya29.gemini-access-token", token)
+	assert.Equal(t, 1, geminiCalls, "gemini seam must be called exactly once")
+	assert.Equal(t, 0, codexCalls, "codex seam must NOT be called for gemini OAuth")
+	assert.Equal(t, 0, claudeCalls, "claude seam must NOT be called for gemini OAuth")
 }
 
 // TestAccountPoolTokenProviderGeminiAPIKeyResolvesDirectly verifies that a
@@ -471,4 +481,11 @@ func setAccountPoolTokenStateUpdateForTest(t *testing.T, update accountPoolToken
 	t.Cleanup(func() {
 		accountPoolTokenStateUpdate = oldUpdate
 	})
+}
+
+func setAccountPoolGeminiOAuthRefreshForTest(t *testing.T, refresh accountPoolClaudeOAuthRefreshFunc) {
+	t.Helper()
+	old := accountPoolGeminiOAuthRefresh
+	accountPoolGeminiOAuthRefresh = refresh
+	t.Cleanup(func() { accountPoolGeminiOAuthRefresh = old })
 }
