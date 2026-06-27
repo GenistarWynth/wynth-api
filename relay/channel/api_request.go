@@ -407,8 +407,26 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	// Reset any handshake context captured by a prior dial on this same info so a
+	// stale 401/429 cannot be attached to a later transport-level failure.
+	info.WsHandshakeStatusCode = 0
+	info.WsHandshakeHeader = nil
+	info.WsHandshakeBody = nil
+	targetConn, resp, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
+		// On a handshake rejection the dialer returns the upstream *http.Response
+		// (with status/headers/body). Capture it so account-pool failure
+		// classification can apply a status/platform-specific cooldown rather than
+		// a generic transport cooldown.
+		if resp != nil {
+			info.WsHandshakeStatusCode = resp.StatusCode
+			info.WsHandshakeHeader = resp.Header
+			if resp.Body != nil {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+				_ = resp.Body.Close()
+				info.WsHandshakeBody = body
+			}
+		}
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
 	}
 	// send request body

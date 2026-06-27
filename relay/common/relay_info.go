@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -167,6 +168,16 @@ type RelayInfo struct {
 	// Google OAuth (Bearer token) rather than an API key. When true, the
 	// Gemini adaptor must send Authorization: Bearer <ApiKey> instead of x-goog-api-key.
 	RuntimeGeminiOAuth bool
+
+	// WsHandshakeStatusCode/Header/Body capture an upstream WebSocket handshake
+	// REJECTION (e.g. 401/429) from the dialer's discarded *http.Response so that
+	// account-pool failure classification can apply a status/platform-specific
+	// cooldown (401 two-strike, 429 reset window) instead of a generic transport
+	// cooldown. They are reset at the start of every DoWssRequest dial so a stale
+	// value from a prior attempt cannot be attached to a later transport error.
+	WsHandshakeStatusCode int
+	WsHandshakeHeader     http.Header
+	WsHandshakeBody       []byte
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see

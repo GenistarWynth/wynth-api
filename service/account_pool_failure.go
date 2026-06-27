@@ -121,7 +121,11 @@ func classifyAccountPoolFailure(account model.AccountPoolAccount, err *types.New
 	}
 
 	// Case 1 — Network / transport error. Check first because code may be 0.
-	if err.GetErrorCode() == types.ErrorCodeDoRequestFailed {
+	// A DoRequestFailed that still carries an upstream HTTP status (e.g. a rejected
+	// WebSocket handshake captured by DoWssRequest) is a real upstream rejection,
+	// not a transport failure, so it must fall through to the status-based branches
+	// below for a precise 401/403/429/5xx cooldown.
+	if err.GetErrorCode() == types.ErrorCodeDoRequestFailed && err.GetUpstreamStatusCode() == 0 {
 		persistent := classifyTransportError(err)
 		reason := sanitizeAccountPoolFailureMessage(err, accountPoolTempDisabledReasonMaxLength)
 		var disableUntil int64

@@ -23,6 +23,20 @@ func markSkipRetry(err *types.NewAPIError) {
 	types.ErrOptionWithSkipRetry()(err)
 }
 
+// wssDialError builds the error for a failed upstream WebSocket dial. When the
+// handshake was REJECTED by the upstream (a non-101 response captured in
+// DoWssRequest onto info), the upstream status/header/body are attached so
+// account-pool failure classification can apply a 401/403/429/5xx-specific
+// cooldown instead of a generic transport cooldown. A pure transport failure
+// (no upstream response) yields a plain ErrorCodeDoRequestFailed.
+func wssDialError(info *relaycommon.RelayInfo, err error) *types.NewAPIError {
+	apiErr := types.NewError(err, types.ErrorCodeDoRequestFailed)
+	if info != nil && info.WsHandshakeStatusCode > 0 {
+		apiErr.SetUpstreamResponse(info.WsHandshakeHeader, info.WsHandshakeBody, info.WsHandshakeStatusCode)
+	}
+	return apiErr
+}
+
 func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	statusCodeMappingStr := c.GetString("status_code_mapping")
@@ -49,8 +63,11 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.
 		resp, err := adaptor.DoRequest(c, info, nil)
 		if err != nil {
 			// Handshake/dial failure occurs before any frame flows, so the
-			// account-pool loop may safely retry on another pooled account.
-			return types.NewError(err, types.ErrorCodeDoRequestFailed)
+			// account-pool loop may safely retry on another pooled account. Attach
+			// any captured upstream handshake rejection (401/403/429/...) so failure
+			// classification applies a status/platform-specific cooldown rather than
+			// a generic transport cooldown.
+			return wssDialError(info, err)
 		}
 
 		if resp != nil {
