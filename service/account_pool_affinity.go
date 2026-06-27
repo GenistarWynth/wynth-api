@@ -73,7 +73,54 @@ func accountPoolRuntimeAffinitySignal(c *gin.Context, info *relaycommon.RelayInf
 		if value := strings.TrimSpace(req.PreviousResponseID); value != "" {
 			return "responses_compaction_previous:" + value
 		}
+	case *dto.ClaudeRequest:
+		return accountPoolRuntimeAffinityClaudeSignal(req)
 	}
+	return ""
+}
+
+// accountPoolRuntimeAffinityClaudeSignal extracts an affinity signal from a Claude API request.
+// Priority:
+//  1. metadata.user_id (non-empty) → "claude_metadata_user:" + digest(user_id)
+//  2. stable digest of system + ordered message content → "claude_digest:" + sha256hex
+//  3. empty conversation → "" (no affinity)
+func accountPoolRuntimeAffinityClaudeSignal(req *dto.ClaudeRequest) string {
+	// Priority 1: metadata user_id
+	if len(req.Metadata) > 0 {
+		var meta struct {
+			UserID string `json:"user_id"`
+		}
+		if err := common.Unmarshal(req.Metadata, &meta); err == nil && strings.TrimSpace(meta.UserID) != "" {
+			return "claude_metadata_user:" + accountPoolRuntimeAffinityDigest(strings.TrimSpace(meta.UserID))
+		}
+	}
+
+	// Priority 2: digest of system + message content
+	var buf strings.Builder
+
+	// System prompt text
+	if req.System != nil {
+		if req.IsStringSystem() {
+			buf.WriteString(req.GetStringSystem())
+		} else {
+			for _, block := range req.ParseSystem() {
+				if block.Type == "text" {
+					buf.WriteString(block.GetText())
+				}
+			}
+		}
+	}
+
+	// Messages: role + text content in order
+	for _, msg := range req.Messages {
+		buf.WriteString(msg.Role)
+		buf.WriteString(msg.GetStringContent())
+	}
+
+	if combined := buf.String(); combined != "" {
+		return "claude_digest:" + accountPoolRuntimeAffinityDigest(combined)
+	}
+
 	return ""
 }
 
