@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 )
 
@@ -95,8 +96,10 @@ type geminiCodeAssistStreamReader struct {
 
 func newGeminiCodeAssistStreamReader(src io.ReadCloser) *geminiCodeAssistStreamReader {
 	scanner := bufio.NewScanner(src)
-	// Allow large SSE events (default bufio limit is 64KiB).
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	// Allow large SSE events up to the same limit used by the standard Gemini stream
+	// path (helper.DefaultMaxScannerBufferSize, currently 128 MiB). The old 4 MiB cap
+	// caused bufio.ErrTooLong on large responses that the standard path handled fine.
+	scanner.Buffer(make([]byte, 0, helper.InitialScannerBufferSize), helper.DefaultMaxScannerBufferSize)
 	scanner.Split(bufio.ScanLines)
 	return &geminiCodeAssistStreamReader{
 		src:     src,

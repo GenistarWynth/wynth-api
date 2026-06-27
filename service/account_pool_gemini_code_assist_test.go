@@ -139,6 +139,55 @@ func TestApplyAccountPoolRuntimeSelection_CodeAssistDetectionFailureReturnsError
 	assert.Contains(t, err.Error(), "project detection")
 }
 
+// TestApplyAccountPoolRuntimeSelection_CodeAssistDetectionFailureLeavesOAuthTypeEmpty
+// verifies FIX 4: when the project detector returns an error,
+// ApplyAccountPoolRuntimeSelection must propagate the error AND leave
+// info.RuntimeGeminiOAuthType at its reset value (""), not "code_assist".
+// This prevents downstream code from treating the account as code_assist when
+// project detection actually failed.
+func TestApplyAccountPoolRuntimeSelection_CodeAssistDetectionFailureLeavesOAuthTypeEmpty(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "code-assist-detect-fail-oauthtype",
+		Credential: AccountPoolCredentialConfig{
+			Type:      AccountPoolCredentialTypeOAuth,
+			OAuthType: AccountPoolGeminiOAuthTypeCodeAssist,
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "ya29.fail-oauthtype-token",
+			ExpiresAt:   9999999999,
+		},
+	})
+
+	origDetector := accountPoolDetectGeminiCodeAssistProject
+	accountPoolDetectGeminiCodeAssistProject = func(_ context.Context, _, _ string) (string, error) {
+		return "", errors.New("network error during project detection")
+	}
+	t.Cleanup(func() { accountPoolDetectGeminiCodeAssistProject = origDetector })
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-2.5-pro",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:         channel.Id,
+			ApiKey:            "AIzaSy-channel-key",
+			UpstreamModelName: "gemini-2.5-pro",
+		},
+	}
+
+	err := ApplyAccountPoolRuntimeSelection(ctx, info, nil)
+	require.Error(t, err, "detection failure must propagate as error")
+	assert.Empty(t, info.RuntimeGeminiOAuthType,
+		"RuntimeGeminiOAuthType must be empty (not 'code_assist') when detection fails")
+	assert.Empty(t, info.RuntimeGeminiProjectID,
+		"RuntimeGeminiProjectID must be empty when detection fails")
+}
+
 // TestApplyAccountPoolRuntimeSelection_PlainGeminiOAuthNotCodeAssist verifies that a
 // Gemini OAuth account WITHOUT oauth_type=code_assist does NOT set RuntimeGeminiOAuthType
 // and does NOT call the Code Assist detector.

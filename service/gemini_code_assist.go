@@ -174,8 +174,10 @@ func postGeminiCodeAssist[Req any, Resp any](ctx context.Context, client *http.C
 }
 
 // cacheAccountPoolGeminiProject persists the detected GCP project id into an account's
-// token state. This is best-effort: if the state was concurrently updated, the worst
-// case is that we re-detect on the next request (Version is NOT bumped).
+// token state using an optimistic-lock (CAS) to avoid clobbering a concurrent OAuth
+// refresh. If the row was concurrently modified (RowsAffected == 0) we treat it as a
+// best-effort no-op and return nil — project re-detection will happen on the next request.
+// Version is NOT bumped.
 func cacheAccountPoolGeminiProject(accountID int, projectID string) error {
 	if accountID <= 0 || strings.TrimSpace(projectID) == "" {
 		return nil
@@ -186,9 +188,17 @@ func cacheAccountPoolGeminiProject(accountID int, projectID string) error {
 		return fmt.Errorf("cacheAccountPoolGeminiProject: load account: %w", err)
 	}
 
-	state, err := DecryptAccountPoolTokenState(account.TokenState)
+	// Capture the encrypted token_state we read — this is the CAS guard.
+	oldTokenState := account.TokenState
+
+	state, err := DecryptAccountPoolTokenState(oldTokenState)
 	if err != nil {
 		return fmt.Errorf("cacheAccountPoolGeminiProject: decrypt token state: %w", err)
+	}
+
+	// Short-circuit: if the project is already cached, nothing to do.
+	if strings.TrimSpace(state.ProjectID) == strings.TrimSpace(projectID) {
+		return nil
 	}
 
 	state.ProjectID = strings.TrimSpace(projectID)
@@ -198,7 +208,16 @@ func cacheAccountPoolGeminiProject(accountID int, projectID string) error {
 		return fmt.Errorf("cacheAccountPoolGeminiProject: encrypt token state: %w", err)
 	}
 
-	return model.DB.Model(&model.AccountPoolAccount{}).
-		Where("id = ?", accountID).
-		Update("token_state", encrypted).Error
+	// Optimistic-lock: only update if the token_state in the DB still matches
+	// what we read above. If a concurrent OAuth refresh already wrote a new
+	// token_state, RowsAffected will be 0 and we silently skip the write so
+	// the concurrent refresh's AccessToken is preserved.
+	tx := model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ? AND token_state = ?", accountID, oldTokenState).
+		Update("token_state", encrypted)
+	if tx.Error != nil {
+		return fmt.Errorf("cacheAccountPoolGeminiProject: update token state: %w", tx.Error)
+	}
+	// RowsAffected == 0 means a concurrent write won — best-effort, silently skip.
+	return nil
 }

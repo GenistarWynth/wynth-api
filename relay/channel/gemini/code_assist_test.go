@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -220,16 +221,26 @@ func TestUnwrapGeminiCodeAssistResponse(t *testing.T) {
 	})
 }
 
-// TestDoResponseStandardBodyUntouched is the zero-regression assertion for the
-// response path: a non-code_assist DoResponse must not read/replace resp.Body.
-func TestDoResponseBodyUntouchedForStandard(t *testing.T) {
-	// We assert at the unwrap-decision level: standard info is not code_assist,
-	// so isGeminiCodeAssist must be false and no unwrap is applied.
+// TestIsGeminiCodeAssistPredicate verifies the routing predicate that guards ALL
+// code_assist-specific behaviour in DoRequest/DoResponse/GetRequestURL. A wrong
+// predicate would silently unwrap standard responses or skip code_assist wrapping.
+// Option (b): we rely on predicate correctness + the existing DoRequest and
+// GetRequestURL integration tests for full regression; the response-path is
+// guarded by the same predicate, so if it is correct the body is never touched
+// for standard accounts.
+func TestIsGeminiCodeAssistPredicate(t *testing.T) {
+	assert.False(t, isGeminiCodeAssist(nil),
+		"nil RelayInfo must be safe and return false")
 	assert.False(t, isGeminiCodeAssist(standardGeminiInfo()),
-		"standard account must not be treated as code_assist")
+		"standard (API-key) account must not be treated as code_assist")
 	assert.True(t, isGeminiCodeAssist(codeAssistInfo()),
-		"code_assist account must be detected")
-	assert.False(t, isGeminiCodeAssist(nil), "nil info must be safe and false")
+		"account with OAuthType=code_assist must be detected as code_assist")
+
+	// Partial state: OAuth but wrong type must not match.
+	partial := codeAssistInfo()
+	partial.RuntimeGeminiOAuthType = "ai_studio"
+	assert.False(t, isGeminiCodeAssist(partial),
+		"OAuthType != code_assist must not be detected as code_assist")
 }
 
 // --- Stream unwrap reader ---------------------------------------------------
@@ -311,4 +322,70 @@ func TestGeminiCodeAssistStreamReaderPartialReads(t *testing.T) {
 	}
 	assert.Equal(t, want, string(got),
 		"one-byte-at-a-time reads must reproduce the unwrapped stream exactly")
+}
+
+// TestGetRequestURLCodeAssistNormalizesThinkingModelName verifies FIX 1:
+// when ThinkingAdapterEnabled is true and the upstream model name carries a
+// thinking suffix, GetRequestURL must strip the suffix BEFORE the code_assist
+// early-return so that DoRequest wraps the clean base model name into the
+// cloudcode-pa envelope's "model" field.
+func TestGetRequestURLCodeAssistNormalizesThinkingModelName(t *testing.T) {
+	withCodeAssistBaseURL(t, "https://cloudcode-pa.example")
+
+	// Enable thinking adapter for the duration of this test.
+	settings := model_setting.GetGeminiSettings()
+	origEnabled := settings.ThinkingAdapterEnabled
+	settings.ThinkingAdapterEnabled = true
+	t.Cleanup(func() { settings.ThinkingAdapterEnabled = origEnabled })
+
+	a := &Adaptor{}
+
+	tests := []struct {
+		name          string
+		upstreamModel string
+		wantModel     string
+	}{
+		{"thinking suffix", "gemini-2.5-pro-thinking", "gemini-2.5-pro"},
+		{"thinking-budget suffix", "gemini-2.5-pro-thinking-1024", "gemini-2.5-pro"},
+		{"nothinking suffix", "gemini-2.5-pro-nothinking", "gemini-2.5-pro"},
+		{"clean model unchanged", "gemini-2.5-pro", "gemini-2.5-pro"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			info := codeAssistInfo()
+			info.UpstreamModelName = tc.upstreamModel
+			// OriginModelName must also be set so ShouldPreserveThinkingSuffix works correctly.
+			info.OriginModelName = tc.upstreamModel
+
+			_, err := a.GetRequestURL(info)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantModel, info.UpstreamModelName,
+				"UpstreamModelName (used by DoRequest to build the wrapper 'model' field) must be normalized before code_assist routing")
+		})
+	}
+}
+
+// TestGeminiCodeAssistStreamReaderLargeLine verifies FIX 3:
+// a single SSE data line whose inner JSON payload exceeds the old 4 MiB cap
+// (we use ~5 MiB) must be unwrapped without error.
+func TestGeminiCodeAssistStreamReaderLargeLine(t *testing.T) {
+	// Build a ~5 MiB inner payload by padding the text field.
+	const targetSize = 5 * 1024 * 1024
+	padding := strings.Repeat("x", targetSize)
+	inner := `{"candidates":[{"content":{"parts":[{"text":"` + padding + `"}]}}]}`
+	wrapped := `data: {"response":` + inner + `}` + "\n"
+
+	r := newGeminiCodeAssistStreamReader(io.NopCloser(strings.NewReader(wrapped)))
+	out, err := io.ReadAll(r)
+	require.NoError(t, err, "a >4 MiB SSE line must not return bufio.ErrTooLong")
+	require.NoError(t, r.Close())
+
+	assert.True(t, strings.HasPrefix(string(out), "data: {"),
+		"output must be a data: line with the inner JSON")
+	assert.True(t, strings.Contains(string(out), `"candidates"`),
+		"unwrapped inner JSON must contain the candidates key")
+	assert.False(t, strings.Contains(string(out), `"response"`),
+		"the outer response wrapper must have been stripped")
 }

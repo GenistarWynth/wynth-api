@@ -134,17 +134,9 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
-	// Code Assist (cloudcode-pa) routing. Returns before the imagen/embedding/
-	// standard branches so those are bypassed for code_assist chat. The endpoint
-	// has no /models/{model} segment and no version segment.
-	if isGeminiCodeAssist(info) {
-		if info.IsStream {
-			info.DisablePing = true
-			return geminiCodeAssistBaseURL + "/v1internal:streamGenerateContent?alt=sse", nil
-		}
-		return geminiCodeAssistBaseURL + "/v1internal:generateContent", nil
-	}
-
+	// Normalize thinking-adapter suffixes from UpstreamModelName BEFORE any
+	// routing branch so that both code_assist and the standard path send the
+	// clean base model name upstream.
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 		!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
 		// 新增逻辑：处理 -thinking-<budget> 格式
@@ -158,6 +150,17 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
 			info.UpstreamModelName = baseModel
 		}
+	}
+
+	// Code Assist (cloudcode-pa) routing. Returns before the imagen/embedding/
+	// standard branches so those are bypassed for code_assist chat. The endpoint
+	// has no /models/{model} segment and no version segment.
+	if isGeminiCodeAssist(info) {
+		if info.IsStream {
+			info.DisablePing = true
+			return geminiCodeAssistBaseURL + "/v1internal:streamGenerateContent?alt=sse", nil
+		}
+		return geminiCodeAssistBaseURL + "/v1internal:generateContent", nil
 	}
 
 	version := model_setting.GetGeminiVersionSetting(info.UpstreamModelName)

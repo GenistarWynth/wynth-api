@@ -106,11 +106,11 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeGeminiOAuth = false
 	}
 	// For Gemini Code Assist OAuth accounts, detect or reuse the GCP project id.
+	// RuntimeGeminiOAuthType is set ONLY after the project id is resolved so that
+	// on detection failure the field is left at its reset ("") value.
 	if selection.Platform == model.AccountPoolPlatformGemini &&
 		accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState) &&
 		strings.EqualFold(strings.TrimSpace(selection.Credential.OAuthType), AccountPoolGeminiOAuthTypeCodeAssist) {
-
-		info.RuntimeGeminiOAuthType = AccountPoolGeminiOAuthTypeCodeAssist
 
 		projectID := strings.TrimSpace(selection.TokenState.ProjectID)
 		if projectID == "" {
@@ -126,6 +126,8 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 			// Best-effort cache: ignore error (worst case we re-detect next call).
 			_ = cacheAccountPoolGeminiProject(selection.AccountID, projectID)
 		}
+		// Detection and caching succeeded — now it is safe to mark the type.
+		info.RuntimeGeminiOAuthType = AccountPoolGeminiOAuthTypeCodeAssist
 		info.RuntimeGeminiProjectID = projectID
 	}
 	if request != nil {
