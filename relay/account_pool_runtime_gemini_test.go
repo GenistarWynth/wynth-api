@@ -199,3 +199,104 @@ func newAccountPoolRelayTestGeminiInfo(channelID int, originModel string, upstre
 		},
 	}
 }
+
+// TestAccountPoolGeminiOAuthAccountSetsGeminiOAuthFlagTrue verifies that a Gemini
+// OAuth account (credential type=oauth, live access token) sets
+// info.RuntimeGeminiOAuth=true and info.ApiKey to the access token.
+func TestAccountPoolGeminiOAuthAccountSetsGeminiOAuthFlagTrue(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestGeminiPool(t)
+	channel := createAccountPoolRelayTestGeminiChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 0)
+
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "gemini-oauth-account",
+		Credential: service.AccountPoolCredentialConfig{
+			Type: service.AccountPoolCredentialTypeOAuth,
+		},
+		TokenState: service.AccountPoolTokenState{
+			AccessToken: "ya29.gemini-live-token",
+			ExpiresAt:   9999999999,
+		},
+	})
+
+	info := newAccountPoolRelayTestGeminiInfo(channel.Id, "gemini-2.5-pro", "gemini-2.5-pro")
+	baseRequest := &dto.GeminiChatRequest{Contents: []dto.GeminiChatContent{{Role: "user", Parts: []dto.GeminiPart{{Text: "hello"}}}}}
+	var capturedGeminiOAuth bool
+	var capturedApiKey string
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		req, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return req, nil
+	}, func(r dto.Request) *types.NewAPIError {
+		capturedGeminiOAuth = info.RuntimeGeminiOAuth
+		capturedApiKey = info.ApiKey
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.True(t, capturedGeminiOAuth, "Gemini OAuth account must set RuntimeGeminiOAuth=true")
+	assert.Equal(t, "ya29.gemini-live-token", capturedApiKey)
+}
+
+// TestAccountPoolGeminiAPIKeyAccountSetsGeminiOAuthFlagFalse verifies that a Gemini
+// API-key account sets RuntimeGeminiOAuth=false. This is distinct from
+// TestAccountPoolGeminiAPIKeyAccountSetsOAuthFlagFalse which checks RuntimeAnthropicOAuth.
+func TestAccountPoolGeminiAPIKeyAccountSetsGeminiOAuthFlagFalse(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
+	pool := createAccountPoolRelayTestGeminiPool(t)
+	channel := createAccountPoolRelayTestGeminiChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 0)
+
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name: "gemini-apikey-only",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:   service.AccountPoolCredentialTypeAPIKey,
+			APIKey: "AIzaSy-test-key-gemini-oauth-false",
+		},
+	})
+
+	info := newAccountPoolRelayTestGeminiInfo(channel.Id, "gemini-2.5-pro", "gemini-2.5-pro")
+	baseRequest := &dto.GeminiChatRequest{Contents: []dto.GeminiChatContent{{Role: "user", Parts: []dto.GeminiPart{{Text: "hello"}}}}}
+	var capturedGeminiOAuth bool
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		req, err := common.DeepCopy(baseRequest)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return req, nil
+	}, func(r dto.Request) *types.NewAPIError {
+		capturedGeminiOAuth = info.RuntimeGeminiOAuth
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.False(t, capturedGeminiOAuth, "API-key Gemini account must NOT set RuntimeGeminiOAuth")
+}
+
+// TestAccountPoolGeminiOAuthSnapshotRestored verifies that RuntimeGeminiOAuth is
+// properly snapshotted and restored across pool retries, parallel to the
+// RuntimeAnthropicOAuth snapshot test for Claude.
+func TestAccountPoolGeminiOAuthSnapshotRestored(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RuntimeGeminiOAuth: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "ya29.original",
+			UpstreamModelName: "gemini-2.5-pro",
+		},
+	}
+	snapshot := snapshotAccountPoolRuntimeRelay(info)
+
+	// Mutate the flag (simulating what a pool attempt might do).
+	info.RuntimeGeminiOAuth = false
+
+	restoreAccountPoolRuntimeRelay(info, snapshot)
+
+	assert.True(t, info.RuntimeGeminiOAuth, "RuntimeGeminiOAuth must be restored from snapshot")
+}
