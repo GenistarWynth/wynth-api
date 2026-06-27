@@ -9,6 +9,7 @@ import {
   buildPoolPayload,
   buildProxyPayload,
   defaultChannelTypeForPlatform,
+  accountToFormValues,
   emptyAccountForm,
   emptyAccountImportForm,
   emptyPoolForm,
@@ -19,6 +20,62 @@ import {
   normalizeModelListText,
   platformSupportsOAuthCredential,
 } from './account-pool-form'
+import type { AccountPoolAccount } from '../types'
+
+function makeAccount(
+  overrides: Partial<AccountPoolAccount> = {}
+): AccountPoolAccount {
+  return {
+    id: 1,
+    pool_id: 1,
+    name: 'acct',
+    account_identifier: 'acct-1',
+    status: 'enabled',
+    oauth_type: '',
+    priority: 0,
+    weight: 1,
+    max_concurrency: 1,
+    request_quota: 0,
+    request_quota_window_seconds: 0,
+    expires_at: 0,
+    auto_pause_on_expired: false,
+    proxy_id: 0,
+    supported_models: [],
+    model_mapping: {},
+    last_used_at: 0,
+    last_success_at: 0,
+    last_failure_at: 0,
+    success_count: 0,
+    failure_count: 0,
+    total_prompt_tokens: 0,
+    total_completion_tokens: 0,
+    total_cached_tokens: 0,
+    total_cache_write_tokens: 0,
+    last_prompt_tokens: 0,
+    last_completion_tokens: 0,
+    last_cached_tokens: 0,
+    last_cache_write_tokens: 0,
+    total_latency_ms: 0,
+    latency_sample_count: 0,
+    last_latency_ms: 0,
+    total_first_token_latency_ms: 0,
+    first_token_latency_sample_count: 0,
+    last_first_token_latency_ms: 0,
+    rate_limited_until: 0,
+    temp_disabled_until: 0,
+    temp_disabled_reason: '',
+    last_error: '',
+    last_capability_check_at: 0,
+    last_capability_check_status: '',
+    last_capability_check_error: '',
+    last_capability_check_models: [],
+    has_credential: false,
+    has_token: false,
+    created_time: 0,
+    updated_time: 0,
+    ...overrides,
+  }
+}
 
 describe('account pool form helpers', () => {
   test('builds a trimmed pool payload with OpenAI defaults', () => {
@@ -132,6 +189,36 @@ describe('account pool form helpers', () => {
         refresh_token: 'refresh-token',
       }
     )
+  })
+
+  test('infers oauth credential_type on edit so the oauth_type selector shows', () => {
+    const values = accountToFormValues(
+      makeAccount({ oauth_type: 'code_assist', has_token: true })
+    )
+    assert.equal(values.credential_type, 'oauth')
+    assert.equal(values.oauth_type, 'code_assist')
+    // Secret fields stay blank on edit; only the selector value is restored.
+    assert.equal(values.api_key, '')
+    assert.equal(values.email, '')
+    assert.equal(values.refresh_token, '')
+    assert.equal(values.access_token, '')
+    assert.equal(values.token_refresh_token, '')
+  })
+
+  test('infers oauth credential_type from a stored token without an oauth_type', () => {
+    const values = accountToFormValues(
+      makeAccount({ oauth_type: '', has_token: true })
+    )
+    assert.equal(values.credential_type, 'oauth')
+    assert.equal(values.oauth_type, '')
+  })
+
+  test('infers api_key credential_type for a token-less account on edit', () => {
+    const values = accountToFormValues(
+      makeAccount({ oauth_type: '', has_token: false, has_credential: true })
+    )
+    assert.equal(values.credential_type, 'api_key')
+    assert.equal(values.api_key, '')
   })
 
   test('preserves zero max concurrency as unlimited for account payloads', () => {

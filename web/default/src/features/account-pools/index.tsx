@@ -3706,7 +3706,9 @@ function AccountFormSheet(props: {
       const next = props.account
         ? accountToFormValues(props.account)
         : emptyAccountForm()
-      // Gemini pools do not support OAuth credentials yet; fall back to api_key.
+      // Guard against a platform that does not support OAuth credentials by
+      // falling back to api_key. All platforms currently support OAuth, so this
+      // is defensive and normally a no-op.
       if (!oauthSupported && next.credential_type === 'oauth') {
         next.credential_type = 'api_key'
       }

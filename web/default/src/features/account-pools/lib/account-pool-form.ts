@@ -326,10 +326,20 @@ export function buildAccountPayload(
 export function accountToFormValues(
   account: AccountPoolAccount
 ): AccountPoolAccountFormValues {
+  // Infer the credential type from the account view so the OAuth sub-type
+  // selector (gated on credential_type === 'oauth') stays visible when editing
+  // an OAuth account. Secret fields remain blank on edit regardless; only this
+  // selector value is restored. An oauth_type or a stored token both signal an
+  // OAuth account, while a token-less account falls back to api_key.
+  const inferredCredentialType: AccountPoolCredentialType =
+    (account.oauth_type && account.oauth_type !== '') || account.has_token
+      ? 'oauth'
+      : 'api_key'
+
   return {
     name: account.name,
     account_identifier: account.account_identifier,
-    credential_type: 'api_key',
+    credential_type: inferredCredentialType,
     oauth_type: account.oauth_type || '',
     api_key: '',
     email: '',
