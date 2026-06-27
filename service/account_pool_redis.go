@@ -40,18 +40,26 @@ const (
 	accountPoolRedisKeyPrefix = "account_pool:"
 	accountPoolRedisOpTimeout = 2 * time.Second
 
-	// accountPoolRedisLeaseTTLSeconds is the crash-recovery safety net for a
-	// distributed concurrency lease. Normal completion releases the slot via
-	// ZREM; this TTL only governs how long a slot stays held after an instance
-	// dies mid-request without releasing. It must comfortably exceed the longest
-	// realistic single request so a live (e.g. long streaming) request is not
-	// purged out from under itself.
-	accountPoolRedisLeaseTTLSeconds = int64(900)
-
 	// accountPoolRedisAffinityTTLSeconds is the sliding idle TTL for a pinned
 	// session, enforced by the Redis key expiry (mirrors the in-memory idle TTL).
 	accountPoolRedisAffinityTTLSeconds = accountPoolRuntimeAffinityTTLSeconds
 )
+
+// accountPoolRedisLeaseTTLSeconds is the crash-recovery safety net for a
+// distributed concurrency lease. Normal completion releases the slot via ZREM;
+// this TTL only governs two things:
+//   - how long a slot stays held after an instance dies mid-request without
+//     releasing (lower = faster recovery), and
+//   - the longest a single request may run before its slot is reclaimed while
+//     still in flight, which would let a concurrent request transiently exceed
+//     the cap (higher = safer against over-subscription).
+//
+// The default (1800s/30min) comfortably exceeds virtually every real request so
+// over-subscription effectively never happens, and 30min of slightly reduced
+// concurrency on a surviving instance after a crash is far safer than briefly
+// exceeding an upstream's per-account concurrency limit (which risks 429s/bans).
+// Operators who need faster crash recovery can lower it via the env var.
+var accountPoolRedisLeaseTTLSeconds = int64(common.GetEnvOrDefault("ACCOUNT_POOL_REDIS_LEASE_TTL_SECONDS", 1800))
 
 func accountPoolRedisOn() bool {
 	return common.RedisEnabled && common.RDB != nil
@@ -148,6 +156,9 @@ func accountPoolRedisAffinityRemember(key string, bindingID, accountID int, now 
 		bindingID, accountID, now, accountPoolRedisAffinityTTLSeconds).Err()
 }
 
+// accountPoolRedisAffinityLookup is read-only except for eviction: it does NOT
+// refresh the sliding idle TTL (only remember() does, matching the in-memory
+// manager), so a session that only reads without re-pinning eventually expires.
 func accountPoolRedisAffinityLookup(key string, bindingID int, now int64) (int, bool, error) {
 	ctx, cancel := accountPoolRedisCtx()
 	defer cancel()

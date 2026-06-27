@@ -255,3 +255,50 @@ func TestAccountPoolRedisUserSlotGuards(t *testing.T) {
 	require.True(t, ok, "userID<=0 is unscoped no-op")
 	require.NotNil(t, release)
 }
+
+// ---- Fail-safe fallback to in-memory on Redis errors -----------------------
+//
+// The core safety contract: a Redis op error at request time must NOT fail the
+// request; it degrades to the in-memory path for that op so per-instance
+// enforcement still applies. miniredis.SetError makes every command error.
+
+func TestAccountPoolRedisBlockFallsBackToInMemoryOnError(t *testing.T) {
+	mr := setupAccountPoolRedisForTest(t)
+	now := common.GetTimestamp()
+	const id = 21
+
+	mr.SetError("CRASHED")
+	blockAccountPoolRuntime(id, now+300)                  // Redis SET errors → in-memory block
+	assert.True(t, accountPoolRuntimeBlocked(id, now+10)) // Redis GET errors → in-memory view → blocked
+	mr.SetError("")
+}
+
+func TestAccountPoolRedisLeaseFallsBackToInMemoryOnError(t *testing.T) {
+	mr := setupAccountPoolRedisForTest(t)
+	const id = 22
+
+	mr.SetError("CRASHED")
+	r1, ok1 := tryAcquireAccountPoolRuntimeLease(id, 1) // Redis errors → in-memory acquire
+	require.True(t, ok1)
+	_, ok2 := tryAcquireAccountPoolRuntimeLease(id, 1) // in-memory limiter still enforces cap=1
+	assert.False(t, ok2, "in-memory fallback must enforce the cap during a Redis outage")
+
+	r1()                                                // in-memory release
+	r3, ok3 := tryAcquireAccountPoolRuntimeLease(id, 1) // slot freed by the in-memory release
+	require.True(t, ok3)
+	r3()
+	mr.SetError("")
+}
+
+func TestAccountPoolRedisAffinityFallsBackToInMemoryOnError(t *testing.T) {
+	mr := setupAccountPoolRedisForTest(t)
+	now := common.GetTimestamp()
+	const key, binding, account = "sig-fallback", 4, 77
+
+	mr.SetError("CRASHED")
+	rememberAccountPoolRuntimeAffinity(key, binding, account, now) // Redis errors → in-memory pin
+	got, ok := lookupAccountPoolRuntimeAffinity(key, binding, now) // Redis errors → in-memory view → hit
+	require.True(t, ok, "in-memory fallback pin must be found during a Redis outage")
+	assert.Equal(t, account, got)
+	mr.SetError("")
+}
