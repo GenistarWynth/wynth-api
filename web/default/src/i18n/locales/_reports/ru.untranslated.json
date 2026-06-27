@@ -1,4 +1,8 @@
 {
+  "AI Studio": "AI Studio",
+  "OAuth Type": "OAuth Type",
+  "Gemini Code Assist": "Gemini Code Assist",
+  "Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.": "Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.",
   "Anthropic (Claude)": "Anthropic (Claude)",
   "Auto Pause On Expired": "Auto Pause On Expired",
   "Expires At (unix seconds, 0 = never)": "Expires At (unix seconds, 0 = never)",

@@ -95,6 +95,9 @@ export type AccountPoolUpdateRequest = AccountPoolCreateRequest
 
 export type AccountPoolCredentialConfigRequest = {
   type: AccountPoolCredentialType
+  // Gemini OAuth sub-type ('' | 'code_assist' | 'ai_studio'); ignored by the
+  // backend unless the platform is gemini and the credential type is oauth.
+  oauth_type?: string
   api_key: string
   email: string
   refresh_token: string
@@ -113,6 +116,8 @@ export type AccountPoolAccount = {
   name: string
   account_identifier: string
   status: AccountPoolAccountStatus | string
+  // Gemini OAuth sub-type ('' | 'code_assist' | 'ai_studio') exposed on the view.
+  oauth_type: string
   priority: number
   weight: number
   max_concurrency: number

@@ -68,11 +68,12 @@ export function defaultChannelTypeForPlatform(
 }
 
 // Whether the OAuth credential type is supported for the given pool platform.
-// Gemini OAuth is not supported yet, so gemini pools only allow api_key.
+// All platforms (openai/anthropic/gemini) now support OAuth credentials; Gemini
+// OAuth additionally carries an oauth_type sub-type (code_assist | ai_studio).
 export function platformSupportsOAuthCredential(
-  platform: AccountPoolPlatform | string
+  _platform: AccountPoolPlatform | string
 ): boolean {
-  return platform !== 'gemini'
+  return true
 }
 
 export function normalizeAccountPoolSchedulePolicy(
@@ -109,6 +110,7 @@ export type AccountPoolAccountFormValues = {
   name: string
   account_identifier: string
   credential_type: AccountPoolCredentialType
+  oauth_type: string
   api_key: string
   email: string
   refresh_token: string
@@ -252,6 +254,7 @@ export function emptyAccountForm(): AccountPoolAccountFormValues {
     name: '',
     account_identifier: '',
     credential_type: 'api_key',
+    oauth_type: '',
     api_key: '',
     email: '',
     refresh_token: '',
@@ -286,6 +289,7 @@ export function buildAccountPayload(
     account_identifier: values.account_identifier.trim(),
     credential: {
       type: values.credential_type || 'api_key',
+      oauth_type: values.oauth_type,
       api_key:
         values.credential_type === 'api_key' ? values.api_key.trim() : '',
       email: values.email.trim(),
@@ -326,6 +330,7 @@ export function accountToFormValues(
     name: account.name,
     account_identifier: account.account_identifier,
     credential_type: 'api_key',
+    oauth_type: account.oauth_type || '',
     api_key: '',
     email: '',
     refresh_token: '',

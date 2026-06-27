@@ -1,4 +1,6 @@
 {
+  "AI Studio": "AI Studio",
+  "Gemini Code Assist": "Gemini Code Assist",
   "Anthropic (Claude)": "Anthropic (Claude)",
   "Auto Pause On Expired": "Auto Pause On Expired",
   "Expires At (unix seconds, 0 = never)": "Expires At (unix seconds, 0 = never)",

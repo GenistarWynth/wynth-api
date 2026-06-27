@@ -2727,6 +2727,19 @@ function AccountListSection(props: {
                       trueLabel='Token'
                       falseLabel='No Token'
                     />
+                    {account.oauth_type ? (
+                      <StatusBadge
+                        label={
+                          account.oauth_type === 'code_assist'
+                            ? t('Gemini Code Assist')
+                            : account.oauth_type === 'ai_studio'
+                              ? t('AI Studio')
+                              : account.oauth_type
+                        }
+                        variant='neutral'
+                        copyable={false}
+                      />
+                    ) : null}
                   </div>
                 </TableCell>
                 <TableCell>
@@ -3672,6 +3685,14 @@ function AccountFormSheet(props: {
     ],
     [t, oauthSupported]
   )
+  const oauthTypeOptions = useMemo(
+    () => [
+      { value: '', label: t('Default') },
+      { value: 'code_assist', label: t('Gemini Code Assist') },
+      { value: 'ai_studio', label: t('AI Studio') },
+    ],
+    [t]
+  )
   const proxyOptions = useMemo(
     () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
     [props.proxies, t]
@@ -3697,6 +3718,12 @@ function AccountFormSheet(props: {
     key: K,
     value: AccountPoolAccountFormValues[K]
   ) => setForm((previous) => ({ ...previous, [key]: value }))
+
+  // Gemini OAuth carries a sub-type that selects the upstream API surface
+  // (Code Assist via cloudcode-pa vs. AI Studio). Only relevant for gemini pools
+  // using OAuth credentials.
+  const showOAuthType =
+    props.pool?.platform === 'gemini' && form.credential_type === 'oauth'
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -3880,6 +3907,36 @@ function AccountFormSheet(props: {
                   </SelectContent>
                 </Select>
               </FieldBlock>
+              {showOAuthType ? (
+                <FieldBlock
+                  label={t('OAuth Type')}
+                  htmlFor='account-pool-account-oauth-type'
+                  description={t(
+                    'Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.'
+                  )}
+                >
+                  <Select
+                    items={oauthTypeOptions}
+                    value={form.oauth_type}
+                    onValueChange={(value) =>
+                      setField('oauth_type', value ?? '')
+                    }
+                  >
+                    <SelectTrigger id='account-pool-account-oauth-type'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        {oauthTypeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </FieldBlock>
+              ) : null}
               <FieldBlock label={t('API Key')} htmlFor='account-pool-account-api-key'>
                 <Input
                   id='account-pool-account-api-key'

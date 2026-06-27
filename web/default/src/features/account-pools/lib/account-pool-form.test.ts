@@ -64,6 +64,7 @@ describe('account pool form helpers', () => {
         account_identifier: 'acct-1',
         credential: {
           type: 'api_key',
+          oauth_type: '',
           api_key: 'sk-test',
           email: '',
           refresh_token: '',
@@ -105,6 +106,27 @@ describe('account pool form helpers', () => {
       }).credential,
       {
         type: 'oauth',
+        oauth_type: '',
+        api_key: '',
+        email: 'user@example.com',
+        refresh_token: 'refresh-token',
+      }
+    )
+  })
+
+  test('serializes gemini oauth_type sub-type in the credential payload', () => {
+    assert.deepEqual(
+      buildAccountPayload({
+        ...emptyAccountForm(),
+        name: 'Gemini OAuth account',
+        credential_type: 'oauth',
+        oauth_type: 'code_assist',
+        email: 'user@example.com',
+        refresh_token: 'refresh-token',
+      }).credential,
+      {
+        type: 'oauth',
+        oauth_type: 'code_assist',
         api_key: '',
         email: 'user@example.com',
         refresh_token: 'refresh-token',
@@ -223,11 +245,11 @@ describe('account pool form helpers', () => {
     assert.equal(defaultChannelTypeForPlatform('gemini'), 24)
   })
 
-  test('gates oauth credential support to platforms with oauth support', () => {
+  test('allows oauth credential support on every platform', () => {
     assert.equal(platformSupportsOAuthCredential('openai'), true)
     assert.equal(platformSupportsOAuthCredential('anthropic'), true)
-    // Gemini OAuth is not supported yet, so only api_key is allowed.
-    assert.equal(platformSupportsOAuthCredential('gemini'), false)
+    // Gemini OAuth is now supported (with an oauth_type sub-type).
+    assert.equal(platformSupportsOAuthCredential('gemini'), true)
   })
 
   test('masks local secret previews', () => {
