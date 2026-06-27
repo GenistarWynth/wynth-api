@@ -187,3 +187,84 @@ func TestCreateBoundChannelRejectsAnthropicChannelTypeOnOpenAIPool(t *testing.T)
 	require.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "not compatible"), "expected compatibility error, got: %s", err.Error())
 }
+
+// TestCreateBindingAllowsGeminiChannelOnGeminiPool verifies gemini pool + gemini channel = OK.
+func TestCreateBindingAllowsGeminiChannelOnGeminiPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.NoError(t, err)
+}
+
+// TestCreateBindingRejectsOpenAIChannelOnGeminiPool verifies gemini pool + openai channel = error.
+func TestCreateBindingRejectsOpenAIChannelOnGeminiPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeOpenAI, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not compatible")
+}
+
+// TestCreateBindingRejectsGeminiChannelOnOpenAIPool verifies openai pool + gemini channel = error.
+func TestCreateBindingRejectsGeminiChannelOnOpenAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformOpenAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not compatible")
+}
+
+// TestCreateBindingRejectsGeminiChannelOnAnthropicPool verifies anthropic pool + gemini channel = error.
+func TestCreateBindingRejectsGeminiChannelOnAnthropicPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformAnthropic)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not compatible")
+}
+
+// TestCreateBoundChannelDefaultsToGeminiTypeForGeminiPool verifies that when no
+// ChannelType is specified, CreateBoundChannel uses ChannelTypeGemini for gemini pools.
+func TestCreateBoundChannelDefaultsToGeminiTypeForGeminiPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+
+	view, err := svc.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "gemini-auto-channel",
+	})
+
+	require.NoError(t, err)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, view.ChannelID).Error)
+	assert.Equal(t, constant.ChannelTypeGemini, channel.Type)
+}

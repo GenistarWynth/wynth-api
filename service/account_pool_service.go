@@ -591,9 +591,12 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 	}
 	channelType := params.ChannelType
 	if channelType == 0 {
-		if pool.Platform == model.AccountPoolPlatformAnthropic {
+		switch pool.Platform {
+		case model.AccountPoolPlatformAnthropic:
 			channelType = constant.ChannelTypeAnthropic
-		} else {
+		case model.AccountPoolPlatformGemini:
+			channelType = constant.ChannelTypeGemini
+		default:
 			channelType = constant.ChannelTypeOpenAI
 		}
 	}
@@ -1044,7 +1047,7 @@ func normalizeAccountPoolPlatform(platform string) (string, error) {
 	switch platform {
 	case "":
 		return model.AccountPoolPlatformOpenAI, nil
-	case model.AccountPoolPlatformOpenAI, model.AccountPoolPlatformAnthropic:
+	case model.AccountPoolPlatformOpenAI, model.AccountPoolPlatformAnthropic, model.AccountPoolPlatformGemini:
 		return platform, nil
 	default:
 		return "", errors.New("unsupported account pool platform")
@@ -1113,10 +1116,10 @@ func resolveAccountPoolSchedulePolicy(policy string, fallback string) (string, e
 
 func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 	switch channel.Type {
-	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex, constant.ChannelTypeAnthropic:
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex, constant.ChannelTypeAnthropic, constant.ChannelTypeGemini:
 		return nil
 	default:
-		return errors.New("account pool runtime only supports OpenAI-compatible or Anthropic channels in this phase")
+		return errors.New("account pool runtime only supports OpenAI-compatible, Anthropic, or Gemini channels in this phase")
 	}
 }
 
@@ -1125,6 +1128,7 @@ func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 //
 //   - pool platform "openai" (or empty) → channel type must be OpenAI(1) or Codex(57)
 //   - pool platform "anthropic"         → channel type must be Anthropic(14)
+//   - pool platform "gemini"            → channel type must be Gemini(24)
 func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel model.Channel) error {
 	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
 		return err
@@ -1134,8 +1138,12 @@ func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel mo
 		if channel.Type != constant.ChannelTypeAnthropic {
 			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
 		}
+	case model.AccountPoolPlatformGemini:
+		if channel.Type != constant.ChannelTypeGemini {
+			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
+		}
 	default: // openai or empty
-		if channel.Type == constant.ChannelTypeAnthropic {
+		if channel.Type == constant.ChannelTypeAnthropic || channel.Type == constant.ChannelTypeGemini {
 			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
 		}
 	}

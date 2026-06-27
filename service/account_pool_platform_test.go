@@ -36,9 +36,15 @@ func TestNormalizeAccountPoolPlatformAnthropic(t *testing.T) {
 }
 
 func TestNormalizeAccountPoolPlatformUnknownRejected(t *testing.T) {
-	_, err := normalizeAccountPoolPlatform("gemini")
+	_, err := normalizeAccountPoolPlatform("bedrock")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestNormalizeAccountPoolPlatformGemini(t *testing.T) {
+	got, err := normalizeAccountPoolPlatform("gemini")
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolPlatformGemini, got)
 }
 
 // ── validateAccountPoolRuntimeChannel ────────────────────────────────────────
@@ -59,10 +65,15 @@ func TestValidateAccountPoolRuntimeChannelAllowsCodex(t *testing.T) {
 }
 
 func TestValidateAccountPoolRuntimeChannelRejectsOther(t *testing.T) {
-	ch := model.Channel{Type: constant.ChannelTypeGemini}
+	ch := model.Channel{Type: 99} // arbitrary unsupported channel type
 	err := validateAccountPoolRuntimeChannel(ch)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "account pool runtime")
+}
+
+func TestValidateAccountPoolRuntimeChannelAllowsGemini(t *testing.T) {
+	ch := model.Channel{Type: constant.ChannelTypeGemini}
+	require.NoError(t, validateAccountPoolRuntimeChannel(ch))
 }
 
 // ── account identifier seam ───────────────────────────────────────────────────

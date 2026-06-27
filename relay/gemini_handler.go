@@ -88,10 +88,26 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
-	if newAPIError := rejectUnsupportedAccountPoolRuntime(c, info, "gemini"); newAPIError != nil {
-		return newAPIError
-	}
+	// NOTE: rejectUnsupportedAccountPoolRuntime("gemini") removed — the pool loop
+	// handles gemini channels. Non-pool channels are a transparent pass-through.
 
+	mappedRequest := request
+	return runAccountPoolRuntimeAttempts(c, info, func() (dto.Request, *types.NewAPIError) {
+		attemptRequest, err := common.DeepCopy(mappedRequest)
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("failed to copy mapped GeminiChatRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return attemptRequest, nil
+	}, func(attemptRequest dto.Request) *types.NewAPIError {
+		geminiRequest, ok := attemptRequest.(*dto.GeminiChatRequest)
+		if !ok {
+			return types.NewErrorWithStatusCode(fmt.Errorf("invalid mapped request type, expected *dto.GeminiChatRequest, got %T", attemptRequest), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return geminiHelperWithRuntimeSelected(c, info, geminiRequest)
+	})
+}
+
+func geminiHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) *types.NewAPIError {
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -191,7 +207,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError
