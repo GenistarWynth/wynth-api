@@ -43,6 +43,9 @@ type AccountPoolCredentialConfigRequest struct {
 	APIKey       string `json:"api_key"`
 	Email        string `json:"email"`
 	RefreshToken string `json:"refresh_token"`
+	// OAuthType selects the Gemini OAuth sub-type ("code_assist" or "ai_studio").
+	// Only meaningful for Gemini OAuth accounts; ignored otherwise.
+	OAuthType string `json:"oauth_type"`
 }
 
 type AccountPoolTokenStateRequest struct {

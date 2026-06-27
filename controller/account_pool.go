@@ -578,6 +578,7 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 			APIKey:       req.Credential.APIKey,
 			Email:        req.Credential.Email,
 			RefreshToken: req.Credential.RefreshToken,
+			OAuthType:    req.Credential.OAuthType,
 		},
 		TokenState: service.AccountPoolTokenState{
 			AccessToken:  req.TokenState.AccessToken,

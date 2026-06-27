@@ -235,6 +235,39 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 	assert.NotContains(t, raw, "credential_preview")
 }
 
+func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "gemini-ca-pool",
+		Platform: model.AccountPoolPlatformGemini,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+
+	accountResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(poolResult.Response.Data.Id)+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "ca-account",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:         "oauth",
+			Email:        "ca@example.com",
+			RefreshToken: "ca-refresh",
+			OAuthType:    "code_assist",
+		},
+		TokenState: dto.AccountPoolTokenStateRequest{
+			AccessToken: "ca-access",
+		},
+	})
+	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
+
+	// oauth_type from the create API must persist into the encrypted credential so
+	// the runtime can route the account through Code Assist.
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, accountResult.Response.Data.Id).Error)
+	cred, err := service.DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, cred.OAuthType)
+}
+
 func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 	setupAccountPoolAPITestDB(t)
 	router := accountPoolAPIRouter()
