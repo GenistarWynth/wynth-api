@@ -75,7 +75,10 @@ func imageHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo,
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed)
+			// Skip-retry: a request-conversion failure is a deterministic client-side
+			// error, not an account problem. Without this, a pooled image channel would
+			// record an account failure and burn retry slots across healthy accounts.
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
 
