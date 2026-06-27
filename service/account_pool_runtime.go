@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -33,6 +34,8 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeAccountID = ""
 		info.RuntimeAnthropicOAuth = false
 		info.RuntimeGeminiOAuth = false
+		info.RuntimeGeminiOAuthType = ""
+		info.RuntimeGeminiProjectID = ""
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -101,6 +104,29 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeGeminiOAuth = accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState)
 	} else {
 		info.RuntimeGeminiOAuth = false
+	}
+	// For Gemini Code Assist OAuth accounts, detect or reuse the GCP project id.
+	if selection.Platform == model.AccountPoolPlatformGemini &&
+		accountPoolHasOAuthRuntimeCredential(selection.Credential, selection.TokenState) &&
+		strings.EqualFold(strings.TrimSpace(selection.Credential.OAuthType), AccountPoolGeminiOAuthTypeCodeAssist) {
+
+		info.RuntimeGeminiOAuthType = AccountPoolGeminiOAuthTypeCodeAssist
+
+		projectID := strings.TrimSpace(selection.TokenState.ProjectID)
+		if projectID == "" {
+			var detectErr error
+			projectID, detectErr = accountPoolDetectGeminiCodeAssistProject(
+				accountPoolRuntimeContext(c),
+				runtimeCredential,
+				selection.ProxyURL,
+			)
+			if detectErr != nil {
+				return fmt.Errorf("gemini code assist project detection failed: %w", detectErr)
+			}
+			// Best-effort cache: ignore error (worst case we re-detect next call).
+			_ = cacheAccountPoolGeminiProject(selection.AccountID, projectID)
+		}
+		info.RuntimeGeminiProjectID = projectID
 	}
 	if request != nil {
 		request.SetModelName(selection.UpstreamModelName)

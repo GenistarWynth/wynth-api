@@ -300,3 +300,31 @@ func TestAccountPoolGeminiOAuthSnapshotRestored(t *testing.T) {
 
 	assert.True(t, info.RuntimeGeminiOAuth, "RuntimeGeminiOAuth must be restored from snapshot")
 }
+
+// TestAccountPoolGeminiCodeAssistFieldsSnapshotRestored verifies that
+// RuntimeGeminiOAuthType and RuntimeGeminiProjectID round-trip through
+// snapshotAccountPoolRuntimeRelay / restoreAccountPoolRuntimeRelay correctly,
+// so that pool-mode retries see the correct Code Assist credentials.
+func TestAccountPoolGeminiCodeAssistFieldsSnapshotRestored(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RuntimeGeminiOAuth:     true,
+		RuntimeGeminiOAuthType: service.AccountPoolGeminiOAuthTypeCodeAssist,
+		RuntimeGeminiProjectID: "projects/my-gcp-project",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey:            "ya29.code-assist-token",
+			UpstreamModelName: "gemini-2.5-pro",
+		},
+	}
+	snapshot := snapshotAccountPoolRuntimeRelay(info)
+
+	// Mutate both new fields (simulating what a relay attempt might do).
+	info.RuntimeGeminiOAuthType = ""
+	info.RuntimeGeminiProjectID = "projects/wrong-project"
+
+	restoreAccountPoolRuntimeRelay(info, snapshot)
+
+	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, info.RuntimeGeminiOAuthType,
+		"RuntimeGeminiOAuthType must be restored from snapshot")
+	assert.Equal(t, "projects/my-gcp-project", info.RuntimeGeminiProjectID,
+		"RuntimeGeminiProjectID must be restored from snapshot")
+}

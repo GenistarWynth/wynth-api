@@ -168,6 +168,13 @@ type RelayInfo struct {
 	// Google OAuth (Bearer token) rather than an API key. When true, the
 	// Gemini adaptor must send Authorization: Bearer <ApiKey> instead of x-goog-api-key.
 	RuntimeGeminiOAuth bool
+	// RuntimeGeminiOAuthType identifies the OAuth sub-type for a Gemini OAuth account.
+	// "code_assist" → Code Assist endpoint (cloudcode-pa.googleapis.com routing in slice 1b).
+	// "" or "ai_studio" → standard AI Studio endpoint path.
+	RuntimeGeminiOAuthType string
+	// RuntimeGeminiProjectID holds the GCP project id for Code Assist accounts.
+	// Only set when RuntimeGeminiOAuthType == "code_assist".
+	RuntimeGeminiProjectID string
 
 	// WsHandshakeStatusCode/Header/Body capture an upstream WebSocket handshake
 	// REJECTION (e.g. 401/429) from the dialer's discarded *http.Response so that

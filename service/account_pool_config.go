@@ -9,6 +9,12 @@ import (
 const (
 	AccountPoolCredentialTypeAPIKey = "api_key"
 	AccountPoolCredentialTypeOAuth  = "oauth"
+
+	// AccountPoolGeminiOAuthTypeCodeAssist identifies Google Code Assist (Gemini CLI
+	// code_assist scope) accounts, which additionally require a GCP project id.
+	AccountPoolGeminiOAuthTypeCodeAssist = "code_assist"
+	// AccountPoolGeminiOAuthTypeAIStudio identifies standard Google AI Studio OAuth accounts.
+	AccountPoolGeminiOAuthTypeAIStudio = "ai_studio"
 )
 
 type AccountPoolCredentialConfig struct {
@@ -16,6 +22,11 @@ type AccountPoolCredentialConfig struct {
 	APIKey       string `json:"api_key"`
 	Email        string `json:"email"`
 	RefreshToken string `json:"refresh_token"`
+	// OAuthType narrows the OAuth flow within a given platform.
+	// For Gemini, "code_assist" selects the Code Assist endpoint (cloudcode-pa.googleapis.com);
+	// "ai_studio" selects standard AI Studio OAuth.
+	// Omitempty keeps legacy encrypted blobs backward-compatible (decrypt → empty string).
+	OAuthType string `json:"oauth_type,omitempty"`
 }
 
 type AccountPoolTokenState struct {
@@ -23,6 +34,9 @@ type AccountPoolTokenState struct {
 	RefreshToken string `json:"refresh_token"`
 	ExpiresAt    int64  `json:"expires_at"`
 	Version      int64  `json:"version"`
+	// ProjectID holds the GCP project id used for Gemini Code Assist accounts.
+	// Omitempty keeps legacy encrypted blobs backward-compatible (decrypt → empty string).
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 type AccountPoolProxyAuthConfig struct {
