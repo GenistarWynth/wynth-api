@@ -41,6 +41,7 @@ const MODEL_MAPPING_ERROR =
 const CHANNEL_TYPE_OPENAI = 1
 const CHANNEL_TYPE_ANTHROPIC = 14
 const CHANNEL_TYPE_GEMINI = 24
+const CHANNEL_TYPE_XAI = 48
 const CHANNEL_TYPE_CODEX_VALUE = 57
 
 // Allowed bound-channel types per pool platform. The backend validates that a
@@ -54,6 +55,8 @@ export function allowedChannelTypesForPlatform(
       return [CHANNEL_TYPE_ANTHROPIC]
     case 'gemini':
       return [CHANNEL_TYPE_GEMINI]
+    case 'xai':
+      return [CHANNEL_TYPE_XAI]
     case 'openai':
     default:
       return [CHANNEL_TYPE_OPENAI, CHANNEL_TYPE_CODEX_VALUE]

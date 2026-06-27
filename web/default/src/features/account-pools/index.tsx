@@ -218,6 +218,7 @@ const POOL_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI / Codex' },
   { value: 'anthropic', label: 'Anthropic (Claude)' },
   { value: 'gemini', label: 'Google Gemini' },
+  { value: 'xai', label: 'Grok (X.AI)' },
 ]
 const STATUS_OPTIONS = [
   { value: 'enabled', label: 'Enabled' },

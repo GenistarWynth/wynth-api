@@ -268,3 +268,68 @@ func TestCreateBoundChannelDefaultsToGeminiTypeForGeminiPool(t *testing.T) {
 	require.NoError(t, model.DB.First(&channel, view.ChannelID).Error)
 	assert.Equal(t, constant.ChannelTypeGemini, channel.Type)
 }
+
+// TestCreateBindingAllowsXAIChannelOnXAIPool verifies xai pool + xai channel = OK.
+func TestCreateBindingAllowsXAIChannelOnXAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeXai, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.NoError(t, err)
+}
+
+// TestCreateBindingRejectsOpenAIChannelOnXAIPool verifies xai pool + non-xai channel = error.
+func TestCreateBindingRejectsOpenAIChannelOnXAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeOpenAI, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not compatible")
+}
+
+// TestCreateBindingRejectsXAIChannelOnOpenAIPool verifies openai pool + xai channel = error.
+func TestCreateBindingRejectsXAIChannelOnOpenAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformOpenAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeXai, common.ChannelStatusManuallyDisabled)
+
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not compatible")
+}
+
+// TestCreateBoundChannelDefaultsToXAITypeForXAIPool verifies that when no
+// ChannelType is specified, CreateBoundChannel uses ChannelTypeXai for xai pools.
+func TestCreateBoundChannelDefaultsToXAITypeForXAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+
+	view, err := svc.CreateBoundChannel(AccountPoolBoundChannelCreateParams{
+		PoolID: pool.Id,
+		Name:   "xai-auto-channel",
+	})
+
+	require.NoError(t, err)
+	var channel model.Channel
+	require.NoError(t, model.DB.First(&channel, view.ChannelID).Error)
+	assert.Equal(t, constant.ChannelTypeXai, channel.Type)
+}

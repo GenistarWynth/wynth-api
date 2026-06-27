@@ -12,6 +12,7 @@ const (
 	AccountPoolPlatformOpenAI    = "openai"
 	AccountPoolPlatformAnthropic = "anthropic"
 	AccountPoolPlatformGemini    = "gemini"
+	AccountPoolPlatformXAI       = "xai"
 
 	AccountPoolStatusEnabled  = "enabled"
 	AccountPoolStatusDisabled = "disabled"

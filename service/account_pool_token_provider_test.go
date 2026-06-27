@@ -489,3 +489,82 @@ func setAccountPoolGeminiOAuthRefreshForTest(t *testing.T, refresh accountPoolGe
 	accountPoolGeminiOAuthRefresh = refresh
 	t.Cleanup(func() { accountPoolGeminiOAuthRefresh = old })
 }
+
+func setAccountPoolXAIOAuthRefreshForTest(t *testing.T, refresh accountPoolOAuthRefreshFunc) {
+	t.Helper()
+	old := accountPoolXAIOAuthRefresh
+	accountPoolXAIOAuthRefresh = refresh
+	t.Cleanup(func() { accountPoolXAIOAuthRefresh = old })
+}
+
+// TestAccountPoolTokenProviderXAIOAuthDispatchesToXAISeam verifies that an
+// xAI-platform OAuth account dispatches to accountPoolXAIOAuthRefresh (not the
+// codex/claude/gemini seams) and that the resolved access token is returned (this
+// is the value that becomes info.ApiKey at runtime).
+func TestAccountPoolTokenProviderXAIOAuthDispatchesToXAISeam(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&pool).Update("platform", model.AccountPoolPlatformXAI).Error)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "xai-oauth-dispatch",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "xai-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{
+			ExpiresAt: 900,
+			Version:   1,
+		},
+	})
+
+	var codexCalls, claudeCalls, geminiCalls, xaiCalls int
+
+	setAccountPoolOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		codexCalls++
+		return nil, errors.New("codex seam must NOT be called for xai")
+	})
+
+	oldClaude := accountPoolClaudeOAuthRefresh
+	accountPoolClaudeOAuthRefresh = func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		claudeCalls++
+		return nil, errors.New("claude seam must NOT be called for xai")
+	}
+	t.Cleanup(func() { accountPoolClaudeOAuthRefresh = oldClaude })
+
+	setAccountPoolGeminiOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string, _ string) (*CodexOAuthTokenResult, error) {
+		geminiCalls++
+		return nil, errors.New("gemini seam must NOT be called for xai")
+	})
+
+	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, refreshToken string, _ string) (*CodexOAuthTokenResult, error) {
+		xaiCalls++
+		assert.Equal(t, "xai-refresh-token", refreshToken)
+		return &CodexOAuthTokenResult{
+			AccessToken:  "xai-access-token",
+			RefreshToken: "xai-refresh-next",
+			ExpiresAt:    time.Unix(2000, 0),
+		}, nil
+	})
+
+	token, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID: account.Id,
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "xai-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{
+			ExpiresAt: 900,
+			Version:   1,
+		},
+		Platform: model.AccountPoolPlatformXAI,
+		Now:      1000,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "xai-access-token", token, "resolved access token becomes info.ApiKey")
+	assert.Equal(t, 1, xaiCalls, "xai seam must be called exactly once")
+	assert.Equal(t, 0, codexCalls, "codex seam must NOT be called for xai OAuth")
+	assert.Equal(t, 0, claudeCalls, "claude seam must NOT be called for xai OAuth")
+	assert.Equal(t, 0, geminiCalls, "gemini seam must NOT be called for xai OAuth")
+}

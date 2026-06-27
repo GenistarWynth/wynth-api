@@ -22,7 +22,7 @@ export type ApiResponse<T = unknown> = {
   data?: T
 }
 
-export type AccountPoolPlatform = 'openai' | 'anthropic' | 'gemini'
+export type AccountPoolPlatform = 'openai' | 'anthropic' | 'gemini' | 'xai'
 
 export type AccountPoolStatus = 'enabled' | 'disabled' | 'deleted'
 

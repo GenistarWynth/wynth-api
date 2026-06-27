@@ -322,6 +322,7 @@ describe('account pool form helpers', () => {
     assert.deepEqual(allowedChannelTypesForPlatform('openai'), [1, 57])
     assert.deepEqual(allowedChannelTypesForPlatform('anthropic'), [14])
     assert.deepEqual(allowedChannelTypesForPlatform('gemini'), [24])
+    assert.deepEqual(allowedChannelTypesForPlatform('xai'), [48])
     // Unknown/legacy platforms fall back to the OpenAI family.
     assert.deepEqual(allowedChannelTypesForPlatform('unknown'), [1, 57])
   })
@@ -330,6 +331,7 @@ describe('account pool form helpers', () => {
     assert.equal(defaultChannelTypeForPlatform('openai'), 1)
     assert.equal(defaultChannelTypeForPlatform('anthropic'), 14)
     assert.equal(defaultChannelTypeForPlatform('gemini'), 24)
+    assert.equal(defaultChannelTypeForPlatform('xai'), 48)
   })
 
   test('allows oauth credential support on every platform', () => {

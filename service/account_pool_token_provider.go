@@ -43,6 +43,7 @@ var (
 	accountPoolOAuthRefresh       accountPoolOAuthRefreshFunc       = RefreshCodexOAuthTokenWithProxy
 	accountPoolClaudeOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshClaudeOAuthTokenWithProxy
 	accountPoolGeminiOAuthRefresh accountPoolGeminiOAuthRefreshFunc = RefreshGeminiOAuthTokenForType
+	accountPoolXAIOAuthRefresh    accountPoolOAuthRefreshFunc       = RefreshXAIOAuthTokenWithProxy
 	accountPoolTokenStateUpdate   accountPoolTokenStateUpdateFunc   = updateAccountPoolRuntimeTokenState
 	accountPoolVertexSATokenMint  accountPoolVertexSATokenMintFunc  = MintVertexServiceAccountToken
 )
@@ -168,6 +169,8 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 		result, err = accountPoolClaudeOAuthRefresh(ctx, refreshToken, proxyURL)
 	case model.AccountPoolPlatformGemini:
 		result, err = accountPoolGeminiOAuthRefresh(ctx, account.OAuthType, refreshToken, proxyURL)
+	case model.AccountPoolPlatformXAI:
+		result, err = accountPoolXAIOAuthRefresh(ctx, refreshToken, proxyURL)
 	case model.AccountPoolPlatformOpenAI, "":
 		result, err = accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
 	default:

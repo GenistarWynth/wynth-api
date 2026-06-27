@@ -47,6 +47,12 @@ func TestNormalizeAccountPoolPlatformGemini(t *testing.T) {
 	assert.Equal(t, model.AccountPoolPlatformGemini, got)
 }
 
+func TestNormalizeAccountPoolPlatformXAI(t *testing.T) {
+	got, err := normalizeAccountPoolPlatform("xai")
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolPlatformXAI, got)
+}
+
 // ── validateAccountPoolRuntimeChannel ────────────────────────────────────────
 
 func TestValidateAccountPoolRuntimeChannelAllowsAnthropic(t *testing.T) {
@@ -73,6 +79,11 @@ func TestValidateAccountPoolRuntimeChannelRejectsOther(t *testing.T) {
 
 func TestValidateAccountPoolRuntimeChannelAllowsGemini(t *testing.T) {
 	ch := model.Channel{Type: constant.ChannelTypeGemini}
+	require.NoError(t, validateAccountPoolRuntimeChannel(ch))
+}
+
+func TestValidateAccountPoolRuntimeChannelAllowsXAI(t *testing.T) {
+	ch := model.Channel{Type: constant.ChannelTypeXai}
 	require.NoError(t, validateAccountPoolRuntimeChannel(ch))
 }
 

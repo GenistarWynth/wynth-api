@@ -206,6 +206,43 @@ func TestAccountPoolServiceImportSub2APIGeminiAccountMatchesPlatform(t *testing.
 	assert.Equal(t, "gemini-refresh", cred.RefreshToken)
 }
 
+func TestAccountPoolServiceImportSub2APIXAIAccountMatchesPlatform(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformXAI).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "xai-oauth",
+					"platform": "xai",
+					"type": "oauth",
+					"credentials": {
+						"email": "grok@example.com",
+						"refresh_token": "xai-refresh",
+						"access_token": "xai-access"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "xai-oauth")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Equal(t, "xai-refresh", cred.RefreshToken)
+}
+
 func TestAccountPoolServiceImportSub2APIGeminiCodeAssistOAuthType(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	svc := AccountPoolService{}
