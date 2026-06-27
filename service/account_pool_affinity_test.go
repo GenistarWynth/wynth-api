@@ -322,6 +322,104 @@ func TestClaudeAffinityMetadataUserIDLong(t *testing.T) {
 	assert.Equal(t, sig1, sig2, "long user_id must still produce a stable, identical signal")
 }
 
+// makeGeminiRequest builds a *dto.GeminiChatRequest with the given system instruction text,
+// and contents (role+text pairs). Pass an empty systemText to omit SystemInstructions.
+func makeGeminiRequest(systemText string, contents []struct{ role, text string }) *dto.GeminiChatRequest {
+	req := &dto.GeminiChatRequest{}
+	if systemText != "" {
+		req.SystemInstructions = &dto.GeminiChatContent{
+			Parts: []dto.GeminiPart{{Text: systemText}},
+		}
+	}
+	for _, c := range contents {
+		req.Contents = append(req.Contents, dto.GeminiChatContent{
+			Role:  c.role,
+			Parts: []dto.GeminiPart{{Text: c.text}},
+		})
+	}
+	return req
+}
+
+// TestGeminiAffinityConversationDigest verifies that two GeminiChatRequests with identical
+// system+contents produce the same digest signal, and that changed contents produce a different
+// signal. This is the primary contract for Gemini session affinity.
+func TestGeminiAffinityConversationDigest(t *testing.T) {
+	info := makeMinimalRelayInfo()
+
+	contents := []struct{ role, text string }{
+		{"user", "hello gemini"},
+		{"model", "hi there"},
+	}
+	req1 := makeGeminiRequest("You are a Gemini assistant.", contents)
+	req2 := makeGeminiRequest("You are a Gemini assistant.", contents)
+	req3 := makeGeminiRequest("You are a Gemini assistant.", []struct{ role, text string }{
+		{"user", "completely different message"},
+	})
+
+	sig1 := accountPoolRuntimeAffinitySignal(nil, info, req1)
+	sig2 := accountPoolRuntimeAffinitySignal(nil, info, req2)
+	sig3 := accountPoolRuntimeAffinitySignal(nil, info, req3)
+
+	require.NotEmpty(t, sig1, "non-empty Gemini conversation should produce a signal")
+	assert.Equal(t, sig1, sig2, "identical Gemini conversation must produce the same digest signal")
+	assert.NotEqual(t, sig1, sig3, "different Gemini contents must produce different digest signals")
+	assert.Contains(t, sig1, "gemini_digest:", "signal must carry the gemini_digest: prefix")
+}
+
+// TestGeminiAffinityEmptyRequest verifies that a GeminiChatRequest with no system and no
+// contents yields no affinity signal.
+func TestGeminiAffinityEmptyRequest(t *testing.T) {
+	info := makeMinimalRelayInfo()
+	req := &dto.GeminiChatRequest{}
+
+	sig := accountPoolRuntimeAffinitySignal(nil, info, req)
+	assert.Empty(t, sig, "an empty GeminiChatRequest must produce no affinity signal")
+}
+
+// TestGeminiAffinityHeaderTakesPrecedence verifies that a session header signal overrides
+// the Gemini content-digest signal (header-first contract).
+func TestGeminiAffinityHeaderTakesPrecedence(t *testing.T) {
+	info := makeMinimalRelayInfo()
+	if info.RequestHeaders == nil {
+		info.RequestHeaders = make(map[string]string)
+	}
+	info.RequestHeaders["X-Session-Id"] = "ses-gemini-override"
+
+	req := makeGeminiRequest("system", []struct{ role, text string }{{"user", "hi"}})
+	sig := accountPoolRuntimeAffinitySignal(nil, info, req)
+
+	require.NotEmpty(t, sig)
+	assert.Contains(t, sig, "header:", "session header must take precedence over Gemini digest signal")
+	assert.Contains(t, sig, "ses-gemini-override")
+}
+
+// TestGeminiAffinityNonTextPartsIgnored verifies that non-text parts (inline_data,
+// function_call) are silently skipped and only text parts contribute to the digest.
+func TestGeminiAffinityNonTextPartsIgnored(t *testing.T) {
+	info := makeMinimalRelayInfo()
+
+	// Build two requests with the same text but one has an extra inline_data part.
+	textOnlyReq := &dto.GeminiChatRequest{
+		Contents: []dto.GeminiChatContent{
+			{Role: "user", Parts: []dto.GeminiPart{{Text: "describe this image"}}},
+		},
+	}
+	mixedReq := &dto.GeminiChatRequest{
+		Contents: []dto.GeminiChatContent{
+			{Role: "user", Parts: []dto.GeminiPart{
+				{Text: "describe this image"},
+				{InlineData: &dto.GeminiInlineData{MimeType: "image/png", Data: "abc123"}},
+			}},
+		},
+	}
+
+	sigText := accountPoolRuntimeAffinitySignal(nil, info, textOnlyReq)
+	sigMixed := accountPoolRuntimeAffinitySignal(nil, info, mixedReq)
+
+	require.NotEmpty(t, sigText)
+	assert.Equal(t, sigText, sigMixed, "non-text parts must not affect the affinity digest")
+}
+
 // TestOpenAIAffinityUnchangedByClaudeAddition is a regression guard: adding the Claude case
 // must not alter any OpenAI Responses signals.
 func TestOpenAIAffinityUnchangedByClaudeAddition(t *testing.T) {

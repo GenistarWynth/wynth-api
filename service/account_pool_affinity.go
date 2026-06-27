@@ -75,6 +75,8 @@ func accountPoolRuntimeAffinitySignal(c *gin.Context, info *relaycommon.RelayInf
 		}
 	case *dto.ClaudeRequest:
 		return accountPoolRuntimeAffinityClaudeSignal(req)
+	case *dto.GeminiChatRequest:
+		return accountPoolRuntimeAffinityGeminiSignal(req)
 	}
 	return ""
 }
@@ -119,6 +121,42 @@ func accountPoolRuntimeAffinityClaudeSignal(req *dto.ClaudeRequest) string {
 
 	if combined := buf.String(); combined != "" {
 		return "claude_digest:" + accountPoolRuntimeAffinityDigest(combined)
+	}
+
+	return ""
+}
+
+// accountPoolRuntimeAffinityGeminiSignal extracts an affinity signal from a Gemini API request.
+// Gemini has no standard user-metadata field, so the signal is always a stable digest of the
+// conversation content:
+//  1. System instruction text (all Parts[*].Text from SystemInstructions, ignoring non-text parts)
+//  2. Each content's role + each part's Text (in order, ignoring non-text parts)
+//
+// Returns "gemini_digest:" + sha256hex if there is any text content; else "" (no affinity).
+func accountPoolRuntimeAffinityGeminiSignal(req *dto.GeminiChatRequest) string {
+	var buf strings.Builder
+
+	// System instruction text
+	if req.SystemInstructions != nil {
+		for _, part := range req.SystemInstructions.Parts {
+			if part.Text != "" {
+				buf.WriteString(part.Text)
+			}
+		}
+	}
+
+	// Contents: role + text parts in order
+	for _, content := range req.Contents {
+		buf.WriteString(content.Role)
+		for _, part := range content.Parts {
+			if part.Text != "" {
+				buf.WriteString(part.Text)
+			}
+		}
+	}
+
+	if combined := buf.String(); combined != "" {
+		return "gemini_digest:" + accountPoolRuntimeAffinityDigest(combined)
 	}
 
 	return ""
