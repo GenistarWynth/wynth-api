@@ -11,13 +11,11 @@ import (
 )
 
 // loadTestCandidate builds a minimal candidate with the fields the load-skew filter reads.
-func loadTestCandidate(id int, priority int64, totalLatencyMS, latencySamples int64) accountPoolAccountCandidate {
+func loadTestCandidate(id int, priority int64) accountPoolAccountCandidate {
 	return accountPoolAccountCandidate{
 		account: model.AccountPoolAccount{
-			Id:                 id,
-			Priority:           priority,
-			TotalLatencyMS:     totalLatencyMS,
-			LatencySampleCount: latencySamples,
+			Id:       id,
+			Priority: priority,
 		},
 	}
 }
@@ -40,16 +38,16 @@ func seedInMemoryLeases(t *testing.T, accountID, n int) {
 	}
 }
 
-// TestLoadSkewSmallScaleNoOp: all-zero load and no latency samples must return the input unchanged.
+// TestLoadSkewSmallScaleNoOp: all-zero in-flight load must return the full input unchanged.
 func TestLoadSkewSmallScaleNoOp(t *testing.T) {
 	ResetAccountPoolRuntimeForTest()
 	restore := setAccountPoolLoadAwareEnabledForTest(true)
 	defer restore()
 
 	candidates := []accountPoolAccountCandidate{
-		loadTestCandidate(1, 100, 0, 0),
-		loadTestCandidate(2, 100, 0, 0),
-		loadTestCandidate(3, 100, 0, 0),
+		loadTestCandidate(1, 100),
+		loadTestCandidate(2, 100),
+		loadTestCandidate(3, 100),
 	}
 	got := loadSkewAccountPoolCandidates(candidates)
 	require.Len(t, got, len(candidates))
@@ -65,32 +63,15 @@ func TestLoadSkewConcurrencyTier(t *testing.T) {
 	seedInMemoryLeases(t, 2, 2) // account B has 2 in-flight
 
 	candidates := []accountPoolAccountCandidate{
-		loadTestCandidate(1, 100, 0, 0), // A
-		loadTestCandidate(2, 100, 0, 0), // B (busy)
-		loadTestCandidate(3, 100, 0, 0), // C
+		loadTestCandidate(1, 100), // A
+		loadTestCandidate(2, 100), // B (busy)
+		loadTestCandidate(3, 100), // C
 	}
 	got := loadSkewAccountPoolCandidates(candidates)
 	assert.Equal(t, map[int]struct{}{1: {}, 3: {}}, candidateIDSet(got), "busy account B must be excluded")
 }
 
-// TestLoadSkewLatencyTieBreak: among equal-in-flight candidates, a much-higher-latency one is
-// dropped while near-equal latencies (same bucket) are all kept.
-func TestLoadSkewLatencyTieBreak(t *testing.T) {
-	ResetAccountPoolRuntimeForTest()
-	restore := setAccountPoolLoadAwareEnabledForTest(true)
-	defer restore()
-
-	// Bucket size 250ms. avg=100 (bucket 0), avg=200 (bucket 0), avg=5000 (bucket 20).
-	candidates := []accountPoolAccountCandidate{
-		loadTestCandidate(1, 100, 100, 1),  // bucket 0
-		loadTestCandidate(2, 100, 200, 1),  // bucket 0 (near-equal, kept)
-		loadTestCandidate(3, 100, 5000, 1), // bucket 20 (far slower, dropped)
-	}
-	got := loadSkewAccountPoolCandidates(candidates)
-	assert.Equal(t, map[int]struct{}{1: {}, 2: {}}, candidateIDSet(got), "high-latency account must be dropped, near-equal kept")
-}
-
-// TestLoadSkewDisabledIsByteIdentical: disabled gate returns the exact input slice.
+// TestLoadSkewDisabledIsByteIdentical: disabled gate returns the exact input slice regardless of load.
 func TestLoadSkewDisabledIsByteIdentical(t *testing.T) {
 	ResetAccountPoolRuntimeForTest()
 	restore := setAccountPoolLoadAwareEnabledForTest(false)
@@ -99,23 +80,72 @@ func TestLoadSkewDisabledIsByteIdentical(t *testing.T) {
 	seedInMemoryLeases(t, 2, 5) // even with skewed load, disabled must ignore it
 
 	candidates := []accountPoolAccountCandidate{
-		loadTestCandidate(1, 100, 100, 1),
-		loadTestCandidate(2, 100, 5000, 1),
+		loadTestCandidate(1, 100),
+		loadTestCandidate(2, 100),
 	}
 	got := loadSkewAccountPoolCandidates(candidates)
 	require.Len(t, got, len(candidates))
 	assert.Equal(t, candidateIDSet(candidates), candidateIDSet(got))
 }
 
-// TestLoadSkewSingleCandidateNoOp: len<=1 short-circuits.
+// TestLoadSkewSingleCandidateNoOp: len<=1 short-circuits without touching in-flight counts.
 func TestLoadSkewSingleCandidateNoOp(t *testing.T) {
 	ResetAccountPoolRuntimeForTest()
 	restore := setAccountPoolLoadAwareEnabledForTest(true)
 	defer restore()
 
-	candidates := []accountPoolAccountCandidate{loadTestCandidate(1, 100, 5000, 1)}
+	candidates := []accountPoolAccountCandidate{loadTestCandidate(1, 100)}
 	got := loadSkewAccountPoolCandidates(candidates)
 	assert.Equal(t, candidateIDSet(candidates), candidateIDSet(got))
+}
+
+// TestLoadSkewEqualNonzeroInFlight: when ALL candidates carry equal non-zero in-flight counts,
+// loadSkew must return the full set (no-op), preserving weighted/RR distribution unchanged.
+func TestLoadSkewEqualNonzeroInFlight(t *testing.T) {
+	ResetAccountPoolRuntimeForTest()
+	restore := setAccountPoolLoadAwareEnabledForTest(true)
+	defer restore()
+
+	// Give every candidate exactly 2 in-flight leases — equal load at non-zero.
+	seedInMemoryLeases(t, 1, 2)
+	seedInMemoryLeases(t, 2, 2)
+	seedInMemoryLeases(t, 3, 2)
+
+	candidates := []accountPoolAccountCandidate{
+		loadTestCandidate(1, 100),
+		loadTestCandidate(2, 100),
+		loadTestCandidate(3, 100),
+	}
+	got := loadSkewAccountPoolCandidates(candidates)
+	require.Len(t, got, len(candidates), "equal non-zero in-flight must keep all candidates")
+	assert.Equal(t, candidateIDSet(candidates), candidateIDSet(got))
+}
+
+// TestLoadSkewStarvationResolvesUnderLoad: an account that starts carrying more load than another
+// must exit the min-load tier, making the lighter-loaded account the sole selectable candidate.
+// This proves a "slower" or less-preferred account becomes selectable once peers carry load,
+// preventing the starvation loop the latency hard-exclusion would have caused.
+func TestLoadSkewStarvationResolvesUnderLoad(t *testing.T) {
+	ResetAccountPoolRuntimeForTest()
+	restore := setAccountPoolLoadAwareEnabledForTest(true)
+	defer restore()
+
+	// Phase 1: A and B both at 0 in-flight → both selectable.
+	candidatesPhase1 := []accountPoolAccountCandidate{
+		loadTestCandidate(10, 100), // A
+		loadTestCandidate(20, 100), // B
+	}
+	got1 := loadSkewAccountPoolCandidates(candidatesPhase1)
+	assert.Equal(t, candidateIDSet(candidatesPhase1), candidateIDSet(got1), "phase 1: both at zero in-flight, both must be selectable")
+
+	// Phase 2: raise A's in-flight above B's → B becomes the sole min-load candidate.
+	seedInMemoryLeases(t, 10, 3) // A now has 3 in-flight, B still 0
+	candidatesPhase2 := []accountPoolAccountCandidate{
+		loadTestCandidate(10, 100), // A (busy)
+		loadTestCandidate(20, 100), // B (idle)
+	}
+	got2 := loadSkewAccountPoolCandidates(candidatesPhase2)
+	assert.Equal(t, map[int]struct{}{20: {}}, candidateIDSet(got2), "phase 2: B must be the sole min-load candidate when A carries load")
 }
 
 // TestSelectAccountPoolCandidatePriorityDominatesLoad: a less-loaded LOWER-priority account must
@@ -128,8 +158,8 @@ func TestSelectAccountPoolCandidatePriorityDominatesLoad(t *testing.T) {
 	seedInMemoryLeases(t, 1, 3) // the high-priority account is busy
 
 	candidates := []accountPoolAccountCandidate{
-		loadTestCandidate(1, 100, 0, 0), // high priority, busy
-		loadTestCandidate(2, 50, 0, 0),  // lower priority, idle
+		loadTestCandidate(1, 100), // high priority, busy
+		loadTestCandidate(2, 50),  // lower priority, idle
 	}
 	// round_robin policy is deterministic for a single survivor.
 	selected := selectAccountPoolCandidate(candidates, "round_robin")
@@ -181,9 +211,9 @@ func TestLoadSkewUsesRedisCounts(t *testing.T) {
 	}
 
 	candidates := []accountPoolAccountCandidate{
-		loadTestCandidate(1, 100, 0, 0),
-		loadTestCandidate(2, 100, 0, 0),
-		loadTestCandidate(3, 100, 0, 0),
+		loadTestCandidate(1, 100),
+		loadTestCandidate(2, 100),
+		loadTestCandidate(3, 100),
 	}
 	got := loadSkewAccountPoolCandidates(candidates)
 	assert.Equal(t, map[int]struct{}{1: {}, 3: {}}, candidateIDSet(got), "load tier must use Redis ZCOUNT")

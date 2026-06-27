@@ -219,14 +219,16 @@ return 1
 
 // accountPoolRedisInFlightCounts reads the current in-flight lease count per account via one
 // pipelined batch (single round-trip). It counts only live (non-expired) lease tokens with
-// ZCOUNT(key, now, +inf) so a crashed instance's not-yet-reclaimed members do not inflate the
-// reported load. On ANY error (pipeline exec, ctx timeout, per-command error) it returns a non-nil
-// error so the caller falls back to the in-memory path. The returned map always has an entry for
-// every requested id.
+// ZCOUNT(key, "(now", "+inf") — exclusive lower bound — so a lease whose score equals exactly now
+// is treated as expired, matching the purge semantics of accountPoolLeaseAcquireScript which removes
+// scores <= now (ZREMRANGEBYSCORE key -inf now). On ANY error (pipeline exec, ctx timeout,
+// per-command error) it returns a non-nil error so the caller falls back to the in-memory path.
+// The returned map always has an entry for every requested id.
 func accountPoolRedisInFlightCounts(accountIDs []int) (map[int]int, error) {
 	ctx, cancel := accountPoolRedisCtx()
 	defer cancel()
-	now := strconv.FormatInt(common.GetTimestamp(), 10)
+	// Use exclusive lower bound "(" so live = score > now, matching ZREMRANGEBYSCORE purge of <= now.
+	now := "(" + strconv.FormatInt(common.GetTimestamp(), 10)
 
 	pipe := common.RDB.Pipeline()
 	cmds := make([]*redis.IntCmd, len(accountIDs))
