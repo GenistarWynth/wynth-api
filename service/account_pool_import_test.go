@@ -160,8 +160,50 @@ func TestAccountPoolServiceImportSub2APIAnthropicAccountsMatchAndInheritPlatform
 	require.NoError(t, err)
 	assert.Equal(t, "claude-access", ts.AccessToken)
 
-	// An account that omits platform inherits the pool's platform (anthropic here).
-	requireAccountPoolAccountByName(t, "claude-inherit")
+	// An account that omits platform inherits the pool's platform (anthropic here)
+	// and its OAuth credential is stored intact.
+	inherit := requireAccountPoolAccountByName(t, "claude-inherit")
+	inheritCred, err := DecryptAccountPoolCredentialConfig(inherit.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, inheritCred.Type)
+	assert.Equal(t, "claude-refresh-2", inheritCred.RefreshToken)
+}
+
+func TestAccountPoolServiceImportSub2APIGeminiAccountMatchesPlatform(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-oauth",
+					"platform": "gemini",
+					"type": "oauth",
+					"credentials": {
+						"email": "gemini@example.com",
+						"refresh_token": "gemini-refresh",
+						"access_token": "gemini-access"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "gemini-oauth")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Equal(t, "gemini-refresh", cred.RefreshToken)
 }
 
 func TestAccountPoolServiceImportSub2APIRejectsPlatformMismatch(t *testing.T) {
