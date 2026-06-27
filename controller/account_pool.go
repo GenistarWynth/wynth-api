@@ -168,6 +168,30 @@ func ImportAccountPoolAccounts(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolAccountImportResponse(result))
 }
 
+// ExportAccountPoolAccounts serializes a pool's accounts (and the proxies they
+// reference) into the same sub2api-data shape the importer consumes, so a full
+// export round-trips through import. Secrets are REDACTED unless include_secrets=true
+// is passed (admin-only route; the request is audit-logged, never the secrets).
+func ExportAccountPoolAccounts(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	includeSecretsRaw := c.Query("include_secrets")
+	includeSecrets := includeSecretsRaw == "true" || includeSecretsRaw == "1"
+	payload, err := (&service.AccountPoolService{}).ExportAccounts(poolID, includeSecrets)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.account_export", map[string]interface{}{
+		"pool_id":         poolID,
+		"include_secrets": includeSecrets,
+		"accounts":        len(payload.Accounts),
+	})
+	common.ApiSuccess(c, payload)
+}
+
 func UpdateAccountPoolAccount(c *gin.Context) {
 	poolID, ok := accountPoolIDFromParam(c)
 	if !ok {

@@ -256,6 +256,7 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.GET("/:id/accounts", controller.ListAccountPoolAccounts)
 			accountPoolRoute.POST("/:id/accounts", controller.CreateAccountPoolAccount)
 			accountPoolRoute.POST("/:id/accounts/import", controller.ImportAccountPoolAccounts)
+			accountPoolRoute.GET("/:id/accounts/export", controller.ExportAccountPoolAccounts)
 			accountPoolRoute.POST("/:id/accounts/:account_id/capabilities/detect", controller.DetectAccountPoolAccountCapability)
 			accountPoolRoute.PUT("/:id/accounts/:account_id", controller.UpdateAccountPoolAccount)
 			accountPoolRoute.DELETE("/:id/accounts/:account_id", controller.DeleteAccountPoolAccount)

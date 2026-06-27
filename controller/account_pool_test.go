@@ -128,6 +128,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.GET("/:id/accounts", ListAccountPoolAccounts)
 		group.POST("/:id/accounts", CreateAccountPoolAccount)
 		group.POST("/:id/accounts/import", ImportAccountPoolAccounts)
+		group.GET("/:id/accounts/export", ExportAccountPoolAccounts)
 		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
@@ -272,6 +273,43 @@ func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {
 	var stored model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&stored, accountResult.Response.Data.Id).Error)
 	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, stored.OAuthType)
+}
+
+func TestAccountPoolAPIExportRedactsByDefaultAndIncludesSecretsOnRequest(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "export-pool",
+		Platform: model.AccountPoolPlatformGemini,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+	poolID := strconv.Itoa(poolResult.Response.Data.Id)
+
+	accountResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "export-acct",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:         "oauth",
+			Email:        "ca@example.com",
+			RefreshToken: "rt-export-secret",
+			OAuthType:    "code_assist",
+		},
+		TokenState: dto.AccountPoolTokenStateRequest{AccessToken: "at-export-secret"},
+	})
+	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
+
+	// Default export is redacted: no secret in the body, but non-secret fields present.
+	redacted := accountPoolAPIRequest[map[string]any](t, router, http.MethodGet, "/api/account_pools/"+poolID+"/accounts/export", nil)
+	require.True(t, redacted.Response.Success, redacted.Response.Message)
+	assert.NotContains(t, string(redacted.Raw), "rt-export-secret")
+	assert.NotContains(t, string(redacted.Raw), "at-export-secret")
+	assert.Contains(t, string(redacted.Raw), "code_assist")
+
+	// include_secrets=true returns the real credentials (admin migration/backup path).
+	full := accountPoolAPIRequest[map[string]any](t, router, http.MethodGet, "/api/account_pools/"+poolID+"/accounts/export?include_secrets=true", nil)
+	require.True(t, full.Response.Success, full.Response.Message)
+	assert.Contains(t, string(full.Raw), "rt-export-secret")
+	assert.Contains(t, string(full.Raw), "at-export-secret")
 }
 
 func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
