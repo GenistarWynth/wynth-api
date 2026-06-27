@@ -147,6 +147,19 @@ export async function importAccountPoolAccounts(
   return res.data
 }
 
+export async function exportAccountPoolAccounts(
+  poolID: number,
+  includeSecrets = false
+): Promise<unknown> {
+  const res = await api.get(
+    `/api/account_pools/${poolID}/accounts/export${
+      includeSecrets ? '?include_secrets=true' : ''
+    }`,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
 export async function detectAccountPoolAccountCapability(
   poolID: number,
   accountID: number,

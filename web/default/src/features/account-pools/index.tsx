@@ -37,6 +37,7 @@ import {
   Save,
   Trash2,
   Upload,
+  Download,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -141,6 +142,7 @@ import {
   detectAccountPoolAccountCapability,
   detectAccountPoolCapabilities,
   disableAccountPoolBinding,
+  exportAccountPoolAccounts,
   importAccountPoolAccounts,
   listAccountPoolAccounts,
   listAccountPoolBindings,
@@ -764,6 +766,8 @@ export function AccountPools() {
   const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false)
   const [detectingAccount, setDetectingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
+  const [exportSecretsConfirmOpen, setExportSecretsConfirmOpen] =
+    useState(false)
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
   const [editingProxy, setEditingProxy] = useState<AccountPoolProxy>()
   const [deletingProxy, setDeletingProxy] = useState<AccountPoolProxy>()
@@ -1032,6 +1036,36 @@ export function AccountPools() {
       }
       setAccountImportOpen(false)
       invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const exportAccountsMutation = useMutation({
+    mutationFn: async (includeSecrets: boolean) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      const payload = await exportAccountPoolAccounts(
+        selectedPoolID,
+        includeSecrets
+      )
+      return { payload, poolID: selectedPoolID }
+    },
+    onSuccess: ({ payload, poolID }) => {
+      const json = JSON.stringify(payload, null, 2)
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `account-pool-${poolID}-export.json`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+      setExportSecretsConfirmOpen(false)
+      toast.success(t('Accounts exported'))
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : t('Request failed'))
@@ -1364,6 +1398,9 @@ export function AccountPools() {
           setAccountSheetOpen(true)
         }}
         onImportAccounts={() => setAccountImportOpen(true)}
+        onExportAccounts={() => exportAccountsMutation.mutate(false)}
+        onExportAccountsWithSecrets={() => setExportSecretsConfirmOpen(true)}
+        exportingAccounts={exportAccountsMutation.isPending}
         onEditAccount={(account) => {
           setEditingAccount(account)
           setAccountSheetOpen(true)
@@ -1431,6 +1468,18 @@ export function AccountPools() {
         isSubmitting={importAccountsMutation.isPending}
         onOpenChange={setAccountImportOpen}
         onSubmit={(values) => importAccountsMutation.mutate(values)}
+      />
+      <ConfirmDialog
+        open={exportSecretsConfirmOpen}
+        onOpenChange={(open) => !open && setExportSecretsConfirmOpen(false)}
+        title={t('Export accounts with secrets?')}
+        desc={t(
+          'The exported file will contain plaintext credentials (API keys, tokens, refresh tokens). Store it securely and delete it when no longer needed.'
+        )}
+        destructive
+        confirmText={t('Export with secrets')}
+        isLoading={exportAccountsMutation.isPending}
+        handleConfirm={() => exportAccountsMutation.mutate(true)}
       />
       <CapabilityDetectDialog
         open={capabilityDialogOpen}
@@ -2503,6 +2552,9 @@ function PoolDetailsSheet(props: {
   onOpenChange: (open: boolean) => void
   onCreateAccount: () => void
   onImportAccounts: () => void
+  onExportAccounts: () => void
+  onExportAccountsWithSecrets: () => void
+  exportingAccounts: boolean
   onEditAccount: (account: AccountPoolAccount) => void
   onDetectAccount: (account: AccountPoolAccount) => void
   onBatchDetectModels: () => void
@@ -2569,6 +2621,9 @@ function PoolDetailsSheet(props: {
                 loading={props.accountsLoading}
                 onCreateAccount={props.onCreateAccount}
                 onImportAccounts={props.onImportAccounts}
+                onExportAccounts={props.onExportAccounts}
+                onExportAccountsWithSecrets={props.onExportAccountsWithSecrets}
+                exportingAccounts={props.exportingAccounts}
                 onEditAccount={props.onEditAccount}
                 onDetectAccount={props.onDetectAccount}
                 onBatchDetectModels={props.onBatchDetectModels}
@@ -2630,6 +2685,9 @@ function AccountListSection(props: {
   loading: boolean
   onCreateAccount: () => void
   onImportAccounts: () => void
+  onExportAccounts: () => void
+  onExportAccountsWithSecrets: () => void
+  exportingAccounts: boolean
   onEditAccount: (account: AccountPoolAccount) => void
   onDetectAccount: (account: AccountPoolAccount) => void
   onBatchDetectModels: () => void
@@ -2662,6 +2720,35 @@ function AccountListSection(props: {
             <Upload data-icon='inline-start' />
             {t('Import Accounts')}
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  disabled={props.exportingAccounts}
+                />
+              }
+            >
+              {props.exportingAccounts ? (
+                <Loader2 data-icon='inline-start' className='animate-spin' />
+              ) : (
+                <Download data-icon='inline-start' />
+              )}
+              {t('Export Accounts')}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end'>
+              <DropdownMenuItem onClick={props.onExportAccounts}>
+                <Download />
+                {t('Export (redacted)')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={props.onExportAccountsWithSecrets}>
+                <Download />
+                {t('Export with secrets')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button type='button' size='sm' onClick={props.onCreateAccount}>
             <Plus data-icon='inline-start' />
             {t('Add Account')}
