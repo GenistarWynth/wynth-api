@@ -20,6 +20,23 @@ type accountPoolRuntimeLeaseManager struct {
 var accountPoolRuntimeLeases = newAccountPoolRuntimeLeaseManager()
 var accountPoolRuntimeSelections = newAccountPoolRuntimeSelectionRecencyManager()
 
+// accountPoolLoadAwareEnabledVar caches the ACCOUNT_POOL_LOAD_AWARE_SCHEDULING gate read once at
+// startup. Load-aware scheduling is ON by default but is a no-op at small scale by construction
+// (when all candidates have equal/zero in-flight load and no latency samples). Tests may toggle it
+// via setAccountPoolLoadAwareEnabledForTest.
+var accountPoolLoadAwareEnabledVar = common.GetEnvOrDefaultBool("ACCOUNT_POOL_LOAD_AWARE_SCHEDULING", true)
+
+// accountPoolLoadAwareEnabled reports whether the least-loaded tier filter is active.
+func accountPoolLoadAwareEnabled() bool {
+	return accountPoolLoadAwareEnabledVar
+}
+
+func setAccountPoolLoadAwareEnabledForTest(enabled bool) (restore func()) {
+	prev := accountPoolLoadAwareEnabledVar
+	accountPoolLoadAwareEnabledVar = enabled
+	return func() { accountPoolLoadAwareEnabledVar = prev }
+}
+
 func newAccountPoolRuntimeLeaseManager() *accountPoolRuntimeLeaseManager {
 	return &accountPoolRuntimeLeaseManager{active: map[int]int{}}
 }
@@ -52,6 +69,36 @@ func tryAcquireAccountPoolRuntimeLease(accountID int, maxConcurrency int) (accou
 		// Redis error: fall back to per-instance in-memory leasing.
 	}
 	return accountPoolRuntimeLeases.tryAcquire(accountID, maxConcurrency)
+}
+
+// accountPoolRuntimeInFlightCounts returns the current in-flight lease count per account for the
+// given accountIDs. This is a heuristic read used only to bias selection toward less-loaded
+// accounts; a race against a concurrent acquire/release is acceptable because the lease acquire in
+// selectAccountPoolAccountWithLease remains the real concurrency gate.
+//
+//   - Redis on: one pipelined batch of ZCARD over accountPoolLeaseKey(id) for all ids (single
+//     round-trip). On ANY error it falls back to the in-memory path.
+//   - Redis off: read the in-memory lease manager's active counts under its mutex.
+//
+// Accounts with no in-flight leases are reported as 0. The returned map always contains an entry
+// for every requested id.
+func accountPoolRuntimeInFlightCounts(accountIDs []int) map[int]int {
+	counts := make(map[int]int, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return counts
+	}
+	if accountPoolRedisOn() {
+		if redisCounts, err := accountPoolRedisInFlightCounts(accountIDs); err == nil {
+			return redisCounts
+		}
+		// Redis error: fall back to the in-memory view for this instance.
+	}
+	accountPoolRuntimeLeases.mu.Lock()
+	defer accountPoolRuntimeLeases.mu.Unlock()
+	for _, id := range accountIDs {
+		counts[id] = accountPoolRuntimeLeases.active[id]
+	}
+	return counts
 }
 
 func rememberAccountPoolRuntimeSelection(accountID int, now int64) {

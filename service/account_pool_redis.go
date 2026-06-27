@@ -217,6 +217,37 @@ redis.call('EXPIRE', key, ttl)
 return 1
 `)
 
+// accountPoolRedisInFlightCounts reads the current in-flight lease count per account via one
+// pipelined batch (single round-trip). It counts only live (non-expired) lease tokens with
+// ZCOUNT(key, now, +inf) so a crashed instance's not-yet-reclaimed members do not inflate the
+// reported load. On ANY error (pipeline exec, ctx timeout, per-command error) it returns a non-nil
+// error so the caller falls back to the in-memory path. The returned map always has an entry for
+// every requested id.
+func accountPoolRedisInFlightCounts(accountIDs []int) (map[int]int, error) {
+	ctx, cancel := accountPoolRedisCtx()
+	defer cancel()
+	now := strconv.FormatInt(common.GetTimestamp(), 10)
+
+	pipe := common.RDB.Pipeline()
+	cmds := make([]*redis.IntCmd, len(accountIDs))
+	for i, id := range accountIDs {
+		cmds[i] = pipe.ZCount(ctx, accountPoolLeaseKey(id), now, "+inf")
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+
+	counts := make(map[int]int, len(accountIDs))
+	for i, id := range accountIDs {
+		n, err := cmds[i].Result()
+		if err != nil {
+			return nil, err
+		}
+		counts[id] = int(n)
+	}
+	return counts, nil
+}
+
 // accountPoolRedisAcquireLease attempts to claim one of maxConcurrency slots for
 // the given key. On success it returns an idempotent release closure that frees
 // the slot (ZREM). On a denied slot it returns (nil,false,nil). On a Redis error

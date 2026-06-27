@@ -433,12 +433,88 @@ func mapAccountPoolUpstreamModel(rawMapping string, upstreamModelName string) (s
 	return upstreamModelName, nil
 }
 
+// accountPoolLatencyBucketMs groups average latencies into coarse buckets so that accounts with
+// near-equal latency stay in the same tie-break tier and continue to share weighted-random /
+// round-robin distribution, rather than collapsing onto the single lowest-latency account.
+const accountPoolLatencyBucketMs = int64(250)
+
 func selectAccountPoolCandidate(candidates []accountPoolAccountCandidate, schedulePolicy string) accountPoolAccountCandidate {
+	// Priority must dominate load: filter to the highest-priority subset FIRST so a less-loaded
+	// lower-priority account is never chosen over a higher-priority (busier) one. Then bias the
+	// priority subset toward the least-loaded accounts before the existing distribution policy.
 	priorityCandidates := highestPriorityAccountPoolCandidates(candidates)
+	priorityCandidates = loadSkewAccountPoolCandidates(priorityCandidates)
 	if strings.EqualFold(strings.TrimSpace(schedulePolicy), AccountPoolSchedulePolicyRandom) {
 		return selectWeightedRandomAccountPoolCandidate(priorityCandidates)
 	}
 	return selectRoundRobinAccountPoolCandidate(priorityCandidates)
+}
+
+// loadSkewAccountPoolCandidates narrows a candidate slice (already filtered to one priority tier)
+// toward the least-loaded accounts. It applies two successive tier filters:
+//
+//  1. Concurrency tier: keep only candidates whose current in-flight lease count equals the
+//     minimum among all candidates.
+//  2. Latency tie-break: among the survivors, keep only those in the minimum average-latency
+//     bucket (avg = TotalLatencyMS/LatencySampleCount, bucketed by accountPoolLatencyBucketMs).
+//
+// It is a NO-OP at small scale by construction: when all candidates have equal in-flight counts
+// (e.g. all zero) the concurrency tier keeps everyone, and when no candidate has latency samples
+// (bucket 0) the latency tier keeps everyone — so the returned slice is the input slice unchanged.
+// It is also a no-op when load-aware scheduling is disabled or len<=1. The result is always
+// non-empty.
+func loadSkewAccountPoolCandidates(candidates []accountPoolAccountCandidate) []accountPoolAccountCandidate {
+	if !accountPoolLoadAwareEnabled() || len(candidates) <= 1 {
+		return candidates
+	}
+
+	ids := make([]int, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.account.Id
+	}
+	counts := accountPoolRuntimeInFlightCounts(ids)
+
+	// Concurrency tier: minimum in-flight load.
+	minLoad := counts[candidates[0].account.Id]
+	for _, c := range candidates[1:] {
+		if n := counts[c.account.Id]; n < minLoad {
+			minLoad = n
+		}
+	}
+	leastLoaded := make([]accountPoolAccountCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if counts[c.account.Id] == minLoad {
+			leastLoaded = append(leastLoaded, c)
+		}
+	}
+	if len(leastLoaded) <= 1 {
+		return leastLoaded
+	}
+
+	// Latency tie-break: minimum average-latency bucket among the least-loaded set.
+	minBucket := accountPoolLatencyBucket(leastLoaded[0].account)
+	for _, c := range leastLoaded[1:] {
+		if b := accountPoolLatencyBucket(c.account); b < minBucket {
+			minBucket = b
+		}
+	}
+	fastest := make([]accountPoolAccountCandidate, 0, len(leastLoaded))
+	for _, c := range leastLoaded {
+		if accountPoolLatencyBucket(c.account) == minBucket {
+			fastest = append(fastest, c)
+		}
+	}
+	return fastest
+}
+
+// accountPoolLatencyBucket returns the coarse average-latency bucket for an account. Accounts with
+// no latency samples bucket to 0 so they are never penalized by the latency tie-break.
+func accountPoolLatencyBucket(account model.AccountPoolAccount) int64 {
+	if account.LatencySampleCount <= 0 {
+		return 0
+	}
+	avg := account.TotalLatencyMS / account.LatencySampleCount
+	return avg / accountPoolLatencyBucketMs
 }
 
 func highestPriorityAccountPoolCandidates(candidates []accountPoolAccountCandidate) []accountPoolAccountCandidate {
