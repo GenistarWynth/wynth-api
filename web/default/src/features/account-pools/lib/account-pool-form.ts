@@ -23,6 +23,7 @@ import type {
   AccountPoolAccountImportRequest,
   AccountPoolAccountStatus,
   AccountPoolBoundChannelCreateRequest,
+  AccountPoolCredentialConfigRequest,
   AccountPoolCapabilityMode,
   AccountPoolCreateRequest,
   AccountPoolCredentialType,
@@ -43,6 +44,7 @@ const CHANNEL_TYPE_ANTHROPIC = 14
 const CHANNEL_TYPE_GEMINI = 24
 const CHANNEL_TYPE_XAI = 48
 const CHANNEL_TYPE_CODEX_VALUE = 57
+const CHANNEL_TYPE_GROK_WEB = 59
 
 // Allowed bound-channel types per pool platform. The backend validates that a
 // binding's channel type matches the pool platform, so the UI mirrors that map
@@ -57,6 +59,8 @@ export function allowedChannelTypesForPlatform(
       return [CHANNEL_TYPE_GEMINI]
     case 'xai':
       return [CHANNEL_TYPE_XAI]
+    case 'grok_web':
+      return [CHANNEL_TYPE_GROK_WEB]
     case 'openai':
     default:
       return [CHANNEL_TYPE_OPENAI, CHANNEL_TYPE_CODEX_VALUE]
@@ -70,13 +74,25 @@ export function defaultChannelTypeForPlatform(
   return allowedChannelTypesForPlatform(platform)[0]
 }
 
-// Whether the OAuth credential type is supported for the given pool platform.
-// All platforms (openai/anthropic/gemini) now support OAuth credentials; Gemini
-// OAuth additionally carries an oauth_type sub-type (code_assist | ai_studio).
-export function platformSupportsOAuthCredential(
-  _platform: AccountPoolPlatform | string
+// Whether the pool platform uses the grok.com web-cookie credential flow. Such
+// pools accept only a single cookie credential type (grok_web_cookie): the
+// grok.com SSO token (carried in the api_key field) plus an optional
+// cf_clearance cookie. They do not offer the api_key/oauth credential UI.
+export function platformIsGrokWebCookie(
+  platform: AccountPoolPlatform | string
 ): boolean {
-  return true
+  return platform === 'grok_web'
+}
+
+// Whether the OAuth credential type is supported for the given pool platform.
+// All API-key/OAuth platforms (openai/anthropic/gemini/xai) support OAuth
+// credentials; Gemini OAuth additionally carries an oauth_type sub-type
+// (code_assist | ai_studio). The grok_web cookie platform is cookie-only and
+// does NOT use OAuth.
+export function platformSupportsOAuthCredential(
+  platform: AccountPoolPlatform | string
+): boolean {
+  return !platformIsGrokWebCookie(platform)
 }
 
 export function normalizeAccountPoolSchedulePolicy(
@@ -115,6 +131,9 @@ export type AccountPoolAccountFormValues = {
   credential_type: AccountPoolCredentialType
   oauth_type: string
   api_key: string
+  // grok.com web-cookie credential: optional Cloudflare clearance cookie. The
+  // grok.com SSO token reuses the existing api_key field.
+  cf_clearance: string
   email: string
   refresh_token: string
   access_token: string
@@ -259,6 +278,7 @@ export function emptyAccountForm(): AccountPoolAccountFormValues {
     credential_type: 'api_key',
     oauth_type: '',
     api_key: '',
+    cf_clearance: '',
     email: '',
     refresh_token: '',
     access_token: '',
@@ -290,14 +310,7 @@ export function buildAccountPayload(
   return {
     name: values.name.trim(),
     account_identifier: values.account_identifier.trim(),
-    credential: {
-      type: values.credential_type || 'api_key',
-      oauth_type: values.oauth_type,
-      api_key:
-        values.credential_type === 'api_key' ? values.api_key.trim() : '',
-      email: values.email.trim(),
-      refresh_token: values.refresh_token.trim(),
-    },
+    credential: buildCredentialPayload(values),
     token_state: {
       access_token: values.access_token.trim(),
       refresh_token: values.token_refresh_token.trim(),
@@ -326,6 +339,34 @@ export function buildAccountPayload(
   }
 }
 
+// Builds the credential sub-payload for an account. The grok.com web-cookie
+// flow (credential_type === 'grok_web_cookie') sends the SSO token in api_key
+// plus an optional cf_clearance cookie; the api_key/oauth/email/refresh fields
+// are not used. Other credential types keep their existing shape so the upstream
+// contract (and existing payload tests) stay unchanged.
+function buildCredentialPayload(
+  values: AccountPoolAccountFormValues
+): AccountPoolCredentialConfigRequest {
+  if (values.credential_type === 'grok_web_cookie') {
+    return {
+      type: 'grok_web_cookie',
+      oauth_type: '',
+      api_key: values.api_key.trim(),
+      email: '',
+      refresh_token: '',
+      cf_clearance: values.cf_clearance.trim(),
+    }
+  }
+
+  return {
+    type: values.credential_type || 'api_key',
+    oauth_type: values.oauth_type,
+    api_key: values.credential_type === 'api_key' ? values.api_key.trim() : '',
+    email: values.email.trim(),
+    refresh_token: values.refresh_token.trim(),
+  }
+}
+
 export function accountToFormValues(
   account: AccountPoolAccount
 ): AccountPoolAccountFormValues {
@@ -345,6 +386,7 @@ export function accountToFormValues(
     credential_type: inferredCredentialType,
     oauth_type: account.oauth_type || '',
     api_key: '',
+    cf_clearance: '',
     email: '',
     refresh_token: '',
     access_token: '',

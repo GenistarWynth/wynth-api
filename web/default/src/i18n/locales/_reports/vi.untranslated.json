@@ -2,5 +2,6 @@
   "Export with secrets": "Export with secrets",
   "Export accounts with secrets?": "Export accounts with secrets?",
   "The exported file will contain plaintext credentials (API keys, tokens, refresh tokens). Store it securely and delete it when no longer needed.": "The exported file will contain plaintext credentials (API keys, tokens, refresh tokens). Store it securely and delete it when no longer needed.",
-  "Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.": "Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API."
+  "Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.": "Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.",
+  "grok.com web-cookie path (best-effort): paste the grok.com SSO session token.": "grok.com web-cookie path (best-effort): paste the grok.com SSO session token."
 }

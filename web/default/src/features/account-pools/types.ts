@@ -22,7 +22,12 @@ export type ApiResponse<T = unknown> = {
   data?: T
 }
 
-export type AccountPoolPlatform = 'openai' | 'anthropic' | 'gemini' | 'xai'
+export type AccountPoolPlatform =
+  | 'openai'
+  | 'anthropic'
+  | 'gemini'
+  | 'xai'
+  | 'grok_web'
 
 export type AccountPoolStatus = 'enabled' | 'disabled' | 'deleted'
 
@@ -36,7 +41,11 @@ export type AccountPoolProxyStatus = 'enabled' | 'disabled' | 'deleted'
 
 export type AccountPoolBindingStatus = 'draft' | 'enabled' | 'disabled'
 
-export type AccountPoolCredentialType = 'api_key' | 'oauth' | string
+export type AccountPoolCredentialType =
+  | 'api_key'
+  | 'oauth'
+  | 'grok_web_cookie'
+  | string
 
 export type AccountPoolProxyProtocol =
   | 'http'
@@ -101,6 +110,10 @@ export type AccountPoolCredentialConfigRequest = {
   api_key: string
   email: string
   refresh_token: string
+  // grok.com web-cookie credential: optional Cloudflare clearance cookie sent
+  // alongside the SSO token (carried in api_key). Mirrors the backend
+  // dto.AccountPoolCredentialConfigRequest field; ignored by other credential types.
+  cf_clearance?: string
 }
 
 export type AccountPoolTokenStateRequest = {

@@ -168,6 +168,7 @@ import {
   emptyPoolForm,
   emptyProxyForm,
   normalizeAccountPoolSchedulePolicy,
+  platformIsGrokWebCookie,
   platformSupportsOAuthCredential,
   poolToFormValues,
   proxyToFormValues,
@@ -219,6 +220,7 @@ const POOL_PLATFORM_OPTIONS = [
   { value: 'anthropic', label: 'Anthropic (Claude)' },
   { value: 'gemini', label: 'Google Gemini' },
   { value: 'xai', label: 'Grok (X.AI)' },
+  { value: 'grok_web', label: 'Grok (Web)' },
 ]
 const STATUS_OPTIONS = [
   { value: 'enabled', label: 'Enabled' },
@@ -3763,15 +3765,20 @@ function AccountFormSheet(props: {
     () => translateOptions(ACCOUNT_STATUS_OPTIONS, t),
     [t]
   )
-  const oauthSupported = platformSupportsOAuthCredential(
-    props.pool?.platform ?? 'openai'
-  )
+  const poolPlatform = props.pool?.platform ?? 'openai'
+  // grok.com web-cookie pools use a single cookie credential type (the SSO token
+  // plus an optional cf_clearance); they hide the api_key/oauth/email/refresh UI.
+  const isGrokWeb = platformIsGrokWebCookie(poolPlatform)
+  const oauthSupported = platformSupportsOAuthCredential(poolPlatform)
   const credentialTypeOptions = useMemo(
-    () => [
-      { value: 'api_key', label: t('API Key') },
-      ...(oauthSupported ? [{ value: 'oauth', label: t('OAuth') }] : []),
-    ],
-    [t, oauthSupported]
+    () =>
+      isGrokWeb
+        ? [{ value: 'grok_web_cookie', label: t('Grok Web Cookie') }]
+        : [
+            { value: 'api_key', label: t('API Key') },
+            ...(oauthSupported ? [{ value: 'oauth', label: t('OAuth') }] : []),
+          ],
+    [t, oauthSupported, isGrokWeb]
   )
   const oauthTypeOptions = useMemo(
     () => [
@@ -3794,15 +3801,21 @@ function AccountFormSheet(props: {
       const next = props.account
         ? accountToFormValues(props.account)
         : emptyAccountForm()
-      // Guard against a platform that does not support OAuth credentials by
-      // falling back to api_key. All platforms currently support OAuth, so this
-      // is defensive and normally a no-op.
-      if (!oauthSupported && next.credential_type === 'oauth') {
+      // grok.com web-cookie pools only accept the grok_web_cookie credential,
+      // so default the selector to it (the SSO token reuses the api_key field).
+      if (isGrokWeb) {
+        next.credential_type = 'grok_web_cookie'
+      } else if (!oauthSupported && next.credential_type === 'oauth') {
+        // Guard against a platform that does not support OAuth credentials by
+        // falling back to api_key. Defensive and normally a no-op.
+        next.credential_type = 'api_key'
+      } else if (next.credential_type === 'grok_web_cookie') {
+        // A non-grok pool should never surface the cookie type.
         next.credential_type = 'api_key'
       }
       setForm(next)
     }
-  }, [props.account, props.open, oauthSupported])
+  }, [props.account, props.open, oauthSupported, isGrokWeb])
 
   const setField = <K extends keyof AccountPoolAccountFormValues>(
     key: K,
@@ -3997,6 +4010,50 @@ function AccountFormSheet(props: {
                   </SelectContent>
                 </Select>
               </FieldBlock>
+              {isGrokWeb ? (
+                <>
+                  <FieldBlock
+                    label={t('SSO Token')}
+                    htmlFor='account-pool-account-sso-token'
+                    description={t(
+                      'grok.com web-cookie path (best-effort): paste the grok.com SSO session token.'
+                    )}
+                  >
+                    <Input
+                      id='account-pool-account-sso-token'
+                      type='password'
+                      value={form.api_key}
+                      onChange={(event) =>
+                        setField('api_key', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_credential
+                          ? t('Leave blank to keep')
+                          : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('cf_clearance (optional)')}
+                    htmlFor='account-pool-account-cf-clearance'
+                  >
+                    <Input
+                      id='account-pool-account-cf-clearance'
+                      type='password'
+                      value={form.cf_clearance}
+                      onChange={(event) =>
+                        setField('cf_clearance', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_credential
+                          ? t('Leave blank to keep')
+                          : ''
+                      }
+                    />
+                  </FieldBlock>
+                </>
+              ) : (
+                <>
               {showOAuthType ? (
                 <FieldBlock
                   label={t('OAuth Type')}
@@ -4107,6 +4164,8 @@ function AccountFormSheet(props: {
                 value={form.token_version}
                 onChange={(value) => setField('token_version', value)}
               />
+                </>
+              )}
             </FieldGroup>
           </SideDrawerSection>
           <SideDrawerSection>

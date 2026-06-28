@@ -323,8 +323,30 @@ describe('account pool form helpers', () => {
     assert.deepEqual(allowedChannelTypesForPlatform('anthropic'), [14])
     assert.deepEqual(allowedChannelTypesForPlatform('gemini'), [24])
     assert.deepEqual(allowedChannelTypesForPlatform('xai'), [48])
+    // grok.com web-cookie pools bind to the grok_web channel type (59).
+    assert.deepEqual(allowedChannelTypesForPlatform('grok_web'), [59])
     // Unknown/legacy platforms fall back to the OpenAI family.
     assert.deepEqual(allowedChannelTypesForPlatform('unknown'), [1, 57])
+  })
+
+  test('serializes a grok_web cookie credential with the SSO token and cf_clearance', () => {
+    assert.deepEqual(
+      buildAccountPayload({
+        ...emptyAccountForm(),
+        name: 'Grok web account',
+        credential_type: 'grok_web_cookie',
+        api_key: '  sso-token  ',
+        cf_clearance: '  cf-cookie  ',
+      }).credential,
+      {
+        type: 'grok_web_cookie',
+        oauth_type: '',
+        api_key: 'sso-token',
+        email: '',
+        refresh_token: '',
+        cf_clearance: 'cf-cookie',
+      }
+    )
   })
 
   test('derives the default bound-channel type from the pool platform', () => {
@@ -332,6 +354,7 @@ describe('account pool form helpers', () => {
     assert.equal(defaultChannelTypeForPlatform('anthropic'), 14)
     assert.equal(defaultChannelTypeForPlatform('gemini'), 24)
     assert.equal(defaultChannelTypeForPlatform('xai'), 48)
+    assert.equal(defaultChannelTypeForPlatform('grok_web'), 59)
   })
 
   test('allows oauth credential support on every platform', () => {
@@ -339,6 +362,8 @@ describe('account pool form helpers', () => {
     assert.equal(platformSupportsOAuthCredential('anthropic'), true)
     // Gemini OAuth is now supported (with an oauth_type sub-type).
     assert.equal(platformSupportsOAuthCredential('gemini'), true)
+    // grok.com web-cookie pools are cookie-only and do NOT use OAuth.
+    assert.equal(platformSupportsOAuthCredential('grok_web'), false)
   })
 
   test('masks local secret previews', () => {
