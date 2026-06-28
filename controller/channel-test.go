@@ -72,6 +72,62 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	return normalized
 }
 
+func selectAutomaticChannelTestModel(channel *model.Channel) string {
+	if channel != nil && channel.TestModel != nil {
+		if testModel := strings.TrimSpace(*channel.TestModel); testModel != "" {
+			return testModel
+		}
+	}
+
+	if channel != nil {
+		models := channel.GetModels()
+		for _, modelName := range models {
+			modelName = strings.TrimSpace(modelName)
+			if modelName != "" && !isSpecializedChannelTestModel(modelName) {
+				return modelName
+			}
+		}
+		for _, modelName := range models {
+			if modelName = strings.TrimSpace(modelName); modelName != "" {
+				return modelName
+			}
+		}
+	}
+
+	return "gpt-4o-mini"
+}
+
+func isSpecializedChannelTestModel(modelName string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(modelName))
+	if normalized == "" {
+		return true
+	}
+	if strings.Contains(normalized, "rerank") || strings.Contains(normalized, "moderation") {
+		return true
+	}
+	if strings.Contains(normalized, "embedding") ||
+		strings.Contains(normalized, "embed") ||
+		strings.HasPrefix(normalized, "m3e") ||
+		strings.Contains(normalized, "bge-") {
+		return true
+	}
+	if common.IsImageGenerationModel(normalized) ||
+		strings.Contains(normalized, "image") ||
+		strings.HasPrefix(normalized, "imagen") {
+		return true
+	}
+	if strings.Contains(normalized, "audio") ||
+		strings.Contains(normalized, "speech") ||
+		strings.Contains(normalized, "tts") ||
+		strings.Contains(normalized, "transcribe") ||
+		strings.Contains(normalized, "whisper") ||
+		strings.Contains(normalized, "video") ||
+		strings.Contains(normalized, "sora") {
+		return true
+	}
+	return false
+}
+
 func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	if c != nil {
 		if userID := c.GetInt("id"); userID > 0 {
@@ -115,17 +171,7 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 
 	testModel = strings.TrimSpace(testModel)
 	if testModel == "" {
-		if channel.TestModel != nil && *channel.TestModel != "" {
-			testModel = strings.TrimSpace(*channel.TestModel)
-		} else {
-			models := channel.GetModels()
-			if len(models) > 0 {
-				testModel = strings.TrimSpace(models[0])
-			}
-			if testModel == "" {
-				testModel = "gpt-4o-mini"
-			}
-		}
+		testModel = selectAutomaticChannelTestModel(channel)
 	}
 	defer func() {
 		if result.testedModel == "" {
@@ -734,7 +780,14 @@ func validateTestResponseBody(respBody []byte, isStream bool) error {
 }
 
 func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
-	return channel != nil && relaycommon.SupportsStreamOptions(channel.Type)
+	if channel == nil {
+		return false
+	}
+	settings := channel.GetOtherSettings()
+	if settings.GeneratedByUpstreamSourceID > 0 || settings.GeneratedByUpstreamMappingID > 0 {
+		return false
+	}
+	return relaycommon.SupportsStreamOptions(channel.Type)
 }
 
 func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int]model.ChannelMonitorLog, now int64) []*model.Channel {

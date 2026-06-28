@@ -17,6 +17,8 @@ import (
 
 const upstreamSourceSyncStaleAfterSeconds int64 = 3600
 
+var errGeneratedChannelModelsRequired = errors.New("models are required before enabling generated channel")
+
 type upstreamSourceSyncMode string
 
 const (
@@ -496,6 +498,22 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	}
 
 	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(config), channel, resolution)
+	if shouldSkipNewAPIEmptyModelMapping(source, modelErr) {
+		errText := SanitizeUpstreamSourceError(modelErr)
+		if existingChannel != nil {
+			if err := disableGeneratedChannelForSkippedMapping(existingChannel, now); err != nil {
+				localErrText := SanitizeUpstreamSourceError(err)
+				_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, localErrText, now)
+				result.Status = model.UpstreamMappingSyncStatusFailed
+				result.Error = localErrText
+				return result, nil
+			}
+		}
+		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusSkipped, errText, now)
+		result.Status = model.UpstreamMappingSyncStatusSkipped
+		result.Error = errText
+		return result, existingChannel
+	}
 	if modelErr != nil {
 		result.Error = SanitizeUpstreamSourceError(modelErr)
 		channel.Models = ""
@@ -551,6 +569,29 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		result.Error = ""
 	}
 	return result, savedChannel
+}
+
+func disableGeneratedChannelForSkippedMapping(channel *model.Channel, now int64) error {
+	if channel == nil {
+		return nil
+	}
+	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{
+		"status":       common.ChannelStatusManuallyDisabled,
+		"updated_time": now,
+	}).Error; err != nil {
+		return err
+	}
+	channel.Status = common.ChannelStatusManuallyDisabled
+	channel.UpdatedTime = now
+	return nil
+}
+
+func shouldSkipNewAPIEmptyModelMapping(source *model.UpstreamSource, modelErr error) bool {
+	if source == nil || modelErr == nil {
+		return false
+	}
+	return strings.TrimSpace(source.Type) == model.UpstreamSourceTypeNewAPI &&
+		errors.Is(modelErr, errGeneratedChannelModelsRequired)
 }
 
 func loadChannelByID(channelID int) (*model.Channel, error) {
@@ -824,7 +865,7 @@ func fetchGeneratedChannelModels(fetchModels func(channel *model.Channel) ([]str
 	}
 	models = normalizeFetchedModelNames(models)
 	if len(models) == 0 {
-		return nil, errors.New("models are required before enabling generated channel")
+		return nil, errGeneratedChannelModelsRequired
 	}
 	if resolution.ModelStrategy == upstreamSourceModelStrategyFixed {
 		models = intersectFetchedModelsWithFixedModels(models, resolution.FixedModels)

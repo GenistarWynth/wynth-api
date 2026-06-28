@@ -1139,6 +1139,135 @@ func TestSyncUpstreamSourceAppliesCodexImageBridgePolicyToGeneratedNewAPIChannel
 	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, settings.CodexImageGenerationBridgePolicy)
 }
 
+func TestSyncNewAPIUpstreamSourceSkipsMatchedGroupWithoutModels(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "OpenAI Pro",
+				"local_group":   "pro",
+				"platforms":     []string{"openai"},
+				"name_contains": []string{"pro"},
+			},
+		},
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("type", model.UpstreamSourceTypeNewAPI).Error)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "ChatGPT Pro", &rate)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			require.Equal(t, model.UpstreamSourceTypeNewAPI, sourceType)
+			return fakeUpstreamSourceAdapter{createKeys: []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return nil, nil
+		},
+		Now: func() int64 { return 2006 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 0, result.Created)
+	assert.Equal(t, 0, result.Updated)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, result.Results[0].Status)
+	assert.Contains(t, result.Results[0].Error, "models")
+	assert.Equal(t, 0, result.Results[0].LocalChannelID)
+	var channelCount int64
+	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&channelCount).Error)
+	assert.Equal(t, int64(0), channelCount)
+	var abilityCount int64
+	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&abilityCount).Error)
+	assert.Equal(t, int64(0), abilityCount)
+	var reloaded model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloaded, mapping.Id).Error)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, reloaded.SyncStatus)
+	assert.Contains(t, reloaded.LastError, "models")
+	assert.Equal(t, int64(2006), reloaded.LastSyncedAt)
+	assert.Equal(t, 0, reloaded.LocalChannelID)
+}
+
+func TestSyncNewAPIUpstreamSourceDisablesExistingGeneratedChannelWithoutModels(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "OpenAI Pro",
+				"local_group":   "pro",
+				"platforms":     []string{"openai"},
+				"name_contains": []string{"pro"},
+			},
+		},
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("type", model.UpstreamSourceTypeNewAPI).Error)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "ChatGPT Pro", &rate)
+	baseURL := "https://relay.example.com"
+	priority := int64(0)
+	weight := uint(0)
+	channel := model.Channel{
+		Name:     "source-a / 1.000x",
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-old",
+		BaseURL:  &baseURL,
+		Models:   "gpt-4o",
+		Group:    "pro",
+		Priority: &priority,
+		Weight:   &weight,
+		Status:   common.ChannelStatusEnabled,
+		Tag:      common.GetPointer("source-a"),
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
+		"upstream_key_id":  "key-10",
+		"local_channel_id": channel.Id,
+		"sync_status":      model.UpstreamMappingSyncStatusSynced,
+		"last_error":       "",
+		"last_synced_at":   int64(1000),
+	}).Error)
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			require.Equal(t, model.UpstreamSourceTypeNewAPI, sourceType)
+			return fakeUpstreamSourceAdapter{updateKey: UpstreamKey{ID: "key-10", Key: "sk-old"}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return nil, nil
+		},
+		Now: func() int64 { return 2007 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	assert.Equal(t, 0, result.Updated)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, result.Results[0].Status)
+	assert.Equal(t, channel.Id, result.Results[0].LocalChannelID)
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
+	assert.Equal(t, "gpt-4o", reloadedChannel.Models)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, reloadedMapping.SyncStatus)
+	assert.Contains(t, reloadedMapping.LastError, "models")
+	assert.Equal(t, channel.Id, reloadedMapping.LocalChannelID)
+	assert.Equal(t, int64(2007), reloadedMapping.LastSyncedAt)
+}
+
 func TestSyncUpstreamSourceFixedModelsIntersectsFetchedModels(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, map[string]any{

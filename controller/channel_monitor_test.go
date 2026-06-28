@@ -360,6 +360,33 @@ func TestShouldUseStreamForAutomaticChannelTestUsesSupportedChannels(t *testing.
 	assert.False(t, shouldUseStreamForAutomaticChannelTest(nil))
 }
 
+func TestShouldUseStreamForAutomaticChannelTestSkipsGeneratedUpstreamChannels(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID: 7,
+	})
+
+	assert.False(t, shouldUseStreamForAutomaticChannelTest(channel))
+}
+
+func TestSelectAutomaticChannelTestModelPrefersTextModel(t *testing.T) {
+	channel := &model.Channel{
+		Models: "text-embedding-3-large,bge-reranker-v2-m3,gpt-4o-mini",
+	}
+
+	assert.Equal(t, "gpt-4o-mini", selectAutomaticChannelTestModel(channel))
+}
+
+func TestSelectAutomaticChannelTestModelHonorsExplicitTestModel(t *testing.T) {
+	explicit := "bge-reranker-v2-m3"
+	channel := &model.Channel{
+		TestModel: &explicit,
+		Models:    "text-embedding-3-large,gpt-4o-mini",
+	}
+
+	assert.Equal(t, explicit, selectAutomaticChannelTestModel(channel))
+}
+
 func TestRecordChannelTestConsumeLogSkipsMonitorProbes(t *testing.T) {
 	db := setupControllerChannelMonitorTestDB(t)
 	gin.SetMode(gin.TestMode)
