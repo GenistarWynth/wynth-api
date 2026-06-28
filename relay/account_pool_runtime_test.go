@@ -983,8 +983,8 @@ func setupAccountPoolRelayTestDB(t *testing.T) {
 	oldDB := model.DB
 	oldSecret := common.CryptoSecret
 	oldStable := common.CryptoSecretStable
-	oldUsingSQLite := common.UsingSQLite
-	common.UsingSQLite = true
+	oldMainDBType := common.MainDatabaseType()
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -1012,7 +1012,7 @@ func setupAccountPoolRelayTestDB(t *testing.T) {
 		model.DB = oldDB
 		common.CryptoSecret = oldSecret
 		common.CryptoSecretStable = oldStable
-		common.UsingSQLite = oldUsingSQLite
+		common.SetMainDatabaseType(oldMainDBType)
 	})
 }
 

@@ -45,8 +45,8 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 	oldTranslateMessage := common.TranslateMessage
 	oldCryptoSecret := common.CryptoSecret
 	oldCryptoSecretStable := common.CryptoSecretStable
-	oldUsingSQLite := common.UsingSQLite
-	common.UsingSQLite = true
+	oldMainDBType := common.MainDatabaseType()
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 		common.TranslateMessage = oldTranslateMessage
 		common.CryptoSecret = oldCryptoSecret
 		common.CryptoSecretStable = oldCryptoSecretStable
-		common.UsingSQLite = oldUsingSQLite
+		common.SetMainDatabaseType(oldMainDBType)
 	})
 
 	require.NoError(t, db.AutoMigrate(

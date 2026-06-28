@@ -1259,7 +1259,7 @@ func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel mo
 func lockAccountPoolRow(tx *gorm.DB, poolID int) (model.AccountPool, error) {
 	var pool model.AccountPool
 	query := tx
-	if !common.UsingSQLite {
+	if !common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		query = tx.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
 	err := query.First(&pool, poolID).Error

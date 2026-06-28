@@ -309,7 +309,9 @@ export function UserApiKeysDialog({
         onOpenChange={setVerificationOpen}
         methods={verificationMethods}
         state={verificationState}
-        onVerify={executeVerification}
+        onVerify={async (method, code) => {
+          await executeVerification(method, code)
+        }}
         onCancel={cancelVerification}
         onCodeChange={setVerificationCode}
         onMethodChange={switchVerificationMethod}

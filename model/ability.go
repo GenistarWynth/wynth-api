@@ -109,12 +109,13 @@ func GetChannel(group string, model string, retry int, requestPath string, attem
 	var abilities []Ability
 
 	var err error = nil
+	// Wynth strict-priority model: fetch ALL enabled abilities (every tier), then below
+	// filter out attempted channels and serve the highest REMAINING priority tier. This
+	// is deliberately NOT upstream's getChannelQuery (which pre-filters to a single
+	// priority tier by retry index) — that would prevent tier fallback when all
+	// higher-priority channels have already been attempted. See channel_strict_priority_test.go.
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	if common.UsingSQLite || common.UsingPostgreSQL {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	}
+	err = channelQuery.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +406,7 @@ func FixAbility() (int, int, error) {
 	defer fixLock.Unlock()
 
 	// truncate abilities table
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		err := DB.Exec("DELETE FROM abilities").Error
 		if err != nil {
 			common.SysLog(fmt.Sprintf("Delete abilities failed: %s", err.Error()))

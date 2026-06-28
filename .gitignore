@@ -40,3 +40,8 @@ skills-lock.json
 
 # Read-only external reference clones (grok2api/sub2api/cliproxyapi) — never commit
 .codex/external/
+
+# Local-only live probes and scratch test workspaces.
+.local-tests/
+service/relayconvert/chat_responses_live_local_test.go
+service/openaicompat/chat_responses_live_local_test.go

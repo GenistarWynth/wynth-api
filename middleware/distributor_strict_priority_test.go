@@ -23,24 +23,18 @@ func withDistributorStrictPriorityDB(t *testing.T) {
 	t.Helper()
 	previousDB := model.DB
 	previousMemoryCache := common.MemoryCacheEnabled
-	previousUsingSQLite := common.UsingSQLite
-	previousUsingMySQL := common.UsingMySQL
-	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousMainDBType := common.MainDatabaseType()
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
 	common.MemoryCacheEnabled = true
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
 
 	t.Cleanup(func() {
 		common.MemoryCacheEnabled = previousMemoryCache
-		common.UsingSQLite = previousUsingSQLite
-		common.UsingMySQL = previousUsingMySQL
-		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.SetMainDatabaseType(previousMainDBType)
 		model.DB = previousDB
 		model.InitChannelCache()
 	})

@@ -152,6 +152,7 @@ export interface ChannelOtherSettings {
   allow_inference_geo?: boolean
   allow_speed?: boolean
   claude_beta_query?: boolean
+  disable_task_polling_sleep?: boolean
   upstream_model_update_check_enabled?: boolean
   upstream_model_update_auto_sync_enabled?: boolean
   upstream_model_update_ignored_models?: string[]
@@ -216,6 +217,7 @@ export type AdvancedCustomConverter =
   | 'anthropic_messages_to_openai_chat_completions'
   | 'openai_chat_completions_to_anthropic_messages'
   | 'openai_chat_completions_to_openai_responses'
+  | 'openai_responses_to_openai_chat_completions'
   | 'gemini_generate_content_to_openai_chat_completions'
   | 'openai_chat_completions_to_gemini_generate_content'
 
@@ -257,6 +259,14 @@ export interface GetChannelMonitorDetailResponse {
   success: boolean
   message?: string
   data?: ChannelMonitorDetail
+}
+
+export interface ChannelOpsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    retry_times: number
+  }
 }
 
 export interface ChannelTestResponse {

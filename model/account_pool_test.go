@@ -46,9 +46,9 @@ func TestAccountPoolAutoMigrateSQLite(t *testing.T) {
 func TestAccountPoolAccountOAuthTypeColumnSQLite(t *testing.T) {
 	setupAccountPoolTestDB(t)
 
-	oldUsingSQLite := common.UsingSQLite
-	common.UsingSQLite = true
-	t.Cleanup(func() { common.UsingSQLite = oldUsingSQLite })
+	oldMainDBType := common.MainDatabaseType()
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	t.Cleanup(func() { common.SetMainDatabaseType(oldMainDBType) })
 
 	require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolAccount{}, &AccountPoolProxy{}, &AccountPoolChannelBinding{}))
 	require.NoError(t, EnsureAccountPoolAccountColumnsSQLite())
