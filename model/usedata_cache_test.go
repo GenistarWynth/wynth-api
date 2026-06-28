@@ -33,8 +33,8 @@ func setupQuotaDataCacheTestDB(t *testing.T) {
 func TestLogQuotaDataAggregatesCacheTokens(t *testing.T) {
 	setupQuotaDataCacheTestDB(t)
 
-	LogQuotaData(1, "alice", "gpt-5", 10, 7201, 100, 70, 40, 5)
-	LogQuotaData(1, "alice", "gpt-5", 15, 7300, 200, 130, 60, 7)
+	LogQuotaData(QuotaDataLogParams{UserID: 1, Username: "alice", ModelName: "gpt-5", Quota: 10, CreatedAt: 7201, TokenUsed: 100, InputTokens: 70, CacheReadTokens: 40, CacheCreationTokens: 5})
+	LogQuotaData(QuotaDataLogParams{UserID: 1, Username: "alice", ModelName: "gpt-5", Quota: 15, CreatedAt: 7300, TokenUsed: 200, InputTokens: 130, CacheReadTokens: 60, CacheCreationTokens: 7})
 	SaveQuotaDataCache()
 
 	var row QuotaData
