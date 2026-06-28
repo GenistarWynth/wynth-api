@@ -20,6 +20,7 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
+var enabledAccountPoolChannelIDsCache map[int]struct{}
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -30,6 +31,11 @@ func InitChannelCache() {
 	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
 	DB.Find(&channels)
+	enabledAccountPoolChannelIDs, err := EnabledAccountPoolRuntimeChannelIDs()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to load enabled account pool channel ids: %v", err))
+		enabledAccountPoolChannelIDs = map[int]struct{}{}
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 		if channel.Type == constant.ChannelTypeAdvancedCustom {
@@ -50,7 +56,9 @@ func InitChannelCache() {
 	}
 	for _, channel := range channels {
 		if channel.Status != common.ChannelStatusEnabled {
-			continue // skip disabled channels
+			if _, enabledByAccountPool := enabledAccountPoolChannelIDs[channel.Id]; !enabledByAccountPool {
+				continue // skip disabled channels unless an enabled account-pool binding exposes them
+			}
 		}
 		groups := splitNonEmptyCSV(channel.Group)
 		for _, group := range groups {
@@ -92,6 +100,7 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channel2advancedCustomConfig = newChannel2advancedCustomConfig
+	enabledAccountPoolChannelIDsCache = enabledAccountPoolChannelIDs
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
 }
@@ -290,6 +299,9 @@ func CacheUpdateChannelStatus(id int, status int) {
 		channel.Status = status
 	}
 	if status != common.ChannelStatusEnabled {
+		if isEnabledAccountPoolRuntimeChannelID(id) {
+			return
+		}
 		// delete the channel from group2model2channels
 		for group, model2channels := range group2model2channels {
 			for model, channels := range model2channels {
@@ -303,6 +315,14 @@ func CacheUpdateChannelStatus(id int, status int) {
 			}
 		}
 	}
+}
+
+func isEnabledAccountPoolRuntimeChannelID(id int) bool {
+	if enabledAccountPoolChannelIDsCache == nil {
+		return false
+	}
+	_, ok := enabledAccountPoolChannelIDsCache[id]
+	return ok
 }
 
 func CacheUpdateChannel(channel *Channel) {

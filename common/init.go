@@ -46,6 +46,7 @@ func InitEnv() {
 		os.Exit(0)
 	}
 
+	sessionSecretStable := false
 	if os.Getenv("SESSION_SECRET") != "" {
 		ss := os.Getenv("SESSION_SECRET")
 		if ss == "random_string" {
@@ -54,12 +55,15 @@ func InitEnv() {
 			log.Fatal("Please set SESSION_SECRET to a random string.")
 		} else {
 			SessionSecret = ss
+			sessionSecretStable = true
 		}
 	}
 	if os.Getenv("CRYPTO_SECRET") != "" {
 		CryptoSecret = os.Getenv("CRYPTO_SECRET")
+		CryptoSecretStable = true
 	} else {
 		CryptoSecret = SessionSecret
+		CryptoSecretStable = sessionSecretStable
 	}
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")

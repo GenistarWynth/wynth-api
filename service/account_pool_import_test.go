@@ -1,0 +1,1032 @@
+package service
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/QuantumNous/new-api/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAccountPoolServiceImportSub2APIDataCreatesAccountsAndReferencedProxy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"version": 1,
+			"exported_at": "2026-06-24T00:00:00Z",
+			"proxies": [
+				{
+					"proxy_key": "proxy-a",
+					"name": "Proxy A",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 8080,
+					"username": "proxy-user",
+					"password": "proxy-secret",
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "sub2api-key",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-sub2api"
+					},
+					"proxy_key": "proxy-a",
+					"concurrency": 3,
+					"priority": 7
+				},
+				{
+					"name": "sub2api-oauth",
+					"platform": "openai",
+					"type": "oauth",
+					"credentials": {
+						"email": "codex@example.com",
+						"refresh_token": "refresh-sub",
+						"access_token": "access-sub",
+						"chatgpt_account_id": "acct-sub",
+						"expires_at": 4102444800
+					},
+					"concurrency": 2,
+					"priority": 9
+				}
+			]
+		}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			Weight:          11,
+			SupportedModels: []string{"gpt-5"},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	assert.Equal(t, 1, result.ProxyCreated)
+	require.Len(t, result.Accounts, 2)
+
+	keyAccount := requireAccountPoolAccountByName(t, "sub2api-key")
+	keyCredential, err := DecryptAccountPoolCredentialConfig(keyAccount.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeAPIKey, keyCredential.Type)
+	assert.Equal(t, "sk-sub2api", keyCredential.APIKey)
+	assert.Equal(t, int64(7), keyAccount.Priority)
+	assert.Equal(t, uint(11), keyAccount.Weight)
+	assert.Equal(t, 3, keyAccount.MaxConcurrency)
+	assert.NotZero(t, keyAccount.ProxyID)
+
+	var storedProxy model.AccountPoolProxy
+	require.NoError(t, model.DB.First(&storedProxy, keyAccount.ProxyID).Error)
+	assert.Equal(t, "Proxy A", storedProxy.Name)
+	assert.Equal(t, "http", storedProxy.Protocol)
+	assert.Equal(t, "127.0.0.1", storedProxy.Host)
+	assert.Equal(t, 8080, storedProxy.Port)
+	assert.Equal(t, "proxy-user", storedProxy.Username)
+	proxyAuth, err := DecryptAccountPoolProxyAuthConfig(storedProxy.Password)
+	require.NoError(t, err)
+	assert.Equal(t, "proxy-secret", proxyAuth.Password)
+
+	oauthAccount := requireAccountPoolAccountByName(t, "sub2api-oauth")
+	oauthCredential, err := DecryptAccountPoolCredentialConfig(oauthAccount.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, oauthCredential.Type)
+	assert.Equal(t, "codex@example.com", oauthCredential.Email)
+	assert.Equal(t, "refresh-sub", oauthCredential.RefreshToken)
+	assert.Equal(t, "acct-sub", oauthAccount.AccountIdentifier)
+	tokenState, err := DecryptAccountPoolTokenState(oauthAccount.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "access-sub", tokenState.AccessToken)
+	assert.Equal(t, "refresh-sub", tokenState.RefreshToken)
+	assert.Equal(t, int64(4102444800), tokenState.ExpiresAt)
+}
+
+func TestAccountPoolServiceImportSub2APIAnthropicAccountsMatchAndInheritPlatform(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "claude-explicit",
+					"platform": "anthropic",
+					"type": "oauth",
+					"credentials": {
+						"email": "claude@example.com",
+						"refresh_token": "claude-refresh",
+						"access_token": "claude-access",
+						"expires_at": 4102444800
+					}
+				},
+				{
+					"name": "claude-inherit",
+					"type": "oauth",
+					"credentials": {
+						"email": "claude2@example.com",
+						"refresh_token": "claude-refresh-2",
+						"access_token": "claude-access-2"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+
+	explicit := requireAccountPoolAccountByName(t, "claude-explicit")
+	cred, err := DecryptAccountPoolCredentialConfig(explicit.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Equal(t, "claude-refresh", cred.RefreshToken)
+	ts, err := DecryptAccountPoolTokenState(explicit.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "claude-access", ts.AccessToken)
+
+	// An account that omits platform inherits the pool's platform (anthropic here)
+	// and its OAuth credential is stored intact.
+	inherit := requireAccountPoolAccountByName(t, "claude-inherit")
+	inheritCred, err := DecryptAccountPoolCredentialConfig(inherit.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, inheritCred.Type)
+	assert.Equal(t, "claude-refresh-2", inheritCred.RefreshToken)
+}
+
+func TestAccountPoolServiceImportSub2APIGeminiAccountMatchesPlatform(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-oauth",
+					"platform": "gemini",
+					"type": "oauth",
+					"credentials": {
+						"email": "gemini@example.com",
+						"refresh_token": "gemini-refresh",
+						"access_token": "gemini-access"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "gemini-oauth")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Equal(t, "gemini-refresh", cred.RefreshToken)
+}
+
+func TestAccountPoolServiceImportSub2APIXAIAccountMatchesPlatform(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformXAI).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "xai-oauth",
+					"platform": "xai",
+					"type": "oauth",
+					"credentials": {
+						"email": "grok@example.com",
+						"refresh_token": "xai-refresh",
+						"access_token": "xai-access"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "xai-oauth")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Equal(t, "xai-refresh", cred.RefreshToken)
+}
+
+func TestAccountPoolServiceImportSub2APIGeminiCodeAssistOAuthType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-code-assist",
+					"platform": "gemini",
+					"type": "oauth",
+					"credentials": {
+						"email": "ca@example.com",
+						"refresh_token": "ca-refresh",
+						"access_token": "ca-access",
+						"oauth_type": "code_assist",
+						"project_id": "projects/seed-123"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	acct := requireAccountPoolAccountByName(t, "gemini-code-assist")
+	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, acct.OAuthType, "oauth_type must be imported into the plaintext column so Code Assist routing activates")
+	ts, err := DecryptAccountPoolTokenState(acct.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "projects/seed-123", ts.ProjectID, "project_id pre-seed must be imported to skip detection")
+}
+
+func TestAccountPoolServiceImportSub2APIGeminiServiceAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-vertex-sa",
+					"platform": "gemini",
+					"type": "service_account",
+					"credentials": {
+						"service_account_json": "{\"type\":\"service_account\",\"project_id\":\"vertex-proj\",\"client_email\":\"svc@vertex-proj.iam\",\"private_key\":\"pk\"}",
+						"location": "europe-west1"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "gemini-vertex-sa")
+	cred, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeServiceAccount, cred.Type)
+	assert.Equal(t, "europe-west1", cred.Location)
+	assert.Contains(t, cred.ServiceAccountJSON, "vertex-proj")
+
+	// project_id must be extractable from the imported SA JSON.
+	saInfo, err := ExtractVertexServiceAccountInfo([]byte(cred.ServiceAccountJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "vertex-proj", saInfo.ProjectID)
+}
+
+func TestAccountPoolServiceImportSub2APIGeminiAntigravityOAuthType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformGemini).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "gemini-antigravity",
+					"platform": "gemini",
+					"type": "oauth",
+					"credentials": {
+						"email": "ag@example.com",
+						"refresh_token": "ag-refresh",
+						"access_token": "ag-access",
+						"oauth_type": "antigravity"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	acct := requireAccountPoolAccountByName(t, "gemini-antigravity")
+	assert.Equal(t, AccountPoolGeminiOAuthTypeAntigravity, acct.OAuthType,
+		"oauth_type=antigravity must be imported into the plaintext column so antigravity routing activates")
+}
+
+func TestAccountPoolServiceImportSub2APIRejectsPlatformMismatch(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{"name": "wrong-platform", "platform": "openai", "type": "api_key", "credentials": {"api_key": "sk-x"}}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, 1, result.Skipped)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Message, "does not match pool platform")
+}
+
+func TestAccountPoolServiceImportCPARejectsNonOpenAIPool(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+
+	_, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: `[{"provider": "codex", "metadata": {"email": "c@example.com", "refresh_token": "r", "access_token": "a"}}]`,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only supported for openai pools")
+}
+
+func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		DryRun: true,
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "sub2api-key",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-sub2api"
+					}
+				}
+			]
+		}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			ProxyID: 999,
+		},
+	})
+
+	require.ErrorContains(t, err, "account pool proxy not found")
+}
+
+func TestAccountPoolServiceImportSub2APIPreservesExplicitZeroConcurrency(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "unlimited-sub2api-key",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-sub2api"
+					},
+					"concurrency": 0
+				}
+			]
+		}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			MaxConcurrency: 4,
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	account := requireAccountPoolAccountByName(t, "unlimited-sub2api-key")
+	assert.Zero(t, account.MaxConcurrency)
+}
+
+func TestAccountPoolServiceImportCPAConfigMapsCodexKeysAndModels(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `
+codex-api-key:
+  - api-key: sk-cpa
+    priority: 30
+    prefix: team
+    proxy-url: socks5://user:pass@proxy.example.com:1080
+    models:
+      - name: gpt-5-codex
+        alias: codex-latest
+      - name: gpt-5.1
+`,
+		Defaults: AccountPoolAccountImportDefaults{
+			MaxConcurrency: 4,
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+	assert.Equal(t, 1, result.ProxyCreated)
+	require.Len(t, result.Accounts, 1)
+
+	account := requireAccountPoolAccountByName(t, result.Accounts[0].Name)
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeAPIKey, credential.Type)
+	assert.Equal(t, "sk-cpa", credential.APIKey)
+	assert.Equal(t, int64(30), account.Priority)
+	assert.Equal(t, 4, account.MaxConcurrency)
+	assert.NotZero(t, account.ProxyID)
+
+	view, err := buildAccountPoolAccountView(account)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"team/codex-latest", "team/gpt-5.1"}, view.SupportedModels)
+	assert.Equal(t, map[string]string{
+		"team/codex-latest": "gpt-5-codex",
+		"team/gpt-5.1":      "gpt-5.1",
+	}, view.ModelMapping)
+}
+
+func TestAccountPoolServiceImportSub2APIRejectsMissingProxyReference(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "missing-proxy-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-missing-proxy"
+					},
+					"proxy_key": "missing-proxy"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, 1, result.Skipped)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Message, "proxy_key")
+
+	var count int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestAccountPoolServiceImportCPAAuthJSONImportsOAuthAndSkipsDuplicate(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	_, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:            pool.Id,
+		Name:              "existing-cpa",
+		AccountIdentifier: "acct-cpa",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			Email:        "existing@example.com",
+			RefreshToken: "refresh-existing",
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `[
+			{
+				"provider": "codex",
+				"label": "Existing Codex",
+				"metadata": {
+					"type": "codex",
+					"email": "existing@example.com",
+					"account_id": "acct-cpa",
+					"access_token": "access-existing",
+					"refresh_token": "refresh-existing",
+					"expired": 4102444800
+				}
+			},
+			{
+				"type": "codex",
+				"email": "new@example.com",
+				"account_id": "acct-new",
+				"access_token": "access-new",
+				"refresh_token": "refresh-new",
+				"expired": 4102444801
+			}
+		]`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 1, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+
+	account := requireAccountPoolAccountByName(t, "new@example.com")
+	assert.Equal(t, "acct-new", account.AccountIdentifier)
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, credential.Type)
+	assert.Equal(t, "new@example.com", credential.Email)
+	assert.Equal(t, "refresh-new", credential.RefreshToken)
+	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "access-new", tokenState.AccessToken)
+	assert.Equal(t, "refresh-new", tokenState.RefreshToken)
+	assert.Equal(t, int64(4102444801), tokenState.ExpiresAt)
+}
+
+func TestAccountPoolServiceImportCPAAuthJSONImportsAccessTokenOnlyEntry(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `[
+			{
+				"type": "codex",
+				"label": "access-only-codex",
+				"metadata": {
+					"access_token": "access-only-token",
+					"expired": 4102444800
+				}
+			}
+		]`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	assert.Equal(t, 0, result.Failed)
+
+	account := requireAccountPoolAccountByName(t, "access-only-codex")
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, credential.Type)
+	assert.Empty(t, credential.RefreshToken)
+	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "access-only-token", tokenState.AccessToken)
+	assert.Empty(t, tokenState.RefreshToken)
+	assert.Equal(t, int64(4102444800), tokenState.ExpiresAt)
+}
+
+func requireAccountPoolAccountByName(t *testing.T, name string) model.AccountPoolAccount {
+	t.Helper()
+
+	var account model.AccountPoolAccount
+	require.NoError(t, model.DB.Where("name = ?", name).First(&account).Error)
+	return account
+}
+
+// import-1: CPA YAML with plural mis-keyed field returns actionable error, not raw JSON error.
+func TestAccountPoolServiceImportCPAYAMLMisKeyedPluralReturnsActionableError(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// "codex-api-keys:" (plural) is a common mis-keying; YAML parses fine but produces zero CodexAPIKeys entries.
+	// parseCPAImport falls through to parseCPAAuthJSONImport which previously returned a raw JSON unmarshal error.
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `
+codex-api-keys:
+  - api-key: sk-wrong-plural
+    base-url: https://api.example.com
+    proxy-url: ""
+`,
+	})
+
+	require.Error(t, err)
+	// Must mention the correct singular key name as an actionable hint.
+	assert.Contains(t, err.Error(), "codex-api-key")
+}
+
+// import-1 (positive): valid CPA config YAML with singular codex-api-key still imports successfully.
+func TestAccountPoolServiceImportCPAYAMLSingularKeyImportsSuccessfully(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `
+codex-api-key:
+  - api-key: sk-singular-ok
+    base-url: https://api.example.com
+    proxy-url: ""
+`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+}
+
+// import-3: dry-run sub2api import with one pre-existing proxy and one new proxy reports accurate counts.
+func TestAccountPoolServiceImportSub2APIDryRunReportsAccurateProxyCounts(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Pre-create a proxy that will match the first entry in the import.
+	_, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "existing-proxy",
+		Protocol: "http",
+		Host:     "127.0.0.1",
+		Port:     8080,
+		Username: "user1",
+		Password: "pass1",
+	})
+	require.NoError(t, err)
+
+	// Count proxy rows before dry-run.
+	var proxyCountBefore int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountBefore).Error)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		DryRun: true,
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-existing",
+					"name": "Existing Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 8080,
+					"username": "user1",
+					"password": "pass1",
+					"status": "active"
+				},
+				{
+					"proxy_key": "proxy-new",
+					"name": "New Proxy",
+					"protocol": "socks5",
+					"host": "10.0.0.1",
+					"port": 1080,
+					"username": "",
+					"password": "",
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "account-a",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-account-a"
+					},
+					"proxy_key": "proxy-existing"
+				},
+				{
+					"name": "account-b",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-account-b"
+					},
+					"proxy_key": "proxy-new"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Imported)
+	// Accurate: one proxy already existed, one is new.
+	assert.Equal(t, 1, result.ProxyReused, "expected one proxy reused (pre-existing match)")
+	assert.Equal(t, 1, result.ProxyCreated, "expected one proxy created (no match)")
+
+	// No proxy rows should have been written in dry-run.
+	var proxyCountAfter int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountAfter).Error)
+	assert.Equal(t, proxyCountBefore, proxyCountAfter, "dry-run must not write proxy rows")
+}
+
+// import-3 (CPA): dry-run CPA config import reports non-zero proxy count when a matching proxy exists.
+func TestAccountPoolServiceImportCPADryRunReportsNonZeroProxyCount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Pre-create a proxy matching the CPA entry's proxy-url.
+	_, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "cpa-existing-proxy",
+		Protocol: "socks5",
+		Host:     "proxy.example.com",
+		Port:     1080,
+		Username: "user",
+		Password: "pass",
+	})
+	require.NoError(t, err)
+
+	var proxyCountBefore int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountBefore).Error)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		DryRun: true,
+		Content: `
+codex-api-key:
+  - api-key: sk-cpa-dry
+    base-url: https://api.example.com
+    proxy-url: socks5://user:pass@proxy.example.com:1080
+`,
+	})
+
+	require.NoError(t, err)
+	// The CPA dry-run path must report a non-zero proxy count (reused or created).
+	assert.True(t, result.ProxyReused+result.ProxyCreated > 0, "CPA dry-run should report proxy reused=1 for existing proxy")
+	assert.Equal(t, 1, result.ProxyReused, "pre-existing proxy should be counted as reused")
+
+	// No proxy rows should have been written.
+	var proxyCountAfter int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCountAfter).Error)
+	assert.Equal(t, proxyCountBefore, proxyCountAfter, "dry-run must not write proxy rows")
+}
+
+// import-2: orphan proxy cleanup — proxy created for an account that subsequently fails must be deleted.
+func TestAccountPoolServiceImportOrphanProxyDeletedOnAccountFailure(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Inject a hook that makes CreateAccount fail for the first call.
+	callCount := 0
+	accountPoolImportCreateAccountHook = func(s AccountPoolService, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
+		callCount++
+		return AccountPoolAccountView{}, errors.New("injected account creation failure")
+	}
+	t.Cleanup(func() { accountPoolImportCreateAccountHook = nil })
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-orphan",
+					"name": "Orphan Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 9999,
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "orphan-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-orphan"
+					},
+					"proxy_key": "proxy-orphan"
+				}
+			]
+		}`,
+	})
+
+	// The import must not error overall — partial success (Failed=1) is intentional.
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, 1, result.Failed, "account creation failure must be counted as Failed")
+	assert.Equal(t, 1, result.ProxyCreated, "the proxy was created during parse")
+
+	// The proxy that was newly created for this import must be cleaned up as an orphan.
+	var proxyCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCount).Error)
+	assert.Zero(t, proxyCount, "orphan proxy must be deleted after failed account creation")
+}
+
+// import-2: proxy kept on successful account — a created proxy referenced by a successful account must NOT be deleted.
+func TestAccountPoolServiceImportProxyKeptOnAccountSuccess(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-success",
+					"name": "Success Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 8888,
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "success-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-success"
+					},
+					"proxy_key": "proxy-success"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Failed)
+	assert.Equal(t, 1, result.ProxyCreated)
+
+	// Proxy must still exist: it is referenced by the successfully created account.
+	var proxyCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCount).Error)
+	assert.Equal(t, int64(1), proxyCount, "proxy referenced by a successful account must be kept")
+}
+
+// import-2: shared proxy kept — one proxy used by both a successful and a failed account must NOT be deleted.
+func TestAccountPoolServiceImportSharedProxyKeptWhenOneAccountSucceeds(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Fail CreateAccount only for the second call (account B), let account A succeed.
+	callCount := 0
+	accountPoolImportCreateAccountHook = func(s AccountPoolService, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
+		callCount++
+		if callCount == 2 {
+			return AccountPoolAccountView{}, errors.New("injected failure for second account")
+		}
+		return s.CreateAccount(params)
+	}
+	t.Cleanup(func() { accountPoolImportCreateAccountHook = nil })
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"proxies": [
+				{
+					"proxy_key": "proxy-shared",
+					"name": "Shared Proxy",
+					"protocol": "http",
+					"host": "127.0.0.1",
+					"port": 7777,
+					"status": "active"
+				}
+			],
+			"accounts": [
+				{
+					"name": "shared-success",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-shared-success"
+					},
+					"proxy_key": "proxy-shared"
+				},
+				{
+					"name": "shared-fail",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-shared-fail"
+					},
+					"proxy_key": "proxy-shared"
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 1, result.Failed)
+	assert.Equal(t, 1, result.ProxyCreated)
+
+	// The proxy must be kept: the successful account (account A) still references it.
+	var proxyCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolProxy{}).Count(&proxyCount).Error)
+	assert.Equal(t, int64(1), proxyCount, "shared proxy referenced by a successful account must be kept")
+}
+
+// import-6: dedup pass with a corrupt CredentialConfig on an existing account does not abort the import.
+func TestAccountPoolServiceImportDedupToleratesCorruptCredentialConfig(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	// Seed an existing account with an undecryptable CredentialConfig (corrupt ciphertext).
+	corrupt := model.AccountPoolAccount{
+		PoolID:           pool.Id,
+		Name:             "corrupt-existing",
+		Status:           "enabled",
+		CredentialConfig: "not-valid-ciphertext",
+	}
+	require.NoError(t, model.DB.Create(&corrupt).Error)
+
+	// Import a new, distinct account — the dedup pass must survive the corrupt row.
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "new-clean-account",
+					"platform": "openai",
+					"type": "api_key",
+					"credentials": {
+						"api_key": "sk-new-clean"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err, "import must not return error when dedup encounters corrupt credential")
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Failed)
+}

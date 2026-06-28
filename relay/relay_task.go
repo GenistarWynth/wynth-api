@@ -171,6 +171,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
 	}
 
+	if apiErr := rejectUnsupportedAccountPoolRuntime(c, info, "task"); apiErr != nil {
+		return nil, service.TaskErrorFromAPIError(apiErr)
+	}
+
 	// 3. 预生成公开 task ID（仅首次）
 	if info.PublicTaskID == "" {
 		info.PublicTaskID = model.GenerateTaskID()

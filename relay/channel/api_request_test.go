@@ -5,10 +5,31 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRelayProxyURLPrefersRuntimeProxy(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RuntimeProxy: "http://runtime-proxy.local:8080",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelSetting: dto.ChannelSettings{
+				Proxy: "http://channel-proxy.local:8081",
+			},
+		},
+	}
+
+	require.Equal(t, "http://runtime-proxy.local:8080", relayProxyURL(info))
+	info.RuntimeProxy = ""
+	require.Equal(t, "http://channel-proxy.local:8081", relayProxyURL(info))
+	info.RuntimeProxy = "   "
+	require.Equal(t, "http://channel-proxy.local:8081", relayProxyURL(info))
+	info.ChannelSetting.Proxy = "   "
+	require.Empty(t, relayProxyURL(info))
+	require.Empty(t, relayProxyURL(nil))
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

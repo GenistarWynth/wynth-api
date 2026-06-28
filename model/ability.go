@@ -368,7 +368,17 @@ func UpdateAbilityStatus(channelId int, status bool) error {
 }
 
 func UpdateAbilityStatusByTag(tag string, status bool) error {
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
+	query := DB.Model(&Ability{}).Where("tag = ?", tag)
+	if status {
+		boundChannelIDs, err := AccountPoolControlledChannelIDs()
+		if err != nil {
+			return err
+		}
+		if len(boundChannelIDs) > 0 {
+			query = query.Where("channel_id NOT IN ?", boundChannelIDs)
+		}
+	}
+	return query.Select("enabled").Update("enabled", status).Error
 }
 
 func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uint) error {

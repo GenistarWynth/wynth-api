@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -153,6 +154,48 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	// RuntimeProxy overrides the persisted channel proxy for a single relay attempt.
+	// It is used for account-pool proxy routing without mutating channel settings.
+	RuntimeProxy string
+	// RuntimeAccountID carries the selected upstream account identifier for provider
+	// adaptors that need it in addition to the runtime credential.
+	RuntimeAccountID string
+	// RuntimeAnthropicOAuth signals that the selected account-pool account uses
+	// Anthropic OAuth (Bearer token) rather than an API key. When true, the
+	// Claude adaptor must send Authorization: Bearer <ApiKey> instead of x-api-key.
+	RuntimeAnthropicOAuth bool
+	// RuntimeGeminiOAuth signals that the selected account-pool account uses
+	// Google OAuth (Bearer token) rather than an API key. When true, the
+	// Gemini adaptor must send Authorization: Bearer <ApiKey> instead of x-goog-api-key.
+	RuntimeGeminiOAuth bool
+	// RuntimeGeminiOAuthType identifies the OAuth sub-type for a Gemini OAuth account.
+	// "code_assist" → Code Assist endpoint (cloudcode-pa.googleapis.com routing in slice 1b).
+	// "" or "ai_studio" → standard AI Studio endpoint path.
+	RuntimeGeminiOAuthType string
+	// RuntimeGeminiProjectID holds the GCP project id for Code Assist accounts.
+	// Only set when RuntimeGeminiOAuthType == "code_assist".
+	RuntimeGeminiProjectID string
+	// RuntimeVertexServiceAccount signals that the selected account-pool account is a
+	// Gemini Vertex AI service-account credential. When true, the Gemini adaptor
+	// routes to the regional Vertex AI endpoint with Bearer auth (no x-goog-api-key)
+	// and performs NO request/response wrapping (standard Gemini body/response).
+	RuntimeVertexServiceAccount bool
+	// RuntimeVertexProjectID holds the GCP project id (from the service-account JSON)
+	// for the Vertex AI endpoint path. Only set when RuntimeVertexServiceAccount.
+	RuntimeVertexProjectID string
+	// RuntimeVertexLocation holds the Vertex AI region (e.g. us-central1) for the
+	// endpoint path. Only set when RuntimeVertexServiceAccount.
+	RuntimeVertexLocation string
+
+	// WsHandshakeStatusCode/Header/Body capture an upstream WebSocket handshake
+	// REJECTION (e.g. 401/429) from the dialer's discarded *http.Response so that
+	// account-pool failure classification can apply a status/platform-specific
+	// cooldown (401 two-strike, 429 reset window) instead of a generic transport
+	// cooldown. They are reset at the start of every DoWssRequest dial so a stale
+	// value from a prior attempt cannot be attached to a later transport error.
+	WsHandshakeStatusCode int
+	WsHandshakeHeader     http.Header
+	WsHandshakeBody       []byte
 
 	// UpstreamRequestBodySize is the byte size of the marshaled upstream request
 	// body. It is set when the body is wrapped in a BodyStorage (see

@@ -21,12 +21,62 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
+// applyClaudeDefaultMaxTokens fills request.MaxTokens with the model-specific default
+// when the client omitted it (nil) or explicitly sent 0. This must run BEFORE the
+// thinking-adapter transform so that the adapter sees a non-nil MaxTokens and can
+// compute an accurate BudgetTokens value.
+func applyClaudeDefaultMaxTokens(request *dto.ClaudeRequest) {
+	if request.MaxTokens == nil || *request.MaxTokens == 0 {
+		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
+		request.MaxTokens = &defaultMaxTokens
+	}
+}
 
+// applyClaudeThinkingAdapterTransform applies the thinking-adapter transformation for
+// legacy "-thinking"-suffixed models (type:enabled branch, non-Opus-4.7/4.8). It
+// assumes applyClaudeDefaultMaxTokens has already run so MaxTokens is non-nil.
+// This is extracted to make the pre-loop transform unit-testable independently.
+func applyClaudeThinkingAdapterTransform(request *dto.ClaudeRequest) {
+	if !model_setting.GetClaudeSettings().ThinkingAdapterEnabled {
+		return
+	}
+	if !strings.HasSuffix(request.Model, "-thinking") {
+		return
+	}
+	if request.Thinking != nil {
+		return
+	}
+	baseModel := strings.TrimSuffix(request.Model, "-thinking")
+	if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
+		strings.HasPrefix(baseModel, "claude-opus-4-8") {
+		// Opus 4.7/4.8 reject thinking.type="enabled"; use adaptive at high effort.
+		request.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
+		request.OutputConfig = json.RawMessage(`{"effort":"high"}`)
+		request.Temperature = nil
+		request.TopP = nil
+		request.TopK = nil
+	} else {
+		// BudgetTokens must be > 1024.  applyClaudeDefaultMaxTokens already ensured
+		// MaxTokens is non-nil; clamp up to 1280 only if the explicit client value is
+		// still below the minimum.
+		if request.MaxTokens == nil || *request.MaxTokens < 1280 {
+			request.MaxTokens = common.GetPointer[uint](1280)
+		}
+		// BudgetTokens is 80% of max_tokens.
+		request.Thinking = &dto.Thinking{
+			Type:         "enabled",
+			BudgetTokens: common.GetPointer[int](int(float64(*request.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage)),
+		}
+		// TODO: temporary workaround
+		// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
+		request.Temperature = common.GetPointer[float64](1.0)
+	}
+}
+
+func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
 	claudeReq, ok := info.Request.(*dto.ClaudeRequest)
-
 	if !ok {
 		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected *dto.ClaudeRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -41,17 +91,13 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-	adaptor.Init(info)
+	// Apply MaxTokens default-fill FIRST, before the thinking-adapter block.
+	// This ensures the adapter always sees a non-nil MaxTokens so it can compute
+	// an accurate BudgetTokens value (pre-refactor ordering restored).
+	applyClaudeDefaultMaxTokens(request)
 
-	if request.MaxTokens == nil || *request.MaxTokens == 0 {
-		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
-		request.MaxTokens = &defaultMaxTokens
-	}
-
+	// Apply thinking adapter and model transformations before the pool loop so
+	// they run once and the result is deep-copied for each pool attempt.
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
 		(strings.HasPrefix(request.Model, "claude-opus-4-6") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-7") ||
@@ -75,32 +121,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamModelName = request.Model
 	} else if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
 		strings.HasSuffix(request.Model, "-thinking") {
-		if request.Thinking == nil {
-			baseModel := strings.TrimSuffix(request.Model, "-thinking")
-			if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
-				strings.HasPrefix(baseModel, "claude-opus-4-8") {
-				// Opus 4.7/4.8 reject thinking.type="enabled"; use adaptive at high effort.
-				request.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
-				request.OutputConfig = json.RawMessage(`{"effort":"high"}`)
-				request.Temperature = nil
-				request.TopP = nil
-				request.TopK = nil
-			} else {
-				// 因为BudgetTokens 必须大于1024
-				if request.MaxTokens == nil || *request.MaxTokens < 1280 {
-					request.MaxTokens = common.GetPointer[uint](1280)
-				}
-
-				// BudgetTokens 为 max_tokens 的 80%
-				request.Thinking = &dto.Thinking{
-					Type:         "enabled",
-					BudgetTokens: common.GetPointer[int](int(float64(*request.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage)),
-				}
-				// TODO: 临时处理
-				// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
-				request.Temperature = common.GetPointer[float64](1.0)
-			}
-		}
+		applyClaudeThinkingAdapterTransform(request)
 		if !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
 			request.Model = strings.TrimSuffix(request.Model, "-thinking")
 		}
@@ -132,6 +153,35 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	mappedRequest := request
+	return runAccountPoolRuntimeAttempts(c, info, func() (dto.Request, *types.NewAPIError) {
+		attemptRequest, err := common.DeepCopy(mappedRequest)
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("failed to copy mapped ClaudeRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return attemptRequest, nil
+	}, func(attemptRequest dto.Request) *types.NewAPIError {
+		claudeRequest, ok := attemptRequest.(*dto.ClaudeRequest)
+		if !ok {
+			return types.NewErrorWithStatusCode(fmt.Errorf("invalid mapped request type, expected *dto.ClaudeRequest, got %T", attemptRequest), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return claudeHelperWithRuntimeSelected(c, info, claudeRequest)
+	})
+}
+
+func claudeHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) *types.NewAPIError {
+	adaptor := GetAdaptor(info.ApiType)
+	if adaptor == nil {
+		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+	}
+	adaptor.Init(info)
+
+	// NOTE: MaxTokens default-fill was moved to ClaudeHelper (before the pool loop)
+	// so it runs once with the correct model name and before the thinking-adapter block.
+	// Do NOT add it back here.
+
+	// TODO: chatCompletionsViaResponses fallback is not pool-wrapped; it bypasses
+	// the account-pool retry loop. Pool-wrapping this path is a future task.
 	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled &&
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
@@ -204,7 +254,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		httpResp = resp.(*http.Response)
 		info.IsStream = info.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError

@@ -64,7 +64,23 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	mappedRequest := request
+	return runAccountPoolRuntimeAttempts(c, info, func() (dto.Request, *types.NewAPIError) {
+		attemptRequest, err := common.DeepCopy(mappedRequest)
+		if err != nil {
+			return nil, types.NewError(fmt.Errorf("failed to copy mapped OpenAIResponsesRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return attemptRequest, nil
+	}, func(attemptRequest dto.Request) *types.NewAPIError {
+		responsesRequest, ok := attemptRequest.(*dto.OpenAIResponsesRequest)
+		if !ok {
+			return types.NewErrorWithStatusCode(fmt.Errorf("invalid mapped request type, expected dto.OpenAIResponsesRequest, got %T", attemptRequest), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		return responsesHelperWithRuntimeSelected(c, info, responsesRequest)
+	})
+}
 
+func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, request *dto.OpenAIResponsesRequest) *types.NewAPIError {
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
@@ -125,7 +141,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		httpResp = resp.(*http.Response)
 
 		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.RelayErrorHandler(c.Request.Context(), httpResp, false)
+			// RelayErrorHandler is called first so that UpstreamStatusCode on the
+			// returned error reflects the raw upstream status before any mapping.
+			newAPIError := service.RelayErrorHandler(c.Request.Context(), httpResp, false)
 			// reset status code 重置状态码
 			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 			return newAPIError

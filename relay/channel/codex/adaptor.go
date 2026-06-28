@@ -275,17 +275,18 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	channel.SetupApiRequestHeader(info, c, req)
 
 	key := strings.TrimSpace(info.ApiKey)
-	if !strings.HasPrefix(key, "{") {
-		return errors.New("codex channel: key must be a JSON object")
+	accessToken := key
+	accountID := strings.TrimSpace(info.RuntimeAccountID)
+	if strings.HasPrefix(key, "{") {
+		oauthKey, err := ParseOAuthKey(key)
+		if err != nil {
+			return err
+		}
+		accessToken = strings.TrimSpace(oauthKey.AccessToken)
+		if accountID == "" {
+			accountID = strings.TrimSpace(oauthKey.AccountID)
+		}
 	}
-
-	oauthKey, err := ParseOAuthKey(key)
-	if err != nil {
-		return err
-	}
-
-	accessToken := strings.TrimSpace(oauthKey.AccessToken)
-	accountID := strings.TrimSpace(oauthKey.AccountID)
 
 	if accessToken == "" {
 		return errors.New("codex channel: access_token is required")

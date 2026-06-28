@@ -260,6 +260,10 @@ func migrateDB() error {
 		&ChannelMonitorLog{},
 		&UpstreamSource{},
 		&UpstreamSourceChannelMapping{},
+		&AccountPool{},
+		&AccountPoolAccount{},
+		&AccountPoolProxy{},
+		&AccountPoolChannelBinding{},
 		&Token{},
 		&User{},
 		&PasskeyCredential{},
@@ -297,6 +301,12 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := ensureAccountPoolAccountColumnsSQLite(); err != nil {
+		return err
+	}
+	if err := ensureAccountPoolBindingColumnsSQLite(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -312,6 +322,10 @@ func migrateDBFast() error {
 		{&ChannelMonitorLog{}, "ChannelMonitorLog"},
 		{&UpstreamSource{}, "UpstreamSource"},
 		{&UpstreamSourceChannelMapping{}, "UpstreamSourceChannelMapping"},
+		{&AccountPool{}, "AccountPool"},
+		{&AccountPoolAccount{}, "AccountPoolAccount"},
+		{&AccountPoolProxy{}, "AccountPoolProxy"},
+		{&AccountPoolChannelBinding{}, "AccountPoolChannelBinding"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
@@ -368,6 +382,12 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := ensureAccountPoolAccountColumnsSQLite(); err != nil {
+		return err
+	}
+	if err := ensureAccountPoolBindingColumnsSQLite(); err != nil {
+		return err
 	}
 	common.SysLog("database migrated")
 	return nil
@@ -453,6 +473,96 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
 		{Name: "created_at", DDL: "`created_at` bigint"},
 		{Name: "updated_at", DDL: "`updated_at` bigint"},
+	}
+	for _, col := range required {
+		if _, ok := existing[col.Name]; ok {
+			continue
+		}
+		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ensureAccountPoolAccountColumnsSQLite idempotently adds columns introduced in the
+// failure-handling / overload-management slice to account_pool_accounts.
+// For MySQL and PostgreSQL, GORM AutoMigrate already handles column additions, so we
+// only run the manual ALTER for SQLite (which cannot ALTER COLUMN but can ADD COLUMN).
+func ensureAccountPoolAccountColumnsSQLite() error {
+	if !common.UsingSQLite {
+		return nil
+	}
+	tableName := "account_pool_accounts"
+	if !DB.Migrator().HasTable(tableName) {
+		return nil
+	}
+	var cols []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := DB.Raw("PRAGMA table_info(`" + tableName + "`)").Scan(&cols).Error; err != nil {
+		return err
+	}
+	existing := make(map[string]struct{}, len(cols))
+	for _, c := range cols {
+		existing[c.Name] = struct{}{}
+	}
+	required := []sqliteColumnDef{
+		{Name: "oauth_type", DDL: "`oauth_type` varchar(32) NOT NULL DEFAULT ''"},
+		{Name: "overload_until", DDL: "`overload_until` bigint NOT NULL DEFAULT 0"},
+		{Name: "failure_state", DDL: "`failure_state` text"},
+		{Name: "model_rate_limits", DDL: "`model_rate_limits` text"},
+		{Name: "runtime_options", DDL: "`runtime_options` text"},
+		{Name: "expires_at", DDL: "`expires_at` bigint NOT NULL DEFAULT 0"},
+		{Name: "auto_pause_on_expired", DDL: "`auto_pause_on_expired` integer NOT NULL DEFAULT 0"},
+		{Name: "request_quota", DDL: "`request_quota` bigint NOT NULL DEFAULT 0"},
+		{Name: "request_quota_used", DDL: "`request_quota_used` bigint NOT NULL DEFAULT 0"},
+		{Name: "request_quota_window_start", DDL: "`request_quota_window_start` bigint NOT NULL DEFAULT 0"},
+		{Name: "request_quota_window_seconds", DDL: "`request_quota_window_seconds` bigint NOT NULL DEFAULT 0"},
+	}
+	for _, col := range required {
+		if _, ok := existing[col.Name]; ok {
+			continue
+		}
+		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureAccountPoolAccountColumnsSQLite is an exported wrapper around the SQLite
+// column-ensure migration for account_pool_accounts. It exists so that test setups in
+// other packages can mirror the production migration path (AutoMigrate then ensure
+// columns) on SQLite, where GORM AutoMigrate does not reliably add not-null columns.
+func EnsureAccountPoolAccountColumnsSQLite() error {
+	return ensureAccountPoolAccountColumnsSQLite()
+}
+
+// ensureAccountPoolBindingColumnsSQLite idempotently adds columns introduced in newer
+// account-pool binding slices to account_pool_channel_bindings.
+// For MySQL and PostgreSQL, GORM AutoMigrate already handles column additions, so we
+// only run the manual ALTER for SQLite (which cannot ALTER COLUMN but can ADD COLUMN).
+func ensureAccountPoolBindingColumnsSQLite() error {
+	if !common.UsingSQLite {
+		return nil
+	}
+	tableName := "account_pool_channel_bindings"
+	if !DB.Migrator().HasTable(tableName) {
+		return nil
+	}
+	var cols []struct {
+		Name string `gorm:"column:name"`
+	}
+	if err := DB.Raw("PRAGMA table_info(`" + tableName + "`)").Scan(&cols).Error; err != nil {
+		return err
+	}
+	existing := make(map[string]struct{}, len(cols))
+	for _, c := range cols {
+		existing[c.Name] = struct{}{}
+	}
+	required := []sqliteColumnDef{
+		{Name: "max_user_concurrency", DDL: "`max_user_concurrency` integer NOT NULL DEFAULT 0"},
 	}
 	for _, col := range required {
 		if _, ok := existing[col.Name]; ok {

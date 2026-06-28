@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -122,6 +123,10 @@ func main() {
 	// Upstream source auto-sync task
 	service.StartUpstreamSourceAutoSyncWorker()
 	service.StartUpstreamSourceAutoPriorityWorker()
+	service.StartAccountPoolCapabilityAutoDetectWorker()
+
+	// Account pool proxy health prober (probes enabled proxies on each tick)
+	service.StartAccountPoolProxyProber(context.Background(), 0)
 
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {

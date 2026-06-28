@@ -81,13 +81,27 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	req.Set("x-api-key", info.ApiKey)
-	anthropicVersion := c.Request.Header.Get("anthropic-version")
-	if anthropicVersion == "" {
-		anthropicVersion = "2023-06-01"
+	if info.RuntimeAnthropicOAuth {
+		// OAuth path: Bearer token + Claude-Code mimicry headers.
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+		req.Set("anthropic-version", "2023-06-01")
+		// Merge client-supplied anthropic-beta with the required OAuth bundle flags.
+		// Required OAuth flags come first; any client-supplied flags not already in the
+		// bundle are appended (union, deduplicated, order-preserving).
+		req.Set("anthropic-beta", mergeAnthropicBetaFlags(AnthropicOAuthBetaFeatures, c.Request.Header.Get("anthropic-beta")))
+		for k, v := range claudeCodeMimicryHeaders() {
+			req.Set(k, v)
+		}
+	} else {
+		// API key path: unchanged from original.
+		req.Set("x-api-key", info.ApiKey)
+		anthropicVersion := c.Request.Header.Get("anthropic-version")
+		if anthropicVersion == "" {
+			anthropicVersion = "2023-06-01"
+		}
+		req.Set("anthropic-version", anthropicVersion)
+		CommonClaudeHeadersOperation(c, req, info)
 	}
-	req.Set("anthropic-version", anthropicVersion)
-	CommonClaudeHeadersOperation(c, req, info)
 	return nil
 }
 

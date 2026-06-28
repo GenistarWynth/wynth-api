@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
+
+// geminiOAuthUserAgent is the User-Agent sent when using OAuth Bearer auth,
+// mimicking the Gemini CLI to maximize endpoint compatibility.
+const geminiOAuthUserAgent = "GeminiCLI/0.1.5 (Windows; AMD64)"
 
 type Adaptor struct {
 }
@@ -129,6 +134,9 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
+	// Normalize thinking-adapter suffixes from UpstreamModelName BEFORE any
+	// routing branch so that both code_assist and the standard path send the
+	// clean base model name upstream.
 	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
 		!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
 		// 新增逻辑：处理 -thinking-<budget> 格式
@@ -142,6 +150,38 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
 			info.UpstreamModelName = baseModel
 		}
+	}
+
+	// Vertex AI service-account routing. Returns before the code_assist/imagen/
+	// embedding/standard branches. Uses the regional aiplatform endpoint with the
+	// project + location + model + action; no request/response wrapping.
+	if isGeminiVertexServiceAccount(info) {
+		action := "generateContent"
+		if info.IsStream {
+			action = "streamGenerateContent?alt=sse"
+			if info.RelayMode == constant.RelayModeGemini {
+				info.DisablePing = true
+			}
+		}
+		return fmt.Sprintf(
+			"%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
+			vertexAIBaseURL(info.RuntimeVertexLocation),
+			info.RuntimeVertexProjectID,
+			vertexAILocation(info.RuntimeVertexLocation),
+			info.UpstreamModelName,
+			action,
+		), nil
+	}
+
+	// Code Assist (cloudcode-pa) routing. Returns before the imagen/embedding/
+	// standard branches so those are bypassed for code_assist chat. The endpoint
+	// has no /models/{model} segment and no version segment.
+	if isGeminiCloudCodePA(info) {
+		if info.IsStream {
+			info.DisablePing = true
+			return geminiCodeAssistBaseURL + "/v1internal:streamGenerateContent?alt=sse", nil
+		}
+		return geminiCodeAssistBaseURL + "/v1internal:generateContent", nil
 	}
 
 	version := model_setting.GetGeminiVersionSetting(info.UpstreamModelName)
@@ -172,7 +212,20 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	req.Set("x-goog-api-key", info.ApiKey)
+	if info.RuntimeVertexServiceAccount {
+		// Vertex AI service-account path: Bearer token (the minted SA access token).
+		// Do NOT set x-goog-api-key — it is mutually exclusive with Bearer auth.
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+		req.Set("User-Agent", geminiOAuthUserAgent)
+	} else if info.RuntimeGeminiOAuth {
+		// OAuth path: Bearer token with Gemini CLI User-Agent.
+		// Do NOT set x-goog-api-key — it is mutually exclusive with Bearer auth.
+		req.Set("Authorization", "Bearer "+info.ApiKey)
+		req.Set("User-Agent", geminiOAuthUserAgent)
+	} else {
+		// API key path: unchanged from original behavior.
+		req.Set("x-goog-api-key", info.ApiKey)
+	}
 	return nil
 }
 
@@ -243,10 +296,42 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if isGeminiCloudCodePA(info) && requestBody != nil {
+		bodyBytes, err := io.ReadAll(requestBody)
+		if err != nil {
+			return nil, err
+		}
+		wrapped, err := wrapGeminiCodeAssistRequest(bodyBytes, info.RuntimeGeminiProjectID, info.UpstreamModelName, isGeminiAntigravity(info))
+		if err != nil {
+			return nil, err
+		}
+		// The re-wrapped body has a different size than any pre-computed value;
+		// reset to 0 so net/http auto-detects ContentLength from the *bytes.Reader.
+		info.UpstreamRequestBodySize = 0
+		return channel.DoApiRequest(a, c, info, bytes.NewReader(wrapped))
+	}
 	return channel.DoApiRequest(a, c, info, requestBody)
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if isGeminiCloudCodePA(info) && resp != nil {
+		// Unwrap the cloudcode-pa envelope before the existing handler dispatch,
+		// so downstream handlers see a standard Gemini response.
+		if info.IsStream {
+			if resp.Body != nil {
+				resp.Body = newGeminiCodeAssistStreamReader(resp.Body)
+			}
+		} else if resp.Body != nil {
+			bodyBytes, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, types.NewError(readErr, types.ErrorCodeBadResponseBody)
+			}
+			inner := unwrapGeminiCodeAssistResponse(bodyBytes)
+			resp.Body = io.NopCloser(bytes.NewReader(inner))
+		}
+	}
+
 	if info.RelayMode == constant.RelayModeGemini {
 		if strings.Contains(info.RequestURLPath, ":embedContent") ||
 			strings.Contains(info.RequestURLPath, ":batchEmbedContents") {

@@ -330,6 +330,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	recordSelectedAccountPoolTextUsage(ctx, relayInfo, originUsage, summary)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false

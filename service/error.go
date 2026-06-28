@@ -86,7 +86,18 @@ func ClaudeErrorWrapperLocal(err error, code string, statusCode int) *dto.Claude
 func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
 	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
 
+	// Capture the raw upstream response context on every return path so that
+	// downstream callers (e.g. account-pool cooldown logic) can inspect
+	// rate-limit headers without re-reading the already-consumed body.
+	// The body bytes pointer is a named variable so the defer closure captures
+	// it by reference and sees the bytes once they have been read below.
+	var capturedBody []byte
+	defer func() {
+		newApiErr.SetUpstreamResponse(resp.Header, capturedBody, resp.StatusCode)
+	}()
+
 	responseBody, err := io.ReadAll(resp.Body)
+	capturedBody = responseBody // capture partial bytes even when err != nil
 	if err != nil {
 		return
 	}

@@ -55,6 +55,14 @@ var auditContentTemplates = map[string]string{
 	"upstream_source.channel_create":     "Created channel ${channelName} from upstream source ${name} (ID: ${id})",
 	"upstream_source.channel_update":     "Updated channel ${channelName} from upstream source ${name} (ID: ${id})",
 
+	"account_pool.create":         "Created account pool ${name} (ID: ${id})",
+	"account_pool.update":         "Updated account pool ${name} (ID: ${id})",
+	"account_pool.delete":         "Deleted account pool ${name} (ID: ${id})",
+	"account_pool.account_create": "Created account ${name} in account pool ${pool_id}",
+	"account_pool.proxy_create":   "Created account pool proxy ${name} (ID: ${id})",
+	"account_pool.binding_create": "Created draft account pool binding for channel ${channel_id} in pool ${pool_id}",
+	"account_pool.binding_delete": "Deleted account pool binding ${id} from pool ${pool_id}",
+
 	"redemption.create": "Created ${count} redemption codes named ${name} (${quota} each)",
 }
 

@@ -37,3 +37,6 @@ data/
 token_estimator_test.go
 skills-lock.json
 .playwright-mcp
+
+# Read-only external reference clones (grok2api/sub2api/cliproxyapi) — never commit
+.codex/external/

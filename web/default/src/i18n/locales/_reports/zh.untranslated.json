@@ -1,0 +1,19 @@
+{
+  "AI Studio": "AI Studio",
+  "Gemini Code Assist": "Gemini Code Assist",
+  "Anthropic (Claude)": "Anthropic (Claude)",
+  "Auto Pause On Expired": "Auto Pause On Expired",
+  "cf_clearance (optional)": "cf_clearance (optional)",
+  "Expires At (unix seconds, 0 = never)": "Expires At (unix seconds, 0 = never)",
+  "Google Gemini": "Google Gemini",
+  "Grok (Web)": "Grok (Web)",
+  "Grok (X.AI)": "Grok (X.AI)",
+  "Grok Web Cookie": "Grok Web Cookie",
+  "grok.com web-cookie path (best-effort): paste the grok.com SSO session token.": "grok.com web-cookie path (best-effort): paste the grok.com SSO session token.",
+  "Max Per-User Concurrency": "Max Per-User Concurrency",
+  "OpenAI / Codex": "OpenAI / Codex",
+  "Request Quota (0 = unlimited)": "Request Quota (0 = unlimited)",
+  "Request Quota Window (seconds, 0 = lifetime)": "Request Quota Window (seconds, 0 = lifetime)",
+  "SSO Token": "SSO Token",
+  "Stop scheduling this account once it has expired": "Stop scheduling this account once it has expired"
+}

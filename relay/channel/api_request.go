@@ -304,6 +304,22 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+// finalizeAnthropicOAuthAuthHeader is a defense-in-depth step applied AFTER header
+// overrides for Anthropic OAuth requests. Channel HeadersOverride templates can set
+// x-api-key via the {api_key} placeholder — but for OAuth accounts info.ApiKey holds
+// the OAuth access token, which must travel as Authorization: Bearer, NOT as x-api-key.
+//
+// This finalizer:
+//   - removes any x-api-key / X-Api-Key header injected by overrides
+//   - ensures Authorization: Bearer <apiKey> is present
+//
+// It is a no-op for non-OAuth requests; callers must guard on info.RuntimeAnthropicOAuth.
+func finalizeAnthropicOAuthAuthHeader(header http.Header, apiKey string) {
+	header.Del("x-api-key")
+	header.Del("X-Api-Key")
+	header.Set("Authorization", "Bearer "+apiKey)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -327,6 +343,11 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	// Defense-in-depth: if this is an Anthropic OAuth request, ensure no x-api-key
+	// leakage from HeadersOverride templates (which resolve {api_key} = OAuth token).
+	if info != nil && info.RuntimeAnthropicOAuth {
+		finalizeAnthropicOAuthAuthHeader(req.Header, info.ApiKey)
+	}
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -386,8 +407,26 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	// Reset any handshake context captured by a prior dial on this same info so a
+	// stale 401/429 cannot be attached to a later transport-level failure.
+	info.WsHandshakeStatusCode = 0
+	info.WsHandshakeHeader = nil
+	info.WsHandshakeBody = nil
+	targetConn, resp, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
+		// On a handshake rejection the dialer returns the upstream *http.Response
+		// (with status/headers/body). Capture it so account-pool failure
+		// classification can apply a status/platform-specific cooldown rather than
+		// a generic transport cooldown.
+		if resp != nil {
+			info.WsHandshakeStatusCode = resp.StatusCode
+			info.WsHandshakeHeader = resp.Header
+			if resp.Body != nil {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+				_ = resp.Body.Close()
+				info.WsHandshakeBody = body
+			}
+		}
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
 	}
 	// send request body
@@ -487,8 +526,9 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	var client *http.Client
 	var err error
-	if info.ChannelSetting.Proxy != "" {
-		client, err = service.NewProxyHttpClient(info.ChannelSetting.Proxy)
+	proxyURL := relayProxyURL(info)
+	if proxyURL != "" {
+		client, err = service.NewProxyHttpClient(proxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("new proxy http client failed: %w", err)
 		}
@@ -530,6 +570,16 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()
 	return resp, nil
+}
+
+func relayProxyURL(info *common.RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	if strings.TrimSpace(info.RuntimeProxy) != "" {
+		return info.RuntimeProxy
+	}
+	return strings.TrimSpace(info.ChannelSetting.Proxy)
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {

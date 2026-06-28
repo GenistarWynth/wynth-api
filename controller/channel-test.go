@@ -149,6 +149,26 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	return testChannelWithOptions(channel, testUserID, testModel, endpointType, isStream, defaultChannelTestOptions())
 }
 
+func resolveChannelTestModel(channel *model.Channel, testModel string) string {
+	testModel = strings.TrimSpace(testModel)
+	if testModel != "" {
+		return testModel
+	}
+	if channel != nil && channel.TestModel != nil && *channel.TestModel != "" {
+		return strings.TrimSpace(*channel.TestModel)
+	}
+	if channel != nil {
+		models := channel.GetModels()
+		if len(models) > 0 {
+			testModel = strings.TrimSpace(models[0])
+		}
+	}
+	if testModel == "" {
+		testModel = "gpt-4o-mini"
+	}
+	return testModel
+}
+
 func testChannelWithOptions(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, options channelTestOptions) (result testResult) {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
@@ -169,10 +189,7 @@ func testChannelWithOptions(channel *model.Channel, testUserID int, testModel st
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
-	testModel = strings.TrimSpace(testModel)
-	if testModel == "" {
-		testModel = selectAutomaticChannelTestModel(channel)
-	}
+	testModel = resolveChannelTestModel(channel, testModel)
 	defer func() {
 		if result.testedModel == "" {
 			result.testedModel = testModel
@@ -790,6 +807,75 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	return relaycommon.SupportsStreamOptions(channel.Type)
 }
 
+func resolveChannelMonitorUpstreamModel(channel *model.Channel, testModel string) (string, error) {
+	upstreamModel := strings.TrimSpace(testModel)
+	if channel == nil || channel.ModelMapping == nil || strings.TrimSpace(*channel.ModelMapping) == "" || strings.TrimSpace(*channel.ModelMapping) == "{}" {
+		return upstreamModel, nil
+	}
+	modelMap := make(map[string]string)
+	if err := common.UnmarshalJsonStr(*channel.ModelMapping, &modelMap); err != nil {
+		return "", fmt.Errorf("unmarshal_model_mapping_failed")
+	}
+	currentModel := upstreamModel
+	visitedModels := map[string]bool{currentModel: true}
+	for {
+		mappedModel, exists := modelMap[currentModel]
+		mappedModel = strings.TrimSpace(mappedModel)
+		if !exists || mappedModel == "" {
+			return currentModel, nil
+		}
+		if visitedModels[mappedModel] {
+			if mappedModel == currentModel {
+				return currentModel, nil
+			}
+			return "", errors.New("model_mapping_contains_cycle")
+		}
+		visitedModels[mappedModel] = true
+		currentModel = mappedModel
+	}
+}
+
+func testAccountPoolChannelMonitorSchedulability(channel *model.Channel, now int64) (testResult, bool) {
+	result := testResult{}
+	if channel == nil {
+		return result, false
+	}
+	runtimeEnabled, err := service.AccountPoolRuntimeEnabledForChannel(channel.Id)
+	if err != nil {
+		result.localErr = err
+		return result, true
+	}
+	if !runtimeEnabled {
+		return result, false
+	}
+	testModel := resolveChannelTestModel(channel, "")
+	result.testedModel = testModel
+	upstreamModel, err := resolveChannelMonitorUpstreamModel(channel, testModel)
+	if err != nil {
+		result.localErr = err
+		return result, true
+	}
+	schedulability, err := service.CheckAccountPoolChannelSchedulability(service.AccountPoolSchedulabilityRequest{
+		ChannelID:            channel.Id,
+		RequestModel:         testModel,
+		ChannelUpstreamModel: upstreamModel,
+		Now:                  now,
+	})
+	if err != nil {
+		result.localErr = err
+		return result, true
+	}
+	if !schedulability.RuntimeEnabled {
+		return testResult{}, false
+	}
+	if !schedulability.Schedulable {
+		err := fmt.Errorf("account pool channel has no schedulable account: %s", schedulability.Reason)
+		result.newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable)
+		result.upstreamAttempted = true
+	}
+	return result, true
+}
+
 func filterDueChannelMonitorCandidates(channels []*model.Channel, latest map[int]model.ChannelMonitorLog, now int64) []*model.Channel {
 	candidates := make([]*model.Channel, 0, len(channels))
 	for _, channel := range channels {
@@ -910,9 +996,12 @@ func runChannelMonitorProbe(channel *model.Channel, testUserID int) {
 	}
 
 	tik := time.Now()
-	result := testChannelWithOptions(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), channelTestOptions{
-		recordConsumeLog: false,
-	})
+	result, handled := testAccountPoolChannelMonitorSchedulability(channel, common.GetTimestamp())
+	if !handled {
+		result = testChannelWithOptions(channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), channelTestOptions{
+			recordConsumeLog: false,
+		})
+	}
 	milliseconds := time.Since(tik).Milliseconds()
 
 	if err := model.RecordChannelMonitorLog(model.ChannelMonitorLog{
