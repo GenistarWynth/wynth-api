@@ -60,6 +60,20 @@
 
 ---
 
+## 🍱 Wynth Fork — changes relative to upstream
+
+> **Wynth** (`GenistarWynth/wynth-api`) is a downstream fork of [New API](https://github.com/QuantumNous/new-api) by **QuantumNous**. It tracks upstream New API and layers the additions below on top. All upstream New API functionality, branding, and licensing are preserved; see [`CHANGELOG.md`](./CHANGELOG.md) for the full per-release log.
+
+Added on top of upstream New API:
+
+- **Account Pool (号池)** — multi-platform account pooling (OpenAI/Codex, Anthropic, Gemini incl. Code Assist / Antigravity / Google One, Vertex AI service-account, xAI OAuth, grok.com web cookie) with failure-grading cooldown, per-user concurrency, account affinity, load-aware selection, per-account request quotas, Redis HA, proxy health-probe, import/export, and a multi-platform admin UI.
+- **grok.com Web Reverse-Proxy channel** *(fragile / best-effort, reverse-engineered)* — a `grok_web` pool platform using a grok.com web cookie / `console.x.ai` SSO token as upstream, coexisting with the official X.AI OAuth channel. Supports text chat, image generation, reasoning, and deep-search via OpenAI ↔ grok web-SSE translation. Not guaranteed to be stable; labeled as such in code.
+- **Upstream-source channel generation** — auto-generate/sync channels from an upstream source, skipping & disabling channels whose upstream returns no usable models.
+
+Last upstream sync: New API `main` @ 2026-06-28 (see CHANGELOG).
+
+---
+
 ## 🤝 Trusted Partners
 
 <p align="center">

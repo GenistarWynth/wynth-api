@@ -62,6 +62,20 @@
 
 ---
 
+## 🍱 Fork Wynth — modifications par rapport à l'amont
+
+> **Wynth** (`GenistarWynth/wynth-api`) est un fork en aval de [New API](https://github.com/QuantumNous/new-api) par **QuantumNous**. Il suit New API en amont et ajoute par-dessus les fonctionnalités ci-dessous. Toutes les fonctionnalités, la marque et la licence de New API en amont sont préservées ; voir [`CHANGELOG.md`](./CHANGELOG.md) pour le journal complet par version.
+
+Ajouté par-dessus New API en amont :
+
+- **Pool de comptes (号池)** — pool de comptes multi-plateformes (OpenAI/Codex, Anthropic, Gemini dont Code Assist / Antigravity / Google One, compte de service Vertex AI, OAuth xAI, cookie web grok.com) avec refroidissement gradué en cas d'échec, concurrence par utilisateur, affinité de compte, sélection sensible à la charge, quotas de requêtes par compte, haute disponibilité Redis, sonde de santé des proxys, import/export et une interface d'administration multi-plateformes.
+- **Canal proxy inverse web grok.com** *(fragile / best-effort, rétro-ingénierie)* — une plateforme de pool `grok_web` utilisant un cookie web grok.com / un jeton SSO `console.x.ai` comme amont, coexistant avec le canal OAuth officiel X.AI. Prend en charge le chat textuel, la génération d'images, le raisonnement et la deep-search via une traduction bidirectionnelle OpenAI ↔ SSE web grok. Stabilité non garantie ; signalé comme tel dans le code.
+- **Génération de canaux depuis une source amont** — génère/synchronise automatiquement des canaux depuis une source amont ; ignore le mappage et désactive les canaux générés dont l'amont ne renvoie aucun modèle utilisable.
+
+Dernière synchronisation amont : New API `main` @ 2026-06-28 (voir CHANGELOG).
+
+---
+
 ## 🤝 Partenaires de confiance
 
 <p align="center">

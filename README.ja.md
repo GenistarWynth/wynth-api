@@ -62,6 +62,20 @@
 
 ---
 
+## 🍱 Wynth フォーク — 上流からの変更点
+
+> **Wynth**（`GenistarWynth/wynth-api`）は **QuantumNous** による [New API](https://github.com/QuantumNous/new-api) の下流フォークです。上流の New API に追従しつつ、以下の機能を上に追加しています。上流 New API の全機能・ブランド・ライセンスはすべて保持しています。リリースごとの完全な記録は [`CHANGELOG.md`](./CHANGELOG.md) を参照してください。
+
+上流 New API への追加：
+
+- **アカウントプール（号池）** — マルチプラットフォームのアカウントプール（OpenAI/Codex、Anthropic、Gemini〔Code Assist / Antigravity / Google One 含む〕、Vertex AI サービスアカウント、xAI OAuth、grok.com Web Cookie）。失敗段階別クールダウン、ユーザー単位の同時実行、アカウントアフィニティ、負荷を考慮した選択、アカウント単位のリクエストクォータ、Redis HA、プロキシのヘルスチェック、インポート/エクスポート、マルチプラットフォーム管理 UI を備えます。
+- **grok.com Web リバースプロキシチャネル** *(脆弱 / ベストエフォート、リバースエンジニアリング)* — grok.com の Web Cookie / `console.x.ai` SSO トークンを上流として使う `grok_web` プールプラットフォーム。公式 X.AI OAuth チャネルと共存します。OpenAI ↔ grok Web SSE の双方向変換により、テキストチャット・画像生成・推論・deep-search に対応。安定性は保証されず、コード内にその旨を明記しています。
+- **上流ソースからのチャネル生成** — 上流ソースからチャネルを自動生成/同期し、上流が利用可能なモデルを返さない場合はマッピングをスキップして該当の生成チャネルを無効化します。
+
+最終の上流同期：New API `main` @ 2026-06-28（CHANGELOG 参照）。
+
+---
+
 ## 🤝 信頼できるパートナー
 
 <p align="center">

@@ -62,6 +62,20 @@
 
 ---
 
+## 🍱 Wynth 分支 — 相較上游的變更
+
+> **Wynth**（`GenistarWynth/wynth-api`）是 **QuantumNous** 的 [New API](https://github.com/QuantumNous/new-api) 的下游分支。它持續跟進上游 New API，並在其之上疊加下列新增功能。上游 New API 的全部功能、品牌與授權均予保留；完整的逐版本記錄見 [`CHANGELOG.md`](./CHANGELOG.md)。
+
+在上游 New API 之上新增：
+
+- **帳號池（號池）** — 多平台帳號池（OpenAI/Codex、Anthropic、Gemini〔含 Code Assist / Antigravity / Google One〕、Vertex AI 服務帳號、xAI OAuth、grok.com 網頁 cookie），具備失敗分級冷卻、依使用者並發、帳號親和、負載感知選號、依帳號請求配額、Redis 高可用、代理健康探測、匯入/匯出，以及多平台管理後台。
+- **grok.com 網頁反代通道** *(脆弱 / 盡力而為，逆向實作)* — 一個 `grok_web` 池平台，使用 grok.com 網頁 cookie / `console.x.ai` SSO token 作為上游，與官方 X.AI OAuth 通道並存。透過 OpenAI ↔ grok 網頁 SSE 雙向翻譯，支援文字對話、影像生成、推理與 deep-search。不保證長期穩定，程式碼中已如實標註。
+- **上游源通道生成** — 從上游源自動生成/同步通道；當上游回傳無可用模型時，略過對應並停用該生成通道。
+
+最近一次上游同步：New API `main` @ 2026-06-28（詳見 CHANGELOG）。
+
+---
+
 ## 🤝 我們信任的合作伙伴
 
 <p align="center">
