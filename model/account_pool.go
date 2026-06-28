@@ -13,6 +13,10 @@ const (
 	AccountPoolPlatformAnthropic = "anthropic"
 	AccountPoolPlatformGemini    = "gemini"
 	AccountPoolPlatformXAI       = "xai"
+	// AccountPoolPlatformGrokWeb is the grok.com web reverse-proxy platform. It binds
+	// to constant.ChannelTypeGrokWeb (59) and uses a grok.com cookie credential
+	// (sso token + optional cf_clearance), NOT OAuth — cookies are used until invalid.
+	AccountPoolPlatformGrokWeb = "grok_web"
 
 	AccountPoolStatusEnabled  = "enabled"
 	AccountPoolStatusDisabled = "disabled"

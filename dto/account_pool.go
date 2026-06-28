@@ -53,6 +53,9 @@ type AccountPoolCredentialConfigRequest struct {
 	// Location is the Vertex AI region (e.g. us-central1) for a service_account
 	// credential. Defaults server-side when empty.
 	Location string `json:"location"`
+	// CFClearance carries the optional grok.com cf_clearance cookie value for a
+	// grok_web_cookie credential (SECRET). The sso token rides in APIKey.
+	CFClearance string `json:"cf_clearance"`
 }
 
 type AccountPoolTokenStateRequest struct {

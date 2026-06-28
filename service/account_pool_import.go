@@ -374,6 +374,10 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 
 	credentialType := strings.ToLower(strings.TrimSpace(account.Type))
 	apiKey := accountPoolImportStringFromMap(account.Credentials, "api_key", "key")
+	// grokSSO/cfClearance carry a grok.com web cookie credential. The sso token may be
+	// supplied under "sso", "cookie", or "token"; cf_clearance is optional.
+	grokSSO := accountPoolImportStringFromMap(account.Credentials, "sso", "cookie", "token")
+	cfClearance := accountPoolImportStringFromMap(account.Credentials, "cf_clearance")
 	// serviceAccountJSON carries a GCP service-account credential for Gemini Vertex
 	// AI. It may be supplied as a JSON string or an embedded object; location is an
 	// optional Vertex region.
@@ -422,6 +426,18 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	}
 
 	switch {
+	case poolPlatform == model.AccountPoolPlatformGrokWeb || credentialType == AccountPoolCredentialTypeGrokWebCookie:
+		// grok.com web cookie credential: sso token (required) + optional cf_clearance.
+		// The sso token is stored in APIKey so it resolves via the APIKey short-circuit
+		// (no OAuth refresh); cf_clearance rides in CFClearance.
+		if grokSSO == "" {
+			return accountPoolImportCandidate{}, false, "sub2api grok_web account is missing sso cookie"
+		}
+		candidate.Params.Credential = AccountPoolCredentialConfig{
+			Type:        AccountPoolCredentialTypeGrokWebCookie,
+			APIKey:      grokSSO,
+			CFClearance: cfClearance,
+		}
 	case serviceAccountJSON != "" || credentialType == AccountPoolCredentialTypeServiceAccount:
 		if serviceAccountJSON == "" {
 			return accountPoolImportCandidate{}, false, "sub2api service_account account is missing service_account_json"
@@ -795,6 +811,7 @@ func accountPoolNormalizeImportAccountParams(params *AccountPoolAccountCreatePar
 	params.Credential.RefreshToken = strings.TrimSpace(params.Credential.RefreshToken)
 	params.Credential.ServiceAccountJSON = strings.TrimSpace(params.Credential.ServiceAccountJSON)
 	params.Credential.Location = strings.TrimSpace(params.Credential.Location)
+	params.Credential.CFClearance = strings.TrimSpace(params.Credential.CFClearance)
 	params.TokenState.AccessToken = strings.TrimSpace(params.TokenState.AccessToken)
 	params.TokenState.RefreshToken = strings.TrimSpace(params.TokenState.RefreshToken)
 	params.SupportedModels = accountPoolCleanStringSlice(params.SupportedModels)
@@ -836,6 +853,8 @@ func normalizeAccountPoolImportCredentialType(credentialType string) string {
 		return AccountPoolCredentialTypeOAuth
 	case AccountPoolCredentialTypeServiceAccount, "service-account", "vertex":
 		return AccountPoolCredentialTypeServiceAccount
+	case AccountPoolCredentialTypeGrokWebCookie, "grok-web-cookie", "grok_web", "grok":
+		return AccountPoolCredentialTypeGrokWebCookie
 	default:
 		return credentialType
 	}

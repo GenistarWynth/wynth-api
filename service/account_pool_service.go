@@ -602,6 +602,8 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 			channelType = constant.ChannelTypeGemini
 		case model.AccountPoolPlatformXAI:
 			channelType = constant.ChannelTypeXai
+		case model.AccountPoolPlatformGrokWeb:
+			channelType = constant.ChannelTypeGrokWeb
 		default:
 			channelType = constant.ChannelTypeOpenAI
 		}
@@ -1053,7 +1055,7 @@ func normalizeAccountPoolPlatform(platform string) (string, error) {
 	switch platform {
 	case "":
 		return model.AccountPoolPlatformOpenAI, nil
-	case model.AccountPoolPlatformOpenAI, model.AccountPoolPlatformAnthropic, model.AccountPoolPlatformGemini, model.AccountPoolPlatformXAI:
+	case model.AccountPoolPlatformOpenAI, model.AccountPoolPlatformAnthropic, model.AccountPoolPlatformGemini, model.AccountPoolPlatformXAI, model.AccountPoolPlatformGrokWeb:
 		return platform, nil
 	default:
 		return "", errors.New("unsupported account pool platform")
@@ -1122,10 +1124,10 @@ func resolveAccountPoolSchedulePolicy(policy string, fallback string) (string, e
 
 func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 	switch channel.Type {
-	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex, constant.ChannelTypeAnthropic, constant.ChannelTypeGemini, constant.ChannelTypeXai:
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex, constant.ChannelTypeAnthropic, constant.ChannelTypeGemini, constant.ChannelTypeXai, constant.ChannelTypeGrokWeb:
 		return nil
 	default:
-		return errors.New("account pool runtime only supports OpenAI-compatible, Anthropic, Gemini, or xAI channels in this phase")
+		return errors.New("account pool runtime only supports OpenAI-compatible, Anthropic, Gemini, xAI, or Grok (Web) channels in this phase")
 	}
 }
 
@@ -1136,6 +1138,7 @@ func validateAccountPoolRuntimeChannel(channel model.Channel) error {
 //   - pool platform "anthropic"         → channel type must be Anthropic(14)
 //   - pool platform "gemini"            → channel type must be Gemini(24)
 //   - pool platform "xai"               → channel type must be Xai(48)
+//   - pool platform "grok_web"          → channel type must be GrokWeb(59)
 func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel model.Channel) error {
 	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
 		return err
@@ -1153,8 +1156,12 @@ func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel mo
 		if channel.Type != constant.ChannelTypeXai {
 			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
 		}
+	case model.AccountPoolPlatformGrokWeb:
+		if channel.Type != constant.ChannelTypeGrokWeb {
+			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
+		}
 	default: // openai or empty
-		if channel.Type == constant.ChannelTypeAnthropic || channel.Type == constant.ChannelTypeGemini || channel.Type == constant.ChannelTypeXai {
+		if channel.Type == constant.ChannelTypeAnthropic || channel.Type == constant.ChannelTypeGemini || channel.Type == constant.ChannelTypeXai || channel.Type == constant.ChannelTypeGrokWeb {
 			return fmt.Errorf("account pool platform %s is not compatible with channel type %d", pool.Platform, channel.Type)
 		}
 	}
@@ -1477,14 +1484,16 @@ func accountPoolCredentialHasValue(config AccountPoolCredentialConfig) bool {
 		strings.TrimSpace(config.APIKey) != "" ||
 		strings.TrimSpace(config.RefreshToken) != "" ||
 		strings.TrimSpace(config.Email) != "" ||
-		strings.TrimSpace(config.ServiceAccountJSON) != ""
+		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
+		strings.TrimSpace(config.CFClearance) != ""
 }
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
 	return strings.TrimSpace(config.APIKey) != "" ||
 		strings.TrimSpace(config.RefreshToken) != "" ||
 		strings.TrimSpace(config.Email) != "" ||
-		strings.TrimSpace(config.ServiceAccountJSON) != ""
+		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
+		strings.TrimSpace(config.CFClearance) != ""
 }
 
 func accountPoolTokenStateHasValue(state AccountPoolTokenState) bool {

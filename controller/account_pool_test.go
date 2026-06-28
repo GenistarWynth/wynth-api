@@ -275,6 +275,41 @@ func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {
 	assert.Equal(t, service.AccountPoolGeminiOAuthTypeCodeAssist, stored.OAuthType)
 }
 
+func TestAccountPoolAPICreateGrokWebCookieCredential(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "grok-web-pool",
+		Platform: model.AccountPoolPlatformGrokWeb,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+
+	accountResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(poolResult.Response.Data.Id)+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "grok-cookie-account",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:        service.AccountPoolCredentialTypeGrokWebCookie,
+			APIKey:      "sso-create-secret",
+			CFClearance: "cf-create-secret",
+		},
+	})
+	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
+	assert.True(t, accountResult.Response.Data.HasCredential)
+
+	// Secrets must never appear in the response body.
+	assert.NotContains(t, string(accountResult.Raw), "sso-create-secret")
+	assert.NotContains(t, string(accountResult.Raw), "cf-create-secret")
+
+	// The cookie credential (sso + cf_clearance) must persist into the encrypted blob.
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, accountResult.Response.Data.Id).Error)
+	credential, err := service.DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, service.AccountPoolCredentialTypeGrokWebCookie, credential.Type)
+	assert.Equal(t, "sso-create-secret", credential.APIKey)
+	assert.Equal(t, "cf-create-secret", credential.CFClearance)
+}
+
 func TestAccountPoolAPIExportRedactsByDefaultAndIncludesSecretsOnRequest(t *testing.T) {
 	setupAccountPoolAPITestDB(t)
 	router := accountPoolAPIRouter()

@@ -15,6 +15,12 @@ const (
 	// access token is minted via the standard SA JWT-bearer flow at runtime.
 	AccountPoolCredentialTypeServiceAccount = "service_account"
 
+	// AccountPoolCredentialTypeGrokWebCookie identifies a grok.com web cookie
+	// credential. The sso token is stored in the APIKey field and an optional
+	// cf_clearance value in CFClearance — both SECRET, in the encrypted credential
+	// blob. Cookies are NOT refreshed (no OAuth flow); they are used until invalid.
+	AccountPoolCredentialTypeGrokWebCookie = "grok_web_cookie"
+
 	// AccountPoolVertexDefaultLocation is the default Vertex AI region used when a
 	// service-account credential does not specify one.
 	AccountPoolVertexDefaultLocation = "us-central1"
@@ -48,6 +54,10 @@ type AccountPoolCredentialConfig struct {
 	// Location is the Vertex AI region (e.g. us-central1) for a service_account
 	// credential. Defaults to AccountPoolVertexDefaultLocation when empty.
 	Location string `json:"location,omitempty"`
+	// CFClearance holds the optional grok.com cf_clearance cookie value for a
+	// grok_web_cookie credential. It is a SECRET and lives in the encrypted
+	// credential blob alongside the sso token (carried in APIKey).
+	CFClearance string `json:"cf_clearance,omitempty"`
 }
 
 type AccountPoolTokenState struct {

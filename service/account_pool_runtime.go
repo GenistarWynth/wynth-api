@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -91,6 +92,23 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	info.ApiKey = runtimeCredential
+	// Grok (Web) cookie credential: the grokweb adaptor reads info.ApiKey as either a
+	// bare sso token OR a JSON string {"sso","cf_clearance"}. runtimeCredential is the
+	// bare sso token (resolved via the APIKey short-circuit; no OAuth refresh). When a
+	// cf_clearance value is present, re-encode info.ApiKey into the JSON form the adaptor
+	// parses; otherwise leave it as the bare sso token.
+	if selection.Platform == model.AccountPoolPlatformGrokWeb {
+		if cf := strings.TrimSpace(selection.Credential.CFClearance); cf != "" {
+			cookieJSON, marshalErr := common.Marshal(map[string]string{
+				"sso":          runtimeCredential,
+				"cf_clearance": cf,
+			})
+			if marshalErr != nil {
+				return fmt.Errorf("grok web cookie credential marshal failed: %w", marshalErr)
+			}
+			info.ApiKey = string(cookieJSON)
+		}
+	}
 	info.RuntimeAccountID = accountPoolRuntimeAccountIdentifier(selection, runtimeCredential)
 	info.UpstreamModelName = selection.UpstreamModelName
 	if selection.ProxyURL != "" {

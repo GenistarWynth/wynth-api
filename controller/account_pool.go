@@ -606,6 +606,7 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 			RefreshToken:       req.Credential.RefreshToken,
 			ServiceAccountJSON: req.Credential.ServiceAccountJSON,
 			Location:           req.Credential.Location,
+			CFClearance:        req.Credential.CFClearance,
 		},
 		TokenState: service.AccountPoolTokenState{
 			AccessToken:  req.TokenState.AccessToken,
