@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/samber/hot"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AccountPoolService struct{}
@@ -293,7 +294,7 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 	if err != nil {
 		return model.AccountPool{}, err
 	}
-	err = model.DB.Model(&pool).Updates(map[string]any{
+	updates := map[string]any{
 		"name":                              name,
 		"platform":                          platform,
 		"default_proxy_id":                  params.DefaultProxyID,
@@ -308,9 +309,55 @@ func (s AccountPoolService) UpdatePool(id int, params AccountPoolCreateParams) (
 		"capability_check_merge":            params.CapabilityCheckMerge,
 		"remark":                            params.Remark,
 		"updated_time":                      common.GetTimestamp(),
-	}).Error
+	}
+	// A platform change must not leave already-bound channels in an incompatible
+	// platform/channel-type pair (e.g. switching an openai pool with an openai channel
+	// binding to grok_web). Create/bind paths validate this, but the platform can only be
+	// revisited here — so re-validate every existing binding against the new platform and
+	// reject the change until incompatible bindings are removed. The pool row is locked and
+	// re-read INSIDE the transaction (FOR UPDATE on MySQL/PostgreSQL; SQLite serializes
+	// writes at the database level), and "changed?" is computed against the LOCKED row, not
+	// the stale pre-transaction read — otherwise a concurrent platform change committed
+	// after the pre-read could make this path skip validation and clobber the platform. The
+	// binding-mutation paths take the same lock, so they serialize.
+	var boundChannelIDs []int
+	var platformChanged bool
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		lockedPool, err := lockAccountPoolRow(tx, id)
+		if err != nil {
+			return err
+		}
+		platformChanged = platform != lockedPool.Platform
+		if platformChanged {
+			var bindings []model.AccountPoolChannelBinding
+			if err := tx.Where("pool_id = ?", id).Find(&bindings).Error; err != nil {
+				return err
+			}
+			proposed := lockedPool
+			proposed.Platform = platform
+			boundChannelIDs = boundChannelIDs[:0]
+			for _, binding := range bindings {
+				boundChannelIDs = append(boundChannelIDs, binding.ChannelID)
+				var channel model.Channel
+				if err := tx.First(&channel, binding.ChannelID).Error; err != nil {
+					return fmt.Errorf("cannot change account pool platform: bound channel %d is unavailable: %w", binding.ChannelID, err)
+				}
+				if err := validateAccountPoolRuntimeChannelForPool(proposed, channel); err != nil {
+					return fmt.Errorf("cannot change account pool platform to %s while channel %d is bound: %w", platform, channel.Id, err)
+				}
+			}
+		}
+		return tx.Model(&lockedPool).Updates(updates).Error
+	})
 	if err != nil {
 		return model.AccountPool{}, err
+	}
+	// The per-channel runtime caches key pool platform/selection by channel; a platform
+	// change makes any cached entry for a bound channel stale, so drop them.
+	if platformChanged {
+		for _, channelID := range boundChannelIDs {
+			invalidateAccountPoolRuntimeEnabledForChannel(channelID)
+		}
 	}
 	return pool, model.DB.First(&pool, id).Error
 }
@@ -469,7 +516,16 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 		updates["overload_until"] = int64(0)
 	}
 	if accountPoolCredentialHasSecret(params.Credential) {
-		credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
+		// Admin edit forms send secret fields blank when the operator is not rotating
+		// them, so a partial update (e.g. only cf_clearance) must merge onto the stored
+		// credential rather than replace it — otherwise the blank sso token would be
+		// silently erased. Rotating a secret means supplying a new non-empty value.
+		existingCredential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+		if err != nil {
+			return AccountPoolAccountView{}, err
+		}
+		merged := mergeAccountPoolCredentialUpdate(existingCredential, params.Credential)
+		credentialConfig, err := EncryptAccountPoolCredentialConfig(merged)
 		if err != nil {
 			return AccountPoolAccountView{}, err
 		}
@@ -528,8 +584,7 @@ func (s AccountPoolService) ListAccounts(poolID int) ([]AccountPoolAccountView, 
 }
 
 func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams) (AccountPoolBindingView, error) {
-	pool, err := getAccountPoolExistingPool(params.PoolID)
-	if err != nil {
+	if _, err := getAccountPoolExistingPool(params.PoolID); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	if err := validateAccountPoolBindingStatus(params.Status); err != nil {
@@ -539,14 +594,8 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
 		return AccountPoolBindingView{}, err
 	}
-	if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
-		return AccountPoolBindingView{}, err
-	}
 	if channel.Status == common.ChannelStatusEnabled {
 		return AccountPoolBindingView{}, errors.New("account pool binding requires a disabled channel in phase 1")
-	}
-	if err := validateAccountPoolBindingChannelAvailable(channel.Id, 0); err != nil {
-		return AccountPoolBindingView{}, err
 	}
 	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
 	if err != nil {
@@ -560,66 +609,53 @@ func (s AccountPoolService) CreateBinding(params AccountPoolBindingCreateParams)
 	if status == "" {
 		status = model.AccountPoolBindingStatusDraft
 	}
-	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
-	if err != nil {
-		return AccountPoolBindingView{}, err
-	}
 	maxUserConcurrency := params.MaxUserConcurrency
 	if maxUserConcurrency < 0 {
 		maxUserConcurrency = 0
 	}
-	binding := model.AccountPoolChannelBinding{
-		PoolID:              params.PoolID,
-		ChannelID:           params.ChannelID,
-		AccountFilterConfig: accountFilterConfig,
-		ModelPolicy:         modelPolicy,
-		SchedulePolicy:      schedulePolicy,
-		AccountRetryTimes:   params.AccountRetryTimes,
-		MaxUserConcurrency:  maxUserConcurrency,
-		Status:              status,
-	}
-	if err := model.DB.Create(&binding).Error; err != nil {
+	// Lock the pool row, then validate platform compatibility and insert in a single
+	// transaction so a concurrent UpdatePool platform change cannot commit between the
+	// compatibility check and the insert (which would orphan an incompatible binding).
+	var binding model.AccountPoolChannelBinding
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		pool, err := lockAccountPoolRow(tx, params.PoolID)
+		if err != nil {
+			return err
+		}
+		if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
+			return err
+		}
+		if err := validateAccountPoolBindingChannelAvailable(tx, channel.Id, 0); err != nil {
+			return err
+		}
+		schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+		if err != nil {
+			return err
+		}
+		binding = model.AccountPoolChannelBinding{
+			PoolID:              params.PoolID,
+			ChannelID:           params.ChannelID,
+			AccountFilterConfig: accountFilterConfig,
+			ModelPolicy:         modelPolicy,
+			SchedulePolicy:      schedulePolicy,
+			AccountRetryTimes:   params.AccountRetryTimes,
+			MaxUserConcurrency:  maxUserConcurrency,
+			Status:              status,
+		}
+		return tx.Create(&binding).Error
+	}); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	return buildAccountPoolBindingView(binding, channel), nil
 }
 
 func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCreateParams) (AccountPoolBindingView, error) {
-	pool, err := getAccountPoolExistingPool(params.PoolID)
-	if err != nil {
+	if _, err := getAccountPoolExistingPool(params.PoolID); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
 		return AccountPoolBindingView{}, errors.New("account pool channel name is required")
-	}
-	channelType := params.ChannelType
-	if channelType == 0 {
-		switch pool.Platform {
-		case model.AccountPoolPlatformAnthropic:
-			channelType = constant.ChannelTypeAnthropic
-		case model.AccountPoolPlatformGemini:
-			channelType = constant.ChannelTypeGemini
-		case model.AccountPoolPlatformXAI:
-			channelType = constant.ChannelTypeXai
-		case model.AccountPoolPlatformGrokWeb:
-			channelType = constant.ChannelTypeGrokWeb
-		default:
-			channelType = constant.ChannelTypeOpenAI
-		}
-	}
-	channel := model.Channel{
-		Type:        channelType,
-		Key:         "account-pool-" + common.GetUUID(),
-		Status:      common.ChannelStatusManuallyDisabled,
-		Name:        name,
-		Group:       "default",
-		Models:      accountPoolFixedModelsCSV(params.ModelPolicy),
-		CreatedTime: common.GetTimestamp(),
-		UpdatedTime: common.GetTimestamp(),
-	}
-	if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
-		return AccountPoolBindingView{}, err
 	}
 	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
 	if err != nil {
@@ -629,20 +665,55 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 	if err != nil {
 		return AccountPoolBindingView{}, err
 	}
-	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
-	if err != nil {
-		return AccountPoolBindingView{}, err
+	channel := model.Channel{
+		Key:         "account-pool-" + common.GetUUID(),
+		Status:      common.ChannelStatusManuallyDisabled,
+		Name:        name,
+		Group:       "default",
+		Models:      accountPoolFixedModelsCSV(params.ModelPolicy),
+		CreatedTime: common.GetTimestamp(),
+		UpdatedTime: common.GetTimestamp(),
 	}
 	binding := model.AccountPoolChannelBinding{
 		PoolID:              params.PoolID,
 		AccountFilterConfig: accountFilterConfig,
 		ModelPolicy:         modelPolicy,
-		SchedulePolicy:      schedulePolicy,
 		AccountRetryTimes:   params.AccountRetryTimes,
 		MaxUserConcurrency:  params.MaxUserConcurrency,
 		Status:              model.AccountPoolBindingStatusDraft,
 	}
+	// Lock the pool row, then resolve the channel type from the locked platform, validate,
+	// and create the channel + binding in one transaction so a concurrent UpdatePool
+	// platform change cannot leave the new channel/binding incompatible with the platform.
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		pool, err := lockAccountPoolRow(tx, params.PoolID)
+		if err != nil {
+			return err
+		}
+		channelType := params.ChannelType
+		if channelType == 0 {
+			switch pool.Platform {
+			case model.AccountPoolPlatformAnthropic:
+				channelType = constant.ChannelTypeAnthropic
+			case model.AccountPoolPlatformGemini:
+				channelType = constant.ChannelTypeGemini
+			case model.AccountPoolPlatformXAI:
+				channelType = constant.ChannelTypeXai
+			case model.AccountPoolPlatformGrokWeb:
+				channelType = constant.ChannelTypeGrokWeb
+			default:
+				channelType = constant.ChannelTypeOpenAI
+			}
+		}
+		channel.Type = channelType
+		if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
+			return err
+		}
+		schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
+		if err != nil {
+			return err
+		}
+		binding.SchedulePolicy = schedulePolicy
 		if err := tx.Create(&channel).Error; err != nil {
 			return err
 		}
@@ -659,8 +730,7 @@ func (s AccountPoolService) CreateBoundChannel(params AccountPoolBoundChannelCre
 }
 
 func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params AccountPoolBindingCreateParams) (AccountPoolBindingView, error) {
-	pool, err := getAccountPoolExistingPool(poolID)
-	if err != nil {
+	if _, err := getAccountPoolExistingPool(poolID); err != nil {
 		return AccountPoolBindingView{}, err
 	}
 	binding, err := getAccountPoolBindingForPool(poolID, bindingID)
@@ -674,14 +744,8 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	if err := model.DB.First(&channel, params.ChannelID).Error; err != nil {
 		return AccountPoolBindingView{}, err
 	}
-	if err := validateAccountPoolRuntimeChannelForPool(pool, channel); err != nil {
-		return AccountPoolBindingView{}, err
-	}
 	if binding.ChannelID != channel.Id && channel.Status == common.ChannelStatusEnabled {
 		return AccountPoolBindingView{}, errors.New("account pool binding requires a disabled channel when changing channel")
-	}
-	if err := validateAccountPoolBindingChannelAvailable(channel.Id, binding.Id); err != nil {
-		return AccountPoolBindingView{}, err
 	}
 	accountFilterConfig, err := marshalAccountPoolOptionalJSON(params.AccountFilterConfig)
 	if err != nil {
@@ -693,16 +757,30 @@ func (s AccountPoolService) UpdateBinding(poolID int, bindingID int, params Acco
 	}
 	oldChannelID := binding.ChannelID
 	oldStatus := binding.Status
-	schedulePolicy, err := resolveAccountPoolSchedulePolicy(params.SchedulePolicy, pool.DefaultSchedulePolicy)
-	if err != nil {
-		return AccountPoolBindingView{}, err
-	}
 	maxUserConcurrency := params.MaxUserConcurrency
 	if maxUserConcurrency < 0 {
 		maxUserConcurrency = 0
 	}
 	now := common.GetTimestamp()
+	// Lock the pool row, then re-validate platform compatibility and channel availability
+	// inside the transaction so a concurrent UpdatePool platform change cannot orphan this
+	// binding between the check and the write.
+	var schedulePolicy string
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		lockedPool, err := lockAccountPoolRow(tx, poolID)
+		if err != nil {
+			return err
+		}
+		if err := validateAccountPoolRuntimeChannelForPool(lockedPool, channel); err != nil {
+			return err
+		}
+		if err := validateAccountPoolBindingChannelAvailable(tx, channel.Id, binding.Id); err != nil {
+			return err
+		}
+		schedulePolicy, err = resolveAccountPoolSchedulePolicy(params.SchedulePolicy, lockedPool.DefaultSchedulePolicy)
+		if err != nil {
+			return err
+		}
 		if err := tx.Model(&binding).Updates(map[string]any{
 			"channel_id":            channel.Id,
 			"account_filter_config": accountFilterConfig,
@@ -1168,9 +1246,29 @@ func validateAccountPoolRuntimeChannelForPool(pool model.AccountPool, channel mo
 	return nil
 }
 
-func validateAccountPoolBindingChannelAvailable(channelID int, excludeBindingID int) error {
+// lockAccountPoolRow re-reads the pool inside a transaction, taking a row-level write
+// lock on MySQL/PostgreSQL (SELECT ... FOR UPDATE). The pool-platform change path and the
+// binding mutation paths all acquire this lock before validating compatibility, so on
+// MySQL/PostgreSQL they fully serialize on the same row and a binding can never be
+// validated against one platform while the pool is concurrently switched to another.
+//
+// SQLite does not support FOR UPDATE (the clause would be a syntax error), so the lock is
+// skipped there; SQLite admits at most one writer at a time, and the affected operations
+// are rare single-admin config changes, so the narrow deferred-read window is acceptable
+// rather than worth a BEGIN IMMEDIATE workaround.
+func lockAccountPoolRow(tx *gorm.DB, poolID int) (model.AccountPool, error) {
+	var pool model.AccountPool
+	query := tx
+	if !common.UsingSQLite {
+		query = tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	err := query.First(&pool, poolID).Error
+	return pool, err
+}
+
+func validateAccountPoolBindingChannelAvailable(db *gorm.DB, channelID int, excludeBindingID int) error {
 	var count int64
-	query := model.DB.Model(&model.AccountPoolChannelBinding{}).Where("channel_id = ?", channelID)
+	query := db.Model(&model.AccountPoolChannelBinding{}).Where("channel_id = ?", channelID)
 	if excludeBindingID > 0 {
 		query = query.Where("id <> ?", excludeBindingID)
 	}
@@ -1486,6 +1584,51 @@ func accountPoolCredentialHasValue(config AccountPoolCredentialConfig) bool {
 		strings.TrimSpace(config.Email) != "" ||
 		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
 		strings.TrimSpace(config.CFClearance) != ""
+}
+
+// mergeAccountPoolCredentialUpdate overlays the non-empty fields of an incoming
+// credential update onto the existing decrypted credential. Admin edit forms leave a
+// secret field blank when the operator does not want to rotate it, so a blank incoming
+// secret means "keep the stored value" rather than "erase it". This prevents a partial
+// update (for example setting only cf_clearance) from wiping the stored sso token. To
+// rotate a secret the operator supplies a new non-empty value; clearing an individual
+// secret back to empty is intentionally not expressible through this path.
+//
+// A credential-TYPE change is treated as a full rotation, NOT a partial edit: the
+// incoming config replaces the stored one wholesale. Merging across types would retain
+// secrets that do not belong to the new type — e.g. switching api_key->oauth would keep
+// the old APIKey, which the token provider short-circuits on (so the account would keep
+// authenticating with the stale key), and the obsolete secret would also linger in
+// storage/export. Same-type edits keep the blank-means-keep partial-update semantics.
+func mergeAccountPoolCredentialUpdate(existing, incoming AccountPoolCredentialConfig) AccountPoolCredentialConfig {
+	incomingType := strings.TrimSpace(incoming.Type)
+	existingType := strings.TrimSpace(existing.Type)
+	if incomingType != "" && !strings.EqualFold(incomingType, existingType) {
+		return incoming
+	}
+	merged := existing
+	if incomingType != "" {
+		merged.Type = incoming.Type
+	}
+	if strings.TrimSpace(incoming.APIKey) != "" {
+		merged.APIKey = incoming.APIKey
+	}
+	if strings.TrimSpace(incoming.Email) != "" {
+		merged.Email = incoming.Email
+	}
+	if strings.TrimSpace(incoming.RefreshToken) != "" {
+		merged.RefreshToken = incoming.RefreshToken
+	}
+	if strings.TrimSpace(incoming.ServiceAccountJSON) != "" {
+		merged.ServiceAccountJSON = incoming.ServiceAccountJSON
+	}
+	if strings.TrimSpace(incoming.Location) != "" {
+		merged.Location = incoming.Location
+	}
+	if strings.TrimSpace(incoming.CFClearance) != "" {
+		merged.CFClearance = incoming.CFClearance
+	}
+	return merged
 }
 
 func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {

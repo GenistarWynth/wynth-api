@@ -1696,6 +1696,84 @@ func TestAccountPoolServiceUpdateOAuthTypeIndependentOfSecret(t *testing.T) {
 	assert.Equal(t, before.CredentialConfig, after.CredentialConfig, "encrypted credential blob must be byte-identical (secret untouched)")
 }
 
+// Updating a grok_web account to set a new cf_clearance while leaving the sso field
+// blank (the admin edit form sends secrets blank unless rotating them) must NOT erase
+// the stored sso token. The update path merges partial secret edits onto the stored
+// credential instead of replacing it.
+func TestUpdateAccountMergesPartialGrokWebCredential(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGrokWeb)
+
+	created, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "grok-edit",
+		Credential: AccountPoolCredentialConfig{
+			Type:        AccountPoolCredentialTypeGrokWebCookie,
+			APIKey:      "sso-original-token",
+			CFClearance: "cf-original",
+		},
+	})
+	require.NoError(t, err)
+
+	// Edit only cf_clearance; api_key (sso) left blank as the form does when not rotating.
+	_, err = svc.UpdateAccount(pool.Id, created.Id, AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "grok-edit",
+		Credential: AccountPoolCredentialConfig{
+			Type:        AccountPoolCredentialTypeGrokWebCookie,
+			APIKey:      "",
+			CFClearance: "cf-rotated",
+		},
+	})
+	require.NoError(t, err)
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, created.Id).Error)
+	cred, err := DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, "sso-original-token", cred.APIKey, "blank sso edit must preserve the stored token")
+	assert.Equal(t, "cf-rotated", cred.CFClearance, "new cf_clearance is applied")
+}
+
+// Changing an account's credential TYPE is a full rotation, not a partial edit: the
+// stale secret from the previous type must not survive the merge. Rotating an api_key
+// account to OAuth (with a blank api_key in the form) must drop the old APIKey, or the
+// token provider's APIKey short-circuit would keep authenticating with the stale key.
+func TestUpdateAccountTypeChangeReplacesCredentialWholesale(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+
+	created, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:     pool.Id,
+		Name:       "rotate-me",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeAPIKey, APIKey: "sk-old-key"},
+	})
+	require.NoError(t, err)
+
+	// Rotate to OAuth; api_key left blank as the form does for the new type.
+	_, err = svc.UpdateAccount(pool.Id, created.Id, AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "rotate-me",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			Email:        "rotated@example.com",
+			RefreshToken: "rt-new",
+		},
+	})
+	require.NoError(t, err)
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, created.Id).Error)
+	cred, err := DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, cred.Type)
+	assert.Empty(t, cred.APIKey, "stale api key must not survive a credential-type rotation")
+	assert.Equal(t, "rt-new", cred.RefreshToken)
+	assert.Equal(t, "rotated@example.com", cred.Email)
+}
+
 func setupAccountPoolServiceTestDB(t *testing.T) {
 	t.Helper()
 

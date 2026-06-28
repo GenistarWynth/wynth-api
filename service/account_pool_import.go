@@ -429,13 +429,18 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	case poolPlatform == model.AccountPoolPlatformGrokWeb || credentialType == AccountPoolCredentialTypeGrokWebCookie:
 		// grok.com web cookie credential: sso token (required) + optional cf_clearance.
 		// The sso token is stored in APIKey so it resolves via the APIKey short-circuit
-		// (no OAuth refresh); cf_clearance rides in CFClearance.
-		if grokSSO == "" {
+		// (no OAuth refresh); cf_clearance rides in CFClearance. Accept api_key/key as an
+		// sso fallback so a credential exported under "api_key" still round-trips.
+		sso := grokSSO
+		if sso == "" {
+			sso = apiKey
+		}
+		if sso == "" {
 			return accountPoolImportCandidate{}, false, "sub2api grok_web account is missing sso cookie"
 		}
 		candidate.Params.Credential = AccountPoolCredentialConfig{
 			Type:        AccountPoolCredentialTypeGrokWebCookie,
-			APIKey:      grokSSO,
+			APIKey:      sso,
 			CFClearance: cfClearance,
 		}
 	case serviceAccountJSON != "" || credentialType == AccountPoolCredentialTypeServiceAccount:

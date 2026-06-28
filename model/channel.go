@@ -351,6 +351,9 @@ func (channel *Channel) Save() error {
 	if err := RejectAccountPoolBoundChannelEnable(channel.Id, channel.Status); err != nil {
 		return err
 	}
+	if err := RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
+		return err
+	}
 	return DB.Save(channel).Error
 }
 
@@ -359,6 +362,9 @@ func (channel *Channel) SaveWithoutKey() error {
 		return errors.New("channel ID is 0")
 	}
 	if err := RejectAccountPoolBoundChannelEnable(channel.Id, channel.Status); err != nil {
+		return err
+	}
+	if err := RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
 		return err
 	}
 	channel.UpdatedTime = common.GetTimestamp()
@@ -545,6 +551,9 @@ func (channel *Channel) Insert() error {
 func (channel *Channel) Update() error {
 	channel.UpdatedTime = common.GetTimestamp()
 	if err := RejectAccountPoolBoundChannelEnable(channel.Id, channel.Status); err != nil {
+		return err
+	}
+	if err := RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
 		return err
 	}
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys

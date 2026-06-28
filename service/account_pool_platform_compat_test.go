@@ -316,6 +316,104 @@ func TestCreateBindingRejectsXAIChannelOnOpenAIPool(t *testing.T) {
 	assert.Contains(t, err.Error(), "not compatible")
 }
 
+// TestPoolBoundChannelTypeChangeRejected verifies that the generic channel editor cannot
+// change the provider type of a pool-bound channel (which would bypass pool-platform
+// compatibility validation), while a non-type edit of the same channel still succeeds.
+func TestPoolBoundChannelTypeChangeRejected(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformOpenAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeOpenAI, common.ChannelStatusManuallyDisabled)
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{PoolID: pool.Id, ChannelID: channel.Id})
+	require.NoError(t, err)
+
+	var stored model.Channel
+	require.NoError(t, model.DB.First(&stored, channel.Id).Error)
+	stored.Type = constant.ChannelTypeAnthropic
+	err = stored.Update()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, model.ErrAccountPoolBoundChannelTypeChange)
+
+	// The type is unchanged in storage after the rejected edit.
+	var afterReject model.Channel
+	require.NoError(t, model.DB.First(&afterReject, channel.Id).Error)
+	assert.Equal(t, constant.ChannelTypeOpenAI, afterReject.Type)
+
+	// A non-type edit of the same bound channel still succeeds.
+	afterReject.Name = "renamed-bound-channel"
+	require.NoError(t, afterReject.Update())
+}
+
+// TestSaveGeneratedChannelRejectsBoundChannelTypeChange verifies the upstream-source sync
+// path (a direct map update that bypasses model.Channel.Update/Save) still honors the
+// pool-bound channel-type guard, so a re-sync cannot repoint a bound channel's provider type.
+func TestSaveGeneratedChannelRejectsBoundChannelTypeChange(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformOpenAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeOpenAI, common.ChannelStatusManuallyDisabled)
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{PoolID: pool.Id, ChannelID: channel.Id})
+	require.NoError(t, err)
+
+	channel.Type = constant.ChannelTypeAnthropic
+	_, err = saveGeneratedChannel(&channel, false, common.GetTimestamp())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, model.ErrAccountPoolBoundChannelTypeChange)
+
+	// A re-sync that preserves the bound channel's type still succeeds.
+	channel.Type = constant.ChannelTypeOpenAI
+	_, err = saveGeneratedChannel(&channel, false, common.GetTimestamp())
+	require.NoError(t, err)
+}
+
+// TestUpdatePoolRejectsPlatformChangeWithIncompatibleBinding verifies that changing a
+// pool's platform is rejected while a channel of the old platform is still bound. The
+// create/bind paths validate platform↔channel compatibility, but the platform can only
+// be revisited via UpdatePool — without this guard an openai pool with an openai channel
+// could be switched to grok_web, leaving an invalid pair the relay can't route.
+func TestUpdatePoolRejectsPlatformChangeWithIncompatibleBinding(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformOpenAI)
+	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeOpenAI, common.ChannelStatusManuallyDisabled)
+	_, err := svc.CreateBinding(AccountPoolBindingCreateParams{PoolID: pool.Id, ChannelID: channel.Id})
+	require.NoError(t, err)
+
+	_, err = svc.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:     pool.Name,
+		Platform: model.AccountPoolPlatformGrokWeb,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot change account pool platform")
+
+	// The platform must be unchanged in storage after the rejected update.
+	var stored model.AccountPool
+	require.NoError(t, model.DB.First(&stored, pool.Id).Error)
+	assert.Equal(t, model.AccountPoolPlatformOpenAI, stored.Platform)
+
+	// Re-saving the same platform (no change) still succeeds.
+	_, err = svc.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:     pool.Name,
+		Platform: model.AccountPoolPlatformOpenAI,
+	})
+	require.NoError(t, err)
+}
+
+// TestUpdatePoolAllowsPlatformChangeWithNoBindings verifies that an empty pool can still
+// have its platform changed freely (the guard only blocks incompatible existing bindings).
+func TestUpdatePoolAllowsPlatformChangeWithNoBindings(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformOpenAI)
+
+	updated, err := svc.UpdatePool(pool.Id, AccountPoolCreateParams{
+		Name:     pool.Name,
+		Platform: model.AccountPoolPlatformGrokWeb,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolPlatformGrokWeb, updated.Platform)
+}
+
 // TestCreateBoundChannelDefaultsToXAITypeForXAIPool verifies that when no
 // ChannelType is specified, CreateBoundChannel uses ChannelTypeXai for xai pools.
 func TestCreateBoundChannelDefaultsToXAITypeForXAIPool(t *testing.T) {

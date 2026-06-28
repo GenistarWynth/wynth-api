@@ -37,6 +37,7 @@ const (
 )
 
 var ErrAccountPoolBoundChannelEnable = errors.New("account pool bound channel cannot be enabled in phase 1")
+var ErrAccountPoolBoundChannelTypeChange = errors.New("account pool bound channel type cannot be changed; remove the pool binding first")
 
 type AccountPool struct {
 	Id                             int    `json:"id"`
@@ -290,6 +291,33 @@ func RejectAccountPoolBoundChannelEnable(channelID int, status int) error {
 	}
 	if bound {
 		return ErrAccountPoolBoundChannelEnable
+	}
+	return nil
+}
+
+// RejectAccountPoolBoundChannelTypeChange prevents the generic channel editor from
+// changing the provider type of a channel that an account pool binding controls. A
+// pool-bound channel's type is validated against the pool platform at bind time; allowing
+// a type change here would silently create an incompatible pool/channel pair that bypasses
+// that validation. newType == 0 means "type not being changed" (GORM skips the zero value),
+// so it is always allowed.
+func RejectAccountPoolBoundChannelTypeChange(channelID int, newType int) error {
+	if channelID <= 0 || newType == 0 || DB == nil {
+		return nil
+	}
+	bound, err := HasAccountPoolControlledChannelBinding(channelID)
+	if err != nil {
+		return err
+	}
+	if !bound {
+		return nil
+	}
+	var current Channel
+	if err := DB.Select("type").First(&current, channelID).Error; err != nil {
+		return err
+	}
+	if current.Type != newType {
+		return ErrAccountPoolBoundChannelTypeChange
 	}
 	return nil
 }

@@ -22,6 +22,16 @@ var defaultBaseURL = "https://grok.com"
 // Mirror of endpoint_table.py: CHAT = f"{BASE}/rest/app-chat/conversations/new".
 const chatPath = "/rest/app-chat/conversations/new"
 
+// assetsBaseURL is the grok.com asset CDN host. Generated images are referenced
+// by a path returned in the chat SSE (image_chunk.imageUrl) and must be fetched
+// from here with the SSO cookie. It is a package var so tests can point it at an
+// httptest mock. Mirror of endpoint_table.py ASSETS_CDN.
+var assetsBaseURL = "https://assets.grok.com"
+
+// defaultImageGenerationCount is the per-request image count grok generates when
+// the client does not specify n. grok2api defaults imageGenerationCount to 2.
+const defaultImageGenerationCount = 2
+
 // staticStatsigID is the static x-statsig-id default copied verbatim from
 // grok2api headers.py _statsig_id() (the non-dynamic branch). It is a base64
 // payload spoofing a JS TypeError; grok.com accepts it in place of a real
@@ -66,9 +76,29 @@ var modelModeMap = map[string]string{
 	// grok-4 generic ids.
 	"grok-4":      "auto",
 	"grok-4-fast": "fast",
+	// reasoning ("think") alias → expert mode, which streams isThinking tokens.
+	"grok-4-reasoning": "expert",
+	// deep-search alias → expert mode; web search is on by default and the handler
+	// surfaces the returned sources as a Markdown "## Sources" section for this model.
+	"grok-4-deepsearch": "expert",
 }
 
-// ModelList is the set of model ids this adaptor advertises.
+// deepSearchModels is the set of model ids for which the chat handler appends the
+// deep-search "## Sources" section. Normal chat models leave search results
+// unsurfaced so their output shape is unchanged.
+var deepSearchModels = map[string]struct{}{
+	"grok-4-deepsearch": {},
+}
+
+// isDeepSearchModel reports whether the requested model should surface web sources.
+func isDeepSearchModel(model string) bool {
+	_, ok := deepSearchModels[model]
+	return ok
+}
+
+// ModelList is the set of model ids this adaptor advertises. grok-2-image is the
+// image-generation model id, routed through the OpenAI /v1/images/generations path
+// (grok.com generates images via the same chat endpoint with image flags set).
 var ModelList = []string{
 	"grok-4.3",
 	"grok-4.3-beta",
@@ -79,6 +109,9 @@ var ModelList = []string{
 	"grok-fast",
 	"grok-expert",
 	"grok-heavy",
+	"grok-4-reasoning",
+	"grok-4-deepsearch",
+	"grok-2-image",
 }
 
 // modelToModeID resolves a requested model id to a grok web modeId, falling

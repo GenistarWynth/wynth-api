@@ -232,39 +232,44 @@ func exportAccountPoolAccount(account model.AccountPoolAccount, platform string,
 
 	// Secret fields: real values only when explicitly requested, otherwise masked.
 	apiKey := strings.TrimSpace(credential.APIKey)
+	cfClearance := strings.TrimSpace(credential.CFClearance)
 	refreshToken := strings.TrimSpace(credential.RefreshToken)
 	accessToken := strings.TrimSpace(tokenState.AccessToken)
 	if refreshToken == "" {
 		refreshToken = strings.TrimSpace(tokenState.RefreshToken)
 	}
 
-	if includeSecrets {
-		if apiKey != "" {
-			exported.Credentials["api_key"] = apiKey
+	// emitSecret writes a secret credential field as its real value when secrets are
+	// requested, otherwise as a masked placeholder. Empty values are skipped entirely.
+	emitSecret := func(key, value string) {
+		if value == "" {
+			return
 		}
-		if refreshToken != "" {
-			exported.Credentials["refresh_token"] = refreshToken
+		if includeSecrets {
+			exported.Credentials[key] = value
+		} else {
+			exported.Credentials[key] = MaskAccountPoolSecretValue(value)
 		}
-		if accessToken != "" {
-			exported.Credentials["access_token"] = accessToken
-		}
-		if tokenState.ExpiresAt > 0 {
-			exported.Credentials["expires_at"] = tokenState.ExpiresAt
-		}
-	} else {
-		if apiKey != "" {
-			exported.Credentials["api_key"] = MaskAccountPoolSecretValue(apiKey)
-		}
-		if refreshToken != "" {
-			exported.Credentials["refresh_token"] = MaskAccountPoolSecretValue(refreshToken)
-		}
-		if accessToken != "" {
-			exported.Credentials["access_token"] = MaskAccountPoolSecretValue(accessToken)
-		}
-		// expires_at is non-secret metadata, but a redacted export is inspection-only and
-		// must not silently round-trip a usable masked OAuth credential, so it is omitted
-		// alongside the masked tokens.
 	}
+
+	if platform == model.AccountPoolPlatformGrokWeb {
+		// grok.com web-cookie accounts store the sso token in APIKey, but the importer
+		// reads it from "sso" (not "api_key") and the optional cf_clearance from
+		// "cf_clearance". Emitting those names is what lets an include_secrets export
+		// round-trip back through import; both are SECRET and masked when redacted.
+		emitSecret("sso", apiKey)
+		emitSecret("cf_clearance", cfClearance)
+	} else {
+		emitSecret("api_key", apiKey)
+	}
+	emitSecret("refresh_token", refreshToken)
+	emitSecret("access_token", accessToken)
+	if includeSecrets && tokenState.ExpiresAt > 0 {
+		exported.Credentials["expires_at"] = tokenState.ExpiresAt
+	}
+	// expires_at is non-secret metadata, but a redacted export is inspection-only and
+	// must not silently round-trip a usable masked OAuth credential, so it is omitted
+	// alongside the masked tokens.
 
 	return exported, nil
 }

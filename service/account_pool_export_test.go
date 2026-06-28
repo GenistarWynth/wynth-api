@@ -98,6 +98,67 @@ func TestAccountPoolServiceExportRoundTripsThroughImport(t *testing.T) {
 	assert.Equal(t, "psecret", proxyAuth.Password)
 }
 
+// A grok.com web-cookie account stores its sso token in APIKey and an optional
+// cf_clearance — both secret. A full export must emit them under the importer-read
+// names ("sso"/"cf_clearance") so it round-trips, and a redacted export must mask
+// both. This guards the seam where export historically only emitted "api_key" (which
+// the grok_web importer ignores) and never emitted cf_clearance at all.
+func TestAccountPoolServiceExportRoundTripsGrokWebCookie(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+
+	// Full export round-trips both secrets into a fresh grok_web pool.
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGrokWeb)
+	_, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "grok-cookie",
+		Credential: AccountPoolCredentialConfig{
+			Type:        AccountPoolCredentialTypeGrokWebCookie,
+			APIKey:      "sso-token-abcdefgh",
+			CFClearance: "cf-clearance-12345678",
+		},
+	})
+	require.NoError(t, err)
+
+	payload, skipped, err := svc.ExportAccounts(pool.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, 0, skipped)
+	require.Len(t, payload.Accounts, 1)
+	assert.Equal(t, "sso-token-abcdefgh", payload.Accounts[0].Credentials["sso"], "sso emitted under importer-read name")
+	assert.Equal(t, "cf-clearance-12345678", payload.Accounts[0].Credentials["cf_clearance"], "cf_clearance emitted")
+	_, hasAPIKey := payload.Accounts[0].Credentials["api_key"]
+	assert.False(t, hasAPIKey, "grok_web export must not use the api_key name the importer ignores")
+
+	content, err := common.Marshal(payload)
+	require.NoError(t, err)
+	pool2 := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGrokWeb)
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool2.Id,
+		Format:  "sub2api",
+		Content: string(content),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	reimported := accountByNameInPool(t, pool2.Id, "grok-cookie")
+	cred, err := DecryptAccountPoolCredentialConfig(reimported.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeGrokWebCookie, cred.Type)
+	assert.Equal(t, "sso-token-abcdefgh", cred.APIKey, "sso token survives the round-trip")
+	assert.Equal(t, "cf-clearance-12345678", cred.CFClearance, "cf_clearance survives the round-trip")
+
+	// Redacted export still emits both secret keys (so the shape round-trips for
+	// inspection) but masks their values — a regression that dropped cf_clearance
+	// entirely must fail here, not merely be "absent".
+	redacted, _, err := svc.ExportAccounts(pool.Id, false)
+	require.NoError(t, err)
+	require.Len(t, redacted.Accounts, 1)
+	redactedCreds := redacted.Accounts[0].Credentials
+	require.Contains(t, redactedCreds, "sso", "redacted export still emits the sso key")
+	require.Contains(t, redactedCreds, "cf_clearance", "redacted export still emits the cf_clearance key")
+	assert.NotEqual(t, "sso-token-abcdefgh", redactedCreds["sso"], "sso value must be masked")
+	assert.NotEqual(t, "cf-clearance-12345678", redactedCreds["cf_clearance"], "cf_clearance value must be masked")
+}
+
 // A single undecryptable credential blob must be skipped (logged + counted), not
 // fail the whole export — mirroring the importer's skip-and-continue.
 func TestAccountPoolServiceExportSkipsUndecryptableAccount(t *testing.T) {

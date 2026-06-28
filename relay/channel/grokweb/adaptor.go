@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
@@ -88,6 +89,11 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		service.CloseResponseBodyGracefully(resp)
 		return nil, classifyHTTPError(resp.StatusCode, resp.Header, body)
 	}
+	// Image generation must be dispatched before the IsStream check: grok returns
+	// an SSE stream for images too, but the client expects a single image JSON.
+	if info.RelayMode == relayconstant.RelayModeImagesGenerations {
+		return grokWebImageHandler(c, info, resp)
+	}
 	if info.IsStream {
 		return grokWebStreamHandler(c, info, resp)
 	}
@@ -116,8 +122,21 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 	return nil, errors.New("grok-web: audio endpoint not supported")
 }
 
+// ConvertImageRequest maps an OpenAI image-generation request onto a grok web
+// image-chat body. NOTE: request.ResponseFormat is intentionally NOT honored — grok
+// asset URLs are auth-gated and expiring and Wynth has no media cache, so the response
+// is always returned as b64_json even when "url" is requested (OpenAI's default).
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	return nil, errors.New("grok-web: image endpoint not supported (deferred to a later slice)")
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		return nil, errors.New("grok-web: image prompt is required")
+	}
+	count := defaultImageGenerationCount
+	if request.N != nil && *request.N > 0 {
+		count = int(*request.N)
+	}
+	modeID := modelToModeID(request.Model)
+	return buildGrokImageRequest(prompt, modeID, count), nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {

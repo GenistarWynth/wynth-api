@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,6 +89,155 @@ func TestGrokWebHandlerNonStreamSingleCompletion(t *testing.T) {
 	assert.Equal(t, "Hello", full.Choices[0].Message.StringContent())
 	assert.Equal(t, "stop", full.Choices[0].FinishReason)
 	assert.Equal(t, "assistant", full.Choices[0].Message.Role)
+}
+
+// mockReasoningSSE interleaves expert-mode reasoning (isThinking) tokens with final
+// content, mirroring grok's "think" stream.
+const mockReasoningSSE = `data: {"result":{"response":{"token":"let me think","isThinking":true}}}
+data: {"result":{"response":{"token":" about it","isThinking":true}}}
+data: {"result":{"response":{"token":"Answer","isThinking":false,"messageTag":"final"}}}
+data: {"result":{"response":{"isSoftStop":true,"finalMetadata":{}}}}
+data: [DONE]
+`
+
+func TestGrokWebStreamHandlerSurfacesReasoning(t *testing.T) {
+	c, rec, resp, info := newHandlerContext(t, mockReasoningSSE, true)
+	usage, apiErr := grokWebStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+
+	var content, reasoning strings.Builder
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			continue
+		}
+		var chunk dto.ChatCompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(payload, &chunk); err != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		if chunk.Choices[0].Delta.Content != nil {
+			content.WriteString(*chunk.Choices[0].Delta.Content)
+		}
+		if chunk.Choices[0].Delta.ReasoningContent != nil {
+			reasoning.WriteString(*chunk.Choices[0].Delta.ReasoningContent)
+		}
+	}
+	assert.Equal(t, "Answer", content.String())
+	assert.Equal(t, "let me think about it", reasoning.String(), "reasoning tokens must be surfaced as reasoning_content")
+}
+
+func TestGrokWebHandlerNonStreamSetsReasoningContent(t *testing.T) {
+	c, rec, resp, info := newHandlerContext(t, mockReasoningSSE, false)
+	_, apiErr := grokWebHandler(c, info, resp)
+	require.Nil(t, apiErr)
+
+	var full dto.OpenAITextResponse
+	require.NoError(t, common.UnmarshalJsonStr(rec.Body.String(), &full))
+	require.Len(t, full.Choices, 1)
+	assert.Equal(t, "Answer", full.Choices[0].Message.StringContent())
+	assert.Equal(t, "let me think about it", full.Choices[0].Message.GetReasoningContent())
+}
+
+// mockDeepSearchSSE carries final content plus a webSearchResults frame.
+const mockDeepSearchSSE = `data: {"result":{"response":{"token":"result text","isThinking":false,"messageTag":"final"}}}
+data: {"result":{"response":{"webSearchResults":{"results":[{"url":"https://example.com","title":"Example Site"},{"url":"https://example.com","title":"dup"}]}}}}
+data: {"result":{"response":{"isSoftStop":true,"finalMetadata":{}}}}
+data: [DONE]
+`
+
+func TestGrokWebStreamHandlerDeepSearchAppendsSources(t *testing.T) {
+	c, rec, resp, info := newHandlerContext(t, mockDeepSearchSSE, true)
+	info.ChannelMeta.UpstreamModelName = "grok-4-deepsearch"
+	_, apiErr := grokWebStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+
+	out := rec.Body.String()
+	assert.Contains(t, out, "## Sources")
+	assert.Contains(t, out, "[Example Site](https://example.com)")
+	// Deduped: the duplicate URL must appear only once.
+	assert.Equal(t, 1, strings.Count(out, "https://example.com)"))
+}
+
+func TestGrokWebHandlerDeepSearchNonStreamAppendsSources(t *testing.T) {
+	c, rec, resp, info := newHandlerContext(t, mockDeepSearchSSE, false)
+	info.ChannelMeta.UpstreamModelName = "grok-4-deepsearch"
+	_, apiErr := grokWebHandler(c, info, resp)
+	require.Nil(t, apiErr)
+
+	var full dto.OpenAITextResponse
+	require.NoError(t, common.UnmarshalJsonStr(rec.Body.String(), &full))
+	content := full.Choices[0].Message.StringContent()
+	assert.Contains(t, content, "result text")
+	assert.Contains(t, content, "## Sources")
+	assert.Contains(t, content, "[Example Site](https://example.com)")
+}
+
+func TestGrokWebHandlerNonDeepSearchModelOmitsSources(t *testing.T) {
+	// A normal (non-deep-search) model must NOT have its output shape changed even
+	// when the upstream returns webSearchResults.
+	c, rec, resp, info := newHandlerContext(t, mockDeepSearchSSE, false)
+	info.ChannelMeta.UpstreamModelName = "grok-4.3"
+	_, apiErr := grokWebHandler(c, info, resp)
+	require.Nil(t, apiErr)
+
+	var full dto.OpenAITextResponse
+	require.NoError(t, common.UnmarshalJsonStr(rec.Body.String(), &full))
+	assert.NotContains(t, full.Choices[0].Message.StringContent(), "## Sources")
+}
+
+// A stream of ONLY reasoning tokens (no final content, no terminator) must not be
+// treated as an empty upstream response.
+func TestGrokWebStreamHandlerReasoningOnlyNotEmpty(t *testing.T) {
+	body := "data: {\"result\":{\"response\":{\"token\":\"pondering\",\"isThinking\":true}}}\ndata: [DONE]\n"
+	c, rec, resp, info := newHandlerContext(t, body, true)
+	usage, apiErr := grokWebStreamHandler(c, info, resp)
+	require.Nil(t, apiErr, "a reasoning-only stream must not be treated as empty")
+	require.NotNil(t, usage)
+	assert.Contains(t, rec.Body.String(), "pondering")
+}
+
+// The injected "## Sources" markdown must NOT be billed as completion tokens.
+func TestGrokWebHandlerDeepSearchSourcesNotBilled(t *testing.T) {
+	c, _, resp, info := newHandlerContext(t, mockDeepSearchSSE, false)
+	info.ChannelMeta.UpstreamModelName = "grok-4-deepsearch"
+	usage, apiErr := grokWebHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	want := service.CountTextToken("result text", "grok-4-deepsearch")
+	assert.Equal(t, want, usage.(*dto.Usage).CompletionTokens,
+		"the injected ## Sources markdown must not be billed as completion tokens")
+}
+
+func TestBuildSourcesSection(t *testing.T) {
+	assert.Equal(t, "", buildSourcesSection(nil))
+	out := buildSourcesSection([]grokSource{
+		{URL: "https://a.com", Title: "Alpha"},
+		{URL: "https://b.com", Title: ""}, // empty title falls back to the URL
+	})
+	assert.Contains(t, out, "## Sources")
+	idxA := strings.Index(out, "[Alpha](https://a.com)")
+	idxB := strings.Index(out, "[https://b.com](https://b.com)")
+	require.NotEqual(t, -1, idxA)
+	require.NotEqual(t, -1, idxB)
+	assert.Less(t, idxA, idxB, "sources preserve arrival order")
+}
+
+// Locks the intentional divergence from grok2api's strict tag=="final": grok emits
+// untagged tokens carrying user-facing content, so an empty messageTag is accepted as
+// content (not dropped).
+func TestGrokWebHandlerEmptyMessageTagTreatedAsContent(t *testing.T) {
+	body := "data: {\"result\":{\"response\":{\"token\":\"untagged text\",\"isThinking\":false}}}\n" +
+		"data: {\"result\":{\"response\":{\"isSoftStop\":true,\"finalMetadata\":{}}}}\ndata: [DONE]\n"
+	c, rec, resp, info := newHandlerContext(t, body, false)
+	_, apiErr := grokWebHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	var full dto.OpenAITextResponse
+	require.NoError(t, common.UnmarshalJsonStr(rec.Body.String(), &full))
+	assert.Equal(t, "untagged text", full.Choices[0].Message.StringContent())
 }
 
 func TestGrokWebHandlerInBandErrorIsTyped(t *testing.T) {
