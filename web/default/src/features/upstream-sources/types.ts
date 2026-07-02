@@ -205,6 +205,14 @@ export type UpstreamSourceCredentialsUpdateRequest = {
   password: string
 }
 
+export interface UpstreamSourceSessionImportRequest {
+  session_cookie?: string
+  access_token?: string
+  user_id?: number
+  refresh_token?: string
+  expires_at?: number
+}
+
 export type UpstreamSourceDiscoveryResult = {
   source_id: number
   discovered: number
