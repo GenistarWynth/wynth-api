@@ -190,3 +190,62 @@ func TestApplyImportedSessionFailsValidationDoesNotPersist(t *testing.T) {
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
 	assert.Equal(t, originalAuth, reloaded.AuthConfig, "a session that fails the live probe must not be persisted")
 }
+
+// TestApplyImportedSessionRejectsStaleTokenEvenWhenPasswordLoginWouldSucceed
+// reproduces the "rescue" bug: new-api's management request layer
+// auto-retries a 401 with a full password re-login whenever the source has
+// stored credentials (which import preserves). If the admin's pasted token
+// is stale/mistyped but the stored password still works, the naive probe
+// (probing with source.AuthConfig, which carries email+password) succeeds
+// via the fallback login instead of validating the SPECIFIC pasted session
+// -- and the auto-obtained session gets persisted under session_source
+// "manual". The probe must use a credentials-stripped copy so the fallback
+// login can never fire.
+func TestApplyImportedSessionRejectsStaleTokenEvenWhenPasswordLoginWouldSucceed(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/user/self/groups":
+			if r.Header.Get("Authorization") == "auto-token" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"success":false,"message":"invalid access token"}`))
+		case r.URL.Path == "/api/user/login":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":99}}`))
+		case r.URL.Path == "/api/user/token":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":"auto-token"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	originalAuth := `{"email":"a@b.com","password":"p"}`
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       originalAuth,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "stale-token",
+		UserID:      5,
+	})
+	require.Error(t, err, "a stale pasted token must not be rescued by a fallback password login")
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, originalAuth, reloaded.AuthConfig, "the stored session must be unchanged when the pasted session fails validation")
+	assert.NotContains(t, reloaded.AuthConfig, "auto-token")
+	assert.NotContains(t, reloaded.AuthConfig, "stale-token")
+}

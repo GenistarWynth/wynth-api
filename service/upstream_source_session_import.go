@@ -18,11 +18,15 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return errors.New("upstream source is required")
 	}
 
-	plaintext, err := buildImportedAuthConfigJSON(source, req)
+	finalJSON, err := buildImportedAuthConfigJSON(source, req) // imported session + preserved email/password
 	if err != nil {
 		return err
 	}
-	source.AuthConfig = plaintext // in-memory plaintext; probe reads via ReadUpstreamSourceAuthConfig
+	probeJSON, err := stripCredentialsFromAuthConfig(source.Type, finalJSON) // imported session ONLY (no email/password)
+	if err != nil {
+		return err
+	}
+	source.AuthConfig = probeJSON // in-memory plaintext; probe reads via ReadUpstreamSourceAuthConfig
 
 	adapter, err := DefaultUpstreamSourceAdapterFactory(source.Type)
 	if err != nil {
@@ -32,11 +36,43 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return errors.New("imported session failed validation: " + SanitizeUpstreamSourceError(err))
 	}
 
-	stored, err := WriteUpstreamSourceAuthConfig(source.AuthConfig)
+	stored, err := WriteUpstreamSourceAuthConfig(finalJSON)
 	if err != nil {
 		return err
 	}
+	source.AuthConfig = finalJSON
 	return model.PersistUpstreamSourceAuthConfig(source.Id, stored)
+}
+
+// stripCredentialsFromAuthConfig removes stored email/password from an
+// already-built auth config JSON so the live validation probe cannot trigger
+// new-api's fallback password re-login (newAPIManagementRequest only retries
+// a 401 with loginManagementAuth when newAPIAuthConfigHasCredentials is
+// true). This ensures the probe validates the admin's SPECIFIC pasted
+// session rather than silently succeeding via stored credentials.
+func stripCredentialsFromAuthConfig(sourceType string, plaintext string) (string, error) {
+	switch sourceType {
+	case model.UpstreamSourceTypeNewAPI:
+		var cfg newAPIAuthConfig
+		if err := common.UnmarshalJsonStr(plaintext, &cfg); err != nil {
+			return "", err
+		}
+		cfg.Email = ""
+		cfg.Password = ""
+		data, err := common.Marshal(cfg)
+		return string(data), err
+	case model.UpstreamSourceTypeSub2API:
+		var cfg sub2APIAuthConfig
+		if err := common.UnmarshalJsonStr(plaintext, &cfg); err != nil {
+			return "", err
+		}
+		cfg.Email = ""
+		cfg.Password = ""
+		data, err := common.Marshal(cfg)
+		return string(data), err
+	default:
+		return "", errors.New("unsupported upstream source type for session import")
+	}
 }
 
 func buildImportedAuthConfigJSON(source *model.UpstreamSource, req dto.UpstreamSourceSessionImportRequest) (string, error) {
@@ -50,7 +86,9 @@ func buildImportedAuthConfigJSON(source *model.UpstreamSource, req dto.UpstreamS
 	case model.UpstreamSourceTypeNewAPI:
 		var cfg newAPIAuthConfig
 		if strings.TrimSpace(existing) != "" {
-			_ = common.UnmarshalJsonStr(existing, &cfg)
+			if err := common.UnmarshalJsonStr(existing, &cfg); err != nil {
+				return "", err
+			}
 		}
 		if token, uid, ok := deriveNewAPISessionFromImport(source, req); ok {
 			cfg.AccessToken = token
@@ -64,7 +102,9 @@ func buildImportedAuthConfigJSON(source *model.UpstreamSource, req dto.UpstreamS
 	case model.UpstreamSourceTypeSub2API:
 		var cfg sub2APIAuthConfig
 		if strings.TrimSpace(existing) != "" {
-			_ = common.UnmarshalJsonStr(existing, &cfg)
+			if err := common.UnmarshalJsonStr(existing, &cfg); err != nil {
+				return "", err
+			}
 		}
 		if strings.TrimSpace(req.AccessToken) == "" {
 			return "", errors.New("sub2api session import requires an access token")
