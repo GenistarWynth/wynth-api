@@ -357,6 +357,9 @@ func newAPIManagementRequest[T any](ctx context.Context, adapter *NewAPIAdapter,
 	}
 	refreshedAuth, refreshErr := adapter.refreshManagementAuth(ctx, source, authConfig)
 	if refreshErr != nil {
+		if errors.Is(refreshErr, ErrUpstreamSourceTurnstileRequired) {
+			return zero, refreshErr
+		}
 		return zero, fmt.Errorf("%w; refresh auth failed: %s", err, SanitizeUpstreamSourceError(refreshErr))
 	}
 	return newAPIRequest[T](ctx, adapter, source, method, endpoint, query, payload, refreshedAuth, nil)

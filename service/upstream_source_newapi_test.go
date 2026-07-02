@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	stdjson "encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -360,6 +361,49 @@ func TestNewAPIAdapterRefreshesExpiredCachedAccessToken(t *testing.T) {
 	var auth map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(source.AuthConfig, &auth))
 	assert.Equal(t, "fresh-token", auth["access_token"])
+}
+
+// TestNewAPIAdapterRefreshExpiredSessionPreservesTurnstileSentinel is a
+// regression guard for the refresh-retry path in newAPIManagementRequest: when
+// the cached session has expired (401 from the request) and the re-login
+// attempt is blocked by Cloudflare Turnstile, the returned error must still
+// satisfy errors.Is(err, ErrUpstreamSourceTurnstileRequired) so downstream
+// callers can detect the block instead of seeing an opaque wrapped string.
+func TestNewAPIAdapterRefreshExpiredSessionPreservesTurnstileSentinel(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			require.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, err := w.Write([]byte(`{"success":false,"message":"invalid access token"}`))
+			require.NoError(t, err)
+		case "/api/user/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": false,
+				"message": "Turnstile token 为空",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p","access_token":"stale","user_id":1}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
 }
 
 func TestNewAPIAdapterListKeysFiltersByGroupAndReadsFullKeys(t *testing.T) {
