@@ -34,11 +34,12 @@ type sub2APIEnvelope[T any] struct {
 }
 
 type sub2APIAuthConfig struct {
-	Email        string `json:"email"`
-	Password     string `json:"password"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresAt    int64  `json:"expires_at"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	AccessToken   string `json:"access_token"`
+	RefreshToken  string `json:"refresh_token"`
+	ExpiresAt     int64  `json:"expires_at"`
+	SessionSource string `json:"session_source,omitempty"`
 }
 
 type sub2APILoginData struct {

@@ -156,6 +156,28 @@ func UpdateUpstreamSourceCredentials(c *gin.Context) {
 	common.ApiSuccess(c, upstreamSourceResponse(*source))
 }
 
+func ImportUpstreamSourceSession(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	var req dto.UpstreamSourceSessionImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := service.ApplyUpstreamSourceImportedSession(c.Request.Context(), source, req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.DB.First(source, source.Id).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "upstream_source.session_import", map[string]interface{}{"id": source.Id, "name": source.Name})
+	common.ApiSuccess(c, upstreamSourceResponse(*source))
+}
+
 func DeleteUpstreamSource(c *gin.Context) {
 	source, ok := loadUpstreamSourceForController(c)
 	if !ok {

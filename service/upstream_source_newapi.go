@@ -31,10 +31,11 @@ type newAPIEnvelope[T any] struct {
 }
 
 type newAPIAuthConfig struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	AccessToken string `json:"access_token"`
-	UserID      int    `json:"user_id"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	AccessToken   string `json:"access_token"`
+	UserID        int    `json:"user_id"`
+	SessionSource string `json:"session_source,omitempty"`
 }
 
 type newAPILoginData struct {
@@ -252,6 +253,32 @@ func (a NewAPIAdapter) loginManagementAuth(ctx context.Context, source *model.Up
 	}
 	source.AuthConfig = string(updated)
 	return authConfig, nil
+}
+
+// newAPIExchangeCookieForToken replays an admin-pasted new-api session cookie
+// against /user/self (to resolve the user id) and /user/token (to mint an
+// access token) so a manually imported cookie can be normalized into the
+// same access_token + user_id pair used by the login flow.
+func newAPIExchangeCookieForToken(source *model.UpstreamSource, cookieHeader string) (string, int, error) {
+	adapter := &NewAPIAdapter{}
+	cookies := parseCookieHeader(cookieHeader)
+	self, err := newAPIRequest[newAPILoginData](context.Background(), adapter, source, http.MethodGet, "/user/self", nil, nil, newAPIAuthConfig{}, cookies)
+	if err != nil {
+		return "", 0, err
+	}
+	if self.ID <= 0 {
+		return "", 0, errors.New("session cookie did not resolve a user id")
+	}
+	token, err := newAPIRequest[string](context.Background(), adapter, source, http.MethodGet, "/user/token", nil, nil, newAPIAuthConfig{UserID: self.ID}, cookies)
+	if err != nil {
+		return "", 0, err
+	}
+	return strings.TrimSpace(token), self.ID, nil
+}
+
+func parseCookieHeader(header string) []*http.Cookie {
+	req := http.Request{Header: http.Header{"Cookie": []string{strings.TrimSpace(header)}}}
+	return req.Cookies()
 }
 
 func parseNewAPIAuthConfig(source *model.UpstreamSource) (newAPIAuthConfig, error) {
