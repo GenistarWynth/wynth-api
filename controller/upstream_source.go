@@ -425,7 +425,7 @@ func marshalUpstreamSourceAuthConfig(email string, password string) (string, err
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return service.WriteUpstreamSourceAuthConfig(string(data))
 }
 
 func marshalUpstreamSourceSyncConfig(config upstreamSourceControllerSyncConfig) (string, error) {
@@ -588,10 +588,11 @@ func sanitizeUpstreamSourceResponseError(text string) string {
 
 func parseUpstreamSourceAuthConfig(raw string) upstreamSourceAuthConfig {
 	var auth upstreamSourceAuthConfig
-	if strings.TrimSpace(raw) == "" {
-		return auth
+	decrypted, err := service.ReadUpstreamSourceAuthConfig(raw)
+	if err != nil || strings.TrimSpace(decrypted) == "" {
+		return upstreamSourceAuthConfig{}
 	}
-	if err := common.UnmarshalJsonStr(raw, &auth); err != nil {
+	if err := common.UnmarshalJsonStr(decrypted, &auth); err != nil {
 		return upstreamSourceAuthConfig{}
 	}
 	return auth

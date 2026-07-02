@@ -255,11 +255,15 @@ func parseNewAPIAuthConfig(source *model.UpstreamSource) (newAPIAuthConfig, erro
 	if source == nil {
 		return newAPIAuthConfig{}, errors.New("upstream source is required")
 	}
-	if strings.TrimSpace(source.AuthConfig) == "" {
+	raw, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
+	if err != nil {
+		return newAPIAuthConfig{}, err
+	}
+	if strings.TrimSpace(raw) == "" {
 		return newAPIAuthConfig{}, nil
 	}
 	var authConfig newAPIAuthConfig
-	if err := common.UnmarshalJsonStr(source.AuthConfig, &authConfig); err != nil {
+	if err := common.UnmarshalJsonStr(raw, &authConfig); err != nil {
 		return newAPIAuthConfig{}, err
 	}
 	return authConfig, nil

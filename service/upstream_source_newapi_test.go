@@ -5,6 +5,7 @@ import (
 	stdjson "encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -414,6 +415,52 @@ func TestNewAPIAdapterListKeysFiltersByGroupAndReadsFullKeys(t *testing.T) {
 	assert.Equal(t, "3", keys[1].ID)
 	assert.Equal(t, "sk-3", keys[1].Key)
 	assert.Equal(t, []string{"/api/token/1/key", "/api/token/3/key"}, keyRequests)
+}
+
+// TestNewAPIAdapterReusesPersistedSession is a regression guard for the
+// existing in-memory reuse contract: a second discover on the same source
+// must NOT log in again once access_token+user_id are cached. Task 2 must
+// keep this passing while routing AuthConfig reads through the decrypt
+// helper and persisting refreshed sessions.
+func TestNewAPIAdapterReusesPersistedSession(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	loginCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user/login"):
+			loginCalls++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":42}}`))
+		case strings.HasSuffix(r.URL.Path, "/user/token"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":"access-xyz"}`))
+		case strings.HasSuffix(r.URL.Path, "/user/self/groups"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	// First discover triggers exactly one login and populates the cached token.
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, 1, loginCalls)
+
+	// A second discover on the same in-memory source (token now cached) must NOT log in again.
+	_, err = adapter.DiscoverGroups(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, 1, loginCalls, "cached access_token+user_id should short-circuit login")
 }
 
 func TestDefaultUpstreamSourceAdapterFactorySupportsNewAPI(t *testing.T) {

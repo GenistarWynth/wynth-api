@@ -243,3 +243,19 @@ func ReleaseUpstreamSourceSync(sourceID int, token string, status string, errTex
 			"updated_time":       now,
 		}).Error
 }
+
+// PersistUpstreamSourceAuthConfig writes back a refreshed AuthConfig value
+// (already encrypted by the caller when applicable) without disturbing any
+// other source fields, so a login acquired during discover/sync is reused
+// on subsequent runs instead of re-authenticating every time.
+func PersistUpstreamSourceAuthConfig(sourceID int, authConfig string) error {
+	if sourceID == 0 {
+		return errors.New("source ID is required")
+	}
+	return DB.Model(&UpstreamSource{}).
+		Where("id = ?", sourceID).
+		Updates(map[string]interface{}{
+			"auth_config":  authConfig,
+			"updated_time": common.GetTimestamp(),
+		}).Error
+}

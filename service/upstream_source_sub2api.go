@@ -245,11 +245,15 @@ func parseSub2APIAuthConfig(source *model.UpstreamSource) (sub2APIAuthConfig, er
 	if source == nil {
 		return sub2APIAuthConfig{}, errors.New("upstream source is required")
 	}
-	if strings.TrimSpace(source.AuthConfig) == "" {
+	raw, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
+	if err != nil {
+		return sub2APIAuthConfig{}, err
+	}
+	if strings.TrimSpace(raw) == "" {
 		return sub2APIAuthConfig{}, nil
 	}
 	var authConfig sub2APIAuthConfig
-	if err := common.UnmarshalJsonStr(source.AuthConfig, &authConfig); err != nil {
+	if err := common.UnmarshalJsonStr(raw, &authConfig); err != nil {
 		return sub2APIAuthConfig{}, err
 	}
 	return authConfig, nil
