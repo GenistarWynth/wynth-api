@@ -658,6 +658,7 @@
     "Blank Rule": "空白规则",
     "Blend": "混合",
     "Block email aliases (e.g., user+alias@domain.com)": "阻止电子邮件别名（例如，user+alias@domain.com）",
+    "Blocked by Cloudflare — import a session": "被 Cloudflare 拦截 — 请导入会话",
     "Blocked keywords": "已阻止的关键词",
     "Blocks messages when sensitive keywords are detected.": "检测到敏感关键词时阻止消息。",
     "Body param": "请求体参数",

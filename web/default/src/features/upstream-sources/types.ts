@@ -99,6 +99,8 @@ export type UpstreamSource = {
   local_group_rules: UpstreamSourceLocalGroupRule[]
   masked_email: string
   has_credentials: boolean
+  session_source?: string
+  turnstile_blocked?: boolean
   last_discovery_time: number
   last_discovery_status: UpstreamDiscoveryStatus | ''
   last_discovery_error: string

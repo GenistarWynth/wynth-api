@@ -16,11 +16,12 @@ import (
 )
 
 type upstreamSourceAuthConfig struct {
-	Email        string `json:"email,omitempty"`
-	Password     string `json:"password,omitempty"`
-	AccessToken  string `json:"access_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	Email         string `json:"email,omitempty"`
+	Password      string `json:"password,omitempty"`
+	AccessToken   string `json:"access_token,omitempty"`
+	RefreshToken  string `json:"refresh_token,omitempty"`
+	ExpiresAt     int64  `json:"expires_at,omitempty"`
+	SessionSource string `json:"session_source,omitempty"`
 }
 
 const (
@@ -468,6 +469,8 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		LocalGroupRules:                  sync.LocalGroupRules,
 		MaskedEmail:                      common.MaskEmail(auth.Email),
 		HasCredentials:                   upstreamSourceHasCredentials(auth),
+		SessionSource:                    auth.SessionSource,
+		TurnstileBlocked:                 upstreamSourceTurnstileBlocked(source),
 		LastDiscoveryTime:                source.LastDiscoveryTime,
 		LastDiscoveryStatus:              source.LastDiscoveryStatus,
 		LastDiscoveryError:               sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
@@ -477,6 +480,11 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		CreatedTime:                      source.CreatedTime,
 		UpdatedTime:                      source.UpdatedTime,
 	}
+}
+
+func upstreamSourceTurnstileBlocked(source model.UpstreamSource) bool {
+	marker := service.ErrUpstreamSourceTurnstileRequired.Error()
+	return source.LastDiscoveryError == marker || source.LastSyncError == marker
 }
 
 func parseUpstreamSourceSyncConfig(raw string) upstreamSourceControllerSyncConfig {

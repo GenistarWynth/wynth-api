@@ -658,6 +658,7 @@
     "Blank Rule": "Blank Rule",
     "Blend": "Blend",
     "Block email aliases (e.g., user+alias@domain.com)": "Block email aliases (e.g., user+alias@domain.com)",
+    "Blocked by Cloudflare — import a session": "Blocked by Cloudflare — import a session",
     "Blocked keywords": "Blocked keywords",
     "Blocks messages when sensitive keywords are detected.": "Blocks messages when sensitive keywords are detected.",
     "Body param": "Body param",

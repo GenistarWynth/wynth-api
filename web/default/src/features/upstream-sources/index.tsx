@@ -823,11 +823,20 @@ function useUpstreamSourceColumns(props: {
         id: 'sync',
         header: t('Sync'),
         cell: ({ row }) => (
-          <StatusWithTime
-            status={row.original.last_sync_status}
-            timestamp={row.original.last_sync_time}
-            error={row.original.last_sync_error}
-          />
+          <div className='flex min-w-0 flex-col gap-1'>
+            <StatusWithTime
+              status={row.original.last_sync_status}
+              timestamp={row.original.last_sync_time}
+              error={row.original.last_sync_error}
+            />
+            {row.original.turnstile_blocked && (
+              <StatusBadge
+                label={t('Blocked by Cloudflare — import a session')}
+                variant='danger'
+                copyable={false}
+              />
+            )}
+          </div>
         ),
         size: 180,
       },

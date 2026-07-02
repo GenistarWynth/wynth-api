@@ -87,6 +87,8 @@ type UpstreamSourceResponse struct {
 	LocalGroupRules                  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 	MaskedEmail                      string                         `json:"masked_email"`
 	HasCredentials                   bool                           `json:"has_credentials"`
+	SessionSource                    string                         `json:"session_source"`
+	TurnstileBlocked                 bool                           `json:"turnstile_blocked"`
 	LastDiscoveryTime                int64                          `json:"last_discovery_time"`
 	LastDiscoveryStatus              string                         `json:"last_discovery_status"`
 	LastDiscoveryError               string                         `json:"last_discovery_error"`
