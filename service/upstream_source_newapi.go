@@ -228,6 +228,9 @@ func (a NewAPIAdapter) loginManagementAuth(ctx context.Context, source *model.Up
 	}
 	loginData, cookies, err := newAPIRequestWithCookies[newAPILoginData](ctx, &a, source, http.MethodPost, "/user/login", nil, loginPayload, newAPIAuthConfig{}, nil)
 	if err != nil {
+		if isUpstreamSourceTurnstileError(err) {
+			return newAPIAuthConfig{}, ErrUpstreamSourceTurnstileRequired
+		}
 		return newAPIAuthConfig{}, err
 	}
 	if loginData.ID <= 0 {

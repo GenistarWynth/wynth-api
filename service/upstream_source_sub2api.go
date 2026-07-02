@@ -215,6 +215,9 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	}
 	data, err := sub2APIRequest[sub2APILoginData](ctx, &a, source, http.MethodPost, "/auth/login", nil, payload, "")
 	if err != nil {
+		if isUpstreamSourceTurnstileError(err) {
+			return "", ErrUpstreamSourceTurnstileRequired
+		}
 		return "", err
 	}
 	if data.Requires2FA {
