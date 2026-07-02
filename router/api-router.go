@@ -153,6 +153,11 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.PUT("/:id/tokens", controller.AdminUpdateUserToken)
 				adminRoute.DELETE("/:id/tokens/:tid", controller.AdminDeleteUserToken)
 				adminRoute.POST("/:id/tokens/batch", controller.AdminBatchDeleteUserTokens)
+
+				// Runtime channel override: force a user's token onto a same-group channel.
+				adminRoute.GET("/:id/tokens/:tid/force-channel", controller.AdminGetTokenForceChannel)
+				adminRoute.POST("/:id/tokens/:tid/force-channel", controller.AdminForceTokenChannel)
+				adminRoute.DELETE("/:id/tokens/:tid/force-channel", controller.AdminClearTokenForceChannel)
 			}
 
 			// Root-only: reveal a user's full token plaintext, behind step-up verification

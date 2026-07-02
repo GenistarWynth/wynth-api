@@ -1,4 +1,9 @@
 {
+  "Currently forced to channel #{{id}}": "Currently forced to channel #{{id}}",
+  "Failed to apply channel override": "Failed to apply channel override",
+  "Failed to clear channel override": "Failed to clear channel override",
+  "Route this API key to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted.": "Route this API key to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted.",
+  "Defaults to 30 minutes. Maximum 24 hours; the override auto-expires.": "Defaults to 30 minutes. Maximum 24 hours; the override auto-expires.",
   "Export with secrets": "Export with secrets",
   "Export accounts with secrets?": "Export accounts with secrets?",
   "The exported file will contain plaintext credentials (API keys, tokens, refresh tokens). Store it securely and delete it when no longer needed.": "The exported file will contain plaintext credentials (API keys, tokens, refresh tokens). Store it securely and delete it when no longer needed.",

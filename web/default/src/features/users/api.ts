@@ -288,3 +288,59 @@ export async function fetchUserTokenKey(
   const res = await api.post(`/api/user/${userId}/tokens/${id}/key`)
   return res.data
 }
+
+// ============================================================================
+// Admin: runtime per-token channel override (force a token onto a same-group channel)
+// ============================================================================
+
+export interface TokenChannelOverride {
+  active: boolean
+  channel_id: number
+  set_by_user_id: number
+  created_at: number
+}
+
+// These handlers own their own success/error toasts, so opt out of the global
+// business-error and HTTP-error toasts to avoid double notifications.
+const forceChannelActionConfig = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
+} as const
+
+// Current override for a token (active=false when none is in effect).
+export async function getUserTokenForceChannel(
+  userId: number,
+  tokenId: number
+): Promise<ApiResponse<TokenChannelOverride>> {
+  const res = await api.get(
+    `/api/user/${userId}/tokens/${tokenId}/force-channel`,
+    forceChannelActionConfig
+  )
+  return res.data
+}
+
+// Force the token onto a channel. ttl_seconds is optional (server default 30m, max 24h).
+export async function forceUserTokenChannel(
+  userId: number,
+  tokenId: number,
+  data: { channel_id: number; ttl_seconds?: number }
+): Promise<ApiResponse<{ token_id: number; channel_id: number }>> {
+  const res = await api.post(
+    `/api/user/${userId}/tokens/${tokenId}/force-channel`,
+    data,
+    forceChannelActionConfig
+  )
+  return res.data
+}
+
+// Remove any override, restoring normal channel selection immediately.
+export async function clearUserTokenForceChannel(
+  userId: number,
+  tokenId: number
+): Promise<ApiResponse> {
+  const res = await api.delete(
+    `/api/user/${userId}/tokens/${tokenId}/force-channel`,
+    forceChannelActionConfig
+  )
+  return res.data
+}

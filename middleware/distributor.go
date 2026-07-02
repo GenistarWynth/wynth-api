@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"gorm.io/gorm"
 )
 
 type ModelRequest struct {
@@ -106,34 +108,50 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
-					affinityUsable := false
-					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path) {
-						if usingGroup == "auto" {
-							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-							autoGroups := service.GetUserAutoGroup(userGroup)
-							for i, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
-									selectGroup = g
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
-									common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, i)
-									channel = preferred
-									affinityUsable = true
-									service.MarkChannelAffinityUsed(c, g, preferred.Id)
-									break
+				// Runtime admin channel override: a temporary, per-token forced channel set from
+				// the admin side. It takes precedence over affinity/random selection, but is
+				// validated per request and on any invalidity falls back to normal selection
+				// instead of aborting. It only forces the channel object — group attribution
+				// stays the token's real group (see resolveTokenChannelOverride).
+				if forced, forcedGroup, forcedOK := resolveTokenChannelOverride(c, modelRequest.Model, usingGroup); forcedOK {
+					channel = forced
+					selectGroup = forcedGroup
+				}
+
+				// Only consult channel affinity when the runtime override did not already pick a
+				// channel. Guarding the affinity lookup itself (not just its body) keeps an
+				// override-selected request from populating affinity context, which would otherwise
+				// inherit the rule's skip-retry and overwrite the affinity cache with the forced channel.
+				if channel == nil {
+					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+						affinityUsable := false
+						preferred, err := model.CacheGetChannel(preferredChannelID)
+						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+							channelSupportsRequestPath(preferred, c.Request.URL.Path) {
+							if usingGroup == "auto" {
+								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+								autoGroups := service.GetUserAutoGroup(userGroup)
+								for i, g := range autoGroups {
+									if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+										selectGroup = g
+										common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
+										common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, i)
+										channel = preferred
+										affinityUsable = true
+										service.MarkChannelAffinityUsed(c, g, preferred.Id)
+										break
+									}
 								}
+							} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+								channel = preferred
+								selectGroup = usingGroup
+								affinityUsable = true
+								service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
-							channel = preferred
-							selectGroup = usingGroup
-							affinityUsable = true
-							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						}
-					}
-					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
-						service.ClearCurrentChannelAffinityCache(c)
+						if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+							service.ClearCurrentChannelAffinityCache(c)
+						}
 					}
 				}
 
@@ -187,6 +205,71 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool
 	}
 	config := channel.GetOtherSettings().AdvancedCustom
 	return config != nil && config.SupportsPath(requestPath)
+}
+
+// resolveTokenChannelOverride applies an admin-configured runtime channel override for
+// this request's token when one is cached and still valid. It returns
+// (channel, effectiveGroup, true) only when the override channel exists, is enabled,
+// serves modelName in the token's effective group, and supports the request path.
+//
+// Every failure returns ok=false so the caller falls back to normal selection — it NEVER
+// aborts live traffic. A permanently-missing channel auto-clears the override; transient
+// failures (disabled / wrong-group / model-unsupported / unsupported-path) keep it and let
+// the TTL be the backstop. For the "auto" group it resolves the sub-group that enables the
+// channel and writes it back (ContextKeyAutoGroup) so billing/logging stay truthful.
+func resolveTokenChannelOverride(c *gin.Context, modelName, usingGroup string) (*model.Channel, string, bool) {
+	tokenId := common.GetContextKeyInt(c, constant.ContextKeyTokenId)
+	if tokenId <= 0 {
+		return nil, "", false
+	}
+	ov, found := service.GetTokenChannelOverride(tokenId)
+	if !found {
+		return nil, "", false
+	}
+
+	ch, err := model.CacheGetChannel(ov.ChannelId)
+	if err != nil || ch == nil {
+		// Only auto-clear when the channel is DEFINITELY gone, so a transient DB error
+		// never destroys an admin override. In memory-cache mode channelsIDM holds every
+		// channel (incl. disabled), so an error means deleted; in DB mode only a record-not-
+		// found is permanent. Anything else is transient: keep the override, fall back once.
+		permanentlyMissing := common.MemoryCacheEnabled || errors.Is(err, gorm.ErrRecordNotFound)
+		if permanentlyMissing {
+			_ = service.ClearTokenChannelOverride(tokenId)
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d not found; cleared override, falling back", tokenId, ov.ChannelId))
+		} else {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d load error (%v); falling back (override kept)", tokenId, ov.ChannelId, err))
+		}
+		return nil, "", false
+	}
+	if ch.Status != common.ChannelStatusEnabled {
+		// Transient: keep the override, fall back for this request.
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d disabled; falling back (override kept)", tokenId, ov.ChannelId))
+		return nil, "", false
+	}
+	if !channelSupportsRequestPath(ch, c.Request.URL.Path) {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d does not support path %q; falling back", tokenId, ov.ChannelId, c.Request.URL.Path))
+		return nil, "", false
+	}
+
+	if usingGroup == "auto" {
+		userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		for i, g := range service.GetUserAutoGroup(userGroup) {
+			if model.IsChannelEnabledForGroupModel(g, modelName, ch.Id) {
+				common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
+				common.SetContextKey(c, constant.ContextKeyAutoGroupIndex, i)
+				return ch, g, true
+			}
+		}
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d not enabled for model=%q in any auto sub-group; falling back", tokenId, ov.ChannelId, modelName))
+		return nil, "", false
+	}
+
+	if !model.IsChannelEnabledForGroupModel(usingGroup, modelName, ch.Id) {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d not enabled for group=%q model=%q; falling back", tokenId, ov.ChannelId, usingGroup, modelName))
+		return nil, "", false
+	}
+	return ch, usingGroup, true
 }
 
 // getModelFromRequest 从请求中读取模型信息
