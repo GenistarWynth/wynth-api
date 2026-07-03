@@ -2460,7 +2460,10 @@ function ImportSessionSheet(props: {
                     onChange={(event) => setAccessToken(event.target.value)}
                   />
                 </FieldBlock>
-                <FieldBlock label={t('Expires At')} htmlFor='session-expires-at'>
+                <FieldBlock
+                  label={t('Expires At (unix seconds, 0 = never)')}
+                  htmlFor='session-expires-at'
+                >
                   <Input
                     id='session-expires-at'
                     type='number'

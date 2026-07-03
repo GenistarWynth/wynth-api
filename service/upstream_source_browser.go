@@ -104,8 +104,12 @@ func chromedpUpstreamBrowserLogin(ctx context.Context, source *model.UpstreamSou
 		return upstreamBrowserSession{}, err
 	}
 
-	upstreamBrowserSemaphore <- struct{}{}
-	defer func() { <-upstreamBrowserSemaphore }()
+	select {
+	case upstreamBrowserSemaphore <- struct{}{}:
+		defer func() { <-upstreamBrowserSemaphore }()
+	case <-ctx.Done():
+		return upstreamBrowserSession{}, ctx.Err()
+	}
 
 	allocCtx, cancelAlloc := chromedp.NewRemoteAllocator(ctx, common.UpstreamBrowserCDPURL)
 	defer cancelAlloc()

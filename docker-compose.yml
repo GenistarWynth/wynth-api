@@ -117,6 +117,7 @@ services:
   # and set UPSTREAM_BROWSER_CDP_URL=ws://browserless:3000 on the new-api service.
   browserless:
     image: ghcr.io/browserless/chromium:latest
+    container_name: browserless
     restart: always
     profiles: ["upstream-browser"]
     environment:

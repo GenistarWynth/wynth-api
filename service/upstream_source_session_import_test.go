@@ -111,6 +111,45 @@ func TestApplyImportedSessionNewAPICookieExchange(t *testing.T) {
 	assert.Equal(t, "manual", got.SessionSource)
 }
 
+// TestApplyImportedSessionNewAPICookieExchangeFailurePropagatesReason is a
+// regression guard for deriveNewAPISessionFromImport: a bad/expired pasted
+// cookie must surface the real cookie-exchange failure reason (e.g. "session
+// did not resolve a user id") instead of being swallowed into the generic
+// "provide either an access token + user id, or a session cookie" message,
+// which told the admin nothing about why their cookie did not work.
+func TestApplyImportedSessionNewAPICookieExchangeFailurePropagatesReason(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":0}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		SessionCookie: "session=cookie-value",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session did not resolve a user id")
+	assert.NotContains(t, err.Error(), "provide either an access token")
+}
+
 func TestApplyImportedSessionSub2APIAccessToken(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	withSub2APIFetchSetting(t, true)

@@ -208,11 +208,15 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	}
 	// Headless browser first (per chosen strategy) when configured.
 	if upstreamBrowserEnabled() {
-		if acquired, bErr := acquireSub2APISessionViaBrowser(ctx, source, authConfig); bErr == nil && acquired.AccessToken != "" {
+		acquired, bErr := acquireSub2APISessionViaBrowser(ctx, source, authConfig)
+		if bErr == nil && acquired.AccessToken != "" {
 			if marshaled := mustMarshalSub2APIAuthConfig(acquired); marshaled != "" {
 				source.AuthConfig = marshaled
 			}
 			return acquired.AccessToken, nil
+		}
+		if bErr != nil {
+			common.SysLog("upstream source headless browser login failed, falling back to password login: " + SanitizeUpstreamSourceError(bErr))
 		}
 	}
 	if authConfig.Email == "" || authConfig.Password == "" {

@@ -95,13 +95,13 @@ func buildImportedAuthConfigJSON(source *model.UpstreamSource, req dto.UpstreamS
 				return "", err
 			}
 		}
-		if token, uid, ok := deriveNewAPISessionFromImport(source, req); ok {
-			cfg.AccessToken = token
-			cfg.UserID = uid
-			cfg.SessionSource = "manual"
-		} else {
-			return "", errors.New("provide either an access token + user id, or a session cookie for new-api")
+		token, uid, err := deriveNewAPISessionFromImport(source, req)
+		if err != nil {
+			return "", err
 		}
+		cfg.AccessToken = token
+		cfg.UserID = uid
+		cfg.SessionSource = "manual"
 		data, err := common.Marshal(cfg)
 		return string(data), err
 	case model.UpstreamSourceTypeSub2API:
@@ -132,16 +132,22 @@ func buildImportedAuthConfigJSON(source *model.UpstreamSource, req dto.UpstreamS
 
 // deriveNewAPISessionFromImport returns access_token + user_id from either the
 // direct token+id fields or by replaying a pasted session cookie against
-// /user/token and /user/self.
-func deriveNewAPISessionFromImport(source *model.UpstreamSource, req dto.UpstreamSourceSessionImportRequest) (string, int, bool) {
+// /user/token and /user/self. The cookie-exchange error is propagated (rather
+// than collapsed into a generic "provide either..." message) so a bad cookie
+// surfaces its real reason, e.g. "session did not resolve a user id".
+func deriveNewAPISessionFromImport(source *model.UpstreamSource, req dto.UpstreamSourceSessionImportRequest) (string, int, error) {
 	if strings.TrimSpace(req.AccessToken) != "" && req.UserID > 0 {
-		return strings.TrimSpace(req.AccessToken), req.UserID, true
+		return strings.TrimSpace(req.AccessToken), req.UserID, nil
 	}
 	if strings.TrimSpace(req.SessionCookie) != "" {
 		token, uid, err := newAPIExchangeCookieForToken(source, req.SessionCookie)
-		if err == nil && token != "" && uid > 0 {
-			return token, uid, true
+		if err != nil {
+			return "", 0, errors.New("session cookie exchange failed: " + SanitizeUpstreamSourceError(err))
 		}
+		if token == "" || uid <= 0 {
+			return "", 0, errors.New("session cookie did not resolve an access token and user id")
+		}
+		return token, uid, nil
 	}
-	return "", 0, false
+	return "", 0, errors.New("provide either an access token + user id, or a session cookie for new-api")
 }

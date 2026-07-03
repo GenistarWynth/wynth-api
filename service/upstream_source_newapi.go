@@ -211,11 +211,15 @@ func (a NewAPIAdapter) ensureManagementAuth(ctx context.Context, source *model.U
 	}
 	// Headless browser first (per chosen strategy) when configured.
 	if upstreamBrowserEnabled() {
-		if acquired, bErr := acquireNewAPISessionViaBrowser(ctx, source, authConfig); bErr == nil && acquired.AccessToken != "" {
+		acquired, bErr := acquireNewAPISessionViaBrowser(ctx, source, authConfig)
+		if bErr == nil && acquired.AccessToken != "" {
 			if marshaled := mustMarshalNewAPIAuthConfig(acquired); marshaled != "" {
 				source.AuthConfig = marshaled
 			}
 			return acquired, nil
+		}
+		if bErr != nil {
+			common.SysLog("upstream source headless browser login failed, falling back to password login: " + SanitizeUpstreamSourceError(bErr))
 		}
 	}
 	// Fall back to password login (works only without Turnstile).
