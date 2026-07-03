@@ -326,7 +326,11 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 	defer resp.Body.Close()
 
 	var envelope sub2APIEnvelope[T]
-	if err := decodeSub2APIResponseBody(resp.Body, &envelope); err != nil {
+	respBody, err := decodeSub2APIResponseBody(resp.Body, &envelope)
+	if err != nil {
+		if isUpstreamSourceCloudflareChallengeBody(resp.StatusCode, respBody) {
+			return zero, ErrUpstreamSourceTurnstileRequired
+		}
 		return zero, fmt.Errorf("decode upstream response failed: %w", err)
 	}
 	if envelope.Code != 0 {
@@ -338,15 +342,19 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 	return envelope.Data, nil
 }
 
-func decodeSub2APIResponseBody(reader io.Reader, v any) error {
+// decodeSub2APIResponseBody decodes the response body into v and also
+// returns the raw bytes read, so a decode failure can be inspected by the
+// caller for a Cloudflare edge managed-challenge (HTML interstitial) instead
+// of surfacing an opaque "decode failed" error.
+func decodeSub2APIResponseBody(reader io.Reader, v any) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, sub2APIResponseBodyLimitBytes+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if int64(len(body)) > sub2APIResponseBodyLimitBytes {
-		return fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
+		return body, fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
 	}
-	return common.Unmarshal(body, v)
+	return body, common.Unmarshal(body, v)
 }
 
 func buildSub2APIURL(source *model.UpstreamSource, endpoint string, query url.Values) (string, error) {

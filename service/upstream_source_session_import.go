@@ -41,7 +41,12 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return err
 	}
 	source.AuthConfig = finalJSON
-	return model.PersistUpstreamSourceAuthConfig(source.Id, stored)
+	if err := model.PersistUpstreamSourceAuthConfig(source.Id, stored); err != nil {
+		return err
+	}
+	// A validated import proves the block is resolved; clear the sentinel so
+	// turnstile_blocked flips to false in the response confirming the import.
+	return model.ClearUpstreamSourceTurnstileBlock(source.Id, ErrUpstreamSourceTurnstileRequired.Error())
 }
 
 // stripCredentialsFromAuthConfig removes stored email/password from an

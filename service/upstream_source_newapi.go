@@ -230,6 +230,21 @@ func mustMarshalNewAPIAuthConfig(cfg newAPIAuthConfig) string {
 	return string(data)
 }
 
+// clearNewAPICachedSession drops the cached access token/user id (keeping
+// email/password) so the next discover/sync re-enters the acquisition chain
+// (headless browser / manual import) instead of reusing a rejected token.
+func clearNewAPICachedSession(source *model.UpstreamSource) {
+	cfg, err := parseNewAPIAuthConfig(source)
+	if err != nil {
+		return
+	}
+	cfg.AccessToken = ""
+	cfg.UserID = 0
+	if data, err := common.Marshal(cfg); err == nil {
+		source.AuthConfig = string(data)
+	}
+}
+
 func (a NewAPIAdapter) refreshManagementAuth(ctx context.Context, source *model.UpstreamSource, authConfig newAPIAuthConfig) (newAPIAuthConfig, error) {
 	authConfig.AccessToken = ""
 	authConfig.UserID = 0
@@ -409,6 +424,7 @@ func newAPIManagementRequest[T any](ctx context.Context, adapter *NewAPIAdapter,
 	refreshedAuth, refreshErr := adapter.refreshManagementAuth(ctx, source, authConfig)
 	if refreshErr != nil {
 		if errors.Is(refreshErr, ErrUpstreamSourceTurnstileRequired) {
+			clearNewAPICachedSession(source)
 			return zero, refreshErr
 		}
 		return zero, fmt.Errorf("%w; refresh auth failed: %s", err, SanitizeUpstreamSourceError(refreshErr))
@@ -470,7 +486,11 @@ func newAPIRequestWithCookies[T any](ctx context.Context, adapter *NewAPIAdapter
 	defer resp.Body.Close()
 
 	var envelope newAPIEnvelope[T]
-	if err := decodeNewAPIResponseBody(resp.Body, &envelope); err != nil {
+	respBody, err := decodeNewAPIResponseBody(resp.Body, &envelope)
+	if err != nil {
+		if isUpstreamSourceCloudflareChallengeBody(resp.StatusCode, respBody) {
+			return zero, nil, ErrUpstreamSourceTurnstileRequired
+		}
 		return zero, nil, fmt.Errorf("decode upstream response failed: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -526,15 +546,19 @@ func newAPIAuthConfigHasCredentials(authConfig newAPIAuthConfig) bool {
 	return strings.TrimSpace(authConfig.Email) != "" && authConfig.Password != ""
 }
 
-func decodeNewAPIResponseBody(reader io.Reader, v any) error {
+// decodeNewAPIResponseBody decodes the response body into v and also returns
+// the raw bytes read, so a decode failure can be inspected by the caller for
+// a Cloudflare edge managed-challenge (HTML interstitial) instead of
+// surfacing an opaque "decode failed" error.
+func decodeNewAPIResponseBody(reader io.Reader, v any) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, sub2APIResponseBodyLimitBytes+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if int64(len(body)) > sub2APIResponseBodyLimitBytes {
-		return fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
+		return body, fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
 	}
-	return common.Unmarshal(body, v)
+	return body, common.Unmarshal(body, v)
 }
 
 func buildNewAPIURL(source *model.UpstreamSource, endpoint string, query url.Values) (string, error) {

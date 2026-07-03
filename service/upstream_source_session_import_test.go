@@ -191,6 +191,47 @@ func TestApplyImportedSessionFailsValidationDoesNotPersist(t *testing.T) {
 	assert.Equal(t, originalAuth, reloaded.AuthConfig, "a session that fails the live probe must not be persisted")
 }
 
+// TestApplyImportedSessionClearsTurnstileBlockedStatus is a regression guard
+// for the confirm-import response: after a successful import, the source's
+// LastDiscoveryError/LastSyncError sentinel values must be cleared so
+// turnstile_blocked (derived by the controller from those two fields) flips
+// to false in the response that confirms the import to the admin, instead of
+// staying stuck on the stale Cloudflare Turnstile block.
+func TestApplyImportedSessionClearsTurnstileBlockedStatus(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:                model.UpstreamSourceTypeNewAPI,
+		Status:              model.UpstreamSourceStatusEnabled,
+		BaseURL:             server.URL,
+		AdminAPIBasePath:    "/api",
+		AuthConfig:          `{"email":"a@b.com","password":"p"}`,
+		LastDiscoveryStatus: model.UpstreamDiscoveryStatusFailed,
+		LastDiscoveryError:  ErrUpstreamSourceTurnstileRequired.Error(),
+		LastSyncStatus:      model.UpstreamSyncStatusFailed,
+		LastSyncError:       ErrUpstreamSourceTurnstileRequired.Error(),
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "access-imported",
+		UserID:      9,
+	})
+	require.NoError(t, err)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Empty(t, reloaded.LastDiscoveryError, "a successful import must clear the turnstile sentinel from last_discovery_error")
+	assert.Empty(t, reloaded.LastSyncError, "a successful import must clear the turnstile sentinel from last_sync_error")
+}
+
 // TestApplyImportedSessionRejectsStaleTokenEvenWhenPasswordLoginWouldSucceed
 // reproduces the "rescue" bug: new-api's management request layer
 // auto-retries a 401 with a full password re-login whenever the source has

@@ -406,6 +406,97 @@ func TestNewAPIAdapterRefreshExpiredSessionPreservesTurnstileSentinel(t *testing
 	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
 }
 
+// TestNewAPIAdapterSurfacesCloudflareEdgeChallengeAsTurnstileSentinel is a
+// regression guard for the decode path: a Cloudflare EDGE managed-challenge
+// (an HTML interstitial, not new-api's own JSON Turnstile rejection) returns
+// a non-JSON body that fails common.Unmarshal. That decode failure must be
+// classified as ErrUpstreamSourceTurnstileRequired via the response body/
+// status (isUpstreamSourceCloudflareChallengeBody), not surfaced as an opaque
+// "decode upstream response failed" error, since a string-only classifier can
+// never see body text once json.Unmarshal has already discarded it.
+func TestNewAPIAdapterSurfacesCloudflareEdgeChallengeAsTurnstileSentinel(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusForbidden)
+			_, err := w.Write([]byte("<html><body>Just a moment... cf-ray: 8abc123</body></html>"))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
+	assert.NotContains(t, err.Error(), "decode upstream response failed")
+}
+
+// TestNewAPIAdapterClearsCachedTokenWhenRefreshTurnstileBlocked is a
+// regression guard for the stale-token trap: ensureManagementAuth
+// short-circuits on any non-empty cached access_token (no expiry check), so
+// once that token goes stale and the login-based refresh is Turnstile-
+// blocked, source.AuthConfig must have the stale token cleared -- otherwise
+// persist-if-changed is a no-op and every subsequent discover/sync replays
+// the same failure forever instead of re-entering the headless-browser /
+// manual-import acquisition chain.
+func TestNewAPIAdapterClearsCachedTokenWhenRefreshTurnstileBlocked(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			require.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, err := w.Write([]byte(`{"success":false,"message":"invalid access token"}`))
+			require.NoError(t, err)
+		case "/api/user/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": false,
+				"message": "Turnstile token 为空",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p","access_token":"stale","user_id":1}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
+
+	cfg, cfgErr := parseNewAPIAuthConfig(source)
+	require.NoError(t, cfgErr)
+	assert.Empty(t, cfg.AccessToken, "stale token must be cleared so the next run re-enters the acquisition chain")
+	assert.Equal(t, "a@b.com", cfg.Email, "email must be preserved")
+	assert.Equal(t, "p", cfg.Password, "password must be preserved")
+}
+
 // TestEnsureManagementAuthUsesBrowserWhenPasswordBlocked verifies the login
 // chain wired in Task 9: when password login is Turnstile-blocked but a
 // headless browser (CDP) is configured and the stubbed browser login

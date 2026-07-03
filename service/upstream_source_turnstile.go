@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 )
 
@@ -10,7 +11,11 @@ import (
 // with stored email+password alone. The admin must import a session.
 var ErrUpstreamSourceTurnstileRequired = errors.New("upstream source login blocked by Cloudflare Turnstile; import a session")
 
-// upstreamSourceCloudflareMarkers mirror relay/channel/grokweb cloudflareMarkers.
+// upstreamSourceCloudflareMarkers are CF challenge/block markers, adapted
+// from relay/channel/grokweb's cloudflareMarkers for the upstream-login
+// case: adds "turnstile" (new-api's own widget-rejection message) and drops
+// the bare "cloudflare" marker (too broad here; cf-ray/challenge-platform/
+// attention-required already catch edge challenges without it).
 var upstreamSourceCloudflareMarkers = []string{
 	"turnstile",
 	"cf_clearance",
@@ -41,4 +46,15 @@ func upstreamSourceTextHasCloudflareMarker(text string) bool {
 		}
 	}
 	return false
+}
+
+// isUpstreamSourceCloudflareChallengeBody reports whether an HTTP response body
+// is a Cloudflare edge managed-challenge / block (HTML interstitial). Mirrors
+// relay/channel/grokweb isCloudflareChallenge so a decode failure on such a
+// body is surfaced as a turnstile block, not an opaque "decode failed".
+func isUpstreamSourceCloudflareChallengeBody(statusCode int, body []byte) bool {
+	if statusCode != http.StatusForbidden && statusCode != http.StatusServiceUnavailable {
+		return false
+	}
+	return upstreamSourceTextHasCloudflareMarker(string(body))
 }

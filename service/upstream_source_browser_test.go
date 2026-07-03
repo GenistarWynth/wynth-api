@@ -89,8 +89,23 @@ func TestAcquireNewAPISessionViaBrowserRejectsAnonymousSession(t *testing.T) {
 
 // TestAcquireSub2APISessionViaBrowser mirrors TestAcquireNewAPISessionViaBrowser
 // for the sub2api acquirer: the token is read from browser localStorage rather
-// than exchanged via cookie-based HTTP calls.
+// than exchanged via cookie-based HTTP calls, and validated with a single
+// authenticated probe (GET /groups/available) before being accepted.
 func TestAcquireSub2APISessionViaBrowser(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			assert.Equal(t, "Bearer jwt-xyz", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
 	originalCDPURL := common.UpstreamBrowserCDPURL
 	common.UpstreamBrowserCDPURL = "ws://stub"
 	t.Cleanup(func() { common.UpstreamBrowserCDPURL = originalCDPURL })
@@ -102,10 +117,46 @@ func TestAcquireSub2APISessionViaBrowser(t *testing.T) {
 	t.Cleanup(func() { upstreamBrowserLogin = orig })
 
 	before := common.GetTimestamp()
-	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeSub2API, BaseURL: "http://example.invalid"}
+	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeSub2API, BaseURL: server.URL, AdminAPIBasePath: "/api/v1"}
 	got, err := acquireSub2APISessionViaBrowser(context.Background(), source, sub2APIAuthConfig{Email: "a@b.com", Password: "p"})
 	require.NoError(t, err)
 	assert.Equal(t, "jwt-xyz", got.AccessToken)
 	assert.Equal(t, "browser", got.SessionSource)
 	assert.Greater(t, got.ExpiresAt, before)
+}
+
+// TestAcquireSub2APISessionViaBrowserRejectsTokenThatFailsProbe guards
+// against accepting whatever happens to sit in localStorage: a headless
+// session can leave a stale/expired/unrelated value there, and persisting it
+// unvalidated for up to an hour would replay the same failure on every
+// subsequent discover/sync. The acquirer must probe the token with an
+// authenticated request before accepting it.
+func TestAcquireSub2APISessionViaBrowserRejectsTokenThatFailsProbe(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"code":401,"message":"invalid token"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	originalCDPURL := common.UpstreamBrowserCDPURL
+	common.UpstreamBrowserCDPURL = "ws://stub"
+	t.Cleanup(func() { common.UpstreamBrowserCDPURL = originalCDPURL })
+
+	orig := upstreamBrowserLogin
+	upstreamBrowserLogin = func(ctx context.Context, source *model.UpstreamSource, email, password string) (upstreamBrowserSession, error) {
+		return upstreamBrowserSession{LocalStorage: map[string]string{"token": "stale-jwt"}}, nil
+	}
+	t.Cleanup(func() { upstreamBrowserLogin = orig })
+
+	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeSub2API, BaseURL: server.URL, AdminAPIBasePath: "/api/v1"}
+	got, err := acquireSub2APISessionViaBrowser(context.Background(), source, sub2APIAuthConfig{Email: "a@b.com", Password: "p"})
+	require.Error(t, err)
+	assert.Empty(t, got.AccessToken, "an unvalidated token must not be accepted")
 }

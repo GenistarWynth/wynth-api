@@ -259,3 +259,23 @@ func PersistUpstreamSourceAuthConfig(sourceID int, authConfig string) error {
 			"updated_time": common.GetTimestamp(),
 		}).Error
 }
+
+// ClearUpstreamSourceTurnstileBlock clears LastDiscoveryError/LastSyncError
+// when they still hold the given turnstile-blocked sentinel marker, so a
+// successful session import (or any other resolution of the block) is
+// reflected immediately instead of leaving turnstile_blocked stuck true in
+// the response that confirms it to the admin.
+func ClearUpstreamSourceTurnstileBlock(sourceID int, marker string) error {
+	if sourceID == 0 {
+		return errors.New("source ID is required")
+	}
+	now := common.GetTimestamp()
+	if err := DB.Model(&UpstreamSource{}).
+		Where("id = ? AND last_discovery_error = ?", sourceID, marker).
+		Updates(map[string]interface{}{"last_discovery_error": "", "updated_time": now}).Error; err != nil {
+		return err
+	}
+	return DB.Model(&UpstreamSource{}).
+		Where("id = ? AND last_sync_error = ?", sourceID, marker).
+		Updates(map[string]interface{}{"last_sync_error": "", "updated_time": now}).Error
+}

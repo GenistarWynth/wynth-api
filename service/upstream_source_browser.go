@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -68,6 +69,13 @@ func acquireSub2APISessionViaBrowser(ctx context.Context, source *model.Upstream
 	token := firstNonEmpty(session.LocalStorage, "token", "access_token", "auth_token", "authToken")
 	if token == "" {
 		return cfg, errors.New("could not locate sub2api token in browser session; import manually")
+	}
+	// Validate the extracted token with one authenticated probe before
+	// accepting it: localStorage can hold a stale/expired/unrelated value,
+	// and accepting it unvalidated would persist a broken session for up to
+	// an hour (see ensureAccessToken's ExpiresAt fallback).
+	if _, err := sub2APIRequest[[]sub2APIGroup](ctx, &Sub2APIAdapter{}, source, http.MethodGet, "/groups/available", nil, nil, token); err != nil {
+		return cfg, fmt.Errorf("browser-acquired sub2api token failed validation: %w", err)
 	}
 	cfg.AccessToken = token
 	if cfg.ExpiresAt == 0 {
