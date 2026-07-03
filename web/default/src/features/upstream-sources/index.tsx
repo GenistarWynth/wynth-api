@@ -2247,7 +2247,7 @@ function ImportSessionSheet(props: {
                   label={t('Expires At (unix seconds, 0 = never)')}
                   htmlFor='session-expires-at'
                   description={t(
-                    'Leave blank to auto-read the token expiry from the JWT (0 = never).'
+                    'Leave blank to auto-read expiry from the JWT; tokens without an exp claim never expire.'
                   )}
                 >
                   <Input

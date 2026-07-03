@@ -2492,7 +2492,7 @@
     "Learn more": "Learn more",
     "Learn more:": "Learn more:",
     "Leave": "Leave",
-    "Leave blank to auto-read the token expiry from the JWT (0 = never).": "Leave blank to auto-read the token expiry from the JWT (0 = never).",
+    "Leave blank to auto-read expiry from the JWT; tokens without an exp claim never expire.": "Leave blank to auto-read expiry from the JWT; tokens without an exp claim never expire.",
     "Leave blank to keep the existing credential": "Leave blank to keep the existing credential",
     "Leave blank to keep the existing key": "Leave blank to keep the existing key",
     "Leave blank unless rotating the secret": "Leave blank unless rotating the secret",

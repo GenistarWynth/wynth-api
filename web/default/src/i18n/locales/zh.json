@@ -2492,7 +2492,7 @@
     "Learn more": "了解更多",
     "Learn more:": "了解更多：",
     "Leave": "离开",
-    "Leave blank to auto-read the token expiry from the JWT (0 = never).": "留空则自动从 JWT 读取过期时间（0 = 永不过期）。",
+    "Leave blank to auto-read expiry from the JWT; tokens without an exp claim never expire.": "留空则自动从 JWT 读取过期时间；无 exp 声明的令牌视为永不过期。",
     "Leave blank to keep the existing credential": "留空以保留现有凭证",
     "Leave blank to keep the existing key": "留空以保留现有密钥",
     "Leave blank unless rotating the secret": "除非正在轮换密钥，否则留空",
