@@ -34,6 +34,10 @@ type fakeUpstreamSourceAdapter struct {
 	createCalls        *[]fakeUpstreamSourceCreateKeyCall
 	updateCalls        *[]fakeUpstreamSourceUpdateKeyCall
 	listCalls          *[]string
+	// authConfigOverride simulates a real adapter writing a freshly acquired
+	// or refreshed login session back onto source.AuthConfig in memory, the
+	// way NewAPIAdapter/Sub2APIAdapter do after a successful login.
+	authConfigOverride string
 }
 
 type fakeUpstreamSourceCreateKeyCall struct {
@@ -51,6 +55,9 @@ func (a fakeUpstreamSourceAdapter) DiscoverGroups(ctx context.Context, source *m
 	if a.err != nil {
 		return nil, a.err
 	}
+	if a.authConfigOverride != "" {
+		source.AuthConfig = a.authConfigOverride
+	}
 	return a.groups, nil
 }
 
@@ -59,6 +66,9 @@ func (a fakeUpstreamSourceAdapter) CreateKey(ctx context.Context, source *model.
 	if a.createCalls != nil {
 		callIndex = len(*a.createCalls)
 		*a.createCalls = append(*a.createCalls, fakeUpstreamSourceCreateKeyCall{GroupID: groupID, Name: name})
+	}
+	if a.authConfigOverride != "" {
+		source.AuthConfig = a.authConfigOverride
 	}
 	if a.createErr != nil {
 		return UpstreamKey{}, a.createErr
@@ -189,6 +199,33 @@ func TestDiscoverUpstreamSourceUpsertsMappings(t *testing.T) {
 	assert.Equal(t, model.UpstreamDiscoveryStatusSucceeded, reloaded.LastDiscoveryStatus)
 	assert.Equal(t, int64(12345), reloaded.LastDiscoveryTime)
 	assert.Empty(t, reloaded.LastDiscoveryError)
+}
+
+func TestDiscoverUpstreamSourcePersistsRefreshedAuthConfig(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).
+		Update("auth_config", `{"email":"a@b.com","password":"p"}`).Error)
+	refreshedAuth := `{"email":"a@b.com","password":"p","access_token":"discover-token","user_id":9}`
+	rate := 1.0
+	svc := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				groups:             []UpstreamGroup{{ID: "10", Name: "primary", RateMultiplier: &rate, EffectiveRateMultiplier: &rate}},
+				authConfigOverride: refreshedAuth,
+			}, nil
+		},
+		Now: func() int64 { return 12345 },
+	}
+
+	_, err := svc.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	got, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	assert.Equal(t, refreshedAuth, got, "a session acquired during discover must be persisted so the next run reuses it instead of logging in again")
 }
 
 func TestDiscoverUpstreamSourceSetsSyncEnabledFromRuleEligibility(t *testing.T) {
@@ -914,6 +951,38 @@ func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	var abilityCount int64
 	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&abilityCount).Error)
 	assert.Equal(t, int64(4), abilityCount)
+}
+
+func TestSyncUpstreamSourcePersistsRefreshedAuthConfig(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).
+		Update("auth_config", `{"email":"a@b.com","password":"p"}`).Error)
+	rate := 1.0
+	createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	refreshedAuth := `{"email":"a@b.com","password":"p","access_token":"sync-token","user_id":9}`
+	svc := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{
+				createKeys:         []UpstreamKey{{ID: "key-10", Key: "sk-secret-10"}},
+				authConfigOverride: refreshedAuth,
+			}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return []string{"gpt-4o"}, nil
+		},
+		Now: func() int64 { return 1000 },
+	}
+
+	result, err := svc.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	got, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	assert.Equal(t, refreshedAuth, got, "a session acquired mid-sync must be persisted so the next run reuses it instead of logging in again")
 }
 
 func TestSyncUpstreamSourceUsesShortRateNameAndRemark(t *testing.T) {

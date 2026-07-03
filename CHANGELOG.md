@@ -4,6 +4,12 @@ All notable changes to the **Wynth** fork (`GenistarWynth/wynth-api`) are docume
 
 Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) by QuantumNous. This changelog records what Wynth adds or changes on top of upstream; upstream New API features are not re-listed.
 
+## [Unreleased]
+
+### Added — Upstream source login for Cloudflare-Turnstile-gated gateways
+- Upstream sources can now authenticate to gateways that gate login behind Cloudflare Turnstile: paste an already-authenticated session (cookie / token) via manual import, or use an optional headless-browser login sidecar (`browserless`, gated by `--profile upstream-browser` and `UPSTREAM_BROWSER_CDP_URL` in `docker-compose.yml`).
+- Upstream source credentials/sessions are now encrypted at rest.
+
 ## [v1.0.0-rc.16] — 2026-06-28
 
 ### Synced with upstream New API

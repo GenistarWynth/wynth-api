@@ -99,6 +99,8 @@ export type UpstreamSource = {
   local_group_rules: UpstreamSourceLocalGroupRule[]
   masked_email: string
   has_credentials: boolean
+  session_source?: string
+  turnstile_blocked?: boolean
   last_discovery_time: number
   last_discovery_status: UpstreamDiscoveryStatus | ''
   last_discovery_error: string
@@ -201,6 +203,14 @@ export type UpstreamSourceUpdateRequest = Omit<
 export type UpstreamSourceCredentialsUpdateRequest = {
   email: string
   password: string
+}
+
+export interface UpstreamSourceSessionImportRequest {
+  session_cookie?: string
+  access_token?: string
+  user_id?: number
+  refresh_token?: string
+  expires_at?: number
 }
 
 export type UpstreamSourceDiscoveryResult = {

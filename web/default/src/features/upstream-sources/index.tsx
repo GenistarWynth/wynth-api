@@ -33,6 +33,7 @@ import {
 import { useMediaQuery } from '@/hooks'
 import {
   ChevronDown,
+  Cookie,
   KeyRound,
   Loader2,
   MoreHorizontal,
@@ -95,6 +96,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   DISABLED_ROW_DESKTOP,
@@ -121,6 +123,7 @@ import {
   createUpstreamSource,
   deleteUpstreamSource,
   discoverUpstreamSource,
+  importUpstreamSourceSession,
   listUpstreamSourceMappings,
   listUpstreamSources,
   runUpstreamSourceAutoPriority,
@@ -167,6 +170,7 @@ import {
   type UpstreamSourceFormValues,
   type UpstreamSourceLocalGroupRule,
   type UpstreamSourceMapping,
+  type UpstreamSourceSessionImportRequest,
   type UpstreamSourceStatus,
   type UpstreamSourceSyncResult,
   type UpstreamSourceType,
@@ -705,6 +709,7 @@ function RuleStrategySummary(props: {
 function useUpstreamSourceColumns(props: {
   onEdit: (source: UpstreamSource) => void
   onCredentials: (source: UpstreamSource) => void
+  onImportSession: (source: UpstreamSource) => void
   onMappings: (source: UpstreamSource) => void
   onDiscover: (source: UpstreamSource) => void
   onSync: (source: UpstreamSource) => void
@@ -823,11 +828,20 @@ function useUpstreamSourceColumns(props: {
         id: 'sync',
         header: t('Sync'),
         cell: ({ row }) => (
-          <StatusWithTime
-            status={row.original.last_sync_status}
-            timestamp={row.original.last_sync_time}
-            error={row.original.last_sync_error}
-          />
+          <div className='flex min-w-0 flex-col gap-1'>
+            <StatusWithTime
+              status={row.original.last_sync_status}
+              timestamp={row.original.last_sync_time}
+              error={row.original.last_sync_error}
+            />
+            {row.original.turnstile_blocked && (
+              <StatusBadge
+                label={t('Blocked by Cloudflare — import a session')}
+                variant='danger'
+                copyable={false}
+              />
+            )}
+          </div>
         ),
         size: 180,
       },
@@ -850,6 +864,7 @@ function useUpstreamSourceColumns(props: {
             row={row}
             onEdit={props.onEdit}
             onCredentials={props.onCredentials}
+            onImportSession={props.onImportSession}
             onMappings={props.onMappings}
             onDiscover={props.onDiscover}
             onSync={props.onSync}
@@ -871,6 +886,7 @@ function SourceActions(props: {
   row: Row<UpstreamSource>
   onEdit: (source: UpstreamSource) => void
   onCredentials: (source: UpstreamSource) => void
+  onImportSession: (source: UpstreamSource) => void
   onMappings: (source: UpstreamSource) => void
   onDiscover: (source: UpstreamSource) => void
   onSync: (source: UpstreamSource) => void
@@ -909,6 +925,12 @@ function SourceActions(props: {
             {t('Credentials')}
             <DropdownMenuShortcut>
               <KeyRound size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => props.onImportSession(source)}>
+            {t('Import session')}
+            <DropdownMenuShortcut>
+              <Cookie size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => props.onMappings(source)}>
@@ -2339,6 +2361,140 @@ function CredentialsSheet(props: {
   )
 }
 
+function ImportSessionSheet(props: {
+  open: boolean
+  source?: UpstreamSource
+  isSubmitting: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (values: UpstreamSourceSessionImportRequest) => void
+}) {
+  const { t } = useTranslation()
+  const [sessionCookie, setSessionCookie] = useState('')
+  const [accessToken, setAccessToken] = useState('')
+  const [userID, setUserID] = useState('')
+  const [expiresAt, setExpiresAt] = useState('')
+  const isNewAPI = props.source?.type === UPSTREAM_SOURCE_TYPE_NEW_API
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const values: UpstreamSourceSessionImportRequest = {}
+    if (sessionCookie.trim()) {
+      values.session_cookie = sessionCookie.trim()
+    }
+    if (accessToken.trim()) {
+      values.access_token = accessToken.trim()
+    }
+    if (isNewAPI) {
+      const parsedUserID = Number.parseInt(userID, 10)
+      if (userID.trim() && Number.isFinite(parsedUserID)) {
+        values.user_id = parsedUserID
+      }
+    } else {
+      const parsedExpiresAt = Number.parseInt(expiresAt, 10)
+      if (expiresAt.trim() && Number.isFinite(parsedExpiresAt)) {
+        values.expires_at = parsedExpiresAt
+      }
+    }
+    props.onSubmit(values)
+  }
+
+  return (
+    <Sheet open={props.open} onOpenChange={props.onOpenChange}>
+      <SheetContent className={sideDrawerContentClassName('sm:max-w-[520px]')}>
+        <SheetHeader className={sideDrawerHeaderClassName()}>
+          <SheetTitle>{t('Import session')}</SheetTitle>
+          <SheetDescription>{props.source?.name}</SheetDescription>
+        </SheetHeader>
+        <form
+          id='upstream-source-session-form'
+          className={sideDrawerFormClassName()}
+          onSubmit={handleSubmit}
+        >
+          <SideDrawerSection>
+            {isNewAPI ? (
+              <>
+                <FieldBlock
+                  label={t('Session cookie')}
+                  htmlFor='session-cookie'
+                  description={t(
+                    'Copy the session cookie from the upstream browser session (DevTools → Application → Cookies), or paste the access token from the upstream user settings page.'
+                  )}
+                >
+                  <Textarea
+                    id='session-cookie'
+                    value={sessionCookie}
+                    autoComplete='off'
+                    onChange={(event) => setSessionCookie(event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label={t('Access token')} htmlFor='session-access-token'>
+                  <Input
+                    id='session-access-token'
+                    value={accessToken}
+                    autoComplete='off'
+                    onChange={(event) => setAccessToken(event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock label={t('User ID')} htmlFor='session-user-id'>
+                  <Input
+                    id='session-user-id'
+                    type='number'
+                    value={userID}
+                    onChange={(event) => setUserID(event.target.value)}
+                  />
+                </FieldBlock>
+              </>
+            ) : (
+              <>
+                <FieldBlock
+                  label={t('Access token (JWT)')}
+                  htmlFor='session-access-token-jwt'
+                  description={t(
+                    'Paste the access token (JWT) from the upstream browser session.'
+                  )}
+                >
+                  <Input
+                    id='session-access-token-jwt'
+                    value={accessToken}
+                    autoComplete='off'
+                    onChange={(event) => setAccessToken(event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock
+                  label={t('Expires At (unix seconds, 0 = never)')}
+                  htmlFor='session-expires-at'
+                >
+                  <Input
+                    id='session-expires-at'
+                    type='number'
+                    value={expiresAt}
+                    onChange={(event) => setExpiresAt(event.target.value)}
+                  />
+                </FieldBlock>
+              </>
+            )}
+          </SideDrawerSection>
+        </form>
+        <SheetFooter className={sideDrawerFooterClassName()}>
+          <SheetClose render={<Button variant='outline' />}>
+            {t('Close')}
+          </SheetClose>
+          <Button
+            form='upstream-source-session-form'
+            type='submit'
+            disabled={props.isSubmitting}
+          >
+            {props.isSubmitting && (
+              <Loader2 data-icon='inline-start' className='animate-spin' />
+            )}
+            {t('Import session')}
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
 function MappingsSheet(props: {
   open: boolean
   source?: UpstreamSource
@@ -2695,6 +2851,8 @@ export function UpstreamSources() {
     useState<SourceSheetMode | null>(null)
   const [currentSource, setCurrentSource] = useState<UpstreamSource>()
   const [credentialSource, setCredentialSource] = useState<UpstreamSource>()
+  const [importSessionSource, setImportSessionSource] =
+    useState<UpstreamSource>()
   const [mappingSource, setMappingSource] = useState<UpstreamSource>()
   const [deleteSource, setDeleteSource] = useState<UpstreamSource>()
 
@@ -2770,6 +2928,25 @@ export function UpstreamSources() {
       }
       toast.success(t('Credentials updated'))
       setCredentialSource(undefined)
+      invalidateSources()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const importSessionMutation = useMutation({
+    mutationFn: async (variables: {
+      source: UpstreamSource
+      values: UpstreamSourceSessionImportRequest
+    }) => importUpstreamSourceSession(variables.source.id, variables.values),
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to import session')))
+        return
+      }
+      toast.success(t('Session imported'))
+      setImportSessionSource(undefined)
       invalidateSources()
     },
     onError: (error) => {
@@ -2895,6 +3072,7 @@ export function UpstreamSources() {
   const columns = useUpstreamSourceColumns({
     onEdit: openUpdateSheet,
     onCredentials: setCredentialSource,
+    onImportSession: setImportSessionSource,
     onMappings: setMappingSource,
     onDiscover: (source) => discoverMutation.mutate(source),
     onSync: (source) => syncMutation.mutate(source),
@@ -3039,6 +3217,26 @@ export function UpstreamSources() {
             source: credentialSource,
             email: values.email,
             password: values.password,
+          })
+        }}
+      />
+      <ImportSessionSheet
+        key={
+          importSessionSource
+            ? `import-session-${importSessionSource.id}`
+            : 'import-session-closed'
+        }
+        open={Boolean(importSessionSource)}
+        source={importSessionSource}
+        isSubmitting={importSessionMutation.isPending}
+        onOpenChange={(open) => !open && setImportSessionSource(undefined)}
+        onSubmit={(values) => {
+          if (!importSessionSource) {
+            return
+          }
+          importSessionMutation.mutate({
+            source: importSessionSource,
+            values,
           })
         }}
       />

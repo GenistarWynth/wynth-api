@@ -34,11 +34,12 @@ type sub2APIEnvelope[T any] struct {
 }
 
 type sub2APIAuthConfig struct {
-	Email        string `json:"email"`
-	Password     string `json:"password"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresAt    int64  `json:"expires_at"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	AccessToken   string `json:"access_token"`
+	RefreshToken  string `json:"refresh_token"`
+	ExpiresAt     int64  `json:"expires_at"`
+	SessionSource string `json:"session_source,omitempty"`
 }
 
 type sub2APILoginData struct {
@@ -205,6 +206,19 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	if authConfig.AccessToken != "" && authConfig.ExpiresAt > time.Now().Unix() {
 		return authConfig.AccessToken, nil
 	}
+	// Headless browser first (per chosen strategy) when configured.
+	if upstreamBrowserEnabled() {
+		acquired, bErr := acquireSub2APISessionViaBrowser(ctx, source, authConfig)
+		if bErr == nil && acquired.AccessToken != "" {
+			if marshaled := mustMarshalSub2APIAuthConfig(acquired); marshaled != "" {
+				source.AuthConfig = marshaled
+			}
+			return acquired.AccessToken, nil
+		}
+		if bErr != nil {
+			common.SysLog("upstream source headless browser login failed, falling back to password login: " + SanitizeUpstreamSourceError(bErr))
+		}
+	}
 	if authConfig.Email == "" || authConfig.Password == "" {
 		return "", errors.New("sub2api email and password are required")
 	}
@@ -215,6 +229,9 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	}
 	data, err := sub2APIRequest[sub2APILoginData](ctx, &a, source, http.MethodPost, "/auth/login", nil, payload, "")
 	if err != nil {
+		if isUpstreamSourceTurnstileError(err) {
+			return "", ErrUpstreamSourceTurnstileRequired
+		}
 		return "", err
 	}
 	if data.Requires2FA {
@@ -241,15 +258,27 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	return authConfig.AccessToken, nil
 }
 
+func mustMarshalSub2APIAuthConfig(cfg sub2APIAuthConfig) string {
+	data, err := common.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 func parseSub2APIAuthConfig(source *model.UpstreamSource) (sub2APIAuthConfig, error) {
 	if source == nil {
 		return sub2APIAuthConfig{}, errors.New("upstream source is required")
 	}
-	if strings.TrimSpace(source.AuthConfig) == "" {
+	raw, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
+	if err != nil {
+		return sub2APIAuthConfig{}, err
+	}
+	if strings.TrimSpace(raw) == "" {
 		return sub2APIAuthConfig{}, nil
 	}
 	var authConfig sub2APIAuthConfig
-	if err := common.UnmarshalJsonStr(source.AuthConfig, &authConfig); err != nil {
+	if err := common.UnmarshalJsonStr(raw, &authConfig); err != nil {
 		return sub2APIAuthConfig{}, err
 	}
 	return authConfig, nil
@@ -301,7 +330,11 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 	defer resp.Body.Close()
 
 	var envelope sub2APIEnvelope[T]
-	if err := decodeSub2APIResponseBody(resp.Body, &envelope); err != nil {
+	respBody, err := decodeSub2APIResponseBody(resp.Body, &envelope)
+	if err != nil {
+		if isUpstreamSourceCloudflareChallengeBody(resp.StatusCode, respBody) {
+			return zero, ErrUpstreamSourceTurnstileRequired
+		}
 		return zero, fmt.Errorf("decode upstream response failed: %w", err)
 	}
 	if envelope.Code != 0 {
@@ -313,15 +346,19 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 	return envelope.Data, nil
 }
 
-func decodeSub2APIResponseBody(reader io.Reader, v any) error {
+// decodeSub2APIResponseBody decodes the response body into v and also
+// returns the raw bytes read, so a decode failure can be inspected by the
+// caller for a Cloudflare edge managed-challenge (HTML interstitial) instead
+// of surfacing an opaque "decode failed" error.
+func decodeSub2APIResponseBody(reader io.Reader, v any) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, sub2APIResponseBodyLimitBytes+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if int64(len(body)) > sub2APIResponseBodyLimitBytes {
-		return fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
+		return body, fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
 	}
-	return common.Unmarshal(body, v)
+	return body, common.Unmarshal(body, v)
 }
 
 func buildSub2APIURL(source *model.UpstreamSource, endpoint string, query url.Values) (string, error) {

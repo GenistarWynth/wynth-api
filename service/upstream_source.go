@@ -41,6 +41,7 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	if err := model.DB.Where("id = ? AND status <> ?", sourceID, model.UpstreamSourceStatusDeleted).First(&source).Error; err != nil {
 		return nil, err
 	}
+	originalAuth := source.AuthConfig
 
 	now := s.now()
 	if err := validateUpstreamSourceDiscoveryConfig(&source); err != nil {
@@ -60,6 +61,7 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	if err != nil {
 		return s.recordDiscoveryFailure(source.Id, now, err), err
 	}
+	persistUpstreamSourceAuthConfigIfChanged(source.Id, originalAuth, source.AuthConfig)
 
 	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	if err != nil {
@@ -137,6 +139,7 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 	if err := model.DB.Where("id = ?", sourceID).First(&source).Error; err != nil {
 		return nil, err
 	}
+	originalAuth := source.AuthConfig
 
 	now := s.now()
 	result := &dto.UpstreamSourceSyncResult{
@@ -288,6 +291,7 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 			changedChannels = append(changedChannels, changedChannel)
 		}
 	}
+	persistUpstreamSourceAuthConfigIfChanged(source.Id, originalAuth, source.AuthConfig)
 
 	for _, channel := range changedChannels {
 		model.CacheUpdateChannel(channel)
@@ -304,6 +308,24 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 		finalStatus = model.UpstreamSyncStatusSucceeded
 	}
 	return result, nil
+}
+
+// persistUpstreamSourceAuthConfigIfChanged writes back a session an adapter
+// acquired or refreshed during this discover/sync run, so the next run reuses
+// it instead of logging in again. It is a no-op when the adapter never wrote
+// to source.AuthConfig (i.e. the cached token was already valid).
+func persistUpstreamSourceAuthConfigIfChanged(sourceID int, original string, current string) {
+	if current == original {
+		return
+	}
+	stored, err := WriteUpstreamSourceAuthConfig(current)
+	if err != nil {
+		common.SysError("failed to encrypt refreshed upstream source auth config: " + SanitizeUpstreamSourceError(err))
+		return
+	}
+	if err := model.PersistUpstreamSourceAuthConfig(sourceID, stored); err != nil {
+		common.SysError("failed to persist refreshed upstream source auth config: " + SanitizeUpstreamSourceError(err))
+	}
 }
 
 func resolveUpstreamSourceRuleForManualSync(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) upstreamSourceRuleResolution {
@@ -422,7 +444,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	if upstreamKeyID != "" {
 		key, created, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
 		if err != nil {
-			errText := SanitizeUpstreamSourceError(err)
+			errText := upstreamSourceFailureMessage(err)
 			_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 			result.Status = model.UpstreamMappingSyncStatusFailed
 			result.Error = errText
@@ -447,7 +469,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		if !ensuredKeyLoaded {
 			key, created, err := ensureUpstreamSourceMappingKey(ctx, adapter, source, mapping)
 			if err != nil {
-				errText := SanitizeUpstreamSourceError(err)
+				errText := upstreamSourceFailureMessage(err)
 				_ = updateUpstreamSourceMappingSync(mapping.Id, mapping.UpstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 				result.Status = model.UpstreamMappingSyncStatusFailed
 				result.Error = errText
@@ -471,7 +493,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		if rawKey == "" && mapping.UpstreamKeyID != "" && !ensuredKeyCreated {
 			recoveredKey, created, err := recoverOrReplaceUpstreamSourceKey(ctx, adapter, source, mapping, ensuredKey)
 			if err != nil {
-				errText := SanitizeUpstreamSourceError(err)
+				errText := upstreamSourceFailureMessage(err)
 				_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 				result.Status = model.UpstreamMappingSyncStatusFailed
 				result.Error = errText
@@ -1131,7 +1153,7 @@ func updateUpstreamSourceDiscoveryStatusTx(tx *gorm.DB, sourceID int, status str
 }
 
 func (s *UpstreamSourceService) recordDiscoveryFailure(sourceID int, now int64, err error) *dto.UpstreamSourceDiscoveryResult {
-	sanitized := SanitizeUpstreamSourceError(err)
+	sanitized := upstreamSourceFailureMessage(err)
 	_ = updateUpstreamSourceDiscoveryStatus(sourceID, model.UpstreamDiscoveryStatusFailed, sanitized, now)
 	return &dto.UpstreamSourceDiscoveryResult{
 		SourceID: sourceID,
@@ -1140,13 +1162,23 @@ func (s *UpstreamSourceService) recordDiscoveryFailure(sourceID int, now int64, 
 }
 
 func (s *UpstreamSourceService) recordSyncFailure(sourceID int, now int64, err error) *dto.UpstreamSourceSyncResult {
-	sanitized := SanitizeUpstreamSourceError(err)
+	sanitized := upstreamSourceFailureMessage(err)
 	_ = updateUpstreamSourceSyncStatus(sourceID, model.UpstreamSyncStatusFailed, sanitized, now)
 	return &dto.UpstreamSourceSyncResult{
 		SourceID: sourceID,
 		Status:   model.UpstreamSyncStatusFailed,
 		Error:    sanitized,
 	}
+}
+
+// upstreamSourceFailureMessage maps a Cloudflare Turnstile block to its canonical
+// sentinel text so callers (and the frontend) can reliably detect it, while all
+// other errors continue to go through sanitization.
+func upstreamSourceFailureMessage(err error) string {
+	if errors.Is(err, ErrUpstreamSourceTurnstileRequired) {
+		return ErrUpstreamSourceTurnstileRequired.Error()
+	}
+	return SanitizeUpstreamSourceError(err)
 }
 
 func updateUpstreamSourceSyncStatus(sourceID int, status string, errText string, now int64) error {

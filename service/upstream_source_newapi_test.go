@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	stdjson "encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -361,6 +363,176 @@ func TestNewAPIAdapterRefreshesExpiredCachedAccessToken(t *testing.T) {
 	assert.Equal(t, "fresh-token", auth["access_token"])
 }
 
+// TestNewAPIAdapterRefreshExpiredSessionPreservesTurnstileSentinel is a
+// regression guard for the refresh-retry path in newAPIManagementRequest: when
+// the cached session has expired (401 from the request) and the re-login
+// attempt is blocked by Cloudflare Turnstile, the returned error must still
+// satisfy errors.Is(err, ErrUpstreamSourceTurnstileRequired) so downstream
+// callers can detect the block instead of seeing an opaque wrapped string.
+func TestNewAPIAdapterRefreshExpiredSessionPreservesTurnstileSentinel(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			require.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, err := w.Write([]byte(`{"success":false,"message":"invalid access token"}`))
+			require.NoError(t, err)
+		case "/api/user/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": false,
+				"message": "Turnstile token 为空",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p","access_token":"stale","user_id":1}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
+}
+
+// TestNewAPIAdapterSurfacesCloudflareEdgeChallengeAsTurnstileSentinel is a
+// regression guard for the decode path: a Cloudflare EDGE managed-challenge
+// (an HTML interstitial, not new-api's own JSON Turnstile rejection) returns
+// a non-JSON body that fails common.Unmarshal. That decode failure must be
+// classified as ErrUpstreamSourceTurnstileRequired via the response body/
+// status (isUpstreamSourceCloudflareChallengeBody), not surfaced as an opaque
+// "decode upstream response failed" error, since a string-only classifier can
+// never see body text once json.Unmarshal has already discarded it.
+func TestNewAPIAdapterSurfacesCloudflareEdgeChallengeAsTurnstileSentinel(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusForbidden)
+			_, err := w.Write([]byte("<html><body>Just a moment... cf-ray: 8abc123</body></html>"))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
+	assert.NotContains(t, err.Error(), "decode upstream response failed")
+}
+
+// TestNewAPIAdapterClearsCachedTokenWhenRefreshTurnstileBlocked is a
+// regression guard for the stale-token trap: ensureManagementAuth
+// short-circuits on any non-empty cached access_token (no expiry check), so
+// once that token goes stale and the login-based refresh is Turnstile-
+// blocked, source.AuthConfig must have the stale token cleared -- otherwise
+// persist-if-changed is a no-op and every subsequent discover/sync replays
+// the same failure forever instead of re-entering the headless-browser /
+// manual-import acquisition chain.
+func TestNewAPIAdapterClearsCachedTokenWhenRefreshTurnstileBlocked(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			require.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, err := w.Write([]byte(`{"success":false,"message":"invalid access token"}`))
+			require.NoError(t, err)
+		case "/api/user/login":
+			require.Equal(t, http.MethodPost, r.Method)
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": false,
+				"message": "Turnstile token 为空",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p","access_token":"stale","user_id":1}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
+
+	cfg, cfgErr := parseNewAPIAuthConfig(source)
+	require.NoError(t, cfgErr)
+	assert.Empty(t, cfg.AccessToken, "stale token must be cleared so the next run re-enters the acquisition chain")
+	assert.Equal(t, "a@b.com", cfg.Email, "email must be preserved")
+	assert.Equal(t, "p", cfg.Password, "password must be preserved")
+}
+
+// TestEnsureManagementAuthUsesBrowserWhenPasswordBlocked verifies the login
+// chain wired in Task 9: when password login is Turnstile-blocked but a
+// headless browser (CDP) is configured and the stubbed browser login
+// succeeds, ensureManagementAuth returns the browser-acquired token instead
+// of surfacing the Turnstile sentinel from the password fallback.
+func TestEnsureManagementAuthUsesBrowserWhenPasswordBlocked(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	common.UpstreamBrowserCDPURL = "ws://stub"
+	t.Cleanup(func() { common.UpstreamBrowserCDPURL = "" })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user/login"):
+			w.Write([]byte(`{"success":false,"message":"Turnstile token 为空"}`))
+		case strings.HasSuffix(r.URL.Path, "/user/self"):
+			w.Write([]byte(`{"success":true,"data":{"id":3}}`))
+		case strings.HasSuffix(r.URL.Path, "/user/token"):
+			w.Write([]byte(`{"success":true,"data":"chrome-tok"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	orig := upstreamBrowserLogin
+	upstreamBrowserLogin = func(ctx context.Context, s *model.UpstreamSource, e, p string) (upstreamBrowserSession, error) {
+		return upstreamBrowserSession{Cookies: []*http.Cookie{{Name: "session", Value: "x"}}}, nil
+	}
+	t.Cleanup(func() { upstreamBrowserLogin = orig })
+
+	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeNewAPI, BaseURL: server.URL, AdminAPIBasePath: "/api", AuthConfig: `{"email":"a@b.com","password":"p"}`}
+	adapter := NewAPIAdapter{Client: server.Client()}
+	cfg, err := adapter.ensureManagementAuth(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, "chrome-tok", cfg.AccessToken)
+}
+
 func TestNewAPIAdapterListKeysFiltersByGroupAndReadsFullKeys(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 
@@ -414,6 +586,52 @@ func TestNewAPIAdapterListKeysFiltersByGroupAndReadsFullKeys(t *testing.T) {
 	assert.Equal(t, "3", keys[1].ID)
 	assert.Equal(t, "sk-3", keys[1].Key)
 	assert.Equal(t, []string{"/api/token/1/key", "/api/token/3/key"}, keyRequests)
+}
+
+// TestNewAPIAdapterReusesPersistedSession is a regression guard for the
+// existing in-memory reuse contract: a second discover on the same source
+// must NOT log in again once access_token+user_id are cached. Task 2 must
+// keep this passing while routing AuthConfig reads through the decrypt
+// helper and persisting refreshed sessions.
+func TestNewAPIAdapterReusesPersistedSession(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	loginCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user/login"):
+			loginCalls++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":42}}`))
+		case strings.HasSuffix(r.URL.Path, "/user/token"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":"access-xyz"}`))
+		case strings.HasSuffix(r.URL.Path, "/user/self/groups"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	// First discover triggers exactly one login and populates the cached token.
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, 1, loginCalls)
+
+	// A second discover on the same in-memory source (token now cached) must NOT log in again.
+	_, err = adapter.DiscoverGroups(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, 1, loginCalls, "cached access_token+user_id should short-circuit login")
 }
 
 func TestDefaultUpstreamSourceAdapterFactorySupportsNewAPI(t *testing.T) {

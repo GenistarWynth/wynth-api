@@ -59,6 +59,18 @@ type UpstreamSourceCredentialsUpdateRequest struct {
 	Password string `json:"password"`
 }
 
+// UpstreamSourceSessionImportRequest carries an admin-pasted upstream session
+// so login can be short-circuited when Cloudflare Turnstile blocks automated
+// login. new-api sources accept a raw session cookie string OR an
+// access_token + user_id pair; sub2api sources accept an access_token (JWT).
+type UpstreamSourceSessionImportRequest struct {
+	SessionCookie string `json:"session_cookie"`
+	AccessToken   string `json:"access_token"`
+	UserID        int    `json:"user_id"`
+	RefreshToken  string `json:"refresh_token"`
+	ExpiresAt     int64  `json:"expires_at"`
+}
+
 type UpstreamSourceResponse struct {
 	Id                               int                            `json:"id"`
 	Name                             string                         `json:"name"`
@@ -87,6 +99,8 @@ type UpstreamSourceResponse struct {
 	LocalGroupRules                  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 	MaskedEmail                      string                         `json:"masked_email"`
 	HasCredentials                   bool                           `json:"has_credentials"`
+	SessionSource                    string                         `json:"session_source"`
+	TurnstileBlocked                 bool                           `json:"turnstile_blocked"`
 	LastDiscoveryTime                int64                          `json:"last_discovery_time"`
 	LastDiscoveryStatus              string                         `json:"last_discovery_status"`
 	LastDiscoveryError               string                         `json:"last_discovery_error"`

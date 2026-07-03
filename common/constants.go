@@ -76,6 +76,10 @@ var SessionSecret = uuid.New().String()
 var CryptoSecret = uuid.New().String()
 var CryptoSecretStable = false
 
+// UpstreamBrowserCDPURL is the Chrome DevTools Protocol endpoint used for headless-browser
+// upstream logins (e.g. Cloudflare Turnstile challenges). Empty disables headless-browser login.
+var UpstreamBrowserCDPURL = ""
+
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex
 

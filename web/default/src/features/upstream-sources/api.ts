@@ -25,6 +25,7 @@ import type {
   UpstreamSourceCredentialsUpdateRequest,
   UpstreamSourceDiscoveryResult,
   UpstreamSourceMapping,
+  UpstreamSourceSessionImportRequest,
   UpstreamSourceSyncResult,
   UpstreamSourceUpdateRequest,
 } from './types'
@@ -84,6 +85,18 @@ export async function updateUpstreamSourceCredentials(
 ): Promise<ApiResponse<UpstreamSource>> {
   const res = await api.put(
     `/api/upstream_sources/${id}/credentials`,
+    data,
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function importUpstreamSourceSession(
+  id: number,
+  data: UpstreamSourceSessionImportRequest
+): Promise<ApiResponse<UpstreamSource>> {
+  const res = await api.post(
+    `/api/upstream_sources/${id}/session`,
     data,
     upstreamSourceActionConfig()
   )

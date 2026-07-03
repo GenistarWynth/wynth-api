@@ -31,10 +31,11 @@ type newAPIEnvelope[T any] struct {
 }
 
 type newAPIAuthConfig struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	AccessToken string `json:"access_token"`
-	UserID      int    `json:"user_id"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	AccessToken   string `json:"access_token"`
+	UserID        int    `json:"user_id"`
+	SessionSource string `json:"session_source,omitempty"`
 }
 
 type newAPILoginData struct {
@@ -208,7 +209,44 @@ func (a NewAPIAdapter) ensureManagementAuth(ctx context.Context, source *model.U
 	if authConfig.AccessToken != "" && authConfig.UserID > 0 {
 		return authConfig, nil
 	}
+	// Headless browser first (per chosen strategy) when configured.
+	if upstreamBrowserEnabled() {
+		acquired, bErr := acquireNewAPISessionViaBrowser(ctx, source, authConfig)
+		if bErr == nil && acquired.AccessToken != "" {
+			if marshaled := mustMarshalNewAPIAuthConfig(acquired); marshaled != "" {
+				source.AuthConfig = marshaled
+			}
+			return acquired, nil
+		}
+		if bErr != nil {
+			common.SysLog("upstream source headless browser login failed, falling back to password login: " + SanitizeUpstreamSourceError(bErr))
+		}
+	}
+	// Fall back to password login (works only without Turnstile).
 	return a.loginManagementAuth(ctx, source, authConfig)
+}
+
+func mustMarshalNewAPIAuthConfig(cfg newAPIAuthConfig) string {
+	data, err := common.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// clearNewAPICachedSession drops the cached access token/user id (keeping
+// email/password) so the next discover/sync re-enters the acquisition chain
+// (headless browser / manual import) instead of reusing a rejected token.
+func clearNewAPICachedSession(source *model.UpstreamSource) {
+	cfg, err := parseNewAPIAuthConfig(source)
+	if err != nil {
+		return
+	}
+	cfg.AccessToken = ""
+	cfg.UserID = 0
+	if data, err := common.Marshal(cfg); err == nil {
+		source.AuthConfig = string(data)
+	}
 }
 
 func (a NewAPIAdapter) refreshManagementAuth(ctx context.Context, source *model.UpstreamSource, authConfig newAPIAuthConfig) (newAPIAuthConfig, error) {
@@ -228,6 +266,9 @@ func (a NewAPIAdapter) loginManagementAuth(ctx context.Context, source *model.Up
 	}
 	loginData, cookies, err := newAPIRequestWithCookies[newAPILoginData](ctx, &a, source, http.MethodPost, "/user/login", nil, loginPayload, newAPIAuthConfig{}, nil)
 	if err != nil {
+		if isUpstreamSourceTurnstileError(err) {
+			return newAPIAuthConfig{}, ErrUpstreamSourceTurnstileRequired
+		}
 		return newAPIAuthConfig{}, err
 	}
 	if loginData.ID <= 0 {
@@ -251,15 +292,51 @@ func (a NewAPIAdapter) loginManagementAuth(ctx context.Context, source *model.Up
 	return authConfig, nil
 }
 
+// newAPIExchangeCookieForToken replays an admin-pasted new-api session cookie
+// against /user/self (to resolve the user id) and /user/token (to mint an
+// access token) so a manually imported cookie can be normalized into the
+// same access_token + user_id pair used by the login flow.
+func newAPIExchangeCookieForToken(source *model.UpstreamSource, cookieHeader string) (string, int, error) {
+	return newAPIExchangeCookiesForToken(context.Background(), source, parseCookieHeader(cookieHeader))
+}
+
+// newAPIExchangeCookiesForToken resolves a new-api admin access token + user id
+// from browser session cookies: GET /user/self for the id, GET /user/token for
+// the token. Shared by manual cookie import and headless-browser acquisition.
+func newAPIExchangeCookiesForToken(ctx context.Context, source *model.UpstreamSource, cookies []*http.Cookie) (string, int, error) {
+	adapter := &NewAPIAdapter{}
+	self, err := newAPIRequest[newAPILoginData](ctx, adapter, source, http.MethodGet, "/user/self", nil, nil, newAPIAuthConfig{}, cookies)
+	if err != nil {
+		return "", 0, err
+	}
+	if self.ID <= 0 {
+		return "", 0, errors.New("session did not resolve a user id")
+	}
+	token, err := newAPIRequest[string](ctx, adapter, source, http.MethodGet, "/user/token", nil, nil, newAPIAuthConfig{UserID: self.ID}, cookies)
+	if err != nil {
+		return "", 0, err
+	}
+	return strings.TrimSpace(token), self.ID, nil
+}
+
+func parseCookieHeader(header string) []*http.Cookie {
+	req := http.Request{Header: http.Header{"Cookie": []string{strings.TrimSpace(header)}}}
+	return req.Cookies()
+}
+
 func parseNewAPIAuthConfig(source *model.UpstreamSource) (newAPIAuthConfig, error) {
 	if source == nil {
 		return newAPIAuthConfig{}, errors.New("upstream source is required")
 	}
-	if strings.TrimSpace(source.AuthConfig) == "" {
+	raw, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
+	if err != nil {
+		return newAPIAuthConfig{}, err
+	}
+	if strings.TrimSpace(raw) == "" {
 		return newAPIAuthConfig{}, nil
 	}
 	var authConfig newAPIAuthConfig
-	if err := common.UnmarshalJsonStr(source.AuthConfig, &authConfig); err != nil {
+	if err := common.UnmarshalJsonStr(raw, &authConfig); err != nil {
 		return newAPIAuthConfig{}, err
 	}
 	return authConfig, nil
@@ -350,6 +427,10 @@ func newAPIManagementRequest[T any](ctx context.Context, adapter *NewAPIAdapter,
 	}
 	refreshedAuth, refreshErr := adapter.refreshManagementAuth(ctx, source, authConfig)
 	if refreshErr != nil {
+		if errors.Is(refreshErr, ErrUpstreamSourceTurnstileRequired) {
+			clearNewAPICachedSession(source)
+			return zero, refreshErr
+		}
 		return zero, fmt.Errorf("%w; refresh auth failed: %s", err, SanitizeUpstreamSourceError(refreshErr))
 	}
 	return newAPIRequest[T](ctx, adapter, source, method, endpoint, query, payload, refreshedAuth, nil)
@@ -409,7 +490,11 @@ func newAPIRequestWithCookies[T any](ctx context.Context, adapter *NewAPIAdapter
 	defer resp.Body.Close()
 
 	var envelope newAPIEnvelope[T]
-	if err := decodeNewAPIResponseBody(resp.Body, &envelope); err != nil {
+	respBody, err := decodeNewAPIResponseBody(resp.Body, &envelope)
+	if err != nil {
+		if isUpstreamSourceCloudflareChallengeBody(resp.StatusCode, respBody) {
+			return zero, nil, ErrUpstreamSourceTurnstileRequired
+		}
 		return zero, nil, fmt.Errorf("decode upstream response failed: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -465,15 +550,19 @@ func newAPIAuthConfigHasCredentials(authConfig newAPIAuthConfig) bool {
 	return strings.TrimSpace(authConfig.Email) != "" && authConfig.Password != ""
 }
 
-func decodeNewAPIResponseBody(reader io.Reader, v any) error {
+// decodeNewAPIResponseBody decodes the response body into v and also returns
+// the raw bytes read, so a decode failure can be inspected by the caller for
+// a Cloudflare edge managed-challenge (HTML interstitial) instead of
+// surfacing an opaque "decode failed" error.
+func decodeNewAPIResponseBody(reader io.Reader, v any) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, sub2APIResponseBodyLimitBytes+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if int64(len(body)) > sub2APIResponseBodyLimitBytes {
-		return fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
+		return body, fmt.Errorf("response body too large: limit %d bytes", sub2APIResponseBodyLimitBytes)
 	}
-	return common.Unmarshal(body, v)
+	return body, common.Unmarshal(body, v)
 }
 
 func buildNewAPIURL(source *model.UpstreamSource, endpoint string, query url.Values) (string, error) {

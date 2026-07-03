@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -708,6 +709,16 @@ func TestUpstreamSourceAPIUpdateMappingsScopesSelectionToSource(t *testing.T) {
 	assert.True(t, reloadedA1.SyncEnabled)
 	assert.False(t, reloadedA2.SyncEnabled)
 	assert.True(t, reloadedB.SyncEnabled)
+}
+
+func TestUpstreamSourceResponseReportsTurnstileBlocked(t *testing.T) {
+	source := model.UpstreamSource{
+		Id:            1,
+		Type:          model.UpstreamSourceTypeNewAPI,
+		LastSyncError: service.ErrUpstreamSourceTurnstileRequired.Error(),
+	}
+	resp := upstreamSourceResponse(source)
+	assert.True(t, resp.TurnstileBlocked)
 }
 
 func mustMarshalUpstreamSourceAPITest(t *testing.T, value any) []byte {

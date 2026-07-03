@@ -16,11 +16,12 @@ import (
 )
 
 type upstreamSourceAuthConfig struct {
-	Email        string `json:"email,omitempty"`
-	Password     string `json:"password,omitempty"`
-	AccessToken  string `json:"access_token,omitempty"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	Email         string `json:"email,omitempty"`
+	Password      string `json:"password,omitempty"`
+	AccessToken   string `json:"access_token,omitempty"`
+	RefreshToken  string `json:"refresh_token,omitempty"`
+	ExpiresAt     int64  `json:"expires_at,omitempty"`
+	SessionSource string `json:"session_source,omitempty"`
 }
 
 const (
@@ -152,6 +153,28 @@ func UpdateUpstreamSourceCredentials(c *gin.Context) {
 		"id":   source.Id,
 		"name": source.Name,
 	})
+	common.ApiSuccess(c, upstreamSourceResponse(*source))
+}
+
+func ImportUpstreamSourceSession(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	var req dto.UpstreamSourceSessionImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := service.ApplyUpstreamSourceImportedSession(c.Request.Context(), source, req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.DB.First(source, source.Id).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "upstream_source.session_import", map[string]interface{}{"id": source.Id, "name": source.Name})
 	common.ApiSuccess(c, upstreamSourceResponse(*source))
 }
 
@@ -425,7 +448,7 @@ func marshalUpstreamSourceAuthConfig(email string, password string) (string, err
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	return service.WriteUpstreamSourceAuthConfig(string(data))
 }
 
 func marshalUpstreamSourceSyncConfig(config upstreamSourceControllerSyncConfig) (string, error) {
@@ -468,6 +491,8 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		LocalGroupRules:                  sync.LocalGroupRules,
 		MaskedEmail:                      common.MaskEmail(auth.Email),
 		HasCredentials:                   upstreamSourceHasCredentials(auth),
+		SessionSource:                    auth.SessionSource,
+		TurnstileBlocked:                 upstreamSourceTurnstileBlocked(source),
 		LastDiscoveryTime:                source.LastDiscoveryTime,
 		LastDiscoveryStatus:              source.LastDiscoveryStatus,
 		LastDiscoveryError:               sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
@@ -477,6 +502,11 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		CreatedTime:                      source.CreatedTime,
 		UpdatedTime:                      source.UpdatedTime,
 	}
+}
+
+func upstreamSourceTurnstileBlocked(source model.UpstreamSource) bool {
+	marker := service.ErrUpstreamSourceTurnstileRequired.Error()
+	return source.LastDiscoveryError == marker || source.LastSyncError == marker
 }
 
 func parseUpstreamSourceSyncConfig(raw string) upstreamSourceControllerSyncConfig {
@@ -588,10 +618,11 @@ func sanitizeUpstreamSourceResponseError(text string) string {
 
 func parseUpstreamSourceAuthConfig(raw string) upstreamSourceAuthConfig {
 	var auth upstreamSourceAuthConfig
-	if strings.TrimSpace(raw) == "" {
-		return auth
+	decrypted, err := service.ReadUpstreamSourceAuthConfig(raw)
+	if err != nil || strings.TrimSpace(decrypted) == "" {
+		return upstreamSourceAuthConfig{}
 	}
-	if err := common.UnmarshalJsonStr(raw, &auth); err != nil {
+	if err := common.UnmarshalJsonStr(decrypted, &auth); err != nil {
 		return upstreamSourceAuthConfig{}
 	}
 	return auth

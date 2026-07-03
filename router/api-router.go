@@ -257,6 +257,7 @@ func SetApiRouter(router *gin.Engine) {
 			upstreamSourceRoute.GET("/:id", controller.GetUpstreamSource)
 			upstreamSourceRoute.PUT("/:id", controller.UpdateUpstreamSource)
 			upstreamSourceRoute.PUT("/:id/credentials", controller.UpdateUpstreamSourceCredentials)
+			upstreamSourceRoute.POST("/:id/session", controller.ImportUpstreamSourceSession)
 			upstreamSourceRoute.DELETE("/:id", controller.DeleteUpstreamSource)
 			upstreamSourceRoute.POST("/:id/discover", controller.DiscoverUpstreamSource)
 			upstreamSourceRoute.GET("/:id/mappings", controller.ListUpstreamSourceMappings)
