@@ -44,17 +44,12 @@ func acquireNewAPISessionViaBrowser(ctx context.Context, source *model.UpstreamS
 	if err != nil {
 		return cfg, err
 	}
-	adapter := &NewAPIAdapter{}
-	self, err := newAPIRequest[newAPILoginData](ctx, adapter, source, http.MethodGet, "/user/self", nil, nil, newAPIAuthConfig{}, session.Cookies)
+	token, userID, err := newAPIExchangeCookiesForToken(ctx, source, session.Cookies)
 	if err != nil {
 		return cfg, err
 	}
-	token, err := newAPIRequest[string](ctx, adapter, source, http.MethodGet, "/user/token", nil, nil, newAPIAuthConfig{UserID: self.ID}, session.Cookies)
-	if err != nil {
-		return cfg, err
-	}
-	cfg.AccessToken = strings.TrimSpace(token)
-	cfg.UserID = self.ID
+	cfg.AccessToken = token
+	cfg.UserID = userID
 	cfg.SessionSource = "browser"
 	return cfg, nil
 }
@@ -62,6 +57,9 @@ func acquireNewAPISessionViaBrowser(ctx context.Context, source *model.UpstreamS
 func acquireSub2APISessionViaBrowser(ctx context.Context, source *model.UpstreamSource, cfg sub2APIAuthConfig) (sub2APIAuthConfig, error) {
 	if !upstreamBrowserEnabled() {
 		return cfg, errors.New("headless browser not configured")
+	}
+	if strings.TrimSpace(cfg.Email) == "" || cfg.Password == "" {
+		return cfg, errors.New("email and password are required for headless login")
 	}
 	session, err := upstreamBrowserLogin(ctx, source, cfg.Email, cfg.Password)
 	if err != nil {

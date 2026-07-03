@@ -260,16 +260,22 @@ func (a NewAPIAdapter) loginManagementAuth(ctx context.Context, source *model.Up
 // access token) so a manually imported cookie can be normalized into the
 // same access_token + user_id pair used by the login flow.
 func newAPIExchangeCookieForToken(source *model.UpstreamSource, cookieHeader string) (string, int, error) {
+	return newAPIExchangeCookiesForToken(context.Background(), source, parseCookieHeader(cookieHeader))
+}
+
+// newAPIExchangeCookiesForToken resolves a new-api admin access token + user id
+// from browser session cookies: GET /user/self for the id, GET /user/token for
+// the token. Shared by manual cookie import and headless-browser acquisition.
+func newAPIExchangeCookiesForToken(ctx context.Context, source *model.UpstreamSource, cookies []*http.Cookie) (string, int, error) {
 	adapter := &NewAPIAdapter{}
-	cookies := parseCookieHeader(cookieHeader)
-	self, err := newAPIRequest[newAPILoginData](context.Background(), adapter, source, http.MethodGet, "/user/self", nil, nil, newAPIAuthConfig{}, cookies)
+	self, err := newAPIRequest[newAPILoginData](ctx, adapter, source, http.MethodGet, "/user/self", nil, nil, newAPIAuthConfig{}, cookies)
 	if err != nil {
 		return "", 0, err
 	}
 	if self.ID <= 0 {
-		return "", 0, errors.New("session cookie did not resolve a user id")
+		return "", 0, errors.New("session did not resolve a user id")
 	}
-	token, err := newAPIRequest[string](context.Background(), adapter, source, http.MethodGet, "/user/token", nil, nil, newAPIAuthConfig{UserID: self.ID}, cookies)
+	token, err := newAPIRequest[string](ctx, adapter, source, http.MethodGet, "/user/token", nil, nil, newAPIAuthConfig{UserID: self.ID}, cookies)
 	if err != nil {
 		return "", 0, err
 	}
