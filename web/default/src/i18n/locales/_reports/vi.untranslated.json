@@ -44,7 +44,7 @@
   "Nodes reporting from this deployment and their latest heartbeat.": "Nodes reporting from this deployment and their latest heartbeat.",
   "Password must be between 8 and 20 characters": "Password must be between 8 and 20 characters",
   "Paste sub2api account export JSON or CPA YAML/JSON.": "Paste sub2api account export JSON or CPA YAML/JSON.",
-  "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.": "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.",
+  "Please use WeChat's \"Scan QR Code\" feature to complete the binding process.": "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.",
   "Protect login and registration with Cloudflare Turnstile": "Protect login and registration with Cloudflare Turnstile",
   "Recent maintenance tasks running across instances and their execution status.": "Recent maintenance tasks running across instances and their execution status.",
   "Recently completed or failed system task runs.": "Recently completed or failed system task runs.",
