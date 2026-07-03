@@ -51,9 +51,10 @@ describe('channel monitor dialog theme contract', () => {
 
   test('owns editable monitor settings instead of the channel edit drawer', () => {
     assert.match(dialogSource, /Monitor Settings/)
-    assert.match(dialogSource, /channel_monitor_enabled/)
-    assert.match(dialogSource, /channel_monitor_interval_minutes/)
-    assert.match(dialogSource, /test_model/)
+    // Monitor-settings (de)serialization now lives in lib/channel-monitor.ts;
+    // the dialog owns editing by using those helpers together with updateChannel.
+    assert.match(dialogSource, /readChannelMonitorSettings/)
+    assert.match(dialogSource, /buildChannelMonitorSettingsPayload/)
     assert.match(dialogSource, /updateChannel/)
 
     assert.doesNotMatch(mutateDrawerSource, /name='channel_monitor_enabled'/)
@@ -67,7 +68,7 @@ describe('channel monitor dialog theme contract', () => {
     assert.match(dialogSource, /import \{ Combobox \}/)
     assert.match(dialogSource, /parseModelsString/)
     assert.match(dialogSource, /channel\?\.models/)
-    assert.match(dialogSource, /testModelOptions/)
+    assert.match(dialogSource, /monitorModelOptions/)
     assert.match(dialogSource, /allowCustomValue/)
     assert.doesNotMatch(
       dialogSource,

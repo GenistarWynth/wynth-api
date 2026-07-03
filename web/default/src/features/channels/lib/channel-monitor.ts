@@ -158,13 +158,23 @@ export function readChannelMonitorSettings(
     typeof settings.channel_monitor_model === 'string'
       ? settings.channel_monitor_model.trim()
       : ''
+  // Fall back to the legacy top-level test_model for display ONLY on channels
+  // that have no monitor configuration yet. Once any monitor setting exists,
+  // channel_monitor_model is authoritative, so clearing it in the dialog sticks
+  // instead of visibly reverting to test_model on the next read.
+  const hasMonitorConfig =
+    'channel_monitor_model' in settings ||
+    'channel_monitor_enabled' in settings ||
+    'channel_monitor_interval_minutes' in settings
   return {
     enabled: settings.channel_monitor_enabled === true,
     intervalMinutes: normalizeMonitorInterval(
       settings.channel_monitor_interval_minutes,
       DEFAULT_MONITOR_INTERVAL_MINUTES
     ),
-    monitorModel: monitorModel || (channel?.test_model?.trim() ?? ''),
+    monitorModel:
+      monitorModel ||
+      (hasMonitorConfig ? '' : (channel?.test_model?.trim() ?? '')),
   }
 }
 

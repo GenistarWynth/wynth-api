@@ -39,12 +39,18 @@ describe('channel monitor settings <-> channel_monitor_model binding', () => {
     assert.equal(draft.monitorModel, 'from-settings')
   })
 
-  test('falls back to test_model for display when channel_monitor_model is absent', () => {
+  test('falls back to test_model for display only on legacy channels with no monitor config', () => {
+    const draft = readChannelMonitorSettings(channel({}, 'legacy-model'))
+    assert.equal(draft.monitorModel, 'legacy-model')
+    assert.equal(draft.intervalMinutes, 10) // DEFAULT_MONITOR_INTERVAL_MINUTES
+  })
+
+  test('does not fall back to test_model once monitor config exists (clearing sticks)', () => {
     const draft = readChannelMonitorSettings(
       channel({ channel_monitor_enabled: true }, 'legacy-model')
     )
-    assert.equal(draft.monitorModel, 'legacy-model')
-    assert.equal(draft.intervalMinutes, 10) // DEFAULT_MONITOR_INTERVAL_MINUTES
+    assert.equal(draft.enabled, true)
+    assert.equal(draft.monitorModel, '')
   })
 
   test('writes the monitor model into channel_monitor_model and never emits test_model', () => {
