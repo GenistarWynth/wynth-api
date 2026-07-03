@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 
@@ -268,6 +269,25 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.Equal(t, 4, resolution.AutoSyncIntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, resolution.ModelStrategy)
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, resolution.FixedModels)
+}
+
+func TestResolveMatchedRuleOverridesChannelTypePriorityWeight(t *testing.T) {
+	priority := int64(42)
+	weight := uint(9)
+	cfg := upstreamSourceSyncConfig{
+		ChannelType: constant.ChannelTypeOpenAI, DefaultPriority: 1, DefaultWeight: 2,
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{{
+			Name: "r", NameContains: []string{"gpt"},
+			ChannelType: constant.ChannelTypeAnthropic, Priority: &priority, Weight: &weight,
+		}},
+	}
+	cfg = normalizeUpstreamSourceSyncConfig(cfg)
+	mapping := &model.UpstreamSourceChannelMapping{SyncEnabled: true, DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive, UpstreamGroupName: "gpt-pro"}
+	res := resolveUpstreamSourceRule(cfg, mapping)
+	assert.True(t, res.SyncEligible)
+	assert.Equal(t, constant.ChannelTypeAnthropic, res.ChannelType)
+	assert.Equal(t, int64(42), res.Priority)
+	assert.Equal(t, uint(9), res.Weight)
 }
 
 func TestResolveUpstreamSourceRuleAllowsZeroRuleIntervalsToOverrideFallback(t *testing.T) {

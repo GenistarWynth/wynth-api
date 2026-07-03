@@ -114,6 +114,9 @@ type UpstreamSourceResponse struct {
 type UpstreamSourceLocalGroupRule struct {
 	Name                             string                          `json:"name"`
 	LocalGroup                       string                          `json:"local_group"`
+	ChannelType                      int                             `json:"channel_type,omitempty"`
+	Priority                         *int64                          `json:"priority,omitempty"`
+	Weight                           *uint                           `json:"weight,omitempty"`
 	Platforms                        []string                        `json:"platforms"`
 	NameContains                     []string                        `json:"name_contains"`
 	DescriptionContains              []string                        `json:"description_contains"`
@@ -175,6 +178,9 @@ type UpstreamSourceMappingResponse struct {
 	ResolvedCodexImageGenerationBridgePolicy string   `json:"resolved_codex_image_generation_bridge_policy"`
 	ResolvedModelStrategy                    string   `json:"resolved_model_strategy"`
 	ResolvedFixedModels                      []string `json:"resolved_fixed_models"`
+	ResolvedChannelType                      int      `json:"resolved_channel_type"`
+	ResolvedPriority                         int64    `json:"resolved_priority"`
+	ResolvedWeight                           uint     `json:"resolved_weight"`
 }
 
 type UpstreamSourceMappingUpdateRequest struct {

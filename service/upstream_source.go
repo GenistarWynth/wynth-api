@@ -836,12 +836,12 @@ func truncateUpstreamSourceString(value string, maxBytes int) string {
 func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping, config upstreamSourceSyncConfig, resolution upstreamSourceRuleResolution, rawKey string) *model.Channel {
 	channel := &model.Channel{
 		Name:     upstreamSourceGeneratedChannelName(source, mapping),
-		Type:     config.ChannelType,
+		Type:     resolution.ChannelType,
 		Key:      rawKey,
 		BaseURL:  common.GetPointer(upstreamSourceGeneratedBaseURL(source)),
 		Group:    resolution.LocalGroup,
-		Priority: common.GetPointer(config.DefaultPriority),
-		Weight:   common.GetPointer(config.DefaultWeight),
+		Priority: common.GetPointer(resolution.Priority),
+		Weight:   common.GetPointer(resolution.Weight),
 		Tag:      common.GetPointer(strings.TrimSpace(source.Name)),
 		Remark:   upstreamSourceGeneratedChannelRemark(mapping),
 	}
@@ -1261,6 +1261,9 @@ func buildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMappi
 		ResolvedCodexImageGenerationBridgePolicy: resolution.CodexImageGenerationBridgePolicy,
 		ResolvedModelStrategy:                    resolution.ModelStrategy,
 		ResolvedFixedModels:                      resolution.FixedModels,
+		ResolvedChannelType:                      resolution.ChannelType,
+		ResolvedPriority:                         resolution.Priority,
+		ResolvedWeight:                           resolution.Weight,
 	}
 }
 

@@ -54,6 +54,9 @@ type upstreamSourceRuleResolution struct {
 	RuleName                         string
 	Reason                           string
 	LocalGroup                       string
+	ChannelType                      int
+	Priority                         int64
+	Weight                           uint
 	MonitorEnabled                   bool
 	MonitorIntervalMinutes           int
 	AutoSyncEnabled                  bool
@@ -179,6 +182,9 @@ func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroup
 		normalized = append(normalized, dto.UpstreamSourceLocalGroupRule{
 			Name:                             strings.TrimSpace(rule.Name),
 			LocalGroup:                       localGroup,
+			ChannelType:                      rule.ChannelType,
+			Priority:                         rule.Priority,
+			Weight:                           rule.Weight,
 			Platforms:                        platforms,
 			NameContains:                     nameContains,
 			DescriptionContains:              descriptionContains,
@@ -337,9 +343,16 @@ func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstr
 	if modelStrategy == upstreamSourceModelStrategyFixed {
 		fixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
 	}
+	channelType := config.ChannelType
+	if channelType == 0 {
+		channelType = constant.ChannelTypeOpenAI
+	}
 	return upstreamSourceRuleResolution{
 		Reason:                           upstreamSourceMatchReasonNoMatchingRule,
 		LocalGroup:                       upstreamSourceDefaultLocalGroup(config),
+		ChannelType:                      channelType,
+		Priority:                         config.DefaultPriority,
+		Weight:                           config.DefaultWeight,
 		MonitorEnabled:                   config.EnableMonitor,
 		MonitorIntervalMinutes:           monitorInterval,
 		AutoSyncEnabled:                  config.AutoSyncEnabled,
@@ -420,6 +433,15 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 	resolution.Reason = upstreamSourceMatchReasonMatched
 	if localGroup := strings.TrimSpace(rule.LocalGroup); localGroup != "" {
 		resolution.LocalGroup = localGroup
+	}
+	if rule.ChannelType != 0 {
+		resolution.ChannelType = rule.ChannelType
+	}
+	if rule.Priority != nil {
+		resolution.Priority = *rule.Priority
+	}
+	if rule.Weight != nil {
+		resolution.Weight = *rule.Weight
 	}
 	if rule.Monitor != nil {
 		if rule.Monitor.Enabled != nil {
