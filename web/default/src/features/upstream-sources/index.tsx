@@ -2137,6 +2137,7 @@ function ImportSessionSheet(props: {
   const [sessionCookie, setSessionCookie] = useState('')
   const [accessToken, setAccessToken] = useState('')
   const [userID, setUserID] = useState('')
+  const [refreshToken, setRefreshToken] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
   const isNewAPI = props.source?.type === UPSTREAM_SOURCE_TYPE_NEW_API
 
@@ -2155,6 +2156,9 @@ function ImportSessionSheet(props: {
         values.user_id = parsedUserID
       }
     } else {
+      if (refreshToken.trim()) {
+        values.refresh_token = refreshToken.trim()
+      }
       const parsedExpiresAt = Number.parseInt(expiresAt, 10)
       if (expiresAt.trim() && Number.isFinite(parsedExpiresAt)) {
         values.expires_at = parsedExpiresAt
@@ -2226,8 +2230,25 @@ function ImportSessionSheet(props: {
                   />
                 </FieldBlock>
                 <FieldBlock
+                  label={t('Refresh token (optional)')}
+                  htmlFor='session-refresh-token'
+                  description={t(
+                    'Paste the refresh token so the access token auto-renews when it expires.'
+                  )}
+                >
+                  <Input
+                    id='session-refresh-token'
+                    value={refreshToken}
+                    autoComplete='off'
+                    onChange={(event) => setRefreshToken(event.target.value)}
+                  />
+                </FieldBlock>
+                <FieldBlock
                   label={t('Expires At (unix seconds, 0 = never)')}
                   htmlFor='session-expires-at'
+                  description={t(
+                    'Leave blank to auto-read the token expiry from the JWT (0 = never).'
+                  )}
                 >
                   <Input
                     id='session-expires-at'
