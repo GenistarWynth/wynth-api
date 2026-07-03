@@ -136,6 +136,7 @@ import {
 import {
   buildLocalGroupRuleTemplate,
   createLocalGroupRuleUserTemplate,
+  DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS,
   formatKeywordList,
   hasLocalGroupRuleMatcher,
   parseLocalGroupRuleUserTemplates,
@@ -178,7 +179,6 @@ import {
   type UpstreamSyncStatus,
 } from './types'
 
-const CHANNEL_TYPE_OPENAI = 1
 const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
 const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 30
 const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
@@ -304,46 +304,16 @@ function defaultSourceFormValues(
     email: '',
     password: '',
     local_group: source?.local_group || 'default',
-    default_local_group:
-      source?.default_local_group || source?.local_group || 'default',
     local_group_rules: (source?.local_group_rules ?? []).map(
       normalizeRuleForForm
     ),
-    channel_type: source?.channel_type || CHANNEL_TYPE_OPENAI,
-    default_priority: source?.default_priority ?? 0,
-    default_weight: source?.default_weight ?? 0,
-    enable_monitor: source?.enable_monitor ?? false,
-    monitor_interval_minutes: monitorIntervalDisplayValue(
-      source?.monitor_interval_minutes,
-      DEFAULT_MONITOR_INTERVAL_MINUTES
-    ),
-    auto_sync_models: source?.auto_sync_models ?? true,
-    model_strategy:
-      source?.model_strategy ?? UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
-    fixed_models: source?.fixed_models ?? [],
     allow_private_ip: source?.allow_private_ip ?? false,
-    auto_sync_enabled: source?.auto_sync_enabled ?? false,
-    auto_sync_interval_minutes:
-      source?.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES,
-    auto_priority_enabled: source?.auto_priority_enabled ?? false,
-    auto_priority_interval_minutes: intervalDisplayValue(
-      source?.auto_priority_interval_minutes,
-      DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
-    ),
-    auto_priority_window_hours:
-      source?.auto_priority_window_hours ?? DEFAULT_AUTO_PRIORITY_WINDOW_HOURS,
-    codex_image_generation_bridge_policy:
-      normalizeCodexImageGenerationBridgePolicy(
-        source?.codex_image_generation_bridge_policy
-      ),
   }
 }
 
 function buildCreatePayload(
   values: UpstreamSourceFormValues
 ): UpstreamSourceCreateRequest {
-  const defaultLocalGroup =
-    values.default_local_group.trim() || values.local_group.trim()
   return {
     name: values.name.trim(),
     type: values.type,
@@ -352,44 +322,15 @@ function buildCreatePayload(
     relay_base_url: values.relay_base_url.trim(),
     email: values.email.trim(),
     password: values.password,
-    local_group: defaultLocalGroup,
-    default_local_group: defaultLocalGroup,
+    local_group: values.local_group.trim(),
     local_group_rules: normalizeSyncRules(values.local_group_rules),
-    channel_type: values.channel_type,
-    default_priority: values.default_priority,
-    default_weight: Math.max(0, values.default_weight),
-    enable_monitor: values.enable_monitor,
-    monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
-    auto_sync_models:
-      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
-    model_strategy: values.model_strategy,
-    fixed_models:
-      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
-        ? normalizeModelList(values.fixed_models)
-        : [],
     allow_private_ip: values.allow_private_ip,
-    auto_sync_enabled: values.auto_sync_enabled,
-    auto_sync_interval_minutes: values.auto_sync_enabled
-      ? Math.max(0, values.auto_sync_interval_minutes)
-      : 0,
-    auto_priority_enabled: values.auto_priority_enabled,
-    auto_priority_interval_minutes: Math.max(
-      0,
-      values.auto_priority_interval_minutes
-    ),
-    auto_priority_window_hours: Math.max(1, values.auto_priority_window_hours),
-    codex_image_generation_bridge_policy:
-      normalizeCodexImageGenerationBridgePolicy(
-        values.codex_image_generation_bridge_policy
-      ),
   }
 }
 
 function buildUpdatePayload(
   values: UpstreamSourceFormValues
 ): UpstreamSourceUpdateRequest {
-  const defaultLocalGroup =
-    values.default_local_group.trim() || values.local_group.trim()
   return {
     name: values.name.trim(),
     type: values.type,
@@ -397,36 +338,9 @@ function buildUpdatePayload(
     base_url: values.base_url.trim(),
     admin_api_base_path: values.admin_api_base_path.trim(),
     relay_base_url: values.relay_base_url.trim(),
-    local_group: defaultLocalGroup,
-    default_local_group: defaultLocalGroup,
+    local_group: values.local_group.trim(),
     local_group_rules: normalizeSyncRules(values.local_group_rules),
-    channel_type: values.channel_type,
-    default_priority: values.default_priority,
-    default_weight: Math.max(0, values.default_weight),
-    enable_monitor: values.enable_monitor,
-    monitor_interval_minutes: Math.max(0, values.monitor_interval_minutes),
-    auto_sync_models:
-      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
-    model_strategy: values.model_strategy,
-    fixed_models:
-      values.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
-        ? normalizeModelList(values.fixed_models)
-        : [],
     allow_private_ip: values.allow_private_ip,
-    auto_sync_enabled: values.auto_sync_enabled,
-    auto_sync_interval_minutes: values.auto_sync_enabled
-      ? Math.max(0, values.auto_sync_interval_minutes)
-      : 0,
-    auto_priority_enabled: values.auto_priority_enabled,
-    auto_priority_interval_minutes: Math.max(
-      0,
-      values.auto_priority_interval_minutes
-    ),
-    auto_priority_window_hours: Math.max(1, values.auto_priority_window_hours),
-    codex_image_generation_bridge_policy:
-      normalizeCodexImageGenerationBridgePolicy(
-        values.codex_image_generation_bridge_policy
-      ),
   }
 }
 
@@ -1178,39 +1092,7 @@ function SourceFormSheet(props: {
     () => modelOptions.map((model) => ({ value: model, label: model })),
     [modelOptions]
   )
-  const ruleStrategyDefaults = useMemo(
-    () => ({
-      monitor: {
-        enabled: form.enable_monitor,
-        interval_minutes: form.monitor_interval_minutes,
-      },
-      autoSync: {
-        enabled: form.auto_sync_enabled,
-        interval_minutes: form.auto_sync_interval_minutes,
-      },
-      autoPriority: {
-        enabled: form.auto_priority_enabled,
-        interval_minutes: form.auto_priority_interval_minutes,
-        window_hours: form.auto_priority_window_hours,
-      },
-      codexImageGenerationBridgePolicy:
-        form.codex_image_generation_bridge_policy,
-      modelStrategy: form.model_strategy,
-      fixedModels: form.fixed_models,
-    }),
-    [
-      form.auto_priority_enabled,
-      form.auto_priority_interval_minutes,
-      form.auto_priority_window_hours,
-      form.auto_sync_enabled,
-      form.auto_sync_interval_minutes,
-      form.codex_image_generation_bridge_policy,
-      form.enable_monitor,
-      form.fixed_models,
-      form.model_strategy,
-      form.monitor_interval_minutes,
-    ]
-  )
+  const ruleStrategyDefaults = DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS
 
   useEffect(() => {
     if (!props.open || typeof window === 'undefined') {
@@ -1295,31 +1177,18 @@ function SourceFormSheet(props: {
 
   const addLocalGroupRuleTemplates = (keys: LocalGroupRuleTemplateKey[]) => {
     setForm((previous) => {
-      const defaultLocalGroup =
-        previous.default_local_group.trim() ||
-        previous.local_group.trim() ||
-        'default'
+      const defaultLocalGroup = previous.local_group.trim() || 'default'
       const proLocalGroup = inferProLocalGroup(defaultLocalGroup)
       const defaults = {
         defaultLocalGroup,
         proLocalGroup,
-        monitor: {
-          enabled: previous.enable_monitor,
-          interval_minutes: previous.monitor_interval_minutes,
-        },
-        autoSync: {
-          enabled: previous.auto_sync_enabled,
-          interval_minutes: previous.auto_sync_interval_minutes,
-        },
-        autoPriority: {
-          enabled: previous.auto_priority_enabled,
-          interval_minutes: previous.auto_priority_interval_minutes,
-          window_hours: previous.auto_priority_window_hours,
-        },
+        monitor: ruleStrategyDefaults.monitor,
+        autoSync: ruleStrategyDefaults.autoSync,
+        autoPriority: ruleStrategyDefaults.autoPriority,
         codexImageGenerationBridgePolicy:
-          previous.codex_image_generation_bridge_policy,
-        modelStrategy: previous.model_strategy,
-        fixedModels: previous.fixed_models,
+          ruleStrategyDefaults.codexImageGenerationBridgePolicy,
+        modelStrategy: ruleStrategyDefaults.modelStrategy,
+        fixedModels: ruleStrategyDefaults.fixedModels,
       }
 
       return {
@@ -1507,6 +1376,16 @@ function SourceFormSheet(props: {
                 />
               </FieldBlock>
             </div>
+            <FieldBlock label={t('Local Group')} htmlFor='source-local-group'>
+              <Combobox
+                id='source-local-group'
+                options={groupOptions}
+                value={form.local_group}
+                onValueChange={(value) => value && setField('local_group', value)}
+                placeholder={t('Select local group')}
+                emptyText={t('No local group found')}
+              />
+            </FieldBlock>
             <SwitchRow
               label={t('Allow Private IP / Fake IP')}
               checked={form.allow_private_ip}
@@ -1538,235 +1417,6 @@ function SourceFormSheet(props: {
               </FieldBlock>
             </SideDrawerSection>
           )}
-
-          <SideDrawerSection>
-            <SideDrawerSectionHeader title={t('Default Strategy')} />
-            <div className='grid gap-4 sm:grid-cols-2'>
-              <FieldBlock
-                label={t('Default Local Group')}
-                htmlFor='source-default-local-group'
-              >
-                <Combobox
-                  id='source-default-local-group'
-                  options={groupOptions}
-                  value={form.default_local_group}
-                  onValueChange={(value) =>
-                    value && setField('default_local_group', value)
-                  }
-                  placeholder={t('Select local group')}
-                  emptyText={t('No local group found')}
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Channel Type')}
-                htmlFor='source-channel-type'
-              >
-                <Input
-                  id='source-channel-type'
-                  type='number'
-                  min={1}
-                  value={form.channel_type}
-                  onChange={(event) =>
-                    setField(
-                      'channel_type',
-                      parseIntegerInput(event.target.value, CHANNEL_TYPE_OPENAI)
-                    )
-                  }
-                />
-              </FieldBlock>
-            </div>
-            <div className='grid gap-4 sm:grid-cols-2'>
-              <FieldBlock
-                label={t('Default Priority')}
-                htmlFor='source-default-priority'
-              >
-                <Input
-                  id='source-default-priority'
-                  type='number'
-                  value={form.default_priority}
-                  onChange={(event) =>
-                    setField(
-                      'default_priority',
-                      parseIntegerInput(event.target.value)
-                    )
-                  }
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Default Weight')}
-                htmlFor='source-default-weight'
-              >
-                <Input
-                  id='source-default-weight'
-                  type='number'
-                  min={0}
-                  value={form.default_weight}
-                  onChange={(event) =>
-                    setField(
-                      'default_weight',
-                      parseIntegerInput(event.target.value)
-                    )
-                  }
-                />
-              </FieldBlock>
-            </div>
-            <SwitchRow
-              label={t('Enable Channel Monitor')}
-              checked={form.enable_monitor}
-              onCheckedChange={(checked) => setField('enable_monitor', checked)}
-            />
-            <FieldBlock
-              label={t('Monitor Interval Minutes')}
-              htmlFor='source-monitor-interval'
-            >
-              <Input
-                id='source-monitor-interval'
-                type='number'
-                min={0}
-                value={form.monitor_interval_minutes}
-                onChange={(event) =>
-                  setField(
-                    'monitor_interval_minutes',
-                    parseIntegerInput(
-                      event.target.value,
-                      DEFAULT_MONITOR_INTERVAL_MINUTES
-                    )
-                  )
-                }
-              />
-            </FieldBlock>
-            <FieldBlock
-              label={t('Default Model Strategy')}
-              htmlFor='source-model-strategy'
-            >
-              <Select
-                value={form.model_strategy}
-                onValueChange={(value) =>
-                  setField('model_strategy', normalizeModelStrategy(value))
-                }
-              >
-                <SelectTrigger id='source-model-strategy'>
-                  <SelectValue>
-                    {t(modelStrategyDisplayLabel(form.model_strategy))}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    <SelectItem value={UPSTREAM_SOURCE_MODEL_STRATEGY_ALL}>
-                      {t('All upstream models')}
-                    </SelectItem>
-                    <SelectItem value={UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED}>
-                      {t('Fixed models')}
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </FieldBlock>
-            {form.model_strategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
-              <FieldBlock label={t('Fixed Models')}>
-                <FixedModelSelect
-                  values={form.fixed_models}
-                  options={modelSelectOptions}
-                  onChange={(values) => setField('fixed_models', values)}
-                />
-              </FieldBlock>
-            )}
-            <SideDrawerSectionHeader title={t('Default Sync Schedule')} />
-            <SwitchRow
-              label={t('Enable Auto Sync')}
-              checked={form.auto_sync_enabled}
-              onCheckedChange={(checked) =>
-                setField('auto_sync_enabled', checked)
-              }
-            />
-            <FieldBlock
-              label={t('Auto Sync Interval Minutes')}
-              htmlFor='source-auto-sync-interval'
-            >
-              <Input
-                id='source-auto-sync-interval'
-                type='number'
-                min={0}
-                value={form.auto_sync_interval_minutes}
-                disabled={!form.auto_sync_enabled}
-                onChange={(event) =>
-                  setField(
-                    'auto_sync_interval_minutes',
-                    parseIntegerInput(
-                      event.target.value,
-                      DEFAULT_AUTO_SYNC_INTERVAL_MINUTES
-                    )
-                  )
-                }
-              />
-            </FieldBlock>
-            <FieldBlock
-              label={t('Codex image generation bridge')}
-              htmlFor='source-codex-image-generation-bridge'
-            >
-              <CodexImageGenerationBridgePolicySelect
-                triggerId='source-codex-image-generation-bridge'
-                value={form.codex_image_generation_bridge_policy}
-                onChange={(value) =>
-                  value !== 'inherit' &&
-                  setField('codex_image_generation_bridge_policy', value)
-                }
-              />
-            </FieldBlock>
-            <SideDrawerSectionHeader title={t('Default Priority Adjustment')} />
-            <SwitchRow
-              label={t('Enable Auto Priority')}
-              checked={form.auto_priority_enabled}
-              onCheckedChange={(checked) =>
-                setField('auto_priority_enabled', checked)
-              }
-            />
-            <div className='grid gap-4 sm:grid-cols-2'>
-              <FieldBlock
-                label={t('Auto Priority Interval Minutes')}
-                htmlFor='source-auto-priority-interval'
-              >
-                <Input
-                  id='source-auto-priority-interval'
-                  type='number'
-                  min={0}
-                  value={form.auto_priority_interval_minutes}
-                  disabled={!form.auto_priority_enabled}
-                  onChange={(event) =>
-                    setField(
-                      'auto_priority_interval_minutes',
-                      parseIntegerInput(
-                        event.target.value,
-                        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
-                      )
-                    )
-                  }
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Metrics Window Hours')}
-                htmlFor='source-auto-priority-window'
-              >
-                <Input
-                  id='source-auto-priority-window'
-                  type='number'
-                  min={1}
-                  max={168}
-                  value={form.auto_priority_window_hours}
-                  disabled={!form.auto_priority_enabled}
-                  onChange={(event) =>
-                    setField(
-                      'auto_priority_window_hours',
-                      parseIntegerInput(
-                        event.target.value,
-                        DEFAULT_AUTO_PRIORITY_WINDOW_HOURS
-                      )
-                    )
-                  }
-                />
-              </FieldBlock>
-            </div>
-          </SideDrawerSection>
 
           <SideDrawerSection>
             <div className='flex items-center justify-between gap-3'>
@@ -2003,7 +1653,8 @@ function SourceFormSheet(props: {
                           <SwitchRow
                             label={t('Monitor')}
                             checked={
-                              rule.monitor?.enabled ?? form.enable_monitor
+                              rule.monitor?.enabled ??
+                              ruleStrategyDefaults.monitor.enabled
                             }
                             onCheckedChange={(checked) =>
                               setLocalGroupRule(index, {
@@ -2012,7 +1663,8 @@ function SourceFormSheet(props: {
                                   enabled: checked,
                                   interval_minutes: monitorIntervalDisplayValue(
                                     rule.monitor?.interval_minutes,
-                                    form.monitor_interval_minutes
+                                    ruleStrategyDefaults.monitor
+                                      .interval_minutes
                                   ),
                                 },
                               })
@@ -2028,7 +1680,7 @@ function SourceFormSheet(props: {
                               min={5}
                               value={monitorIntervalDisplayValue(
                                 rule.monitor?.interval_minutes,
-                                form.monitor_interval_minutes
+                                ruleStrategyDefaults.monitor.interval_minutes
                               )}
                               onChange={(event) =>
                                 setLocalGroupRule(index, {
@@ -2036,10 +1688,11 @@ function SourceFormSheet(props: {
                                   monitor: {
                                     enabled:
                                       rule.monitor?.enabled ??
-                                      form.enable_monitor,
+                                      ruleStrategyDefaults.monitor.enabled,
                                     interval_minutes: parseIntegerInput(
                                       event.target.value,
-                                      form.monitor_interval_minutes
+                                      ruleStrategyDefaults.monitor
+                                        .interval_minutes
                                     ),
                                   },
                                 })
@@ -2051,7 +1704,8 @@ function SourceFormSheet(props: {
                           <SwitchRow
                             label={t('Auto Sync')}
                             checked={
-                              rule.auto_sync?.enabled ?? form.auto_sync_enabled
+                              rule.auto_sync?.enabled ??
+                              ruleStrategyDefaults.autoSync.enabled
                             }
                             onCheckedChange={(checked) =>
                               setLocalGroupRule(index, {
@@ -2060,7 +1714,8 @@ function SourceFormSheet(props: {
                                   enabled: checked,
                                   interval_minutes:
                                     rule.auto_sync?.interval_minutes ??
-                                    form.auto_sync_interval_minutes,
+                                    ruleStrategyDefaults.autoSync
+                                      .interval_minutes,
                                 },
                               })
                             }
@@ -2075,7 +1730,7 @@ function SourceFormSheet(props: {
                               min={0}
                               value={
                                 rule.auto_sync?.interval_minutes ??
-                                form.auto_sync_interval_minutes
+                                ruleStrategyDefaults.autoSync.interval_minutes
                               }
                               onChange={(event) =>
                                 setLocalGroupRule(index, {
@@ -2083,10 +1738,11 @@ function SourceFormSheet(props: {
                                   auto_sync: {
                                     enabled:
                                       rule.auto_sync?.enabled ??
-                                      form.auto_sync_enabled,
+                                      ruleStrategyDefaults.autoSync.enabled,
                                     interval_minutes: parseIntegerInput(
                                       event.target.value,
-                                      form.auto_sync_interval_minutes
+                                      ruleStrategyDefaults.autoSync
+                                        .interval_minutes
                                     ),
                                   },
                                 })
@@ -2099,7 +1755,7 @@ function SourceFormSheet(props: {
                             label={t('Auto Priority')}
                             checked={
                               rule.auto_priority?.enabled ??
-                              form.auto_priority_enabled
+                              ruleStrategyDefaults.autoPriority.enabled
                             }
                             onCheckedChange={(checked) =>
                               setLocalGroupRule(index, {
@@ -2108,11 +1764,13 @@ function SourceFormSheet(props: {
                                   enabled: checked,
                                   interval_minutes: intervalDisplayValue(
                                     rule.auto_priority?.interval_minutes,
-                                    form.auto_priority_interval_minutes
+                                    ruleStrategyDefaults.autoPriority
+                                      .interval_minutes
                                   ),
                                   window_hours:
                                     rule.auto_priority?.window_hours ??
-                                    form.auto_priority_window_hours,
+                                    ruleStrategyDefaults.autoPriority
+                                      .window_hours,
                                 },
                               })
                             }
@@ -2128,7 +1786,8 @@ function SourceFormSheet(props: {
                                 min={0}
                                 value={intervalDisplayValue(
                                   rule.auto_priority?.interval_minutes,
-                                  form.auto_priority_interval_minutes
+                                  ruleStrategyDefaults.autoPriority
+                                    .interval_minutes
                                 )}
                                 onChange={(event) =>
                                   setLocalGroupRule(index, {
@@ -2136,14 +1795,17 @@ function SourceFormSheet(props: {
                                     auto_priority: {
                                       enabled:
                                         rule.auto_priority?.enabled ??
-                                        form.auto_priority_enabled,
+                                        ruleStrategyDefaults.autoPriority
+                                          .enabled,
                                       interval_minutes: parseIntegerInput(
                                         event.target.value,
-                                        form.auto_priority_interval_minutes
+                                        ruleStrategyDefaults.autoPriority
+                                          .interval_minutes
                                       ),
                                       window_hours:
                                         rule.auto_priority?.window_hours ??
-                                        form.auto_priority_window_hours,
+                                        ruleStrategyDefaults.autoPriority
+                                          .window_hours,
                                     },
                                   })
                                 }
@@ -2160,7 +1822,8 @@ function SourceFormSheet(props: {
                                 max={168}
                                 value={
                                   rule.auto_priority?.window_hours ??
-                                  form.auto_priority_window_hours
+                                  ruleStrategyDefaults.autoPriority
+                                    .window_hours
                                 }
                                 onChange={(event) =>
                                   setLocalGroupRule(index, {
@@ -2168,14 +1831,17 @@ function SourceFormSheet(props: {
                                     auto_priority: {
                                       enabled:
                                         rule.auto_priority?.enabled ??
-                                        form.auto_priority_enabled,
+                                        ruleStrategyDefaults.autoPriority
+                                          .enabled,
                                       interval_minutes: intervalDisplayValue(
                                         rule.auto_priority?.interval_minutes,
-                                        form.auto_priority_interval_minutes
+                                        ruleStrategyDefaults.autoPriority
+                                          .interval_minutes
                                       ),
                                       window_hours: parseIntegerInput(
                                         event.target.value,
-                                        form.auto_priority_window_hours
+                                        ruleStrategyDefaults.autoPriority
+                                          .window_hours
                                       ),
                                     },
                                   })
@@ -3108,7 +2774,6 @@ export function UpstreamSources() {
         source.relay_base_url,
         source.masked_email,
         source.local_group,
-        source.default_local_group,
       ].some((value) =>
         String(value || '')
           .toLowerCase()

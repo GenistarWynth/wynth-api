@@ -3,6 +3,7 @@ import { describe, test } from 'node:test'
 import {
   buildLocalGroupRuleTemplate,
   createLocalGroupRuleUserTemplate,
+  DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS,
   hasLocalGroupRuleMatcher,
   normalizeKeywordList,
   normalizeModelList,
@@ -269,25 +270,14 @@ describe('upstream source rule normalization', () => {
         model_strategy: 'all_upstream',
         fixed_models: [],
       },
-      {
-        monitor: { enabled: true, interval_minutes: 10 },
-        autoSync: { enabled: true, interval_minutes: 0 },
-        autoPriority: {
-          enabled: false,
-          interval_minutes: 30,
-          window_hours: 24,
-        },
-        codexImageGenerationBridgePolicy: 'follow',
-        modelStrategy: 'all_upstream',
-        fixedModels: [],
-      }
+      DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS
     )
 
     assert.equal(inherited.has_overrides, false)
     assert.deepEqual(inherited.override_keys, [])
     assert.equal(inherited.monitor.origin, 'inherit')
-    assert.equal(inherited.monitor.enabled, true)
-    assert.equal(inherited.auto_sync.interval_minutes, 0)
+    assert.equal(inherited.monitor.enabled, false)
+    assert.equal(inherited.auto_sync.interval_minutes, 30)
 
     const customized = resolveLocalGroupRuleStrategy(
       {
@@ -307,18 +297,7 @@ describe('upstream source rule normalization', () => {
         model_strategy: 'fixed',
         fixed_models: ['gpt-5', 'gpt-4o'],
       },
-      {
-        monitor: { enabled: true, interval_minutes: 10 },
-        autoSync: { enabled: true, interval_minutes: 0 },
-        autoPriority: {
-          enabled: false,
-          interval_minutes: 30,
-          window_hours: 24,
-        },
-        codexImageGenerationBridgePolicy: 'follow',
-        modelStrategy: 'all_upstream',
-        fixedModels: [],
-      }
+      DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS
     )
 
     assert.equal(customized.has_overrides, true)

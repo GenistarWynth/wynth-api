@@ -171,22 +171,7 @@ export type UpstreamSourceFormValues = {
   email: string
   password: string
   local_group: string
-  channel_type: number
-  default_priority: number
-  default_weight: number
-  enable_monitor: boolean
-  monitor_interval_minutes: number
-  auto_sync_models: boolean
   allow_private_ip: boolean
-  auto_sync_enabled: boolean
-  auto_sync_interval_minutes: number
-  auto_priority_enabled: boolean
-  auto_priority_interval_minutes: number
-  auto_priority_window_hours: number
-  codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy
-  default_local_group: string
-  model_strategy: UpstreamSourceModelStrategy
-  fixed_models: string[]
   local_group_rules: UpstreamSourceLocalGroupRule[]
 }
 

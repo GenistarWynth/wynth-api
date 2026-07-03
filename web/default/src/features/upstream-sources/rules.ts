@@ -52,6 +52,29 @@ export type LocalGroupRuleStrategyDefaults = {
   fixedModels: string[]
 }
 
+// DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS is the constant inherit baseline
+// every per-rule strategy override falls back to now that upstream sources no
+// longer carry source-level "Default *" settings — everything is per-rule.
+export const DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS: LocalGroupRuleStrategyDefaults =
+  {
+    monitor: {
+      enabled: false,
+      interval_minutes: 10,
+    },
+    autoSync: {
+      enabled: false,
+      interval_minutes: 30,
+    },
+    autoPriority: {
+      enabled: false,
+      interval_minutes: 30,
+      window_hours: 24,
+    },
+    codexImageGenerationBridgePolicy: 'follow',
+    modelStrategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
+    fixedModels: [],
+  }
+
 type ResolvedMonitorStrategy = {
   origin: LocalGroupRuleStrategyOrigin
   enabled: boolean
