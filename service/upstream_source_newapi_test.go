@@ -406,6 +406,42 @@ func TestNewAPIAdapterRefreshExpiredSessionPreservesTurnstileSentinel(t *testing
 	assert.True(t, errors.Is(err, ErrUpstreamSourceTurnstileRequired))
 }
 
+// TestEnsureManagementAuthUsesBrowserWhenPasswordBlocked verifies the login
+// chain wired in Task 9: when password login is Turnstile-blocked but a
+// headless browser (CDP) is configured and the stubbed browser login
+// succeeds, ensureManagementAuth returns the browser-acquired token instead
+// of surfacing the Turnstile sentinel from the password fallback.
+func TestEnsureManagementAuthUsesBrowserWhenPasswordBlocked(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	common.UpstreamBrowserCDPURL = "ws://stub"
+	t.Cleanup(func() { common.UpstreamBrowserCDPURL = "" })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user/login"):
+			w.Write([]byte(`{"success":false,"message":"Turnstile token 为空"}`))
+		case strings.HasSuffix(r.URL.Path, "/user/self"):
+			w.Write([]byte(`{"success":true,"data":{"id":3}}`))
+		case strings.HasSuffix(r.URL.Path, "/user/token"):
+			w.Write([]byte(`{"success":true,"data":"chrome-tok"}`))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	orig := upstreamBrowserLogin
+	upstreamBrowserLogin = func(ctx context.Context, s *model.UpstreamSource, e, p string) (upstreamBrowserSession, error) {
+		return upstreamBrowserSession{Cookies: []*http.Cookie{{Name: "session", Value: "x"}}}, nil
+	}
+	t.Cleanup(func() { upstreamBrowserLogin = orig })
+
+	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeNewAPI, BaseURL: server.URL, AdminAPIBasePath: "/api", AuthConfig: `{"email":"a@b.com","password":"p"}`}
+	adapter := NewAPIAdapter{Client: server.Client()}
+	cfg, err := adapter.ensureManagementAuth(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, "chrome-tok", cfg.AccessToken)
+}
+
 func TestNewAPIAdapterListKeysFiltersByGroupAndReadsFullKeys(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 

@@ -206,6 +206,15 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	if authConfig.AccessToken != "" && authConfig.ExpiresAt > time.Now().Unix() {
 		return authConfig.AccessToken, nil
 	}
+	// Headless browser first (per chosen strategy) when configured.
+	if upstreamBrowserEnabled() {
+		if acquired, bErr := acquireSub2APISessionViaBrowser(ctx, source, authConfig); bErr == nil && acquired.AccessToken != "" {
+			if marshaled := mustMarshalSub2APIAuthConfig(acquired); marshaled != "" {
+				source.AuthConfig = marshaled
+			}
+			return acquired.AccessToken, nil
+		}
+	}
 	if authConfig.Email == "" || authConfig.Password == "" {
 		return "", errors.New("sub2api email and password are required")
 	}
@@ -243,6 +252,14 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	}
 	source.AuthConfig = string(updated)
 	return authConfig.AccessToken, nil
+}
+
+func mustMarshalSub2APIAuthConfig(cfg sub2APIAuthConfig) string {
+	data, err := common.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func parseSub2APIAuthConfig(source *model.UpstreamSource) (sub2APIAuthConfig, error) {

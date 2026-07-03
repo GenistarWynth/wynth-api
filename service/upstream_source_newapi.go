@@ -209,7 +209,25 @@ func (a NewAPIAdapter) ensureManagementAuth(ctx context.Context, source *model.U
 	if authConfig.AccessToken != "" && authConfig.UserID > 0 {
 		return authConfig, nil
 	}
+	// Headless browser first (per chosen strategy) when configured.
+	if upstreamBrowserEnabled() {
+		if acquired, bErr := acquireNewAPISessionViaBrowser(ctx, source, authConfig); bErr == nil && acquired.AccessToken != "" {
+			if marshaled := mustMarshalNewAPIAuthConfig(acquired); marshaled != "" {
+				source.AuthConfig = marshaled
+			}
+			return acquired, nil
+		}
+	}
+	// Fall back to password login (works only without Turnstile).
 	return a.loginManagementAuth(ctx, source, authConfig)
+}
+
+func mustMarshalNewAPIAuthConfig(cfg newAPIAuthConfig) string {
+	data, err := common.Marshal(cfg)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (a NewAPIAdapter) refreshManagementAuth(ctx context.Context, source *model.UpstreamSource, authConfig newAPIAuthConfig) (newAPIAuthConfig, error) {
