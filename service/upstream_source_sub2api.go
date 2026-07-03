@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,9 +30,34 @@ type Sub2APIAdapter struct {
 }
 
 type sub2APIEnvelope[T any] struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    T      `json:"data"`
+	// Code is decoded as raw JSON rather than int because some sub2api
+	// gateways send it as a numeric string (e.g. "0", "40001") instead of a
+	// JSON number, which broke common.Unmarshal against a hardcoded int
+	// field. See sub2APICodeIndicatesError for the flexible interpretation.
+	Code    json.RawMessage `json:"code"`
+	Message string          `json:"message"`
+	Data    T               `json:"data"`
+}
+
+// sub2APICodeIndicatesError treats only a NONZERO number (int or numeric
+// string) as an error. Non-numeric strings ("success") and empty/absent
+// codes are not errors by themselves -- HTTP status is the primary success
+// signal. Gateways vary (some send code as int 0, some as string "0" or
+// "success").
+func sub2APICodeIndicatesError(raw json.RawMessage) bool {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	s = strings.TrimSpace(s)
+	if s == "" || s == "null" {
+		return false
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n != 0
+	}
+	return false
+}
+
+func sub2APICodeString(raw json.RawMessage) string {
+	return strings.Trim(strings.TrimSpace(string(raw)), `"`)
 }
 
 type sub2APIAuthConfig struct {
@@ -203,8 +230,23 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 	if err != nil {
 		return "", err
 	}
-	if authConfig.AccessToken != "" && authConfig.ExpiresAt > time.Now().Unix() {
+	now := time.Now().Unix()
+	if authConfig.AccessToken != "" && (authConfig.ExpiresAt == 0 || authConfig.ExpiresAt-60 > now) {
 		return authConfig.AccessToken, nil
+	}
+	// Access token missing/expired: try refresh-token renewal before
+	// browser/password login.
+	if authConfig.RefreshToken != "" {
+		refreshed, rErr := refreshSub2APIAccessToken(ctx, &a, source, authConfig)
+		if rErr == nil && refreshed.AccessToken != "" {
+			if marshaled := mustMarshalSub2APIAuthConfig(refreshed); marshaled != "" {
+				source.AuthConfig = marshaled
+			}
+			return refreshed.AccessToken, nil
+		}
+		if rErr != nil {
+			common.SysLog("sub2api refresh-token renewal failed, falling back: " + SanitizeUpstreamSourceError(rErr))
+		}
 	}
 	// Headless browser first (per chosen strategy) when configured.
 	if upstreamBrowserEnabled() {
@@ -243,19 +285,50 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 
 	authConfig.AccessToken = data.AccessToken
 	authConfig.RefreshToken = data.RefreshToken
-	authConfig.ExpiresAt = data.ExpiresAt
-	if authConfig.ExpiresAt == 0 && data.ExpiresIn > 0 {
-		authConfig.ExpiresAt = time.Now().Unix() + data.ExpiresIn
-	}
-	if authConfig.ExpiresAt == 0 {
-		authConfig.ExpiresAt = time.Now().Add(time.Hour).Unix()
-	}
+	authConfig.ExpiresAt = sub2APIResolveExpiresAt(data.AccessToken, data.ExpiresAt, data.ExpiresIn)
 	updated, err := common.Marshal(authConfig)
 	if err != nil {
 		return "", err
 	}
 	source.AuthConfig = string(updated)
 	return authConfig.AccessToken, nil
+}
+
+// sub2APIJWTExp decodes a JWT's exp (unix seconds) claim WITHOUT verifying
+// its signature -- it is only used as a best-effort expiry hint when the
+// gateway response/import request did not supply one explicitly. Returns 0
+// if the token is not a well-formed JWT or carries no exp claim.
+func sub2APIJWTExp(token string) int64 {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		if payload, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
+			return 0
+		}
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := common.Unmarshal(payload, &claims); err != nil {
+		return 0
+	}
+	return claims.Exp
+}
+
+// sub2APIResolveExpiresAt prefers an explicit expiresAt, then an
+// expiresIn-from-now duration, then falls back to the access token's JWT exp
+// claim. 0 means "never expires".
+func sub2APIResolveExpiresAt(accessToken string, expiresAt int64, expiresIn int64) int64 {
+	if expiresAt > 0 {
+		return expiresAt
+	}
+	if expiresIn > 0 {
+		return time.Now().Unix() + expiresIn
+	}
+	return sub2APIJWTExp(accessToken)
 }
 
 func mustMarshalSub2APIAuthConfig(cfg sub2APIAuthConfig) string {
@@ -281,6 +354,32 @@ func parseSub2APIAuthConfig(source *model.UpstreamSource) (sub2APIAuthConfig, er
 	if err := common.UnmarshalJsonStr(raw, &authConfig); err != nil {
 		return sub2APIAuthConfig{}, err
 	}
+	return authConfig, nil
+}
+
+// refreshSub2APIAccessToken exchanges the stored refresh token for a fresh
+// access token. ASSUMPTION: POST {AdminAPIBasePath}/auth/refresh
+// {"refresh_token": ...} returns the same shape as /auth/login. If a given
+// sub2api build's refresh endpoint differs, this errors and the caller falls
+// back to browser/password login (non-breaking).
+func refreshSub2APIAccessToken(ctx context.Context, a *Sub2APIAdapter, source *model.UpstreamSource, authConfig sub2APIAuthConfig) (sub2APIAuthConfig, error) {
+	if strings.TrimSpace(authConfig.RefreshToken) == "" {
+		return authConfig, errors.New("no refresh token")
+	}
+	payload := map[string]string{"refresh_token": authConfig.RefreshToken}
+	data, err := sub2APIRequest[sub2APILoginData](ctx, a, source, http.MethodPost, "/auth/refresh", nil, payload, "")
+	if err != nil {
+		return authConfig, err
+	}
+	if data.AccessToken == "" {
+		return authConfig, errors.New("sub2api refresh response missing access token")
+	}
+	authConfig.AccessToken = data.AccessToken
+	if data.RefreshToken != "" {
+		authConfig.RefreshToken = data.RefreshToken
+	}
+	authConfig.ExpiresAt = sub2APIResolveExpiresAt(data.AccessToken, data.ExpiresAt, data.ExpiresIn)
+	authConfig.SessionSource = "refresh"
 	return authConfig, nil
 }
 
@@ -337,11 +436,11 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 		}
 		return zero, fmt.Errorf("decode upstream response failed: %w", err)
 	}
-	if envelope.Code != 0 {
-		return zero, fmt.Errorf("upstream error %d: %s", envelope.Code, SanitizeUpstreamSourceError(errors.New(envelope.Message)))
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return zero, fmt.Errorf("upstream request failed with status %d", resp.StatusCode)
+		return zero, fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, SanitizeUpstreamSourceError(errors.New(envelope.Message)))
+	}
+	if sub2APICodeIndicatesError(envelope.Code) {
+		return zero, fmt.Errorf("upstream error %s: %s", sub2APICodeString(envelope.Code), SanitizeUpstreamSourceError(errors.New(envelope.Message)))
 	}
 	return envelope.Data, nil
 }

@@ -118,10 +118,7 @@ func buildImportedAuthConfigJSON(source *model.UpstreamSource, req dto.UpstreamS
 		if req.RefreshToken != "" {
 			cfg.RefreshToken = req.RefreshToken
 		}
-		cfg.ExpiresAt = req.ExpiresAt
-		if cfg.ExpiresAt == 0 {
-			cfg.ExpiresAt = common.GetTimestamp() + 3600
-		}
+		cfg.ExpiresAt = sub2APIResolveExpiresAt(cfg.AccessToken, req.ExpiresAt, 0)
 		cfg.SessionSource = "manual"
 		data, err := common.Marshal(cfg)
 		return string(data), err

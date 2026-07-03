@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -351,6 +352,141 @@ func TestSub2APIAdapterNonZeroEnvelopeCodeIsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "upstream error")
 	assert.Contains(t, err.Error(), "401")
 	assert.NotContains(t, err.Error(), "should-not-leak")
+}
+
+// TestSub2APICodeIndicatesError is a regression guard for gateways that send
+// the envelope "code" field as a numeric string (or omit it) instead of a
+// JSON number. Only a nonzero number, in either encoding, should be treated
+// as an upstream error; HTTP status is the primary success signal.
+func TestSub2APICodeIndicatesError(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want bool
+	}{
+		{"string zero", json.RawMessage(`"0"`), false},
+		{"int zero", json.RawMessage(`0`), false},
+		{"absent", nil, false},
+		{"empty string literal", json.RawMessage(`""`), false},
+		{"success string", json.RawMessage(`"success"`), false},
+		{"string nonzero", json.RawMessage(`"5"`), true},
+		{"int nonzero", json.RawMessage(`5`), true},
+		{"string large error code", json.RawMessage(`"40001"`), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sub2APICodeIndicatesError(tt.raw))
+		})
+	}
+}
+
+// TestDiscoverGroupsSucceedsWithStringCode reproduces the reported decode bug:
+// some sub2api gateways send the envelope "code" field as a STRING ("0")
+// rather than a JSON number, and the previous hardcoded `int` field made
+// common.Unmarshal fail with "cannot unmarshal string into Go struct field".
+func TestDiscoverGroupsSucceedsWithStringCode(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			w.Header().Set("Content-Type", "application/json")
+			_, err := w.Write([]byte(`{"code":"0","message":"ok","data":[{"id":1,"name":"g","platform":"openai","status":"enabled"}]}`))
+			require.NoError(t, err)
+		case "/api/v1/groups/rates":
+			w.Header().Set("Content-Type", "application/json")
+			_, err := w.Write([]byte(`{"code":"0","data":{}}`))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	adapter := Sub2APIAdapter{Client: server.Client()}
+
+	groups, err := adapter.DiscoverGroups(context.Background(), source)
+
+	require.NoError(t, err)
+	require.Len(t, groups, 1)
+	assert.Equal(t, "1", groups[0].ID)
+	assert.Equal(t, "g", groups[0].Name)
+}
+
+// TestEnsureAccessTokenRefreshesWithRefreshToken verifies that an
+// expired-but-refreshable access token is renewed via the refresh-token
+// exchange BEFORE falling back to password login, and that the refreshed
+// tokens are persisted onto source.AuthConfig.
+func TestEnsureAccessTokenRefreshesWithRefreshToken(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	var loginCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/refresh":
+			var payload map[string]string
+			require.NoError(t, common.DecodeJson(r.Body, &payload))
+			assert.Equal(t, "rt-1", payload["refresh_token"])
+			writeSub2APITestJSON(t, w, map[string]any{
+				"code": "0",
+				"data": map[string]any{
+					"access_token":  "new-at",
+					"refresh_token": "rt-2",
+					"expires_in":    3600,
+				},
+			})
+		case "/api/v1/auth/login":
+			loginCalled = true
+			writeSub2APITestJSON(t, w, map[string]any{
+				"code": 0,
+				"data": map[string]any{"access_token": "from-login", "expires_in": 3600},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, map[string]any{
+		"access_token":  "stale",
+		"refresh_token": "rt-1",
+		"expires_at":    1,
+	})
+	adapter := Sub2APIAdapter{Client: server.Client()}
+
+	token, err := adapter.ensureAccessToken(context.Background(), source)
+
+	require.NoError(t, err)
+	assert.Equal(t, "new-at", token)
+	assert.False(t, loginCalled, "password login must not be called when refresh-token renewal succeeds")
+
+	var auth map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(source.AuthConfig, &auth))
+	assert.Equal(t, "new-at", auth["access_token"])
+	assert.Equal(t, "rt-2", auth["refresh_token"])
+}
+
+// TestEnsureAccessTokenZeroExpiryIsNever verifies that an access token with
+// expires_at == 0 (meaning "never expires", e.g. resolved from a JWT without
+// an exp claim) is used as-is without any HTTP call.
+func TestEnsureAccessTokenZeroExpiryIsNever(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	source := newSub2APITestSource(t, "https://example.com", map[string]any{
+		"access_token": "at",
+		"expires_at":   0,
+	})
+	adapter := Sub2APIAdapter{Client: &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("unexpected HTTP call to %s", req.URL.String())
+		}),
+	}}
+
+	token, err := adapter.ensureAccessToken(context.Background(), source)
+
+	require.NoError(t, err)
+	assert.Equal(t, "at", token)
 }
 
 func TestSub2APIAdapterRejectsOversizedResponseBody(t *testing.T) {

@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -188,7 +190,11 @@ func TestApplyImportedSessionSub2APIAccessToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "jwt-imported", got.AccessToken)
 	assert.Equal(t, "manual", got.SessionSource)
-	assert.Greater(t, got.ExpiresAt, common.GetTimestamp())
+	// "jwt-imported" is not a well-formed JWT and no explicit expires_at was
+	// supplied, so expiry is unresolved (0 = never) rather than the old
+	// arbitrary now+3600 fallback. See TestSub2APIImportDerivesExpiryFromJWT
+	// for the case where the pasted token IS a JWT with an exp claim.
+	assert.Equal(t, int64(0), got.ExpiresAt)
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
@@ -197,6 +203,65 @@ func TestApplyImportedSessionSub2APIAccessToken(t *testing.T) {
 	var persistedCfg sub2APIAuthConfig
 	require.NoError(t, common.UnmarshalJsonStr(persisted, &persistedCfg))
 	assert.Equal(t, "jwt-imported", persistedCfg.AccessToken)
+}
+
+// TestSub2APIImportDerivesExpiryFromJWT verifies that a pasted access token
+// which happens to be a JWT has its real exp claim used to populate
+// expires_at when the admin does not supply one, instead of the previous
+// arbitrary "now+3600" fallback that could expire a still-valid session
+// early or misreport a longer-lived one.
+func TestSub2APIImportDerivesExpiryFromJWT(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	futureExp := time.Now().Add(2 * time.Hour).Unix()
+	jwt := buildTestJWT(t, map[string]any{"exp": futureExp})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			assert.Equal(t, "Bearer "+jwt, r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":[]}`))
+		case "/api/v1/groups/rates":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":{}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeSub2API,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api/v1",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: jwt,
+		ExpiresAt:   0,
+	})
+	require.NoError(t, err)
+
+	got, err := parseSub2APIAuthConfig(source)
+	require.NoError(t, err)
+	assert.Equal(t, futureExp, got.ExpiresAt, "expires_at should be derived from the JWT exp claim, not now+3600")
+}
+
+// buildTestJWT builds an unsigned header.payload.signature JWT string whose
+// payload is the base64url (no padding) encoding of claims, matching the
+// encoding sub2APIJWTExp expects to decode.
+func buildTestJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payloadBytes, err := common.Marshal(claims)
+	require.NoError(t, err)
+	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	return header + "." + payload + ".sig"
 }
 
 func TestApplyImportedSessionFailsValidationDoesNotPersist(t *testing.T) {
