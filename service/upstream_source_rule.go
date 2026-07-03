@@ -46,6 +46,11 @@ type upstreamSourceSyncConfig struct {
 	CodexImageGenerationBridgePolicy string                             `json:"codex_image_generation_bridge_policy"`
 	DefaultLocalGroup                string                             `json:"default_local_group"`
 	LocalGroupRules                  []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	// SyncConfigVersion marks whether this blob has already gone through
+	// migrateLegacyUpstreamSourceConfig. 0 (absent/legacy) blobs get their
+	// source-level defaults folded into local_group_rules on read; version 1
+	// blobs are trusted as-is so the migration runs at most once.
+	SyncConfigVersion int `json:"sync_config_version,omitempty"`
 }
 
 type upstreamSourceRuleResolution struct {
@@ -81,13 +86,119 @@ func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error)
 		AutoPriorityIntervalMinutes: upstreamSourceAutoPriorityDefaultIntervalMinutes,
 		AutoPriorityWindowHours:     upstreamSourceAutoPriorityDefaultWindowHours,
 	}
-	if strings.TrimSpace(raw) == "" {
-		return normalizeUpstreamSourceSyncConfig(config), nil
+	if strings.TrimSpace(raw) != "" {
+		if err := common.Unmarshal([]byte(raw), &config); err != nil {
+			return config, err
+		}
 	}
-	if err := common.Unmarshal([]byte(raw), &config); err != nil {
-		return config, err
-	}
+	config = migrateLegacyUpstreamSourceConfig(config)
 	return normalizeUpstreamSourceSyncConfig(config), nil
+}
+
+// migrateLegacyUpstreamSourceConfig folds legacy source-level defaults into
+// per-group rules for blobs written before the fold-down (version 0),
+// including a wholly empty/never-configured blob. Each existing rule
+// inherits the source-level channel_type/priority/weight and any unset
+// monitor/auto-sync/auto-priority/model settings; a source with no rules
+// gets a single catch-all rule (empty matchers = match all), preserving the
+// legacy "no rules = sync everything with these defaults" behavior. Version
+// is bumped to 1 so the migration runs at most once per stored blob.
+func migrateLegacyUpstreamSourceConfig(config upstreamSourceSyncConfig) upstreamSourceSyncConfig {
+	if config.SyncConfigVersion >= 1 {
+		return config
+	}
+	base := legacySourceRuleFromConfig(config)
+	if len(config.LocalGroupRules) == 0 {
+		config.LocalGroupRules = []dto.UpstreamSourceLocalGroupRule{base}
+	} else {
+		for i := range config.LocalGroupRules {
+			config.LocalGroupRules[i] = backfillLegacyRule(config.LocalGroupRules[i], base)
+		}
+	}
+	config.SyncConfigVersion = 1
+	return config
+}
+
+// legacySourceRuleFromConfig builds a match-all rule carrying every source-level
+// default so pre-fold behavior is preserved exactly.
+func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSourceLocalGroupRule {
+	priority := config.DefaultPriority
+	weight := config.DefaultWeight
+	monitorEnabled := config.EnableMonitor
+	autoSyncEnabled := config.AutoSyncEnabled
+	autoPriorityEnabled := config.AutoPriorityEnabled
+	autoPriorityInterval := config.AutoPriorityIntervalMinutes
+	autoPriorityWindow := config.AutoPriorityWindowHours
+	localGroup := strings.TrimSpace(config.DefaultLocalGroup)
+	if localGroup == "" {
+		localGroup = strings.TrimSpace(config.LocalGroup)
+	}
+	modelStrategy := normalizeUpstreamSourceFallbackModelStrategy(config.ModelStrategy, config.AutoSyncModels)
+	return dto.UpstreamSourceLocalGroupRule{
+		Name:                             "migrated",
+		LocalGroup:                       localGroup,
+		ChannelType:                      config.ChannelType,
+		Priority:                         &priority,
+		Weight:                           &weight,
+		Monitor:                          &dto.UpstreamSourceRuleMonitor{Enabled: &monitorEnabled, IntervalMinutes: config.MonitorIntervalMinutes},
+		AutoSync:                         &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: config.AutoSyncIntervalMinutes},
+		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, IntervalMinutes: &autoPriorityInterval, WindowHours: &autoPriorityWindow},
+		CodexImageGenerationBridgePolicy: config.CodexImageGenerationBridgePolicy,
+		ModelStrategy:                    modelStrategy,
+		FixedModels:                      config.FixedModels,
+	}
+}
+
+// backfillLegacyRule fills only the fields a legacy rule left unset with the
+// source-level base (which previously fed the fallback), preserving behavior.
+func backfillLegacyRule(rule dto.UpstreamSourceLocalGroupRule, base dto.UpstreamSourceLocalGroupRule) dto.UpstreamSourceLocalGroupRule {
+	if rule.ChannelType == 0 {
+		rule.ChannelType = base.ChannelType
+	}
+	if rule.Priority == nil {
+		rule.Priority = base.Priority
+	}
+	if rule.Weight == nil {
+		rule.Weight = base.Weight
+	}
+	if rule.Monitor == nil {
+		rule.Monitor = base.Monitor
+	}
+	if rule.AutoSync == nil {
+		rule.AutoSync = base.AutoSync
+	}
+	if rule.AutoPriority == nil {
+		rule.AutoPriority = base.AutoPriority
+	}
+	if strings.TrimSpace(rule.CodexImageGenerationBridgePolicy) == "" {
+		rule.CodexImageGenerationBridgePolicy = base.CodexImageGenerationBridgePolicy
+	}
+	if strings.TrimSpace(rule.ModelStrategy) == "" {
+		rule.ModelStrategy = base.ModelStrategy
+		rule.FixedModels = base.FixedModels
+	}
+	if strings.TrimSpace(rule.LocalGroup) == "" {
+		rule.LocalGroup = base.LocalGroup
+	}
+	return rule
+}
+
+// MigrateAndNormalizeUpstreamSourceSyncConfigRaw parses raw sync_config JSON
+// (running the legacy-defaults-to-rules migration and normalization) and
+// re-marshals the result back to a JSON string. The controller uses this so
+// a create/update persists an already-migrated (version 1) blob that carries
+// the folded rules, instead of leaving that to happen only at the next
+// runtime sync read.
+func MigrateAndNormalizeUpstreamSourceSyncConfigRaw(raw string) (string, error) {
+	config, err := parseUpstreamSourceSyncConfig(raw)
+	if err != nil {
+		return "", err
+	}
+	data, err := common.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstreamSourceSyncConfig {
@@ -174,9 +285,6 @@ func normalizeUpstreamSourceLocalGroupRules(rules []dto.UpstreamSourceLocalGroup
 		platforms := normalizeUpstreamSourceRuleKeywords(rule.Platforms)
 		nameContains := normalizeUpstreamSourceRuleKeywords(rule.NameContains)
 		descriptionContains := normalizeUpstreamSourceRuleKeywords(rule.DescriptionContains)
-		if len(platforms) == 0 && len(nameContains) == 0 && len(descriptionContains) == 0 {
-			continue
-		}
 		normalized = append(normalized, dto.UpstreamSourceLocalGroupRule{
 			Name:                             strings.TrimSpace(rule.Name),
 			LocalGroup:                       localGroup,
@@ -296,12 +404,6 @@ func resolveUpstreamSourceRule(config upstreamSourceSyncConfig, mapping *model.U
 		fallback.Reason = upstreamSourceMatchReasonManualDisabled
 		return fallback
 	}
-	if len(config.LocalGroupRules) == 0 {
-		fallback.Matched = true
-		fallback.SyncEligible = true
-		fallback.Reason = upstreamSourceMatchReasonMatched
-		return fallback
-	}
 
 	name := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupName))
 	description := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupDescription))
@@ -324,41 +426,31 @@ func resolveUpstreamSourceRule(config upstreamSourceSyncConfig, mapping *model.U
 	return fallback
 }
 
+// upstreamSourceRuleFallbackResolution is the resolution used when no rule
+// applies: no rules configured at all ("no rules" = sync nothing), no rule
+// matched the mapping, the mapping is manually disabled, or its discovery is
+// inactive. It intentionally does NOT read source-level defaults (channel
+// type, priority, weight, monitor, auto-sync, ...) — those are legacy inputs
+// consumed only by migrateLegacyUpstreamSourceConfig. A hardcoded, neutral
+// baseline keeps "no matching rule" from silently reviving source-level
+// defaults for configs that are supposed to have none.
 func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstreamSourceRuleResolution {
-	monitorInterval := config.MonitorIntervalMinutes
-	autoSyncInterval := config.AutoSyncIntervalMinutes
-	if config.AutoSyncEnabled {
-		if autoSyncInterval < 0 {
-			autoSyncInterval = 0
-		}
-	} else {
-		autoSyncInterval = 0
-	}
-	modelStrategy := normalizeUpstreamSourceFallbackModelStrategy(config.ModelStrategy, config.AutoSyncModels)
-	fixedModels := []string(nil)
-	if modelStrategy == upstreamSourceModelStrategyFixed {
-		fixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
-	}
-	channelType := config.ChannelType
-	if channelType == 0 {
-		channelType = constant.ChannelTypeOpenAI
-	}
 	return upstreamSourceRuleResolution{
 		Reason:                           upstreamSourceMatchReasonNoMatchingRule,
 		LocalGroup:                       upstreamSourceDefaultLocalGroup(config),
-		ChannelType:                      channelType,
-		Priority:                         config.DefaultPriority,
-		Weight:                           config.DefaultWeight,
-		MonitorEnabled:                   config.EnableMonitor,
-		MonitorIntervalMinutes:           monitorInterval,
-		AutoSyncEnabled:                  config.AutoSyncEnabled,
-		AutoSyncIntervalMinutes:          autoSyncInterval,
-		AutoPriorityEnabled:              config.AutoPriorityEnabled,
-		AutoPriorityIntervalMinutes:      normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes),
-		AutoPriorityWindowHours:          normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours),
-		CodexImageGenerationBridgePolicy: dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy),
-		ModelStrategy:                    modelStrategy,
-		FixedModels:                      fixedModels,
+		ChannelType:                      constant.ChannelTypeOpenAI,
+		Priority:                         0,
+		Weight:                           1,
+		MonitorEnabled:                   false,
+		MonitorIntervalMinutes:           0,
+		AutoSyncEnabled:                  false,
+		AutoSyncIntervalMinutes:          0,
+		AutoPriorityEnabled:              false,
+		AutoPriorityIntervalMinutes:      upstreamSourceAutoPriorityDefaultIntervalMinutes,
+		AutoPriorityWindowHours:          upstreamSourceAutoPriorityDefaultWindowHours,
+		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyFollow,
+		ModelStrategy:                    upstreamSourceModelStrategyAllUpstream,
+		FixedModels:                      nil,
 	}
 }
 
@@ -378,6 +470,9 @@ func upstreamSourceRuleMatches(rule dto.UpstreamSourceLocalGroupRule, platform s
 	}
 	if upstreamSourceRuleKeywordsMatchAnyText([]string{name, description}, rule.ExcludeKeywords) {
 		return false, true
+	}
+	if len(rule.Platforms) == 0 && len(rule.NameContains) == 0 && len(rule.DescriptionContains) == 0 {
+		return true, false // no matchers => match every group (catch-all)
 	}
 
 	includeMatched := upstreamSourceKeywordsMatch(name, rule.NameContains) ||

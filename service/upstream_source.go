@@ -189,11 +189,7 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 
 	resolutions := make([]upstreamSourceRuleResolution, len(mappings))
 	eligibleCount := 0
-	syncEnabledCount := 0
 	for i := range mappings {
-		if mappings[i].SyncEnabled {
-			syncEnabledCount++
-		}
 		resolutions[i] = resolveUpstreamSourceRuleForManualSync(config, &mappings[i])
 		if mode == upstreamSourceSyncModeAuto && resolutions[i].SyncEligible && !upstreamSourceMappingAutoSyncDue(config, &mappings[i], now) {
 			resolutions[i].SyncEligible = false
@@ -204,7 +200,10 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 		}
 	}
 
-	if len(mappings) == 0 && len(config.LocalGroupRules) == 0 {
+	// A source with genuinely no discovered/selected mappings can never sync
+	// regardless of its rules, so this hard error is scoped to that case
+	// alone (not conflated with "rules exist but nothing matched").
+	if len(mappings) == 0 {
 		err := errors.New("no upstream groups selected for sync; discover and select at least one group before syncing")
 		sanitized := SanitizeUpstreamSourceError(err)
 		result.Status = model.UpstreamSyncStatusFailed
@@ -231,15 +230,8 @@ func (s *UpstreamSourceService) sync(ctx context.Context, sourceID int, mode ups
 			finalError = sanitized
 			return result, err
 		}
-		if syncEnabledCount == 0 {
-			err := errors.New("no upstream groups selected for sync; discover and select at least one group before syncing")
-			sanitized := SanitizeUpstreamSourceError(err)
-			result.Status = model.UpstreamSyncStatusFailed
-			result.Error = sanitized
-			finalStatus = model.UpstreamSyncStatusFailed
-			finalError = sanitized
-			return result, err
-		}
+		// No rules configured at all: "no rules" means sync nothing, which
+		// is a deliberate, successful no-op rather than a failure.
 		return result, nil
 	}
 
@@ -330,7 +322,7 @@ func persistUpstreamSourceAuthConfigIfChanged(sourceID int, original string, cur
 
 func resolveUpstreamSourceRuleForManualSync(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) upstreamSourceRuleResolution {
 	resolution := resolveUpstreamSourceRule(config, mapping)
-	if mapping == nil || len(config.LocalGroupRules) == 0 || mapping.SyncEnabled {
+	if mapping == nil || mapping.SyncEnabled {
 		return resolution
 	}
 	eligibilityMapping := *mapping

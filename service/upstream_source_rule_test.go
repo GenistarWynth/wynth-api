@@ -113,9 +113,14 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 }
 
 func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
+	// The source-level auto_priority_* fields are legacy migration inputs
+	// only; they no longer feed resolution once a rule matches. A rule that
+	// overrides "enabled" but leaves interval/window unset falls back to the
+	// hardcoded defaults below, not these (vestigial) source-level values.
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
-		"auto_priority_enabled":          false,
-		"auto_priority_interval_minutes": 30,
+		"sync_config_version":            1,
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 5,
 		"auto_priority_window_hours":     48,
 		"local_group_rules": []map[string]any{
 			{
@@ -139,22 +144,22 @@ func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
 
 	assert.True(t, resolution.SyncEligible)
 	assert.False(t, resolution.AutoPriorityEnabled)
-	assert.Equal(t, 30, resolution.AutoPriorityIntervalMinutes)
-	assert.Equal(t, 48, resolution.AutoPriorityWindowHours)
+	assert.Equal(t, upstreamSourceAutoPriorityDefaultIntervalMinutes, resolution.AutoPriorityIntervalMinutes)
+	assert.Equal(t, upstreamSourceAutoPriorityDefaultWindowHours, resolution.AutoPriorityWindowHours)
 }
 
 func TestResolveUpstreamSourceRuleAutoPriorityPreservesExplicitZeroInterval(t *testing.T) {
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
-		"auto_priority_enabled":          true,
-		"auto_priority_interval_minutes": 30,
-		"auto_priority_window_hours":     48,
+		"sync_config_version": 1,
 		"local_group_rules": []map[string]any{
 			{
 				"name":        "OpenAI pro",
 				"local_group": "paid",
 				"platforms":   []string{"openai"},
 				"auto_priority": map[string]any{
+					"enabled":          true,
 					"interval_minutes": 0,
+					"window_hours":     48,
 				},
 			},
 		},
@@ -358,7 +363,12 @@ func TestResolveUpstreamSourceRuleTreatsClaudePlatformAsAnthropic(t *testing.T) 
 }
 
 func TestResolveUpstreamSourceRuleKeepsFallbackOnlyRule(t *testing.T) {
+	// sync_config_version 1 keeps this a pure steady-state rule-matching
+	// check: the rule's local_group stays genuinely empty (no migration
+	// backfill from the source-level default), and resolution still falls
+	// back to default_local_group for the local group itself.
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"sync_config_version": 1,
 		"default_local_group": "fallback",
 		"local_group_rules": []map[string]any{
 			{
@@ -514,7 +524,13 @@ func TestResolveUpstreamSourceRuleUsesFirstMatch(t *testing.T) {
 }
 
 func TestResolveUpstreamSourceRuleLeavesUnmatchedGroupsUnsynced(t *testing.T) {
+	// The source-level fields below are legacy migration inputs only. The
+	// mapping matches no rule here, so resolution must fall through to the
+	// hardcoded fallback constants and must NOT leak any of these
+	// source-level values (that reliance is exactly what this fold-down
+	// removes).
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"sync_config_version":        1,
 		"default_local_group":        "fallback",
 		"enable_monitor":             true,
 		"monitor_interval_minutes":   10,
@@ -544,12 +560,12 @@ func TestResolveUpstreamSourceRuleLeavesUnmatchedGroupsUnsynced(t *testing.T) {
 	assert.False(t, resolution.SyncEligible)
 	assert.Equal(t, upstreamSourceMatchReasonNoMatchingRule, resolution.Reason)
 	assert.Equal(t, "fallback", resolution.LocalGroup)
-	assert.True(t, resolution.MonitorEnabled)
-	assert.Equal(t, 10, resolution.MonitorIntervalMinutes)
-	assert.True(t, resolution.AutoSyncEnabled)
-	assert.Equal(t, 15, resolution.AutoSyncIntervalMinutes)
-	assert.Equal(t, upstreamSourceModelStrategyFixed, resolution.ModelStrategy)
-	assert.Equal(t, []string{"GPT-4o"}, resolution.FixedModels)
+	assert.False(t, resolution.MonitorEnabled)
+	assert.Equal(t, 0, resolution.MonitorIntervalMinutes)
+	assert.False(t, resolution.AutoSyncEnabled)
+	assert.Equal(t, 0, resolution.AutoSyncIntervalMinutes)
+	assert.Equal(t, upstreamSourceModelStrategyAllUpstream, resolution.ModelStrategy)
+	assert.Empty(t, resolution.FixedModels)
 }
 
 func TestMonitorIntervalMinimumIsOne(t *testing.T) {
@@ -558,6 +574,41 @@ func TestMonitorIntervalMinimumIsOne(t *testing.T) {
 	assert.Equal(t, 0, normalizeUpstreamSourceRuleInterval(0)) // 0 = inherit/disabled
 	cfg := normalizeUpstreamSourceSyncConfig(upstreamSourceSyncConfig{MonitorIntervalMinutes: 2})
 	assert.Equal(t, 2, cfg.MonitorIntervalMinutes)
+}
+
+func TestLegacyNoRulesMigratesToCatchAll(t *testing.T) {
+	// version 0 (absent) blob with source-level defaults, no rules
+	raw := `{"channel_type":14,"default_priority":7,"default_weight":11,"enable_monitor":true,"monitor_interval_minutes":3,"local_group":"grp"}`
+	cfg, err := parseUpstreamSourceSyncConfig(raw)
+	require.NoError(t, err)
+	require.Len(t, cfg.LocalGroupRules, 1)
+	r := cfg.LocalGroupRules[0]
+	assert.Equal(t, 14, r.ChannelType)
+	require.NotNil(t, r.Priority)
+	assert.Equal(t, int64(7), *r.Priority)
+	require.NotNil(t, r.Weight)
+	assert.Equal(t, uint(11), *r.Weight)
+	require.NotNil(t, r.Monitor)
+	require.NotNil(t, r.Monitor.Enabled)
+	assert.True(t, *r.Monitor.Enabled)
+	// migrated catch-all matches any group
+	m := &model.UpstreamSourceChannelMapping{SyncEnabled: true, DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive, UpstreamGroupName: "anything"}
+	assert.True(t, resolveUpstreamSourceRule(cfg, m).SyncEligible)
+}
+
+func TestNoRulesV1SyncsNothing(t *testing.T) {
+	cfg, err := parseUpstreamSourceSyncConfig(`{"sync_config_version":1,"local_group_rules":[]}`)
+	require.NoError(t, err)
+	m := &model.UpstreamSourceChannelMapping{SyncEnabled: true, DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive, UpstreamGroupName: "x"}
+	assert.False(t, resolveUpstreamSourceRule(cfg, m).SyncEligible)
+}
+
+func TestEmptyMatcherRuleMatchesAll(t *testing.T) {
+	cfg, err := parseUpstreamSourceSyncConfig(`{"sync_config_version":1,"local_group_rules":[{"name":"catch","local_group":"g"}]}`)
+	require.NoError(t, err)
+	require.Len(t, cfg.LocalGroupRules, 1)
+	m := &model.UpstreamSourceChannelMapping{SyncEnabled: true, DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive, UpstreamGroupName: "whatever"}
+	assert.True(t, resolveUpstreamSourceRule(cfg, m).SyncEligible)
 }
 
 func mustParseUpstreamSourceRuleTestConfig(t *testing.T, values map[string]any) upstreamSourceSyncConfig {

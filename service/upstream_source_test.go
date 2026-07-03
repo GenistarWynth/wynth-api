@@ -868,7 +868,12 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoSyncAndLocalGroupRules(t *test
 
 func TestSyncUpstreamSourceCreatesChannelPerSelectedGroup(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
+	// sync_config_version 0 (legacy, no rules): the read-time migration
+	// folds these source-level defaults into a synthesized catch-all rule,
+	// so behavior here is preserved through migration rather than through
+	// the (now-removed) no-rules-matches-everything fallback.
 	source := createSyncTestSource(t, map[string]any{
+		"sync_config_version":      0,
 		"local_group":              "paid",
 		"default_priority":         7,
 		"default_weight":           11,
@@ -1183,13 +1188,17 @@ func TestBuildGeneratedChannelWritesMonitorModel(t *testing.T) {
 
 func TestSyncUpstreamSourceAppliesCodexImageBridgePolicyToGeneratedNewAPIChannel(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
+	// sync_config_version 1: channel_type is expressed directly on the rule
+	// rather than relying on the (now-vestigial, migration-only) source-level
+	// channel_type default, matching the steady-state per-rule contract.
 	source := createSyncTestSource(t, map[string]any{
-		"channel_type":                         constant.ChannelTypeCodex,
+		"sync_config_version":                  1,
 		"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyEnabled,
 		"local_group_rules": []map[string]any{
 			{
 				"name":                                 "OpenAI Pro",
 				"local_group":                          "pro",
+				"channel_type":                         constant.ChannelTypeCodex,
 				"platforms":                            []string{"openai"},
 				"name_contains":                        []string{"pro"},
 				"codex_image_generation_bridge_policy": dto.CodexImageGenerationBridgePolicyDisabled,

@@ -457,12 +457,26 @@ func marshalUpstreamSourceSyncConfig(config upstreamSourceControllerSyncConfig) 
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	// Route the freshly composed config through the service parser so the
+	// persisted blob is upgraded to the folded (version 1) shape and carries
+	// any synthesized/backfilled rules, rather than leaving that to happen
+	// only at the next runtime sync read.
+	migrated, err := service.MigrateAndNormalizeUpstreamSourceSyncConfigRaw(string(data))
+	if err != nil {
+		return "", err
+	}
+	return migrated, nil
 }
 
 func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceResponse {
 	auth := parseUpstreamSourceAuthConfig(source.AuthConfig)
-	sync := parseUpstreamSourceSyncConfig(source.SyncConfig)
+	// Migrate on read too, so the admin UI sees folded rules for sources
+	// whose stored blob predates this create/update-time migration.
+	syncConfigRaw, err := service.MigrateAndNormalizeUpstreamSourceSyncConfigRaw(source.SyncConfig)
+	if err != nil {
+		syncConfigRaw = source.SyncConfig
+	}
+	sync := parseUpstreamSourceSyncConfig(syncConfigRaw)
 	return dto.UpstreamSourceResponse{
 		Id:                               source.Id,
 		Name:                             source.Name,
