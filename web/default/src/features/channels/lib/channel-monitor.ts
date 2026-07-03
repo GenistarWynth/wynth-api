@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ChannelMonitorRecord } from '../types'
+import type { Channel, ChannelMonitorRecord } from '../types'
 
 export type MonitorVisualStatus =
   | ChannelMonitorRecord['status']
@@ -117,4 +117,81 @@ export function buildMonitorHistoryBars(
     })),
     ...bars,
   ]
+}
+
+export interface ChannelMonitorSettingsDraft {
+  enabled: boolean
+  intervalMinutes: number
+  monitorModel: string
+}
+
+export const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
+
+function parseChannelSettings(settings: string | null | undefined) {
+  if (!settings?.trim()) return {}
+  try {
+    const parsed = JSON.parse(settings)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    return {}
+  }
+  return {}
+}
+
+export function normalizeMonitorInterval(value: unknown, fallback: number) {
+  const interval = Number(value)
+  if (Number.isInteger(interval) && interval >= 1) return interval
+  return fallback
+}
+
+// readChannelMonitorSettings maps a channel's persisted OtherSettings onto the
+// monitor dialog draft. The monitor probe reads channel_monitor_model (also set
+// by upstream-source rules), so the dialog must bind to that same field — with a
+// fallback to the legacy top-level test_model for display only.
+export function readChannelMonitorSettings(
+  channel: Channel | null
+): ChannelMonitorSettingsDraft {
+  const settings = parseChannelSettings(channel?.settings)
+  const monitorModel =
+    typeof settings.channel_monitor_model === 'string'
+      ? settings.channel_monitor_model.trim()
+      : ''
+  return {
+    enabled: settings.channel_monitor_enabled === true,
+    intervalMinutes: normalizeMonitorInterval(
+      settings.channel_monitor_interval_minutes,
+      DEFAULT_MONITOR_INTERVAL_MINUTES
+    ),
+    monitorModel: monitorModel || (channel?.test_model?.trim() ?? ''),
+  }
+}
+
+// buildChannelMonitorSettingsPayload serializes the draft back into a partial
+// channel update. Only `settings` is returned; channel.Update() persists via
+// GORM Updates (field-aware), so omitted fields (e.g. test_model) are untouched.
+export function buildChannelMonitorSettingsPayload(
+  channel: Channel,
+  draft: ChannelMonitorSettingsDraft
+): Pick<Channel, 'settings'> {
+  const settings = parseChannelSettings(channel.settings)
+  settings.channel_monitor_enabled = draft.enabled
+  if (draft.enabled) {
+    settings.channel_monitor_interval_minutes = normalizeMonitorInterval(
+      draft.intervalMinutes,
+      DEFAULT_MONITOR_INTERVAL_MINUTES
+    )
+  } else {
+    delete settings.channel_monitor_interval_minutes
+  }
+  const monitorModel = draft.monitorModel.trim()
+  if (monitorModel) {
+    settings.channel_monitor_model = monitorModel
+  } else {
+    delete settings.channel_monitor_model
+  }
+  return {
+    settings: JSON.stringify(settings),
+  }
 }

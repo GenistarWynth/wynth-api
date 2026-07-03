@@ -77,8 +77,12 @@ import {
   parseModelsString,
 } from '../../lib'
 import {
+  buildChannelMonitorSettingsPayload,
   buildMonitorHistoryBars,
   monitorStatusText,
+  normalizeMonitorInterval,
+  readChannelMonitorSettings,
+  type ChannelMonitorSettingsDraft,
   type MonitorHistoryBar,
   type MonitorVisualStatus,
 } from '../../lib/channel-monitor'
@@ -98,15 +102,7 @@ interface CompactMetricValue {
   empty: boolean
 }
 
-interface ChannelMonitorSettingsDraft {
-  enabled: boolean
-  intervalMinutes: number
-  testModel: string
-}
-
 type MonitorHistoryViewMode = 'availability' | 'first-token'
-
-const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
 
 function monitorStatusPillClass(status: MonitorVisualStatus | undefined) {
   if (status === 'success')
@@ -140,60 +136,6 @@ function formatAvailability(
 ) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
   return `${(value * 100).toFixed(2)}%`
-}
-
-function parseChannelSettings(settings: string | null | undefined) {
-  if (!settings?.trim()) return {}
-  try {
-    const parsed = JSON.parse(settings)
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    return {}
-  }
-  return {}
-}
-
-function normalizeMonitorInterval(value: unknown, fallback: number) {
-  const interval = Number(value)
-  if (Number.isInteger(interval) && interval >= 1) return interval
-  return fallback
-}
-
-function readChannelMonitorSettings(
-  channel: Channel | null
-): ChannelMonitorSettingsDraft {
-  const settings = parseChannelSettings(channel?.settings)
-  return {
-    enabled: settings.channel_monitor_enabled === true,
-    intervalMinutes: normalizeMonitorInterval(
-      settings.channel_monitor_interval_minutes,
-      DEFAULT_MONITOR_INTERVAL_MINUTES
-    ),
-    testModel: channel?.test_model?.trim() ?? '',
-  }
-}
-
-function buildChannelMonitorSettingsPayload(
-  channel: Channel,
-  draft: ChannelMonitorSettingsDraft
-): Pick<Channel, 'settings' | 'test_model'> {
-  const settings = parseChannelSettings(channel.settings)
-  settings.channel_monitor_enabled = draft.enabled
-  if (draft.enabled) {
-    settings.channel_monitor_interval_minutes = normalizeMonitorInterval(
-      draft.intervalMinutes,
-      DEFAULT_MONITOR_INTERVAL_MINUTES
-    )
-  } else {
-    delete settings.channel_monitor_interval_minutes
-  }
-
-  return {
-    settings: JSON.stringify(settings),
-    test_model: draft.testModel.trim(),
-  }
 }
 
 function metricText(value: number | undefined, t: TFn) {
@@ -504,8 +446,8 @@ export function ChannelMonitorDialog({
   const [monitorIntervalInput, setMonitorIntervalInput] = useState(
     String(monitorDefaults.intervalMinutes)
   )
-  const [monitorTestModel, setMonitorTestModel] = useState(
-    monitorDefaults.testModel
+  const [monitorModel, setMonitorModel] = useState(
+    monitorDefaults.monitorModel
   )
   const [savedMonitorSettings, setSavedMonitorSettings] =
     useState<ChannelMonitorSettingsDraft>(monitorDefaults)
@@ -522,12 +464,12 @@ export function ChannelMonitorDialog({
     if (!open) return
     setMonitorEnabled(monitorDefaults.enabled)
     setMonitorIntervalInput(String(monitorDefaults.intervalMinutes))
-    setMonitorTestModel(monitorDefaults.testModel)
+    setMonitorModel(monitorDefaults.monitorModel)
     setSavedMonitorSettings(monitorDefaults)
   }, [
     monitorDefaults.enabled,
     monitorDefaults.intervalMinutes,
-    monitorDefaults.testModel,
+    monitorDefaults.monitorModel,
     open,
   ])
 
@@ -546,9 +488,9 @@ export function ChannelMonitorDialog({
     () => buildMonitorHistoryBars(records, 60),
     [records]
   )
-  const testModelOptions = useMemo(() => {
+  const monitorModelOptions = useMemo(() => {
     const models = parseModelsString(channel?.models ?? '')
-    const selectedModel = monitorTestModel.trim()
+    const selectedModel = monitorModel.trim()
     const allModels = new Set([
       ...models,
       ...(selectedModel ? [selectedModel] : []),
@@ -557,7 +499,7 @@ export function ChannelMonitorDialog({
       value: model,
       label: model,
     }))
-  }, [channel?.models, monitorTestModel])
+  }, [channel?.models, monitorModel])
   const channelType = channel?.type ?? 1
   const typeLabel = t(getChannelTypeLabel(channelType))
   const icon = getLobeIcon(`${getChannelTypeIcon(channelType)}.Color`, 28)
@@ -580,13 +522,13 @@ export function ChannelMonitorDialog({
       monitorIntervalInput,
       savedMonitorSettings.intervalMinutes
     ),
-    testModel: monitorTestModel.trim(),
+    monitorModel: monitorModel.trim(),
   }
   const monitorSettingsDirty =
     currentMonitorDraft.enabled !== savedMonitorSettings.enabled ||
     currentMonitorDraft.intervalMinutes !==
       savedMonitorSettings.intervalMinutes ||
-    currentMonitorDraft.testModel !== savedMonitorSettings.testModel
+    currentMonitorDraft.monitorModel !== savedMonitorSettings.monitorModel
 
   const handleSaveMonitorSettings = async () => {
     if (!channel) return
@@ -736,17 +678,17 @@ export function ChannelMonitorDialog({
                   <FieldLabel
                     htmlFor={`channel-monitor-test-model-${channelId}`}
                   >
-                    {t('Test model')}
+                    {t('Monitor Model')}
                   </FieldLabel>
                   <Combobox
                     id={`channel-monitor-test-model-${channelId}`}
-                    options={testModelOptions}
-                    value={monitorTestModel}
-                    placeholder={t('Test model')}
+                    options={monitorModelOptions}
+                    value={monitorModel}
+                    placeholder={t('Select monitor model')}
                     searchPlaceholder={t('Search models...')}
                     emptyText={t('No models found')}
                     allowCustomValue
-                    onValueChange={(value) => setMonitorTestModel(value ?? '')}
+                    onValueChange={(value) => setMonitorModel(value ?? '')}
                   />
                 </Field>
               </FieldGroup>
