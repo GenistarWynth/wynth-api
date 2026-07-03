@@ -43,6 +43,7 @@ services:
 #      - GOOGLE_ANALYTICS_ID=G-XXXXXXXXXX  # Google Analytics 的测量 ID (Google Analytics Measurement ID)
 #      - UMAMI_WEBSITE_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  # Umami 网站 ID (Umami Website ID)
 #      - UMAMI_SCRIPT_URL=https://analytics.umami.is/script.js  # Umami 脚本 URL，默认为官方地址 (Umami Script URL, defaults to official URL)
+#      - UPSTREAM_BROWSER_CDP_URL=ws://browserless:3000  # enable headless upstream login (requires --profile upstream-browser)
 
     depends_on:
       - redis
@@ -110,6 +111,19 @@ services:
 #    ports:
 #      - "8123:8123"  # HTTP interface, uncomment if you need external access
 #      - "9000:9000"  # Native interface used by the LOG_SQL_DSN example above
+
+  # Optional: headless browser for logging in to Cloudflare-Turnstile-gated
+  # upstream sources. Enable with:  docker compose --profile upstream-browser up
+  # and set UPSTREAM_BROWSER_CDP_URL=ws://browserless:3000 on the new-api service.
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    restart: always
+    profiles: ["upstream-browser"]
+    environment:
+      - CONCURRENT=2
+      - TIMEOUT=60000
+    networks:
+      - new-api-network
 
 volumes:
   pg_data:
