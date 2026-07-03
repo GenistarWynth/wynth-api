@@ -1,57 +1,27 @@
 package dto
 
 type UpstreamSourceCreateRequest struct {
-	Name                             string                         `json:"name" binding:"required"`
-	Type                             string                         `json:"type" binding:"required"`
-	BaseURL                          string                         `json:"base_url" binding:"required"`
-	AdminAPIBasePath                 string                         `json:"admin_api_base_path"`
-	RelayBaseURL                     string                         `json:"relay_base_url"`
-	Email                            string                         `json:"email"`
-	Password                         string                         `json:"password"`
-	LocalGroup                       string                         `json:"local_group"`
-	ChannelType                      int                            `json:"channel_type"`
-	DefaultPriority                  int64                          `json:"default_priority"`
-	DefaultWeight                    uint                           `json:"default_weight"`
-	EnableMonitor                    bool                           `json:"enable_monitor"`
-	MonitorIntervalMinutes           int                            `json:"monitor_interval_minutes"`
-	AutoSyncModels                   bool                           `json:"auto_sync_models"`
-	ModelStrategy                    string                         `json:"model_strategy"`
-	FixedModels                      []string                       `json:"fixed_models"`
-	AllowPrivateIP                   bool                           `json:"allow_private_ip"`
-	AutoSyncEnabled                  bool                           `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes          int                            `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled              bool                           `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes      *int                           `json:"auto_priority_interval_minutes,omitempty"`
-	AutoPriorityWindowHours          *int                           `json:"auto_priority_window_hours,omitempty"`
-	CodexImageGenerationBridgePolicy string                         `json:"codex_image_generation_bridge_policy"`
-	DefaultLocalGroup                string                         `json:"default_local_group"`
-	LocalGroupRules                  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	Name             string                         `json:"name" binding:"required"`
+	Type             string                         `json:"type" binding:"required"`
+	BaseURL          string                         `json:"base_url" binding:"required"`
+	AdminAPIBasePath string                         `json:"admin_api_base_path"`
+	RelayBaseURL     string                         `json:"relay_base_url"`
+	Email            string                         `json:"email"`
+	Password         string                         `json:"password"`
+	LocalGroup       string                         `json:"local_group"`
+	AllowPrivateIP   bool                           `json:"allow_private_ip"`
+	LocalGroupRules  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 type UpstreamSourceUpdateRequest struct {
-	Name                             string                         `json:"name"`
-	Status                           string                         `json:"status"`
-	BaseURL                          string                         `json:"base_url"`
-	AdminAPIBasePath                 string                         `json:"admin_api_base_path"`
-	RelayBaseURL                     string                         `json:"relay_base_url"`
-	LocalGroup                       string                         `json:"local_group"`
-	ChannelType                      int                            `json:"channel_type"`
-	DefaultPriority                  int64                          `json:"default_priority"`
-	DefaultWeight                    uint                           `json:"default_weight"`
-	EnableMonitor                    bool                           `json:"enable_monitor"`
-	MonitorIntervalMinutes           int                            `json:"monitor_interval_minutes"`
-	AutoSyncModels                   bool                           `json:"auto_sync_models"`
-	ModelStrategy                    string                         `json:"model_strategy"`
-	FixedModels                      []string                       `json:"fixed_models"`
-	AllowPrivateIP                   bool                           `json:"allow_private_ip"`
-	AutoSyncEnabled                  bool                           `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes          int                            `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled              bool                           `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes      *int                           `json:"auto_priority_interval_minutes,omitempty"`
-	AutoPriorityWindowHours          *int                           `json:"auto_priority_window_hours,omitempty"`
-	CodexImageGenerationBridgePolicy string                         `json:"codex_image_generation_bridge_policy"`
-	DefaultLocalGroup                string                         `json:"default_local_group"`
-	LocalGroupRules                  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	Name             string                         `json:"name"`
+	Status           string                         `json:"status"`
+	BaseURL          string                         `json:"base_url"`
+	AdminAPIBasePath string                         `json:"admin_api_base_path"`
+	RelayBaseURL     string                         `json:"relay_base_url"`
+	LocalGroup       string                         `json:"local_group"`
+	AllowPrivateIP   bool                           `json:"allow_private_ip"`
+	LocalGroupRules  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 }
 
 type UpstreamSourceCredentialsUpdateRequest struct {
@@ -72,43 +42,28 @@ type UpstreamSourceSessionImportRequest struct {
 }
 
 type UpstreamSourceResponse struct {
-	Id                               int                            `json:"id"`
-	Name                             string                         `json:"name"`
-	Type                             string                         `json:"type"`
-	Status                           string                         `json:"status"`
-	BaseURL                          string                         `json:"base_url"`
-	AdminAPIBasePath                 string                         `json:"admin_api_base_path"`
-	RelayBaseURL                     string                         `json:"relay_base_url"`
-	LocalGroup                       string                         `json:"local_group"`
-	ChannelType                      int                            `json:"channel_type"`
-	DefaultPriority                  int64                          `json:"default_priority"`
-	DefaultWeight                    uint                           `json:"default_weight"`
-	EnableMonitor                    bool                           `json:"enable_monitor"`
-	MonitorIntervalMinutes           int                            `json:"monitor_interval_minutes"`
-	AutoSyncModels                   bool                           `json:"auto_sync_models"`
-	ModelStrategy                    string                         `json:"model_strategy"`
-	FixedModels                      []string                       `json:"fixed_models"`
-	AllowPrivateIP                   bool                           `json:"allow_private_ip"`
-	AutoSyncEnabled                  bool                           `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes          int                            `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled              bool                           `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes      int                            `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours          int                            `json:"auto_priority_window_hours"`
-	CodexImageGenerationBridgePolicy string                         `json:"codex_image_generation_bridge_policy"`
-	DefaultLocalGroup                string                         `json:"default_local_group"`
-	LocalGroupRules                  []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
-	MaskedEmail                      string                         `json:"masked_email"`
-	HasCredentials                   bool                           `json:"has_credentials"`
-	SessionSource                    string                         `json:"session_source"`
-	TurnstileBlocked                 bool                           `json:"turnstile_blocked"`
-	LastDiscoveryTime                int64                          `json:"last_discovery_time"`
-	LastDiscoveryStatus              string                         `json:"last_discovery_status"`
-	LastDiscoveryError               string                         `json:"last_discovery_error"`
-	LastSyncTime                     int64                          `json:"last_sync_time"`
-	LastSyncStatus                   string                         `json:"last_sync_status"`
-	LastSyncError                    string                         `json:"last_sync_error"`
-	CreatedTime                      int64                          `json:"created_time"`
-	UpdatedTime                      int64                          `json:"updated_time"`
+	Id                  int                            `json:"id"`
+	Name                string                         `json:"name"`
+	Type                string                         `json:"type"`
+	Status              string                         `json:"status"`
+	BaseURL             string                         `json:"base_url"`
+	AdminAPIBasePath    string                         `json:"admin_api_base_path"`
+	RelayBaseURL        string                         `json:"relay_base_url"`
+	LocalGroup          string                         `json:"local_group"`
+	AllowPrivateIP      bool                           `json:"allow_private_ip"`
+	LocalGroupRules     []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	MaskedEmail         string                         `json:"masked_email"`
+	HasCredentials      bool                           `json:"has_credentials"`
+	SessionSource       string                         `json:"session_source"`
+	TurnstileBlocked    bool                           `json:"turnstile_blocked"`
+	LastDiscoveryTime   int64                          `json:"last_discovery_time"`
+	LastDiscoveryStatus string                         `json:"last_discovery_status"`
+	LastDiscoveryError  string                         `json:"last_discovery_error"`
+	LastSyncTime        int64                          `json:"last_sync_time"`
+	LastSyncStatus      string                         `json:"last_sync_status"`
+	LastSyncError       string                         `json:"last_sync_error"`
+	CreatedTime         int64                          `json:"created_time"`
+	UpdatedTime         int64                          `json:"updated_time"`
 }
 
 type UpstreamSourceLocalGroupRule struct {

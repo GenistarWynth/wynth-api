@@ -32,6 +32,12 @@ const (
 // Keep this JSON shape in lockstep with service.upstreamSourceSyncConfig.
 // Defaults are seeded before unmarshaling so an absent auto_sync_models key
 // preserves the service default of true while explicit false still persists.
+//
+// The source-level default fields below (ChannelType..DefaultLocalGroup) are
+// no longer populated from the create/update request DTOs — everything now
+// lives in per-group rules (LocalGroupRules). They are kept here only so
+// legacy stored JSON (version 0, pre-fold) still parses; see
+// service.MigrateAndNormalizeUpstreamSourceSyncConfigRaw for the migration.
 type upstreamSourceControllerSyncConfig struct {
 	LocalGroup                       string                             `json:"local_group"`
 	ChannelType                      int                                `json:"channel_type"`
@@ -51,6 +57,13 @@ type upstreamSourceControllerSyncConfig struct {
 	CodexImageGenerationBridgePolicy string                             `json:"codex_image_generation_bridge_policy"`
 	DefaultLocalGroup                string                             `json:"default_local_group"`
 	LocalGroupRules                  []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	// SyncConfigVersion marks whether this blob has already gone through the
+	// legacy-defaults-to-rules migration. Configs built here from a create/
+	// update request are stamped version 1 directly (never version 0) so a
+	// genuinely new, rule-only source syncs nothing rather than having a
+	// catch-all rule synthesized for it. Keep in lockstep with
+	// service.upstreamSourceSyncConfig.SyncConfigVersion.
+	SyncConfigVersion int `json:"sync_config_version,omitempty"`
 }
 
 func ListUpstreamSources(c *gin.Context) {
@@ -335,27 +348,12 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 	}
 	syncConfigInput := defaultUpstreamSourceControllerSyncConfig()
 	syncConfigInput.LocalGroup = req.LocalGroup
-	syncConfigInput.ChannelType = req.ChannelType
-	syncConfigInput.DefaultPriority = req.DefaultPriority
-	syncConfigInput.DefaultWeight = req.DefaultWeight
-	syncConfigInput.EnableMonitor = req.EnableMonitor
-	syncConfigInput.MonitorIntervalMinutes = req.MonitorIntervalMinutes
-	syncConfigInput.AutoSyncModels = req.AutoSyncModels
-	syncConfigInput.ModelStrategy = req.ModelStrategy
-	syncConfigInput.FixedModels = req.FixedModels
 	syncConfigInput.AllowPrivateIP = common.FlexibleBool(req.AllowPrivateIP)
-	syncConfigInput.AutoSyncEnabled = req.AutoSyncEnabled
-	syncConfigInput.AutoSyncIntervalMinutes = req.AutoSyncIntervalMinutes
-	syncConfigInput.AutoPriorityEnabled = req.AutoPriorityEnabled
-	if req.AutoPriorityIntervalMinutes != nil {
-		syncConfigInput.AutoPriorityIntervalMinutes = *req.AutoPriorityIntervalMinutes
-	}
-	if req.AutoPriorityWindowHours != nil {
-		syncConfigInput.AutoPriorityWindowHours = *req.AutoPriorityWindowHours
-	}
-	syncConfigInput.CodexImageGenerationBridgePolicy = req.CodexImageGenerationBridgePolicy
-	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
 	syncConfigInput.LocalGroupRules = req.LocalGroupRules
+	// Stamp the config as already-migrated (never version 0) so a genuinely
+	// new, rule-only source syncs nothing instead of getting a synthesized
+	// catch-all rule from the legacy migration.
+	syncConfigInput.SyncConfigVersion = 1
 	syncConfig, err := marshalUpstreamSourceSyncConfig(syncConfigInput)
 	if err != nil {
 		return model.UpstreamSource{}, err
@@ -379,27 +377,12 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]interface{}, error) {
 	syncConfigInput := defaultUpstreamSourceControllerSyncConfig()
 	syncConfigInput.LocalGroup = req.LocalGroup
-	syncConfigInput.ChannelType = req.ChannelType
-	syncConfigInput.DefaultPriority = req.DefaultPriority
-	syncConfigInput.DefaultWeight = req.DefaultWeight
-	syncConfigInput.EnableMonitor = req.EnableMonitor
-	syncConfigInput.MonitorIntervalMinutes = req.MonitorIntervalMinutes
-	syncConfigInput.AutoSyncModels = req.AutoSyncModels
-	syncConfigInput.ModelStrategy = req.ModelStrategy
-	syncConfigInput.FixedModels = req.FixedModels
 	syncConfigInput.AllowPrivateIP = common.FlexibleBool(req.AllowPrivateIP)
-	syncConfigInput.AutoSyncEnabled = req.AutoSyncEnabled
-	syncConfigInput.AutoSyncIntervalMinutes = req.AutoSyncIntervalMinutes
-	syncConfigInput.AutoPriorityEnabled = req.AutoPriorityEnabled
-	if req.AutoPriorityIntervalMinutes != nil {
-		syncConfigInput.AutoPriorityIntervalMinutes = *req.AutoPriorityIntervalMinutes
-	}
-	if req.AutoPriorityWindowHours != nil {
-		syncConfigInput.AutoPriorityWindowHours = *req.AutoPriorityWindowHours
-	}
-	syncConfigInput.CodexImageGenerationBridgePolicy = req.CodexImageGenerationBridgePolicy
-	syncConfigInput.DefaultLocalGroup = req.DefaultLocalGroup
 	syncConfigInput.LocalGroupRules = req.LocalGroupRules
+	// Stamp the config as already-migrated (never version 0) so a genuinely
+	// new, rule-only source syncs nothing instead of getting a synthesized
+	// catch-all rule from the legacy migration.
+	syncConfigInput.SyncConfigVersion = 1
 	syncConfig, err := marshalUpstreamSourceSyncConfig(syncConfigInput)
 	if err != nil {
 		return nil, err
@@ -478,43 +461,28 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 	}
 	sync := parseUpstreamSourceSyncConfig(syncConfigRaw)
 	return dto.UpstreamSourceResponse{
-		Id:                               source.Id,
-		Name:                             source.Name,
-		Type:                             source.Type,
-		Status:                           source.Status,
-		BaseURL:                          source.BaseURL,
-		AdminAPIBasePath:                 source.AdminAPIBasePath,
-		RelayBaseURL:                     source.RelayBaseURL,
-		LocalGroup:                       sync.LocalGroup,
-		ChannelType:                      sync.ChannelType,
-		DefaultPriority:                  sync.DefaultPriority,
-		DefaultWeight:                    sync.DefaultWeight,
-		EnableMonitor:                    sync.EnableMonitor,
-		MonitorIntervalMinutes:           sync.MonitorIntervalMinutes,
-		AutoSyncModels:                   sync.AutoSyncModels,
-		ModelStrategy:                    sync.ModelStrategy,
-		FixedModels:                      sync.FixedModels,
-		AllowPrivateIP:                   bool(sync.AllowPrivateIP),
-		AutoSyncEnabled:                  sync.AutoSyncEnabled,
-		AutoSyncIntervalMinutes:          sync.AutoSyncIntervalMinutes,
-		AutoPriorityEnabled:              sync.AutoPriorityEnabled,
-		AutoPriorityIntervalMinutes:      sync.AutoPriorityIntervalMinutes,
-		AutoPriorityWindowHours:          sync.AutoPriorityWindowHours,
-		CodexImageGenerationBridgePolicy: sync.CodexImageGenerationBridgePolicy,
-		DefaultLocalGroup:                sync.DefaultLocalGroup,
-		LocalGroupRules:                  sync.LocalGroupRules,
-		MaskedEmail:                      common.MaskEmail(auth.Email),
-		HasCredentials:                   upstreamSourceHasCredentials(auth),
-		SessionSource:                    auth.SessionSource,
-		TurnstileBlocked:                 upstreamSourceTurnstileBlocked(source),
-		LastDiscoveryTime:                source.LastDiscoveryTime,
-		LastDiscoveryStatus:              source.LastDiscoveryStatus,
-		LastDiscoveryError:               sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
-		LastSyncTime:                     source.LastSyncTime,
-		LastSyncStatus:                   source.LastSyncStatus,
-		LastSyncError:                    sanitizeUpstreamSourceResponseError(source.LastSyncError),
-		CreatedTime:                      source.CreatedTime,
-		UpdatedTime:                      source.UpdatedTime,
+		Id:                  source.Id,
+		Name:                source.Name,
+		Type:                source.Type,
+		Status:              source.Status,
+		BaseURL:             source.BaseURL,
+		AdminAPIBasePath:    source.AdminAPIBasePath,
+		RelayBaseURL:        source.RelayBaseURL,
+		LocalGroup:          sync.LocalGroup,
+		AllowPrivateIP:      bool(sync.AllowPrivateIP),
+		LocalGroupRules:     sync.LocalGroupRules,
+		MaskedEmail:         common.MaskEmail(auth.Email),
+		HasCredentials:      upstreamSourceHasCredentials(auth),
+		SessionSource:       auth.SessionSource,
+		TurnstileBlocked:    upstreamSourceTurnstileBlocked(source),
+		LastDiscoveryTime:   source.LastDiscoveryTime,
+		LastDiscoveryStatus: source.LastDiscoveryStatus,
+		LastDiscoveryError:  sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
+		LastSyncTime:        source.LastSyncTime,
+		LastSyncStatus:      source.LastSyncStatus,
+		LastSyncError:       sanitizeUpstreamSourceResponseError(source.LastSyncError),
+		CreatedTime:         source.CreatedTime,
+		UpdatedTime:         source.UpdatedTime,
 	}
 }
 

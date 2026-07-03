@@ -208,19 +208,27 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
 	request := dto.UpstreamSourceCreateRequest{
-		Name:                   "created-source",
-		Type:                   model.UpstreamSourceTypeSub2API,
-		BaseURL:                "https://admin.example.com",
-		RelayBaseURL:           "https://relay.example.com",
-		Email:                  "wynth@example.com",
-		Password:               "plain-password",
-		LocalGroup:             "paid",
-		ChannelType:            constant.ChannelTypeOpenAI,
-		DefaultPriority:        12,
-		DefaultWeight:          34,
-		EnableMonitor:          true,
-		MonitorIntervalMinutes: 7,
-		AutoSyncModels:         true,
+		Name:         "created-source",
+		Type:         model.UpstreamSourceTypeSub2API,
+		BaseURL:      "https://admin.example.com",
+		RelayBaseURL: "https://relay.example.com",
+		Email:        "wynth@example.com",
+		Password:     "plain-password",
+		LocalGroup:   "paid",
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
+			{
+				Name:        "OpenAI pro",
+				LocalGroup:  "paid",
+				ChannelType: constant.ChannelTypeOpenAI,
+				Priority:    common.GetPointer(int64(12)),
+				Weight:      common.GetPointer(uint(34)),
+				Platforms:   []string{"openai"},
+				Monitor: &dto.UpstreamSourceRuleMonitor{
+					Enabled: common.GetPointer(true),
+					Model:   "gpt-4o-mini",
+				},
+			},
+		},
 	}
 
 	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
@@ -230,12 +238,15 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	assert.True(t, response.Data.HasCredentials)
 	assert.NotContains(t, response.Data.MaskedEmail, "wynth@example.com")
 	assert.Equal(t, "paid", response.Data.LocalGroup)
-	assert.Equal(t, constant.ChannelTypeOpenAI, response.Data.ChannelType)
-	assert.Equal(t, int64(12), response.Data.DefaultPriority)
-	assert.Equal(t, uint(34), response.Data.DefaultWeight)
-	assert.True(t, response.Data.EnableMonitor)
-	assert.Equal(t, 7, response.Data.MonitorIntervalMinutes)
-	assert.True(t, response.Data.AutoSyncModels)
+	require.Len(t, response.Data.LocalGroupRules, 1)
+	rule := response.Data.LocalGroupRules[0]
+	assert.Equal(t, constant.ChannelTypeOpenAI, rule.ChannelType)
+	require.NotNil(t, rule.Priority)
+	assert.Equal(t, int64(12), *rule.Priority)
+	require.NotNil(t, rule.Weight)
+	assert.Equal(t, uint(34), *rule.Weight)
+	require.NotNil(t, rule.Monitor)
+	assert.Equal(t, "gpt-4o-mini", rule.Monitor.Model)
 	raw := string(mustMarshalUpstreamSourceAPITest(t, response))
 	assert.NotContains(t, raw, "plain-password")
 	var source model.UpstreamSource
@@ -243,21 +254,19 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	assert.Contains(t, source.AuthConfig, "wynth@example.com")
 	assert.Contains(t, source.AuthConfig, "plain-password")
 	assert.Contains(t, source.SyncConfig, "paid")
-	assert.Contains(t, source.SyncConfig, "default_priority")
+	var syncConfig map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(source.SyncConfig, &syncConfig))
+	assert.Equal(t, float64(1), syncConfig["sync_config_version"])
 }
 
 func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
 	request := dto.UpstreamSourceCreateRequest{
-		Name:                        "auto-priority-source",
-		Type:                        model.UpstreamSourceTypeSub2API,
-		BaseURL:                     "https://admin.example.com",
-		LocalGroup:                  "paid",
-		ChannelType:                 constant.ChannelTypeOpenAI,
-		AutoPriorityEnabled:         true,
-		AutoPriorityIntervalMinutes: common.GetPointer(3),
-		AutoPriorityWindowHours:     common.GetPointer(999),
+		Name:       "auto-priority-source",
+		Type:       model.UpstreamSourceTypeSub2API,
+		BaseURL:    "https://admin.example.com",
+		LocalGroup: "paid",
 		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
 			{
 				Name:       "OpenAI pro",
@@ -275,9 +284,6 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
 
 	require.True(t, response.Success, response.Message)
-	assert.True(t, response.Data.AutoPriorityEnabled)
-	assert.Equal(t, 3, response.Data.AutoPriorityIntervalMinutes)
-	assert.Equal(t, 168, response.Data.AutoPriorityWindowHours)
 	require.Len(t, response.Data.LocalGroupRules, 1)
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority)
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.Enabled)
@@ -291,9 +297,6 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
 	var syncConfig map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
-	assert.Equal(t, true, syncConfig["auto_priority_enabled"])
-	assert.Equal(t, float64(3), syncConfig["auto_priority_interval_minutes"])
-	assert.Equal(t, float64(168), syncConfig["auto_priority_window_hours"])
 	require.Contains(t, syncConfig, "local_group_rules")
 	rules, ok := syncConfig["local_group_rules"].([]any)
 	require.True(t, ok)
@@ -310,56 +313,72 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 func TestUpstreamSourceAPICreatePersistsExplicitZeroAutoPriorityInterval(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
+	rule := dto.UpstreamSourceLocalGroupRule{
+		Name:       "OpenAI pro",
+		LocalGroup: "paid",
+		AutoPriority: &dto.UpstreamSourceRuleAutoPriority{
+			Enabled:         common.GetPointer(true),
+			IntervalMinutes: common.GetPointer(0),
+			WindowHours:     common.GetPointer(999),
+		},
+	}
 	request := dto.UpstreamSourceCreateRequest{
-		Name:                        "auto-priority-zero-source",
-		Type:                        model.UpstreamSourceTypeSub2API,
-		BaseURL:                     "https://admin.example.com",
-		LocalGroup:                  "paid",
-		ChannelType:                 constant.ChannelTypeOpenAI,
-		AutoPriorityEnabled:         true,
-		AutoPriorityIntervalMinutes: common.GetPointer(0),
-		AutoPriorityWindowHours:     common.GetPointer(999),
+		Name:            "auto-priority-zero-source",
+		Type:            model.UpstreamSourceTypeSub2API,
+		BaseURL:         "https://admin.example.com",
+		LocalGroup:      "paid",
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{rule},
 	}
 
 	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
 
 	require.True(t, response.Success, response.Message)
-	assert.True(t, response.Data.AutoPriorityEnabled)
-	assert.Equal(t, 0, response.Data.AutoPriorityIntervalMinutes)
-	assert.Equal(t, 168, response.Data.AutoPriorityWindowHours)
+	require.Len(t, response.Data.LocalGroupRules, 1)
+	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	assert.Equal(t, 0, *response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
+	assert.Equal(t, 168, *response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
 	var syncConfig map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
-	assert.Equal(t, float64(0), syncConfig["auto_priority_interval_minutes"])
-	assert.Equal(t, float64(168), syncConfig["auto_priority_window_hours"])
+	rules, ok := syncConfig["local_group_rules"].([]any)
+	require.True(t, ok)
+	require.Len(t, rules, 1)
+	rawRule, ok := rules[0].(map[string]any)
+	require.True(t, ok)
+	autoPriority, ok := rawRule["auto_priority"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), autoPriority["interval_minutes"])
+	assert.Equal(t, float64(168), autoPriority["window_hours"])
 
 	updateRequest := dto.UpstreamSourceUpdateRequest{
-		Status:                      model.UpstreamSourceStatusEnabled,
-		AutoPriorityEnabled:         true,
-		AutoPriorityIntervalMinutes: common.GetPointer(0),
-		AutoPriorityWindowHours:     common.GetPointer(999),
+		Status:          model.UpstreamSourceStatusEnabled,
+		LocalGroup:      "paid",
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{rule},
 	}
 	updateResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(response.Data.Id), updateRequest, true)
 	require.True(t, updateResponse.Success, updateResponse.Message)
-	assert.Equal(t, 0, updateResponse.Data.AutoPriorityIntervalMinutes)
-	assert.Equal(t, 168, updateResponse.Data.AutoPriorityWindowHours)
+	require.Len(t, updateResponse.Data.LocalGroupRules, 1)
+	require.NotNil(t, updateResponse.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	assert.Equal(t, 0, *updateResponse.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
+	require.NotNil(t, updateResponse.Data.LocalGroupRules[0].AutoPriority.WindowHours)
+	assert.Equal(t, 168, *updateResponse.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 }
 
 func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
 	request := dto.UpstreamSourceCreateRequest{
-		Name:                             "codex-bridge-source",
-		Type:                             model.UpstreamSourceTypeNewAPI,
-		BaseURL:                          "https://admin.example.com",
-		ChannelType:                      constant.ChannelTypeCodex,
-		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyEnabled,
+		Name:    "codex-bridge-source",
+		Type:    model.UpstreamSourceTypeNewAPI,
+		BaseURL: "https://admin.example.com",
 		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
 			{
 				Name:                             "OpenAI pro",
 				LocalGroup:                       "paid",
+				ChannelType:                      constant.ChannelTypeCodex,
 				Platforms:                        []string{"openai"},
 				CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyDisabled,
 			},
@@ -369,7 +388,6 @@ func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.
 	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
 
 	require.True(t, response.Success, response.Message)
-	assert.Equal(t, dto.CodexImageGenerationBridgePolicyEnabled, response.Data.CodexImageGenerationBridgePolicy)
 	require.Len(t, response.Data.LocalGroupRules, 1)
 	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, response.Data.LocalGroupRules[0].CodexImageGenerationBridgePolicy)
 
@@ -377,7 +395,6 @@ func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.
 	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
 	var syncConfig map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
-	assert.Equal(t, dto.CodexImageGenerationBridgePolicyEnabled, syncConfig["codex_image_generation_bridge_policy"])
 	rules, ok := syncConfig["local_group_rules"].([]any)
 	require.True(t, ok)
 	require.Len(t, rules, 1)
@@ -406,54 +423,90 @@ func TestUpstreamSourceAPISyncConfigRoundTripsExplicitFalseValues(t *testing.T) 
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
 	createRequest := dto.UpstreamSourceCreateRequest{
-		Name:                   "false-sync-source",
-		Type:                   model.UpstreamSourceTypeSub2API,
-		BaseURL:                "https://admin.example.com",
-		LocalGroup:             "paid",
-		ChannelType:            constant.ChannelTypeOpenAI,
-		DefaultPriority:        10,
-		DefaultWeight:          20,
-		EnableMonitor:          true,
-		MonitorIntervalMinutes: 5,
-		AutoSyncModels:         true,
-		AllowPrivateIP:         true,
+		Name:           "false-sync-source",
+		Type:           model.UpstreamSourceTypeSub2API,
+		BaseURL:        "https://admin.example.com",
+		LocalGroup:     "paid",
+		AllowPrivateIP: true,
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
+			{
+				Name:        "OpenAI pro",
+				LocalGroup:  "paid",
+				ChannelType: constant.ChannelTypeOpenAI,
+				Priority:    common.GetPointer(int64(10)),
+				Weight:      common.GetPointer(uint(20)),
+				Monitor:     &dto.UpstreamSourceRuleMonitor{Enabled: common.GetPointer(true)},
+				AutoSync:    &dto.UpstreamSourceRuleAutoSync{Enabled: common.GetPointer(true)},
+			},
+		},
 	}
 	createResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", createRequest, true)
 	require.True(t, createResponse.Success, createResponse.Message)
 
 	updateRequest := dto.UpstreamSourceUpdateRequest{
-		Status:                 model.UpstreamSourceStatusEnabled,
-		LocalGroup:             "default",
-		ChannelType:            constant.ChannelTypeOpenAI,
-		DefaultPriority:        0,
-		DefaultWeight:          0,
-		EnableMonitor:          false,
-		MonitorIntervalMinutes: 0,
-		AutoSyncModels:         false,
-		AllowPrivateIP:         false,
+		Status:         model.UpstreamSourceStatusEnabled,
+		LocalGroup:     "default",
+		AllowPrivateIP: false,
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
+			{
+				Name:        "OpenAI pro",
+				LocalGroup:  "default",
+				ChannelType: constant.ChannelTypeOpenAI,
+				Priority:    common.GetPointer(int64(0)),
+				Weight:      common.GetPointer(uint(0)),
+				Monitor:     &dto.UpstreamSourceRuleMonitor{Enabled: common.GetPointer(false)},
+				AutoSync:    &dto.UpstreamSourceRuleAutoSync{Enabled: common.GetPointer(false)},
+			},
+		},
 	}
 	updateResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(createResponse.Data.Id), updateRequest, true)
 	require.True(t, updateResponse.Success, updateResponse.Message)
-	assert.False(t, updateResponse.Data.EnableMonitor)
-	assert.Equal(t, 0, updateResponse.Data.MonitorIntervalMinutes)
-	assert.False(t, updateResponse.Data.AutoSyncModels)
 	assert.False(t, updateResponse.Data.AllowPrivateIP)
+	require.Len(t, updateResponse.Data.LocalGroupRules, 1)
+	updatedRule := updateResponse.Data.LocalGroupRules[0]
+	require.NotNil(t, updatedRule.Priority)
+	assert.Equal(t, int64(0), *updatedRule.Priority)
+	require.NotNil(t, updatedRule.Weight)
+	assert.Equal(t, uint(0), *updatedRule.Weight)
+	require.NotNil(t, updatedRule.Monitor)
+	require.NotNil(t, updatedRule.Monitor.Enabled)
+	assert.False(t, *updatedRule.Monitor.Enabled)
+	require.NotNil(t, updatedRule.AutoSync)
+	require.NotNil(t, updatedRule.AutoSync.Enabled)
+	assert.False(t, *updatedRule.AutoSync.Enabled)
 
 	getResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(createResponse.Data.Id), nil, true)
 	require.True(t, getResponse.Success, getResponse.Message)
-	assert.False(t, getResponse.Data.EnableMonitor)
-	assert.Equal(t, int64(0), getResponse.Data.DefaultPriority)
-	assert.Equal(t, uint(0), getResponse.Data.DefaultWeight)
-	assert.False(t, getResponse.Data.AutoSyncModels)
 	assert.False(t, getResponse.Data.AllowPrivateIP)
+	require.Len(t, getResponse.Data.LocalGroupRules, 1)
+	getRule := getResponse.Data.LocalGroupRules[0]
+	require.NotNil(t, getRule.Priority)
+	assert.Equal(t, int64(0), *getRule.Priority)
+	require.NotNil(t, getRule.Weight)
+	assert.Equal(t, uint(0), *getRule.Weight)
+	require.NotNil(t, getRule.Monitor)
+	require.NotNil(t, getRule.Monitor.Enabled)
+	assert.False(t, *getRule.Monitor.Enabled)
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, createResponse.Data.Id).Error)
 	var syncConfig map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
-	assert.Equal(t, false, syncConfig["enable_monitor"])
-	assert.Equal(t, false, syncConfig["auto_sync_models"])
 	assert.Equal(t, false, syncConfig["allow_private_ip"])
+	assert.Equal(t, float64(1), syncConfig["sync_config_version"])
+	rules, ok := syncConfig["local_group_rules"].([]any)
+	require.True(t, ok)
+	require.Len(t, rules, 1)
+	rawRule, ok := rules[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(0), rawRule["priority"])
+	assert.Equal(t, float64(0), rawRule["weight"])
+	monitor, ok := rawRule["monitor"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, monitor["enabled"])
+	autoSync, ok := rawRule["auto_sync"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, autoSync["enabled"])
 }
 
 func TestUpstreamSourceAPICredentialsUpdateClearsCachedTokens(t *testing.T) {
