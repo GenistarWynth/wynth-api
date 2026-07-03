@@ -107,9 +107,6 @@ func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstream
 	} else {
 		config.DefaultLocalGroup = strings.TrimSpace(config.DefaultLocalGroup)
 	}
-	if config.MonitorIntervalMinutes > 0 && config.MonitorIntervalMinutes < 5 {
-		config.MonitorIntervalMinutes = 5
-	}
 	if config.AutoSyncEnabled {
 		if config.AutoSyncIntervalMinutes < 0 {
 			config.AutoSyncIntervalMinutes = 0
@@ -262,8 +259,8 @@ func cloneUpstreamSourceRuleBool(value *bool) *bool {
 }
 
 func normalizeUpstreamSourceRuleInterval(intervalMinutes int) int {
-	if intervalMinutes > 0 && intervalMinutes < 5 {
-		return 5
+	if intervalMinutes < 0 {
+		return 0
 	}
 	return intervalMinutes
 }
@@ -329,9 +326,6 @@ func resolveUpstreamSourceRule(config upstreamSourceSyncConfig, mapping *model.U
 
 func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstreamSourceRuleResolution {
 	monitorInterval := config.MonitorIntervalMinutes
-	if monitorInterval > 0 && monitorInterval < 5 {
-		monitorInterval = 5
-	}
 	autoSyncInterval := config.AutoSyncIntervalMinutes
 	if config.AutoSyncEnabled {
 		if autoSyncInterval < 0 {

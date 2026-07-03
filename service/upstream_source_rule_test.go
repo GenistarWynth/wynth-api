@@ -49,7 +49,7 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "fallback", config.LocalGroup)
-	assert.Equal(t, 5, config.MonitorIntervalMinutes)
+	assert.Equal(t, 3, config.MonitorIntervalMinutes)
 	assert.True(t, config.AutoSyncEnabled)
 	assert.Equal(t, 4, config.AutoSyncIntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, config.ModelStrategy)
@@ -65,7 +65,7 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 	require.NotNil(t, rule.Monitor)
 	require.NotNil(t, rule.Monitor.Enabled)
 	assert.False(t, *rule.Monitor.Enabled)
-	assert.Equal(t, 5, rule.Monitor.IntervalMinutes)
+	assert.Equal(t, 3, rule.Monitor.IntervalMinutes)
 	assert.Equal(t, "gpt-4o-mini", rule.Monitor.Model)
 	require.NotNil(t, rule.AutoSync)
 	require.NotNil(t, rule.AutoSync.Enabled)
@@ -266,7 +266,7 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.Equal(t, upstreamSourceMatchReasonMatched, resolution.Reason)
 	assert.Equal(t, "paid", resolution.LocalGroup)
 	assert.True(t, resolution.MonitorEnabled)
-	assert.Equal(t, 5, resolution.MonitorIntervalMinutes)
+	assert.Equal(t, 3, resolution.MonitorIntervalMinutes)
 	assert.True(t, resolution.AutoSyncEnabled)
 	assert.Equal(t, 4, resolution.AutoSyncIntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, resolution.ModelStrategy)
@@ -326,7 +326,7 @@ func TestResolveUpstreamSourceRuleAllowsZeroRuleIntervalsToOverrideFallback(t *t
 
 	assert.True(t, resolution.Matched)
 	assert.True(t, resolution.MonitorEnabled)
-	assert.Equal(t, 5, resolution.MonitorIntervalMinutes)
+	assert.Equal(t, 3, resolution.MonitorIntervalMinutes)
 	assert.True(t, resolution.AutoSyncEnabled)
 	assert.Equal(t, 0, resolution.AutoSyncIntervalMinutes)
 	assert.True(t, upstreamSourceMappingAutoSyncDue(config, mapping, 3600))
@@ -550,6 +550,14 @@ func TestResolveUpstreamSourceRuleLeavesUnmatchedGroupsUnsynced(t *testing.T) {
 	assert.Equal(t, 15, resolution.AutoSyncIntervalMinutes)
 	assert.Equal(t, upstreamSourceModelStrategyFixed, resolution.ModelStrategy)
 	assert.Equal(t, []string{"GPT-4o"}, resolution.FixedModels)
+}
+
+func TestMonitorIntervalMinimumIsOne(t *testing.T) {
+	assert.Equal(t, 2, normalizeUpstreamSourceRuleInterval(2))
+	assert.Equal(t, 1, normalizeUpstreamSourceRuleInterval(1))
+	assert.Equal(t, 0, normalizeUpstreamSourceRuleInterval(0)) // 0 = inherit/disabled
+	cfg := normalizeUpstreamSourceSyncConfig(upstreamSourceSyncConfig{MonitorIntervalMinutes: 2})
+	assert.Equal(t, 2, cfg.MonitorIntervalMinutes)
 }
 
 func mustParseUpstreamSourceRuleTestConfig(t *testing.T, values map[string]any) upstreamSourceSyncConfig {
