@@ -16,6 +16,9 @@ export type LocalGroupRuleTemplateKey =
 type LocalGroupRuleTemplateDefaults = {
   defaultLocalGroup: string
   proLocalGroup: string
+  channelType?: number
+  priority?: number
+  weight?: number
   monitor?: UpstreamSourceLocalGroupRule['monitor']
   autoSync?: UpstreamSourceLocalGroupRule['auto_sync']
   autoPriority?: UpstreamSourceLocalGroupRule['auto_priority']
@@ -202,6 +205,30 @@ function hasCodexImageGenerationBridgePolicy(value?: string | null): boolean {
   return typeof value === 'string' && value.trim() !== ''
 }
 
+// normalizeRuleChannelType/Priority/Weight sanitize the per-rule overrides
+// emitted to the backend: channel type must be a positive channel id, weight
+// must be non-negative, and priority is an unrestricted signed integer.
+function normalizeRuleChannelType(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+  return Math.max(1, Math.trunc(value))
+}
+
+function normalizeRulePriority(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+  return Math.trunc(value)
+}
+
+function normalizeRuleWeight(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined
+  }
+  return Math.max(0, Math.trunc(value))
+}
+
 function sameStringList(left: string[], right: string[]) {
   if (left.length !== right.length) {
     return false
@@ -331,6 +358,9 @@ export function buildLocalGroupRuleTemplate(
   defaults: LocalGroupRuleTemplateDefaults
 ): UpstreamSourceLocalGroupRule {
   const modelStrategy = normalizeModelStrategy(defaults.modelStrategy)
+  const channelType = normalizeRuleChannelType(defaults.channelType)
+  const priority = normalizeRulePriority(defaults.priority)
+  const weight = normalizeRuleWeight(defaults.weight)
   const baseRule: UpstreamSourceLocalGroupRule = {
     name: '',
     local_group:
@@ -341,6 +371,9 @@ export function buildLocalGroupRuleTemplate(
     name_contains: [],
     description_contains: [],
     exclude_keywords: [],
+    ...(channelType !== undefined ? { channel_type: channelType } : {}),
+    ...(priority !== undefined ? { priority } : {}),
+    ...(weight !== undefined ? { weight } : {}),
     ...(defaults.monitor ? { monitor: defaults.monitor } : {}),
     ...(defaults.autoSync ? { auto_sync: defaults.autoSync } : {}),
     ...(defaults.autoPriority ? { auto_priority: defaults.autoPriority } : {}),
@@ -408,6 +441,9 @@ function normalizeTemplateRule(
   const bridgePolicy = normalizeCodexImageGenerationBridgePolicy(
     rule.codex_image_generation_bridge_policy
   )
+  const channelType = normalizeRuleChannelType(rule.channel_type)
+  const priority = normalizeRulePriority(rule.priority)
+  const weight = normalizeRuleWeight(rule.weight)
   return {
     name: String(rule.name ?? '').trim(),
     local_group: String(rule.local_group ?? '').trim(),
@@ -419,6 +455,9 @@ function normalizeTemplateRule(
     exclude_keywords: normalizeKeywordList(
       toStringArray(rule.exclude_keywords)
     ),
+    ...(channelType !== undefined ? { channel_type: channelType } : {}),
+    ...(priority !== undefined ? { priority } : {}),
+    ...(weight !== undefined ? { weight } : {}),
     ...(rule.monitor ? { monitor: rule.monitor } : {}),
     ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
     ...(autoPriority ? { auto_priority: autoPriority } : {}),
@@ -554,6 +593,9 @@ export function normalizeSyncRules(
       const bridgePolicy = normalizeCodexImageGenerationBridgePolicy(
         rule.codex_image_generation_bridge_policy
       )
+      const channelType = normalizeRuleChannelType(rule.channel_type)
+      const priority = normalizeRulePriority(rule.priority)
+      const weight = normalizeRuleWeight(rule.weight)
 
       return {
         name: rule.name.trim(),
@@ -562,6 +604,9 @@ export function normalizeSyncRules(
         name_contains: nameContains,
         description_contains: descriptionContains,
         exclude_keywords: excludeKeywords,
+        ...(channelType !== undefined ? { channel_type: channelType } : {}),
+        ...(priority !== undefined ? { priority } : {}),
+        ...(weight !== undefined ? { weight } : {}),
         ...(rule.monitor ? { monitor: rule.monitor } : {}),
         ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
         ...(autoPriority ? { auto_priority: autoPriority } : {}),

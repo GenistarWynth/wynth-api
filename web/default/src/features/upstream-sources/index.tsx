@@ -118,6 +118,7 @@ import { LongText } from '@/components/long-text'
 import { MultiSelect } from '@/components/multi-select'
 import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
+import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 import { channelsQueryKeys } from '@/features/channels/lib/channel-actions'
 import {
   createUpstreamSource,
@@ -179,8 +180,6 @@ import {
   type UpstreamSyncStatus,
 } from './types'
 
-const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
-const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 30
 const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
 const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
@@ -241,6 +240,10 @@ function codexImageGenerationBridgePolicyLabel(
   }
 }
 
+const DEFAULT_RULE_CHANNEL_TYPE = 1 // OpenAI
+const DEFAULT_RULE_PRIORITY = 0
+const DEFAULT_RULE_WEIGHT = 1
+
 function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
   return {
     name: '',
@@ -249,6 +252,10 @@ function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
     name_contains: [],
     description_contains: [],
     exclude_keywords: [],
+    channel_type: DEFAULT_RULE_CHANNEL_TYPE,
+    priority: DEFAULT_RULE_PRIORITY,
+    weight: DEFAULT_RULE_WEIGHT,
+    monitor: { model: '' },
     model_strategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
     fixed_models: [],
   }
@@ -268,13 +275,31 @@ function monitorIntervalDisplayValue(
 function normalizeRuleForForm(
   rule: Partial<UpstreamSourceLocalGroupRule>
 ): UpstreamSourceLocalGroupRule {
+  const base = emptyLocalGroupRule()
   return {
-    ...emptyLocalGroupRule(),
+    ...base,
     ...rule,
     platforms: normalizeKeywordList(rule.platforms ?? []),
     name_contains: normalizeKeywordList(rule.name_contains ?? []),
     description_contains: normalizeKeywordList(rule.description_contains ?? []),
     exclude_keywords: normalizeKeywordList(rule.exclude_keywords ?? []),
+    channel_type:
+      typeof rule.channel_type === 'number' &&
+      Number.isFinite(rule.channel_type)
+        ? rule.channel_type
+        : base.channel_type,
+    priority:
+      typeof rule.priority === 'number' && Number.isFinite(rule.priority)
+        ? rule.priority
+        : base.priority,
+    weight:
+      typeof rule.weight === 'number' && Number.isFinite(rule.weight)
+        ? rule.weight
+        : base.weight,
+    monitor: {
+      ...rule.monitor,
+      model: rule.monitor?.model ?? '',
+    },
     codex_image_generation_bridge_policy:
       rule.codex_image_generation_bridge_policy
         ? normalizeCodexImageGenerationBridgePolicy(
@@ -467,49 +492,20 @@ function StatusWithTime(props: {
   )
 }
 
+// SourceSettingBadges summarizes per-source settings that still live on the
+// source itself. Monitor/auto-sync/auto-priority/priority/weight moved to
+// per-rule overrides (see UpstreamSourceLocalGroupRule), so this only shows
+// how many sync rules are configured plus the still-source-level private IP
+// policy.
 function SourceSettingBadges(props: { source: UpstreamSource }) {
   const { t } = useTranslation()
-  const monitorLabel = props.source.enable_monitor
-    ? `${t('Monitor On')} / ${monitorIntervalDisplayValue(
-        props.source.monitor_interval_minutes,
-        DEFAULT_MONITOR_INTERVAL_MINUTES
-      )}m`
-    : t('Monitor Off')
-  const autoSyncLabel = props.source.auto_sync_enabled
-    ? `${t('Auto Sync On')} / ${props.source.auto_sync_interval_minutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES}m`
-    : t('Auto Sync Off')
-  const autoPriorityLabel = props.source.auto_priority_enabled
-    ? `${t('Auto Priority On')} / ${intervalDisplayValue(
-        props.source.auto_priority_interval_minutes,
-        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
-      )}m / ${props.source.auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h`
-    : t('Auto Priority Off')
+  const ruleCount = props.source.local_group_rules.length
 
   return (
     <div className='flex max-w-[260px] flex-wrap gap-1'>
       <StatusBadge
-        label={`${t('Priority')}: ${props.source.default_priority}`}
-        variant='neutral'
-        copyable={false}
-      />
-      <StatusBadge
-        label={`${t('Weight')}: ${props.source.default_weight}`}
-        variant='neutral'
-        copyable={false}
-      />
-      <StatusBadge
-        label={monitorLabel}
-        variant={props.source.enable_monitor ? 'success' : 'neutral'}
-        copyable={false}
-      />
-      <StatusBadge
-        label={autoSyncLabel}
-        variant={props.source.auto_sync_enabled ? 'success' : 'neutral'}
-        copyable={false}
-      />
-      <StatusBadge
-        label={autoPriorityLabel}
-        variant={props.source.auto_priority_enabled ? 'success' : 'neutral'}
+        label={t('{{count}} sync rules', { count: ruleCount })}
+        variant={ruleCount > 0 ? 'success' : 'neutral'}
         copyable={false}
       />
       <StatusBadge
@@ -1092,6 +1088,14 @@ function SourceFormSheet(props: {
     () => modelOptions.map((model) => ({ value: model, label: model })),
     [modelOptions]
   )
+  const channelTypeSelectOptions = useMemo(
+    () =>
+      CHANNEL_TYPE_OPTIONS.map((option) => ({
+        value: String(option.value),
+        label: t(option.label),
+      })),
+    [t]
+  )
   const ruleStrategyDefaults = DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS
 
   useEffect(() => {
@@ -1560,6 +1564,72 @@ function SourceFormSheet(props: {
                       />
                     </FieldBlock>
                   </div>
+                  <div className='grid gap-3 sm:grid-cols-3'>
+                    <FieldBlock
+                      label={t('Channel Type')}
+                      htmlFor={`source-rule-channel-type-${index}`}
+                    >
+                      <Combobox
+                        id={`source-rule-channel-type-${index}`}
+                        options={channelTypeSelectOptions}
+                        value={String(
+                          rule.channel_type ?? DEFAULT_RULE_CHANNEL_TYPE
+                        )}
+                        onValueChange={(value) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            channel_type: value
+                              ? Number.parseInt(value, 10)
+                              : DEFAULT_RULE_CHANNEL_TYPE,
+                          })
+                        }
+                        placeholder={t('Channel Type')}
+                        emptyText={t('No channel type found.')}
+                      />
+                    </FieldBlock>
+                    <FieldBlock
+                      label={t('Priority')}
+                      htmlFor={`source-rule-priority-${index}`}
+                    >
+                      <Input
+                        id={`source-rule-priority-${index}`}
+                        type='number'
+                        value={rule.priority ?? DEFAULT_RULE_PRIORITY}
+                        onChange={(event) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            priority: parseIntegerInput(
+                              event.target.value,
+                              DEFAULT_RULE_PRIORITY
+                            ),
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                    <FieldBlock
+                      label={t('Weight')}
+                      htmlFor={`source-rule-weight-${index}`}
+                    >
+                      <Input
+                        id={`source-rule-weight-${index}`}
+                        type='number'
+                        min={0}
+                        value={rule.weight ?? DEFAULT_RULE_WEIGHT}
+                        onChange={(event) =>
+                          setLocalGroupRule(index, {
+                            ...rule,
+                            weight: Math.max(
+                              0,
+                              parseIntegerInput(
+                                event.target.value,
+                                DEFAULT_RULE_WEIGHT
+                              )
+                            ),
+                          })
+                        }
+                      />
+                    </FieldBlock>
+                  </div>
                   <FieldBlock label={t('Platforms')}>
                     <CheckboxList
                       values={rule.platforms}
@@ -1660,6 +1730,7 @@ function SourceFormSheet(props: {
                               setLocalGroupRule(index, {
                                 ...rule,
                                 monitor: {
+                                  ...rule.monitor,
                                   enabled: checked,
                                   interval_minutes: monitorIntervalDisplayValue(
                                     rule.monitor?.interval_minutes,
@@ -1677,7 +1748,7 @@ function SourceFormSheet(props: {
                             <Input
                               id={`source-rule-monitor-interval-${index}`}
                               type='number'
-                              min={5}
+                              min={1}
                               value={monitorIntervalDisplayValue(
                                 rule.monitor?.interval_minutes,
                                 ruleStrategyDefaults.monitor.interval_minutes
@@ -1686,6 +1757,7 @@ function SourceFormSheet(props: {
                                 setLocalGroupRule(index, {
                                   ...rule,
                                   monitor: {
+                                    ...rule.monitor,
                                     enabled:
                                       rule.monitor?.enabled ??
                                       ruleStrategyDefaults.monitor.enabled,
@@ -1697,6 +1769,28 @@ function SourceFormSheet(props: {
                                   },
                                 })
                               }
+                            />
+                          </FieldBlock>
+                          <FieldBlock
+                            label={t('Monitor Model')}
+                            htmlFor={`source-rule-monitor-model-${index}`}
+                          >
+                            <Combobox
+                              id={`source-rule-monitor-model-${index}`}
+                              options={modelSelectOptions}
+                              value={rule.monitor?.model ?? ''}
+                              onValueChange={(value) =>
+                                setLocalGroupRule(index, {
+                                  ...rule,
+                                  monitor: {
+                                    ...rule.monitor,
+                                    model: value ?? '',
+                                  },
+                                })
+                              }
+                              placeholder={t('Select monitor model')}
+                              emptyText={t('No models found')}
+                              allowCustomValue
                             />
                           </FieldBlock>
                         </div>

@@ -58,6 +58,7 @@ export type CodexImageGenerationBridgePolicy =
 export type UpstreamSourceRuleMonitor = {
   enabled?: boolean
   interval_minutes?: number
+  model?: string
 }
 
 export type UpstreamSourceRuleAutoSync = {
@@ -80,22 +81,7 @@ export type UpstreamSource = {
   admin_api_base_path: string
   relay_base_url: string
   local_group: string
-  channel_type: number
-  default_priority: number
-  default_weight: number
-  enable_monitor: boolean
-  monitor_interval_minutes: number
-  auto_sync_models: boolean
   allow_private_ip: boolean
-  auto_sync_enabled: boolean
-  auto_sync_interval_minutes: number
-  auto_priority_enabled: boolean
-  auto_priority_interval_minutes: number
-  auto_priority_window_hours: number
-  codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy
-  default_local_group: string
-  model_strategy: UpstreamSourceModelStrategy
-  fixed_models: string[]
   local_group_rules: UpstreamSourceLocalGroupRule[]
   masked_email: string
   has_credentials: boolean
@@ -118,6 +104,9 @@ export type UpstreamSourceLocalGroupRule = {
   name_contains: string[]
   description_contains: string[]
   exclude_keywords: string[]
+  channel_type?: number
+  priority?: number
+  weight?: number
   monitor?: UpstreamSourceRuleMonitor
   auto_sync?: UpstreamSourceRuleAutoSync
   auto_priority?: UpstreamSourceRuleAutoPriority
@@ -146,8 +135,12 @@ export type UpstreamSourceMapping = {
   matched_rule_name: string
   match_reason: string
   resolved_local_group: string
+  resolved_channel_type?: number
+  resolved_priority?: number
+  resolved_weight?: number
   resolved_monitor_enabled: boolean
   resolved_monitor_interval_minutes: number
+  resolved_monitor_model?: string
   resolved_auto_sync_enabled: boolean
   resolved_auto_sync_interval_minutes: number
   resolved_auto_priority_enabled: boolean
