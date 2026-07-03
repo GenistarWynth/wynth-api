@@ -570,52 +570,57 @@ export function parseLocalGroupRuleUserTemplates(
   }
 }
 
+// normalizeSyncRules intentionally keeps matcher-less rules: the backend
+// treats a rule with no platforms/name_contains/description_contains as a
+// catch-all that matches every group (see rule matching in
+// service/upstream_source_rule.go), and the read-time legacy migration
+// synthesizes exactly such a rule for pre-fold sources. Filtering those out
+// here would silently turn "sync everything" into "sync nothing" the moment
+// an admin re-saves an unmodified migrated rule.
 export function normalizeSyncRules(
   rules: UpstreamSourceLocalGroupRule[]
 ): UpstreamSourceLocalGroupRule[] {
-  return rules
-    .map((rule) => {
-      const platforms = normalizeKeywordList(rule.platforms ?? [])
-      const nameContains = normalizeKeywordList(rule.name_contains ?? [])
-      const descriptionContains = normalizeKeywordList(
-        rule.description_contains ?? []
-      )
-      const excludeKeywords = normalizeKeywordList(rule.exclude_keywords ?? [])
-      const modelStrategy = normalizeModelStrategy(rule.model_strategy)
-      const fixedModels =
-        modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
-          ? normalizeModelList(rule.fixed_models ?? [])
-          : []
-      const autoPriority = normalizeRuleAutoPriority(rule.auto_priority)
-      const hasBridgePolicy = hasCodexImageGenerationBridgePolicy(
-        rule.codex_image_generation_bridge_policy
-      )
-      const bridgePolicy = normalizeCodexImageGenerationBridgePolicy(
-        rule.codex_image_generation_bridge_policy
-      )
-      const channelType = normalizeRuleChannelType(rule.channel_type)
-      const priority = normalizeRulePriority(rule.priority)
-      const weight = normalizeRuleWeight(rule.weight)
+  return rules.map((rule) => {
+    const platforms = normalizeKeywordList(rule.platforms ?? [])
+    const nameContains = normalizeKeywordList(rule.name_contains ?? [])
+    const descriptionContains = normalizeKeywordList(
+      rule.description_contains ?? []
+    )
+    const excludeKeywords = normalizeKeywordList(rule.exclude_keywords ?? [])
+    const modelStrategy = normalizeModelStrategy(rule.model_strategy)
+    const fixedModels =
+      modelStrategy === UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED
+        ? normalizeModelList(rule.fixed_models ?? [])
+        : []
+    const autoPriority = normalizeRuleAutoPriority(rule.auto_priority)
+    const hasBridgePolicy = hasCodexImageGenerationBridgePolicy(
+      rule.codex_image_generation_bridge_policy
+    )
+    const bridgePolicy = normalizeCodexImageGenerationBridgePolicy(
+      rule.codex_image_generation_bridge_policy
+    )
+    const channelType = normalizeRuleChannelType(rule.channel_type)
+    const priority = normalizeRulePriority(rule.priority)
+    const weight = normalizeRuleWeight(rule.weight)
 
-      return {
-        name: rule.name.trim(),
-        local_group: rule.local_group.trim(),
-        platforms,
-        name_contains: nameContains,
-        description_contains: descriptionContains,
-        exclude_keywords: excludeKeywords,
-        ...(channelType !== undefined ? { channel_type: channelType } : {}),
-        ...(priority !== undefined ? { priority } : {}),
-        ...(weight !== undefined ? { weight } : {}),
-        ...(rule.monitor ? { monitor: rule.monitor } : {}),
-        ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
-        ...(autoPriority ? { auto_priority: autoPriority } : {}),
-        ...(hasBridgePolicy
-          ? { codex_image_generation_bridge_policy: bridgePolicy }
-          : {}),
-        model_strategy: modelStrategy,
-        fixed_models: fixedModels,
-      }
-    })
-    .filter(hasLocalGroupRuleMatcher)
+    return {
+      name: rule.name.trim(),
+      local_group: rule.local_group.trim(),
+      platforms,
+      name_contains: nameContains,
+      description_contains: descriptionContains,
+      exclude_keywords: excludeKeywords,
+      ...(channelType !== undefined ? { channel_type: channelType } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(weight !== undefined ? { weight } : {}),
+      ...(rule.monitor ? { monitor: rule.monitor } : {}),
+      ...(rule.auto_sync ? { auto_sync: rule.auto_sync } : {}),
+      ...(autoPriority ? { auto_priority: autoPriority } : {}),
+      ...(hasBridgePolicy
+        ? { codex_image_generation_bridge_policy: bridgePolicy }
+        : {}),
+      model_strategy: modelStrategy,
+      fixed_models: fixedModels,
+    }
+  })
 }

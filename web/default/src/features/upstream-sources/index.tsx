@@ -499,7 +499,7 @@ function StatusWithTime(props: {
 // policy.
 function SourceSettingBadges(props: { source: UpstreamSource }) {
   const { t } = useTranslation()
-  const ruleCount = props.source.local_group_rules.length
+  const ruleCount = (props.source.local_group_rules ?? []).length
 
   return (
     <div className='flex max-w-[260px] flex-wrap gap-1'>
@@ -1683,6 +1683,11 @@ function SourceFormSheet(props: {
                       />
                     </FieldBlock>
                   </div>
+                  {!hasLocalGroupRuleMatcher(rule) && (
+                    <p className='text-muted-foreground text-xs leading-5'>
+                      {t('Matches all groups')}
+                    </p>
+                  )}
                   <FieldBlock
                     label={t('Exclude Keywords')}
                     htmlFor={`source-rule-exclude-keywords-${index}`}

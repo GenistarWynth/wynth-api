@@ -51,6 +51,25 @@ describe('upstream source rule normalization', () => {
     )
   })
 
+  test('keeps matcher-less catch-all rules instead of dropping them', () => {
+    const rules = normalizeSyncRules([
+      {
+        name: 'Migrated',
+        local_group: 'paid',
+        platforms: [],
+        name_contains: [],
+        description_contains: [],
+        exclude_keywords: [],
+        model_strategy: 'all_upstream',
+        fixed_models: [],
+      },
+    ])
+
+    assert.equal(rules.length, 1)
+    assert.equal(rules[0].name, 'Migrated')
+    assert.equal(rules[0].local_group, 'paid')
+  })
+
   test('normalizes fixed model rules with de-duplicated model order', () => {
     assert.deepEqual(normalizeModelList([' gpt-4o ', 'claude', 'gpt-4o']), [
       'gpt-4o',
