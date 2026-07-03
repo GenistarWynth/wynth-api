@@ -127,6 +127,14 @@ func main() {
 	service.StartUpstreamSourceAutoPriorityWorker()
 	service.StartAccountPoolCapabilityAutoDetectWorker()
 
+	// Per-channel monitor batch: master-only, sync.Once-guarded ticker that every
+	// minute probes channels whose per-channel monitor is due and records their
+	// availability history for the Channel Monitor dialog. This is the ONLY writer
+	// of channel monitor logs. Keep this boot call — an upstream merge
+	// (system-task-runner refactor, #5680) previously dropped it and silently
+	// orphaned the monitor batch, so the dialog showed "no data" for every channel.
+	go controller.AutomaticallyTestChannels()
+
 	// Account pool proxy health prober (probes enabled proxies on each tick)
 	service.StartAccountPoolProxyProber(context.Background(), 0)
 
