@@ -5258,7 +5258,7 @@
     "Passive recovery only": "Passive recovery only",
     "Password must be between 8 and 20 characters": "Password must be between 8 and 20 characters",
     "Paste sub2api account export JSON or CPA YAML/JSON.": "Paste sub2api account export JSON or CPA YAML/JSON.",
-    "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.": "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.",
+    "Please use WeChat's \"Scan QR Code\" feature to complete the binding process.": "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.",
     "Protect login and registration with Cloudflare Turnstile": "Protect login and registration with Cloudflare Turnstile",
     "Proxy deleted": "Proxy deleted",
     "Proxy updated": "Proxy updated",

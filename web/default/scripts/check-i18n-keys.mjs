@@ -1,8 +1,21 @@
 #!/usr/bin/env node
 // Guardrail: fail if any static t('literal') key referenced in src is missing
 // from en.json. Locale files nest keys under a "translation" namespace.
-// LIMITATION: only STATIC string-literal first args are checked; dynamic keys
-// (t(variable), t(`x-${y}`)) are intentionally skipped (uncheckable statically).
+//
+// LIMITATIONS (static analysis, not a real parser):
+// - Dynamic keys (t(variable), t(`x-${y}`)) are intentionally skipped
+//   (uncheckable statically).
+// - Constant-reference keys (t(SOME_CONST)) are not checked — the first arg
+//   must be a literal.
+// - Concatenation / partial literals (t('prefix.' + code)) are not checked —
+//   the literal must be the complete first argument (closing quote followed
+//   by optional whitespace then `,` or `)`).
+// - Exotic escapes in key literals (e.g. `\n`, `\uXXXX`) are not decoded;
+//   only escaped quote/backslash characters are unescaped before comparing
+//   against en.json keys.
+// - t('...') written inside a `//` or `/* */` comment is still treated as a
+//   real call (comments are not stripped, to avoid corrupting string
+//   contents such as `https://`), so it may false-positive as "missing".
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,8 +30,18 @@ const enRaw = JSON.parse(fs.readFileSync(enPath, 'utf8'))
 const en = enRaw.translation ?? enRaw
 const keys = new Set(Object.keys(en))
 
-// First arg of t(...) as a single/double/backtick string literal.
-const T_CALL = /\bt\(\s*(['"`])((?:\\.|(?!\1)[^\\])*?)\1/g
+// First arg of t(...) as a single/double/backtick string literal. The
+// lookahead requires the closing quote to be the end of the argument (only
+// whitespace then `,` or `)` may follow) so `t('key')` / `t('key', opts)`
+// match but `t('prefix.' + code)` does not.
+const T_CALL = /\bt\(\s*(['"`])((?:\\.|(?!\1)[^\\])*?)\1(?=\s*[,)])/g
+
+// Unescape only escaped quote/backslash chars so `t('It\'s saved')` compares
+// against the JSON key `It's saved`. Other escapes (\n, \uXXXX, etc.) are
+// left as-is — see LIMITATIONS above.
+function unescapeKey(raw) {
+  return raw.replace(/\\(['"`\\])/g, '$1')
+}
 
 const missing = new Map() // key -> Set<relpath>
 function walk(dir) {
@@ -32,9 +55,10 @@ function walk(dir) {
       const s = fs.readFileSync(p, 'utf8')
       let m
       while ((m = T_CALL.exec(s))) {
-        const key = m[2]
-        if (!key) continue
-        if (key.includes('${')) continue // JS template interpolation => dynamic
+        const rawKey = m[2]
+        if (!rawKey) continue
+        if (rawKey.includes('${')) continue // JS template interpolation => dynamic
+        const key = unescapeKey(rawKey)
         if (!keys.has(key)) {
           if (!missing.has(key)) missing.set(key, new Set())
           missing.get(key).add(path.relative(root, p).replace(/\\/g, '/'))

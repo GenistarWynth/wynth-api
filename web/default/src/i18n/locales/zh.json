@@ -5258,7 +5258,7 @@
     "Passive recovery only": "仅被动恢复",
     "Password must be between 8 and 20 characters": "密码长度必须为 8 到 20 个字符",
     "Paste sub2api account export JSON or CPA YAML/JSON.": "粘贴 sub2api 账号导出的 JSON 或 CPA YAML/JSON。",
-    "Please use WeChat\\'s \"Scan QR Code\" feature to complete the binding process.": "请使用微信的“扫一扫”功能完成绑定流程。",
+    "Please use WeChat's \"Scan QR Code\" feature to complete the binding process.": "请使用微信的“扫一扫”功能完成绑定流程。",
     "Protect login and registration with Cloudflare Turnstile": "使用 Cloudflare Turnstile 保护登录和注册",
     "Proxy deleted": "代理已删除",
     "Proxy updated": "代理已更新",
