@@ -130,8 +130,9 @@ type UpstreamSourceLocalGroupRule struct {
 }
 
 type UpstreamSourceRuleMonitor struct {
-	Enabled         *bool `json:"enabled,omitempty"`
-	IntervalMinutes int   `json:"interval_minutes,omitempty"`
+	Enabled         *bool  `json:"enabled,omitempty"`
+	IntervalMinutes int    `json:"interval_minutes,omitempty"`
+	Model           string `json:"model,omitempty"`
 }
 
 type UpstreamSourceRuleAutoSync struct {
@@ -181,6 +182,7 @@ type UpstreamSourceMappingResponse struct {
 	ResolvedChannelType                      int      `json:"resolved_channel_type"`
 	ResolvedPriority                         int64    `json:"resolved_priority"`
 	ResolvedWeight                           uint     `json:"resolved_weight"`
+	ResolvedMonitorModel                     string   `json:"resolved_monitor_model"`
 }
 
 type UpstreamSourceMappingUpdateRequest struct {

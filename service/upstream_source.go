@@ -848,6 +848,7 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
 		ChannelMonitorEnabled:            resolution.MonitorEnabled,
 		ChannelMonitorIntervalMinutes:    resolution.MonitorIntervalMinutes,
+		ChannelMonitorModel:              resolution.MonitorModel,
 		CodexImageGenerationBridgePolicy: upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution),
 		GeneratedByUpstreamSourceID:      source.Id,
 		GeneratedByUpstreamMappingID:     mapping.Id,
@@ -862,6 +863,7 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 	settings := existingChannel.GetOtherSettings()
 	settings.ChannelMonitorEnabled = resolution.MonitorEnabled
 	settings.ChannelMonitorIntervalMinutes = resolution.MonitorIntervalMinutes
+	settings.ChannelMonitorModel = resolution.MonitorModel
 	settings.CodexImageGenerationBridgePolicy = upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution)
 	if source != nil {
 		settings.GeneratedByUpstreamSourceID = source.Id
@@ -1264,6 +1266,7 @@ func buildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMappi
 		ResolvedChannelType:                      resolution.ChannelType,
 		ResolvedPriority:                         resolution.Priority,
 		ResolvedWeight:                           resolution.Weight,
+		ResolvedMonitorModel:                     resolution.MonitorModel,
 	}
 }
 

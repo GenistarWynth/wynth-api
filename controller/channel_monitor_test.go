@@ -397,6 +397,32 @@ func TestFilterDueChannelMonitorCandidatesKeepsInvalidSettingsReadOnly(t *testin
 	assert.Equal(t, "{bad-json", reloaded.OtherSettings)
 }
 
+func TestResolveChannelMonitorProbeModelUsesConfiguredModelWhenInChannelModels(t *testing.T) {
+	channel := monitorChannel(t, 1, common.ChannelStatusEnabled, dto.ChannelOtherSettings{
+		ChannelMonitorModel: "claude-3",
+	})
+	channel.Models = "gpt-4o-mini,claude-3"
+
+	assert.Equal(t, "claude-3", resolveChannelMonitorProbeModel(channel))
+}
+
+func TestResolveChannelMonitorProbeModelFallsBackWhenModelNotInChannelModels(t *testing.T) {
+	channel := monitorChannel(t, 2, common.ChannelStatusEnabled, dto.ChannelOtherSettings{
+		ChannelMonitorModel: "claude-3",
+	})
+	channel.Models = "gpt-4o-mini"
+
+	assert.Equal(t, "", resolveChannelMonitorProbeModel(channel))
+}
+
+func TestResolveChannelMonitorProbeModelHandlesNilChannelAndUnsetModel(t *testing.T) {
+	assert.Equal(t, "", resolveChannelMonitorProbeModel(nil))
+
+	channel := monitorChannel(t, 3, common.ChannelStatusEnabled, dto.ChannelOtherSettings{})
+	channel.Models = "gpt-4o-mini"
+	assert.Equal(t, "", resolveChannelMonitorProbeModel(channel))
+}
+
 func TestRunChannelMonitorProbeUsesSyntheticAccountPoolSchedulability(t *testing.T) {
 	db := setupControllerChannelMonitorTestDB(t)
 	channel := createControllerAccountPoolMonitorChannel(t, db, common.ChannelStatusManuallyDisabled)

@@ -50,6 +50,7 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateIgnoredModels      []string                  `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 	ChannelMonitorEnabled                 bool                      `json:"channel_monitor_enabled,omitempty"`
 	ChannelMonitorIntervalMinutes         int                       `json:"channel_monitor_interval_minutes,omitempty"`
+	ChannelMonitorModel                   string                    `json:"channel_monitor_model,omitempty"`
 	ChannelAutoPriorityEnabled            bool                      `json:"channel_auto_priority_enabled,omitempty"`
 	ChannelAutoPriorityIntervalMinutes    int                       `json:"channel_auto_priority_interval_minutes,omitempty"`
 	ChannelAutoPriorityWindowHours        int                       `json:"channel_auto_priority_window_hours,omitempty"`

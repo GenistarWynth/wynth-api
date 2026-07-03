@@ -59,6 +59,7 @@ type upstreamSourceRuleResolution struct {
 	Weight                           uint
 	MonitorEnabled                   bool
 	MonitorIntervalMinutes           int
+	MonitorModel                     string
 	AutoSyncEnabled                  bool
 	AutoSyncIntervalMinutes          int
 	AutoPriorityEnabled              bool
@@ -218,6 +219,7 @@ func normalizeUpstreamSourceRuleMonitor(monitor *dto.UpstreamSourceRuleMonitor) 
 	normalized := &dto.UpstreamSourceRuleMonitor{
 		Enabled:         cloneUpstreamSourceRuleBool(monitor.Enabled),
 		IntervalMinutes: normalizeUpstreamSourceRuleInterval(monitor.IntervalMinutes),
+		Model:           strings.TrimSpace(monitor.Model),
 	}
 	return normalized
 }
@@ -449,6 +451,9 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		}
 		if rule.Monitor.IntervalMinutes > 0 {
 			resolution.MonitorIntervalMinutes = normalizeUpstreamSourceRuleInterval(rule.Monitor.IntervalMinutes)
+		}
+		if m := strings.TrimSpace(rule.Monitor.Model); m != "" {
+			resolution.MonitorModel = m
 		}
 	}
 	if rule.AutoSync != nil {

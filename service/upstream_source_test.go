@@ -1166,6 +1166,21 @@ func TestSyncUpstreamSourceUsesRuleLocalGroupAndMonitorOverrides(t *testing.T) {
 	assert.Equal(t, 5, settings.ChannelMonitorIntervalMinutes)
 }
 
+func TestBuildGeneratedChannelWritesMonitorModel(t *testing.T) {
+	enabled := true
+	cfg := normalizeUpstreamSourceSyncConfig(upstreamSourceSyncConfig{
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{{
+			Name: "r", NameContains: []string{"gpt"},
+			Monitor: &dto.UpstreamSourceRuleMonitor{Enabled: &enabled, IntervalMinutes: 2, Model: "gpt-4o-mini"},
+		}},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{Id: 1, SyncEnabled: true, DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive, UpstreamGroupName: "gpt-pro"}
+	res := resolveUpstreamSourceRule(cfg, mapping)
+	assert.Equal(t, "gpt-4o-mini", res.MonitorModel)
+	ch := buildGeneratedChannel(&model.UpstreamSource{Name: "s"}, mapping, cfg, res, "sk-x")
+	assert.Equal(t, "gpt-4o-mini", ch.GetOtherSettings().ChannelMonitorModel)
+}
+
 func TestSyncUpstreamSourceAppliesCodexImageBridgePolicyToGeneratedNewAPIChannel(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, map[string]any{

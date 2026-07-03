@@ -170,6 +170,25 @@ func resolveChannelTestModel(channel *model.Channel, testModel string) string {
 	return testModel
 }
 
+// resolveChannelMonitorProbeModel returns the configured monitor model only when
+// it is one of the channel's models (after mapping); otherwise "" so the caller
+// falls back to the default test-model resolution instead of a guaranteed failure.
+func resolveChannelMonitorProbeModel(channel *model.Channel) string {
+	if channel == nil {
+		return ""
+	}
+	configured := strings.TrimSpace(model.NormalizeChannelMonitorSettings(model.GetChannelMonitorSettingsReadOnly(channel)).ChannelMonitorModel)
+	if configured == "" {
+		return ""
+	}
+	for _, m := range channel.GetModels() {
+		if strings.TrimSpace(m) == configured {
+			return configured
+		}
+	}
+	return ""
+}
+
 func testChannelWithOptions(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, options channelTestOptions) (result testResult) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -847,7 +866,7 @@ func testAccountPoolChannelMonitorSchedulability(channel *model.Channel, now int
 	if !runtimeEnabled {
 		return result, false
 	}
-	testModel := resolveChannelTestModel(channel, "")
+	testModel := resolveChannelTestModel(channel, resolveChannelMonitorProbeModel(channel))
 	result.testedModel = testModel
 	upstreamModel, err := resolveChannelMonitorUpstreamModel(channel, testModel)
 	if err != nil {
@@ -997,7 +1016,7 @@ func runChannelMonitorProbe(channel *model.Channel, testUserID int) {
 	tik := time.Now()
 	result, handled := testAccountPoolChannelMonitorSchedulability(channel, common.GetTimestamp())
 	if !handled {
-		result = testChannelWithOptions(context.Background(), channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel), channelTestOptions{
+		result = testChannelWithOptions(context.Background(), channel, testUserID, resolveChannelMonitorProbeModel(channel), "", shouldUseStreamForAutomaticChannelTest(channel), channelTestOptions{
 			recordConsumeLog: false,
 		})
 	}

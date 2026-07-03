@@ -32,6 +32,7 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 				"monitor": map[string]any{
 					"enabled":          false,
 					"interval_minutes": 3,
+					"model":            " gpt-4o-mini ",
 				},
 				"auto_sync": map[string]any{
 					"enabled":          false,
@@ -65,6 +66,7 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 	require.NotNil(t, rule.Monitor.Enabled)
 	assert.False(t, *rule.Monitor.Enabled)
 	assert.Equal(t, 5, rule.Monitor.IntervalMinutes)
+	assert.Equal(t, "gpt-4o-mini", rule.Monitor.Model)
 	require.NotNil(t, rule.AutoSync)
 	require.NotNil(t, rule.AutoSync.Enabled)
 	assert.False(t, *rule.AutoSync.Enabled)
