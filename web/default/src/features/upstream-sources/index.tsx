@@ -1784,15 +1784,24 @@ function SourceFormSheet(props: {
                               id={`source-rule-monitor-model-${index}`}
                               options={modelSelectOptions}
                               value={rule.monitor?.model ?? ''}
-                              onValueChange={(value) =>
+                              onValueChange={(value) => {
+                                const model = value ?? ''
                                 setLocalGroupRule(index, {
                                   ...rule,
                                   monitor: {
                                     ...rule.monitor,
-                                    model: value ?? '',
+                                    // Choosing a monitor model implies the admin
+                                    // wants this rule monitored; auto-enable so it
+                                    // does not silently stay off. Clearing the model
+                                    // leaves the existing enabled state untouched.
+                                    enabled: model
+                                      ? true
+                                      : (rule.monitor?.enabled ??
+                                        ruleStrategyDefaults.monitor.enabled),
+                                    model,
                                   },
                                 })
-                              }
+                              }}
                               placeholder={t('Select monitor model')}
                               emptyText={t('No models found')}
                               allowCustomValue
