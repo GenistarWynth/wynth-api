@@ -554,7 +554,12 @@ func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncCon
 		AutoPriorityWindowHours:          24,
 		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyFollow,
 		ModelStrategy:                    upstreamSourceControllerModelStrategyAllUpstream,
-		DefaultLocalGroup:                "default",
+		// DefaultLocalGroup is intentionally left empty here (not seeded to
+		// "default") so normalizeUpstreamSourceControllerSyncConfig's
+		// "copy LocalGroup when DefaultLocalGroup is empty" branch actually
+		// runs. The request DTO no longer carries default_local_group
+		// (folded into per-rule overrides), so a non-empty seed would
+		// permanently shadow the real base LocalGroup with "default".
 	}
 }
 

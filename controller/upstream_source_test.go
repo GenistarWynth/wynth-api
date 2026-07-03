@@ -259,6 +259,44 @@ func TestUpstreamSourceAPICreateStoresCredentialsButReturnsMaskedState(t *testin
 	assert.Equal(t, float64(1), syncConfig["sync_config_version"])
 }
 
+// TestUpstreamSourceAPICreatePersistsBaseLocalGroupAsDefaultLocalGroupFallback
+// guards against a regression where a source's base Local Group ("paid")
+// stopped propagating into the persisted default_local_group fallback used
+// by blank-local_group rules (service.upstreamSourceDefaultLocalGroup). The
+// request DTO no longer carries default_local_group directly, so the
+// controller must derive it from LocalGroup instead of leaving a stale
+// "default" placeholder in the persisted sync_config.
+func TestUpstreamSourceAPICreatePersistsBaseLocalGroupAsDefaultLocalGroupFallback(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	request := dto.UpstreamSourceCreateRequest{
+		Name:       "paid-group-source",
+		Type:       model.UpstreamSourceTypeSub2API,
+		BaseURL:    "https://admin.example.com",
+		LocalGroup: "paid",
+		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{
+			{
+				Name:       "Catch-all",
+				LocalGroup: "",
+				Platforms:  []string{"openai"},
+			},
+		},
+	}
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.Equal(t, "paid", response.Data.LocalGroup)
+	require.Len(t, response.Data.LocalGroupRules, 1)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
+	var syncConfig map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(reloaded.SyncConfig, &syncConfig))
+	assert.Equal(t, "paid", syncConfig["local_group"])
+	assert.Equal(t, "paid", syncConfig["default_local_group"])
+}
+
 func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)

@@ -611,6 +611,40 @@ func TestEmptyMatcherRuleMatchesAll(t *testing.T) {
 	assert.True(t, resolveUpstreamSourceRule(cfg, m).SyncEligible)
 }
 
+// TestResolveUpstreamSourceRuleBlankRuleLocalGroupFallsBackToSourceBaseGroup
+// pins the contract that a matched rule which leaves local_group blank
+// inherits the source's real base group (LocalGroup), not a stale
+// "default" placeholder. DefaultLocalGroup starts empty here (as
+// normalizeUpstreamSourceSyncConfig produces before copying LocalGroup into
+// it), matching what a correctly-behaving create/update path should hand
+// off to the service layer.
+func TestResolveUpstreamSourceRuleBlankRuleLocalGroupFallsBackToSourceBaseGroup(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"sync_config_version": 1,
+		"local_group":         "paid",
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI catch-all",
+				"local_group": "",
+				"platforms":   []string{"openai"},
+			},
+		},
+	})
+	require.Equal(t, "paid", config.LocalGroup)
+	require.Equal(t, "paid", config.DefaultLocalGroup)
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:      true,
+		DiscoveryStatus:  model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamPlatform: "openai",
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.Matched)
+	assert.True(t, resolution.SyncEligible)
+	assert.Equal(t, "paid", resolution.LocalGroup)
+}
+
 func mustParseUpstreamSourceRuleTestConfig(t *testing.T, values map[string]any) upstreamSourceSyncConfig {
 	t.Helper()
 
