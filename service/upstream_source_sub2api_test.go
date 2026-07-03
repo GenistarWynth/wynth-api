@@ -372,6 +372,8 @@ func TestSub2APICodeIndicatesError(t *testing.T) {
 		{"string nonzero", json.RawMessage(`"5"`), true},
 		{"int nonzero", json.RawMessage(`5`), true},
 		{"string large error code", json.RawMessage(`"40001"`), true},
+		{"string non-integer numeric code", json.RawMessage(`"5.0"`), true},
+		{"string non-integer zero code", json.RawMessage(`"0.0"`), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

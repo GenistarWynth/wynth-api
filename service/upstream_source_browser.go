@@ -78,9 +78,7 @@ func acquireSub2APISessionViaBrowser(ctx context.Context, source *model.Upstream
 		return cfg, fmt.Errorf("browser-acquired sub2api token failed validation: %w", err)
 	}
 	cfg.AccessToken = token
-	if cfg.ExpiresAt == 0 {
-		cfg.ExpiresAt = common.GetTimestamp() + 3600
-	}
+	cfg.ExpiresAt = sub2APIResolveExpiresAt(cfg.AccessToken, cfg.ExpiresAt, 0)
 	cfg.SessionSource = "browser"
 	return cfg, nil
 }

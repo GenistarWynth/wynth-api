@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -116,13 +117,58 @@ func TestAcquireSub2APISessionViaBrowser(t *testing.T) {
 	}
 	t.Cleanup(func() { upstreamBrowserLogin = orig })
 
-	before := common.GetTimestamp()
 	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeSub2API, BaseURL: server.URL, AdminAPIBasePath: "/api/v1"}
 	got, err := acquireSub2APISessionViaBrowser(context.Background(), source, sub2APIAuthConfig{Email: "a@b.com", Password: "p"})
 	require.NoError(t, err)
 	assert.Equal(t, "jwt-xyz", got.AccessToken)
 	assert.Equal(t, "browser", got.SessionSource)
-	assert.Greater(t, got.ExpiresAt, before)
+	// "jwt-xyz" is not a well-formed JWT and no explicit expiry was supplied,
+	// so expiry is unresolved (0 = never) rather than the old arbitrary
+	// now+3600 fallback. See
+	// TestAcquireSub2APISessionViaBrowserDerivesExpiryFromJWT for the case
+	// where the browser-extracted token IS a JWT with an exp claim.
+	assert.Equal(t, int64(0), got.ExpiresAt)
+}
+
+// TestAcquireSub2APISessionViaBrowserDerivesExpiryFromJWT verifies that a
+// browser-extracted access token which happens to be a JWT has its real exp
+// claim used to populate ExpiresAt, instead of the old arbitrary now+3600
+// fallback that could expire a still-valid session early or misreport a
+// longer-lived one (mirrors TestSub2APIImportDerivesExpiryFromJWT for the
+// manual-import path).
+func TestAcquireSub2APISessionViaBrowserDerivesExpiryFromJWT(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	futureExp := time.Now().Add(2 * time.Hour).Unix()
+	jwt := buildTestJWT(t, map[string]any{"exp": futureExp})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			assert.Equal(t, "Bearer "+jwt, r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	originalCDPURL := common.UpstreamBrowserCDPURL
+	common.UpstreamBrowserCDPURL = "ws://stub"
+	t.Cleanup(func() { common.UpstreamBrowserCDPURL = originalCDPURL })
+
+	orig := upstreamBrowserLogin
+	upstreamBrowserLogin = func(ctx context.Context, source *model.UpstreamSource, email, password string) (upstreamBrowserSession, error) {
+		return upstreamBrowserSession{LocalStorage: map[string]string{"token": jwt}}, nil
+	}
+	t.Cleanup(func() { upstreamBrowserLogin = orig })
+
+	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeSub2API, BaseURL: server.URL, AdminAPIBasePath: "/api/v1"}
+	got, err := acquireSub2APISessionViaBrowser(context.Background(), source, sub2APIAuthConfig{Email: "a@b.com", Password: "p"})
+	require.NoError(t, err)
+	assert.Equal(t, jwt, got.AccessToken)
+	assert.Equal(t, futureExp, got.ExpiresAt, "expires_at should be derived from the JWT exp claim, not now+3600")
 }
 
 // TestAcquireSub2APISessionViaBrowserRejectsTokenThatFailsProbe guards

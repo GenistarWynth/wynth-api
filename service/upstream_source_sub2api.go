@@ -25,6 +25,12 @@ var ErrUpstreamSource2FARequired = errors.New("upstream source requires 2FA")
 const sub2APIResponseBodyLimitBytes int64 = 1 << 20
 const defaultSub2APIRequestTimeout = 30 * time.Second
 
+// sub2APIAccessTokenRefreshSkewSeconds is the safety margin subtracted from
+// an access token's expiry when deciding whether it's still usable, so a
+// token that is about to expire mid-request is proactively renewed instead
+// of used right up to the wire.
+const sub2APIAccessTokenRefreshSkewSeconds = int64(60)
+
 type Sub2APIAdapter struct {
 	Client *http.Client
 }
@@ -45,19 +51,29 @@ type sub2APIEnvelope[T any] struct {
 // signal. Gateways vary (some send code as int 0, some as string "0" or
 // "success").
 func sub2APICodeIndicatesError(raw json.RawMessage) bool {
-	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
-	s = strings.TrimSpace(s)
+	s := sub2APINormalizeCode(raw)
 	if s == "" || s == "null" {
 		return false
 	}
-	if n, err := strconv.Atoi(s); err == nil {
+	// ParseFloat (rather than Atoi) so a numeric-but-non-integer code like
+	// "5.0" still classifies as a nonzero error code instead of falling
+	// through to "not error".
+	if n, err := strconv.ParseFloat(s, 64); err == nil {
 		return n != 0
 	}
 	return false
 }
 
 func sub2APICodeString(raw json.RawMessage) string {
-	return strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	return sub2APINormalizeCode(raw)
+}
+
+// sub2APINormalizeCode strips surrounding whitespace and a JSON string's
+// quotes from a raw envelope "code" value, leaving a bare token suitable for
+// numeric classification or display.
+func sub2APINormalizeCode(raw json.RawMessage) string {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	return strings.TrimSpace(s)
 }
 
 type sub2APIAuthConfig struct {
@@ -231,7 +247,7 @@ func (a Sub2APIAdapter) ensureAccessToken(ctx context.Context, source *model.Ups
 		return "", err
 	}
 	now := time.Now().Unix()
-	if authConfig.AccessToken != "" && (authConfig.ExpiresAt == 0 || authConfig.ExpiresAt-60 > now) {
+	if authConfig.AccessToken != "" && (authConfig.ExpiresAt == 0 || authConfig.ExpiresAt-sub2APIAccessTokenRefreshSkewSeconds > now) {
 		return authConfig.AccessToken, nil
 	}
 	// Access token missing/expired: try refresh-token renewal before
