@@ -252,6 +252,74 @@ func TestSub2APIImportDerivesExpiryFromJWT(t *testing.T) {
 	assert.Equal(t, futureExp, got.ExpiresAt, "expires_at should be derived from the JWT exp claim, not now+3600")
 }
 
+// TestApplyImportedSessionSub2APIRefreshesStaleAccessToken reproduces a
+// "double rescue" bug: if the pasted access token is already expired but a
+// refresh token is present, the live probe (DiscoverGroups -> ensureAccessToken)
+// renews the session in place via /auth/refresh, mutating source.AuthConfig
+// to the FRESH session. Persisting the pre-probe finalJSON afterwards would
+// throw that refreshed session away and store the stale pasted access token
+// instead -- dead on arrival if the gateway issues one-time refresh tokens.
+// The persisted config must be the post-probe (refreshed) session, with the
+// admin's stored email/password merged back in.
+func TestApplyImportedSessionSub2APIRefreshesStaleAccessToken(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	pastExpiry := time.Now().Add(-1 * time.Hour).Unix()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/refresh":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":{"access_token":"refreshed-token","refresh_token":"new-refresh-token","expires_in":3600}}`))
+		case "/api/v1/groups/available":
+			assert.Equal(t, "Bearer refreshed-token", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":[]}`))
+		case "/api/v1/groups/rates":
+			assert.Equal(t, "Bearer refreshed-token", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":{}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeSub2API,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api/v1",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken:  "stale-pasted-token",
+		RefreshToken: "valid-refresh-token",
+		ExpiresAt:    pastExpiry,
+	})
+	require.NoError(t, err)
+
+	got, err := parseSub2APIAuthConfig(source)
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-token", got.AccessToken, "the refreshed session must be persisted, not the stale pasted access token")
+	assert.Equal(t, "a@b.com", got.Email, "stored credentials must survive a probe that refreshed the session")
+	assert.Equal(t, "p", got.Password)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	persisted, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	var persistedCfg sub2APIAuthConfig
+	require.NoError(t, common.UnmarshalJsonStr(persisted, &persistedCfg))
+	assert.Equal(t, "refreshed-token", persistedCfg.AccessToken)
+	assert.NotEqual(t, "stale-pasted-token", persistedCfg.AccessToken)
+	assert.Equal(t, "a@b.com", persistedCfg.Email)
+	assert.Equal(t, "p", persistedCfg.Password)
+}
+
 // buildTestJWT builds an unsigned header.payload.signature JWT string whose
 // payload is the base64url (no padding) encoding of claims, matching the
 // encoding sub2APIJWTExp expects to decode.

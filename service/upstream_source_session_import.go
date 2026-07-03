@@ -36,11 +36,26 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return errors.New("imported session failed validation: " + SanitizeUpstreamSourceError(err))
 	}
 
-	stored, err := WriteUpstreamSourceAuthConfig(finalJSON)
+	// The probe may have refreshed the session in place (e.g. sub2api renews
+	// an expired access token via its stored refresh token during
+	// ensureAccessToken); read the ACTUAL post-probe session rather than
+	// re-persisting the pre-probe finalJSON, or a refreshed access token
+	// would be discarded in favor of the stale pasted one -- dead on arrival
+	// if the gateway issues one-time refresh tokens.
+	validated, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
 	if err != nil {
 		return err
 	}
-	source.AuthConfig = finalJSON
+	persistPlaintext, err := mergeUpstreamSourceCredentials(source.Type, validated, finalJSON)
+	if err != nil {
+		return err
+	}
+
+	stored, err := WriteUpstreamSourceAuthConfig(persistPlaintext)
+	if err != nil {
+		return err
+	}
+	source.AuthConfig = persistPlaintext
 	if err := model.PersistUpstreamSourceAuthConfig(source.Id, stored); err != nil {
 		return err
 	}
@@ -77,6 +92,40 @@ func stripCredentialsFromAuthConfig(sourceType string, plaintext string) (string
 		return string(data), err
 	default:
 		return "", errors.New("unsupported upstream source type for session import")
+	}
+}
+
+// mergeUpstreamSourceCredentials copies email/password from credsSource into
+// target (both plaintext auth-config JSON of the given source type), so a
+// probe that refreshed the session in place still keeps the admin's stored
+// credentials instead of losing them to the probe's credentials-stripped
+// copy.
+func mergeUpstreamSourceCredentials(sourceType, target, credsSource string) (string, error) {
+	switch sourceType {
+	case model.UpstreamSourceTypeNewAPI:
+		var t, c newAPIAuthConfig
+		if err := common.UnmarshalJsonStr(target, &t); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(credsSource) != "" {
+			_ = common.UnmarshalJsonStr(credsSource, &c)
+		}
+		t.Email, t.Password = c.Email, c.Password
+		data, err := common.Marshal(t)
+		return string(data), err
+	case model.UpstreamSourceTypeSub2API:
+		var t, c sub2APIAuthConfig
+		if err := common.UnmarshalJsonStr(target, &t); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(credsSource) != "" {
+			_ = common.UnmarshalJsonStr(credsSource, &c)
+		}
+		t.Email, t.Password = c.Email, c.Password
+		data, err := common.Marshal(t)
+		return string(data), err
+	default:
+		return target, nil
 	}
 }
 

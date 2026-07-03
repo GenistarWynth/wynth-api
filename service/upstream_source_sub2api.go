@@ -453,6 +453,9 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 		return zero, fmt.Errorf("decode upstream response failed: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if strings.TrimSpace(envelope.Message) == "" {
+			return zero, fmt.Errorf("upstream request failed with status %d", resp.StatusCode)
+		}
 		return zero, fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, SanitizeUpstreamSourceError(errors.New(envelope.Message)))
 	}
 	if sub2APICodeIndicatesError(envelope.Code) {

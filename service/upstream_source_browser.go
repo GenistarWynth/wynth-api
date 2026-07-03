@@ -78,7 +78,13 @@ func acquireSub2APISessionViaBrowser(ctx context.Context, source *model.Upstream
 		return cfg, fmt.Errorf("browser-acquired sub2api token failed validation: %w", err)
 	}
 	cfg.AccessToken = token
-	cfg.ExpiresAt = sub2APIResolveExpiresAt(cfg.AccessToken, cfg.ExpiresAt, 0)
+	// Derive expiry from the freshly acquired token alone: cfg.ExpiresAt at
+	// this point is the PREVIOUS token's stored expiry (a stale, already-past
+	// value during a renewal), and the resolver's explicit-expiresAt
+	// precedence would let that stale value win over the new token's own JWT
+	// exp, persisting an already-expired session and forcing a headless
+	// login on every subsequent discover/sync.
+	cfg.ExpiresAt = sub2APIResolveExpiresAt(cfg.AccessToken, 0, 0)
 	cfg.SessionSource = "browser"
 	return cfg, nil
 }

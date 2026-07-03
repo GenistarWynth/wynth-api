@@ -171,6 +171,49 @@ func TestAcquireSub2APISessionViaBrowserDerivesExpiryFromJWT(t *testing.T) {
 	assert.Equal(t, futureExp, got.ExpiresAt, "expires_at should be derived from the JWT exp claim, not now+3600")
 }
 
+// TestAcquireSub2APISessionViaBrowserIgnoresStaleStoredExpiry guards against
+// stamping a freshly acquired browser token with the PREVIOUS token's stored
+// expiry: the cfg passed in during a renewal carries the OLD access token's
+// expires_at (which may already be in the past), and letting that stale
+// value win over the NEW token's own JWT exp would persist an
+// already-expired session, forcing a headless login on every subsequent
+// discover/sync.
+func TestAcquireSub2APISessionViaBrowserIgnoresStaleStoredExpiry(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	staleExpiry := time.Now().Add(-1 * time.Hour).Unix()
+	futureExp := time.Now().Add(2 * time.Hour).Unix()
+	jwt := buildTestJWT(t, map[string]any{"exp": futureExp})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			assert.Equal(t, "Bearer "+jwt, r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	originalCDPURL := common.UpstreamBrowserCDPURL
+	common.UpstreamBrowserCDPURL = "ws://stub"
+	t.Cleanup(func() { common.UpstreamBrowserCDPURL = originalCDPURL })
+
+	orig := upstreamBrowserLogin
+	upstreamBrowserLogin = func(ctx context.Context, source *model.UpstreamSource, email, password string) (upstreamBrowserSession, error) {
+		return upstreamBrowserSession{LocalStorage: map[string]string{"token": jwt}}, nil
+	}
+	t.Cleanup(func() { upstreamBrowserLogin = orig })
+
+	source := &model.UpstreamSource{Type: model.UpstreamSourceTypeSub2API, BaseURL: server.URL, AdminAPIBasePath: "/api/v1"}
+	got, err := acquireSub2APISessionViaBrowser(context.Background(), source, sub2APIAuthConfig{Email: "a@b.com", Password: "p", ExpiresAt: staleExpiry})
+	require.NoError(t, err)
+	assert.Equal(t, jwt, got.AccessToken)
+	assert.Equal(t, futureExp, got.ExpiresAt, "expires_at must be derived from the NEW token's JWT exp, not the previous token's stale stored expiry")
+}
+
 // TestAcquireSub2APISessionViaBrowserRejectsTokenThatFailsProbe guards
 // against accepting whatever happens to sit in localStorage: a headless
 // session can leave a stale/expired/unrelated value there, and persisting it
