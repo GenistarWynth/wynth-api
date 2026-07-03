@@ -1,0 +1,20 @@
+name: i18n Check
+
+on:
+  pull_request:
+    paths:
+      - 'web/default/src/**'
+      - 'web/default/src/i18n/locales/**'
+      - 'web/default/scripts/check-i18n-keys.mjs'
+
+jobs:
+  i18n-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check i18n keys
+        working-directory: web/default
+        run: node scripts/check-i18n-keys.mjs
