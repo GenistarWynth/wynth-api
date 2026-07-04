@@ -336,15 +336,23 @@ function defaultSourceFormValues(
   }
 }
 
+// normalizeUrlField trims whitespace and trailing slashes. A trailing slash
+// (often copied from a browser address bar) makes the backend join base URLs to
+// "host//v1/..." which some gateways serve their web page for; the backend
+// normalizes too, this just keeps the field tidy for the user.
+function normalizeUrlField(value: string) {
+  return value.trim().replace(/\/+$/, '')
+}
+
 function buildCreatePayload(
   values: UpstreamSourceFormValues
 ): UpstreamSourceCreateRequest {
   return {
     name: values.name.trim(),
     type: values.type,
-    base_url: values.base_url.trim(),
-    admin_api_base_path: values.admin_api_base_path.trim(),
-    relay_base_url: values.relay_base_url.trim(),
+    base_url: normalizeUrlField(values.base_url),
+    admin_api_base_path: normalizeUrlField(values.admin_api_base_path),
+    relay_base_url: normalizeUrlField(values.relay_base_url),
     email: values.email.trim(),
     password: values.password,
     local_group: values.local_group.trim(),
@@ -360,9 +368,9 @@ function buildUpdatePayload(
     name: values.name.trim(),
     type: values.type,
     status: values.status,
-    base_url: values.base_url.trim(),
-    admin_api_base_path: values.admin_api_base_path.trim(),
-    relay_base_url: values.relay_base_url.trim(),
+    base_url: normalizeUrlField(values.base_url),
+    admin_api_base_path: normalizeUrlField(values.admin_api_base_path),
+    relay_base_url: normalizeUrlField(values.relay_base_url),
     local_group: values.local_group.trim(),
     local_group_rules: normalizeSyncRules(values.local_group_rules),
     allow_private_ip: values.allow_private_ip,

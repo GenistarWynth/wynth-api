@@ -819,3 +819,41 @@ func mustMarshalUpstreamSourceAPITest(t *testing.T, value any) []byte {
 	require.NoError(t, err)
 	return data
 }
+
+func TestUpstreamSourceURLNormalizationStripsTrailingSlashes(t *testing.T) {
+	t.Run("create trims trailing slashes and keeps leading path slash", func(t *testing.T) {
+		source, err := upstreamSourceFromCreateRequest(dto.UpstreamSourceCreateRequest{
+			Name:             "s",
+			Type:             model.UpstreamSourceTypeSub2API,
+			BaseURL:          "https://api.example.com/",
+			RelayBaseURL:     "https://relay.example.com//",
+			AdminAPIBasePath: "/api/v1/",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "https://api.example.com", source.BaseURL)
+		assert.Equal(t, "https://relay.example.com", source.RelayBaseURL)
+		assert.Equal(t, "/api/v1", source.AdminAPIBasePath)
+	})
+
+	t.Run("create falls back relay URL to the trimmed base URL", func(t *testing.T) {
+		source, err := upstreamSourceFromCreateRequest(dto.UpstreamSourceCreateRequest{
+			Name:    "s",
+			Type:    model.UpstreamSourceTypeSub2API,
+			BaseURL: "https://api.example.com/",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "https://api.example.com", source.RelayBaseURL)
+	})
+
+	t.Run("update trims trailing slashes", func(t *testing.T) {
+		updates, err := upstreamSourceUpdateMap(dto.UpstreamSourceUpdateRequest{
+			BaseURL:          "https://api.example.com/",
+			RelayBaseURL:     "https://relay.example.com/",
+			AdminAPIBasePath: "/api/v1/",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "https://api.example.com", updates["base_url"])
+		assert.Equal(t, "https://relay.example.com", updates["relay_base_url"])
+		assert.Equal(t, "/api/v1", updates["admin_api_base_path"])
+	})
+}

@@ -2656,3 +2656,14 @@ func createAutoSyncTestSource(t *testing.T, name string, status string, syncConf
 	require.NoError(t, model.DB.Create(&source).Error)
 	return source
 }
+
+func TestUpstreamSourceGeneratedBaseURLTrimsTrailingSlash(t *testing.T) {
+	// Legacy/other-path sources may still carry a trailing slash; the generated
+	// channel base URL must be trimmed so it never joins to "host//v1/...".
+	assert.Equal(t, "https://relay.example.com",
+		upstreamSourceGeneratedBaseURL(&model.UpstreamSource{RelayBaseURL: "https://relay.example.com/"}))
+	// Falls back to base URL (also trimmed) when relay is unset.
+	assert.Equal(t, "https://api.example.com",
+		upstreamSourceGeneratedBaseURL(&model.UpstreamSource{BaseURL: "https://api.example.com//"}))
+	assert.Equal(t, "", upstreamSourceGeneratedBaseURL(nil))
+}

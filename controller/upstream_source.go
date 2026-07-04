@@ -329,10 +329,21 @@ func loadUpstreamSourceForController(c *gin.Context) (*model.UpstreamSource, boo
 	return &source, true
 }
 
+// normalizeUpstreamSourceURL trims surrounding whitespace and any trailing
+// slashes from a base URL or base path. A trailing slash (commonly copied from
+// a browser address bar) makes URL joining produce a double slash — e.g.
+// "https://host/" + "/v1/chat/completions" -> "https://host//v1/..." — which
+// some gateways route to their web/SPA fallback (HTTP 200 + HTML) instead of
+// the API, silently breaking the generated channel. Leading slashes are kept so
+// base paths like "/api/v1" stay valid.
+func normalizeUpstreamSourceURL(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), "/")
+}
+
 func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model.UpstreamSource, error) {
 	name := strings.TrimSpace(req.Name)
 	sourceType := strings.TrimSpace(req.Type)
-	baseURL := strings.TrimSpace(req.BaseURL)
+	baseURL := normalizeUpstreamSourceURL(req.BaseURL)
 	if name == "" {
 		return model.UpstreamSource{}, errors.New("upstream source name is required")
 	}
@@ -358,7 +369,7 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 	if err != nil {
 		return model.UpstreamSource{}, err
 	}
-	relayBaseURL := strings.TrimSpace(req.RelayBaseURL)
+	relayBaseURL := normalizeUpstreamSourceURL(req.RelayBaseURL)
 	if relayBaseURL == "" {
 		relayBaseURL = baseURL
 	}
@@ -367,7 +378,7 @@ func upstreamSourceFromCreateRequest(req dto.UpstreamSourceCreateRequest) (model
 		Type:             sourceType,
 		Status:           model.UpstreamSourceStatusEnabled,
 		BaseURL:          baseURL,
-		AdminAPIBasePath: strings.TrimSpace(req.AdminAPIBasePath),
+		AdminAPIBasePath: normalizeUpstreamSourceURL(req.AdminAPIBasePath),
 		RelayBaseURL:     relayBaseURL,
 		AuthConfig:       authConfig,
 		SyncConfig:       syncConfig,
@@ -400,13 +411,13 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 		}
 		updates["status"] = trimmed
 	}
-	if trimmed := strings.TrimSpace(req.BaseURL); trimmed != "" {
+	if trimmed := normalizeUpstreamSourceURL(req.BaseURL); trimmed != "" {
 		updates["base_url"] = trimmed
 	}
-	if trimmed := strings.TrimSpace(req.AdminAPIBasePath); trimmed != "" {
+	if trimmed := normalizeUpstreamSourceURL(req.AdminAPIBasePath); trimmed != "" {
 		updates["admin_api_base_path"] = trimmed
 	}
-	if trimmed := strings.TrimSpace(req.RelayBaseURL); trimmed != "" {
+	if trimmed := normalizeUpstreamSourceURL(req.RelayBaseURL); trimmed != "" {
 		updates["relay_base_url"] = trimmed
 	}
 	return updates, nil

@@ -361,10 +361,14 @@ func upstreamSourceGeneratedBaseURL(source *model.UpstreamSource) string {
 	if source == nil {
 		return ""
 	}
-	if trimmed := strings.TrimSpace(source.RelayBaseURL); trimmed != "" {
+	// TrimRight the trailing slash defensively: sources persisted before URL
+	// normalization (or via other paths) may still carry one, which would make
+	// the generated channel's base URL join to "host//v1/..." and hit the
+	// gateway's web fallback instead of the API.
+	if trimmed := strings.TrimRight(strings.TrimSpace(source.RelayBaseURL), "/"); trimmed != "" {
 		return trimmed
 	}
-	return strings.TrimSpace(source.BaseURL)
+	return strings.TrimRight(strings.TrimSpace(source.BaseURL), "/")
 }
 
 func shouldPersistSkippedUpstreamSourceMapping(mode upstreamSourceSyncMode, resolution upstreamSourceRuleResolution) bool {
