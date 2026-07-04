@@ -542,7 +542,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	}
 
 	created := mapping.LocalChannelID == 0
-	savedChannel, err := saveGeneratedChannel(channel, created, now)
+	savedChannel, err := saveGeneratedChannel(channel, created, autoPriorityOwnsGeneratedChannelPriority(existingChannel, resolution), now)
 	if err != nil {
 		errText := SanitizeUpstreamSourceError(err)
 		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
@@ -852,6 +852,18 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 	return channel
 }
 
+// autoPriorityOwnsGeneratedChannelPriority reports whether the auto-priority
+// worker owns this generated channel's priority column. When it does, a re-sync
+// must NOT write the priority field at all — not even the existing value it read
+// earlier, which can be stale (sync blocks on an upstream model-list call while
+// the 1-minute auto-priority worker commits a newer priority). Omitting the
+// column leaves whatever the worker last wrote, so sync never clobbers it. Only
+// true when re-syncing an existing channel with auto-priority enabled; a brand
+// new channel still gets the rule's static priority as its baseline.
+func autoPriorityOwnsGeneratedChannelPriority(existingChannel *model.Channel, resolution upstreamSourceRuleResolution) bool {
+	return existingChannel != nil && resolution.AutoPriorityEnabled
+}
+
 func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel *model.Channel, resolution upstreamSourceRuleResolution, source *model.UpstreamSource, mapping *model.UpstreamSourceChannelMapping) {
 	if channel == nil || existingChannel == nil {
 		return
@@ -910,7 +922,7 @@ func intersectFetchedModelsWithFixedModels(fetchedModels []string, fixedModels [
 	return intersected
 }
 
-func saveGeneratedChannel(channel *model.Channel, create bool, now int64) (*model.Channel, error) {
+func saveGeneratedChannel(channel *model.Channel, create bool, autoPriorityManaged bool, now int64) (*model.Channel, error) {
 	channel.LastSyncTime = now
 	channel.UpdatedTime = now
 	if create {
@@ -927,7 +939,7 @@ func saveGeneratedChannel(channel *model.Channel, create bool, now int64) (*mode
 	if err := model.RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
 		return nil, err
 	}
-	updates := generatedChannelUpdateMap(channel)
+	updates := generatedChannelUpdateMap(channel, autoPriorityManaged)
 	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
 		return nil, err
 	}
@@ -938,8 +950,8 @@ func saveGeneratedChannel(channel *model.Channel, create bool, now int64) (*mode
 	return &reloaded, nil
 }
 
-func generatedChannelUpdateMap(channel *model.Channel) map[string]any {
-	return map[string]any{
+func generatedChannelUpdateMap(channel *model.Channel, autoPriorityManaged bool) map[string]any {
+	updates := map[string]any{
 		"name":           channel.Name,
 		"type":           channel.Type,
 		"base_url":       channel.BaseURL,
@@ -954,6 +966,12 @@ func generatedChannelUpdateMap(channel *model.Channel) map[string]any {
 		"last_sync_time": channel.LastSyncTime,
 		"updated_time":   channel.UpdatedTime,
 	}
+	if autoPriorityManaged {
+		// Auto-priority owns the priority column; omit it so this sync never
+		// writes a (possibly stale) value over a concurrent worker commit.
+		delete(updates, "priority")
+	}
+	return updates
 }
 
 func updateUpstreamSourceMappingSync(mappingID int, upstreamKeyID string, localChannelID int, status string, errText string, now int64) error {

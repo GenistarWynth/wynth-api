@@ -2667,3 +2667,27 @@ func TestUpstreamSourceGeneratedBaseURLTrimsTrailingSlash(t *testing.T) {
 		upstreamSourceGeneratedBaseURL(&model.UpstreamSource{BaseURL: "https://api.example.com//"}))
 	assert.Equal(t, "", upstreamSourceGeneratedBaseURL(nil))
 }
+
+func TestAutoPriorityOwnsGeneratedChannelPriority(t *testing.T) {
+	existing := &model.Channel{Priority: common.GetPointer(int64(348))}
+
+	assert.True(t, autoPriorityOwnsGeneratedChannelPriority(existing, upstreamSourceRuleResolution{AutoPriorityEnabled: true}),
+		"re-sync of an existing channel with auto-priority on: the worker owns priority")
+	assert.False(t, autoPriorityOwnsGeneratedChannelPriority(existing, upstreamSourceRuleResolution{AutoPriorityEnabled: false}),
+		"auto-priority off: sync applies the rule static priority")
+	assert.False(t, autoPriorityOwnsGeneratedChannelPriority(nil, upstreamSourceRuleResolution{AutoPriorityEnabled: true}),
+		"new channel (no existing): rule static priority is the baseline")
+}
+
+func TestGeneratedChannelUpdateMapOmitsPriorityWhenAutoPriorityManaged(t *testing.T) {
+	channel := &model.Channel{Priority: common.GetPointer(int64(348))}
+
+	managed := generatedChannelUpdateMap(channel, true)
+	assert.NotContains(t, managed, "priority",
+		"auto-priority-managed sync must not write the priority column (avoids clobbering a concurrent worker commit)")
+	assert.Contains(t, managed, "weight", "non-priority columns are still synced")
+
+	unmanaged := generatedChannelUpdateMap(channel, false)
+	assert.Equal(t, channel.Priority, unmanaged["priority"],
+		"auto-priority off: sync writes the rule static priority")
+}

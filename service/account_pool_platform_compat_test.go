@@ -356,13 +356,13 @@ func TestSaveGeneratedChannelRejectsBoundChannelTypeChange(t *testing.T) {
 	require.NoError(t, err)
 
 	channel.Type = constant.ChannelTypeAnthropic
-	_, err = saveGeneratedChannel(&channel, false, common.GetTimestamp())
+	_, err = saveGeneratedChannel(&channel, false, false, common.GetTimestamp())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, model.ErrAccountPoolBoundChannelTypeChange)
 
 	// A re-sync that preserves the bound channel's type still succeeds.
 	channel.Type = constant.ChannelTypeOpenAI
-	_, err = saveGeneratedChannel(&channel, false, common.GetTimestamp())
+	_, err = saveGeneratedChannel(&channel, false, false, common.GetTimestamp())
 	require.NoError(t, err)
 }
 
