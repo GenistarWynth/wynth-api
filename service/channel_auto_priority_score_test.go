@@ -18,11 +18,13 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         500,
 				EffectiveRateMultiplier: 1,
-				Availability:            floatPtr(0.10),
-				FirstTokenLatencyMS:     2000,
-				UsageLogCount:           4,
-				MonitorCheckCount:       8,
-				FirstTokenSampleCount:   2,
+				// Healthy availability: this subtest pins price dominance among
+				// healthy channels; low availability is the gate subtests' job.
+				Availability:          floatPtr(0.9),
+				FirstTokenLatencyMS:   2000,
+				UsageLogCount:         4,
+				MonitorCheckCount:     8,
+				FirstTokenSampleCount: 2,
 			},
 			{
 				ChannelID:               102,
@@ -49,6 +51,86 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.Greater(t, cheap.EffectivePriceScore, expensive.EffectivePriceScore)
 		assert.Greater(t, cheap.FinalScore, expensive.FinalScore)
 		assert.Greater(t, cheap.ComputedPriority, expensive.ComputedPriority)
+	})
+
+	t.Run("low availability gates a cheap channel below a healthy pricier one", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               111,
+				LocalGroup:              "gated",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 1,
+				Availability:            floatPtr(0.10),
+				MonitorCheckCount:       8,
+			},
+			{
+				ChannelID:               112,
+				LocalGroup:              "gated",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 5,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       8,
+			},
+		}, 1000)
+
+		require.Len(t, results, 2)
+		cheap := resultByChannelID(results, 111)
+		expensive := resultByChannelID(results, 112)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		// Price still favors the cheap channel, but the availability gate must
+		// push its overall score and priority below the healthy pricier one.
+		assert.Greater(t, cheap.EffectivePriceScore, expensive.EffectivePriceScore)
+		assert.Less(t, cheap.FinalScore, expensive.FinalScore)
+		assert.Less(t, cheap.ComputedPriority, expensive.ComputedPriority)
+	})
+
+	t.Run("zero availability zeroes the priority", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+			ChannelID:               121,
+			LocalGroup:              "dead",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 0.03,
+			Availability:            floatPtr(0),
+			MonitorCheckCount:       5,
+			CohortCostFloor:         0.02,
+			CohortCostCeil:          0.08,
+		}}, 1000)
+
+		require.Len(t, results, 1)
+		assert.Equal(t, float64(0), results[0].FinalScore)
+		assert.Equal(t, int64(0), results[0].ComputedPriority)
+	})
+
+	t.Run("availability at the gate knee stays neutral", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+			ChannelID:               122,
+			LocalGroup:              "knee",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 1,
+			Availability:            floatPtr(0.5),
+			MonitorCheckCount:       8,
+		}}, 1000)
+
+		require.Len(t, results, 1)
+		// gate == 1 at the knee: FinalScore is the ungated weighted sum.
+		assert.InDelta(t, 0.80*100+0.17*50+0.03*70, results[0].FinalScore, 1e-9)
+	})
+
+	t.Run("too few monitor checks bypass the availability gate", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+			ChannelID:               123,
+			LocalGroup:              "fresh",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 1,
+			Availability:            floatPtr(0),
+			MonitorCheckCount:       2,
+		}}, 1000)
+
+		require.Len(t, results, 1)
+		// Only the additive 17% availability penalty applies; the gate is off.
+		assert.InDelta(t, 0.80*100+0.17*0+0.03*70, results[0].FinalScore, 1e-9)
+		assert.Equal(t, int64(821), results[0].ComputedPriority)
 	})
 
 	t.Run("same price in different cohorts still scores as 100", func(t *testing.T) {

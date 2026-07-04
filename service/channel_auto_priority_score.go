@@ -55,6 +55,13 @@ const (
 	autoPriorityMinCacheCostFactor   float64 = 0.35
 	autoPriorityCurrentCostWeight    float64 = 0.65
 	autoPriorityPreviousCostWeight   float64 = 0.35
+
+	// Below this measured availability the whole score is scaled down linearly,
+	// so an unavailable channel cannot outrank a healthy one on price alone.
+	autoPriorityAvailabilityGateKnee float64 = 0.5
+	// Minimum monitor checks in the window before the gate trusts the
+	// availability ratio; protects fresh channels from one noisy failed probe.
+	autoPriorityMinAvailabilityGateSamples int64 = 3
 )
 
 func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority int) []AutoPriorityScoreResult {
@@ -175,7 +182,11 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			continue
 		}
 
-		results[i].FinalScore = 0.80*results[i].EffectivePriceScore + 0.17*results[i].AvailabilityScore + 0.03*results[i].FirstTokenScore
+		// Availability multiplicatively gates the weighted sum: a channel whose
+		// probes keep failing must fall to the bottom of the rotation no matter
+		// how cheap it is, and recover automatically once probes succeed again.
+		gate := autoPriorityAvailabilityGate(inputs[i].Availability, inputs[i].MonitorCheckCount)
+		results[i].FinalScore = gate * (0.80*results[i].EffectivePriceScore + 0.17*results[i].AvailabilityScore + 0.03*results[i].FirstTokenScore)
 		results[i].ComputedPriority = clampAutoPriorityPriority(int64(math.Round(results[i].FinalScore*10)), 0, int64(maxPriority))
 		results[i].NewPriority = results[i].ComputedPriority
 
@@ -222,6 +233,27 @@ func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64) float64 {
 		return 1 + (cacheFactor-1)*confidence
 	}
 	return cacheFactor
+}
+
+// autoPriorityAvailabilityGate returns the multiplicative factor availability
+// applies to the final score: 1.0 (neutral) when availability is unknown, when
+// there are too few monitor checks to trust it, or when it is at/above the
+// knee; a linear ramp down to 0 below the knee. Continuous at the knee, so the
+// existing 10-point apply-hysteresis absorbs small oscillations around it.
+func autoPriorityAvailabilityGate(avail *float64, monitorCheckCount int64) float64 {
+	if avail == nil || math.IsNaN(*avail) || math.IsInf(*avail, 0) {
+		return 1
+	}
+	if monitorCheckCount < autoPriorityMinAvailabilityGateSamples {
+		return 1
+	}
+	if *avail >= autoPriorityAvailabilityGateKnee {
+		return 1
+	}
+	if *avail <= 0 {
+		return 0
+	}
+	return *avail / autoPriorityAvailabilityGateKnee
 }
 
 func autoPriorityAvailabilityScore(avail *float64) float64 {
