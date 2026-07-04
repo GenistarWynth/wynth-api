@@ -463,3 +463,50 @@ func IsRecordErrorLog(e *NewAPIError) bool {
 	}
 	return *e.recordErrorLog
 }
+
+// NewUpstreamBodyDecodeError wraps a response-body decode failure with the
+// upstream HTTP status, content type, and a short body snippet, so an HTML
+// error or challenge page surfaces as actionable diagnostics ("Just a
+// moment...", "502 Bad Gateway") instead of a bare JSON syntax error. The
+// resulting error keeps ErrorCodeBadResponseBody with HTTP 500 so failure
+// classification (e.g. auto-disable) is unchanged; only the message improves.
+func NewUpstreamBodyDecodeError(decodeErr error, resp *http.Response, body []byte) *NewAPIError {
+	if resp == nil {
+		return NewOpenAIError(decodeErr, ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "unknown"
+	}
+	err := fmt.Errorf("upstream response is not valid JSON (HTTP %d, Content-Type: %s): %s",
+		resp.StatusCode, contentType, upstreamBodySnippet(body, decodeErr))
+	return NewOpenAIError(err, ErrorCodeBadResponseBody, http.StatusInternalServerError)
+}
+
+// upstreamBodySnippet condenses an undecodable upstream body into one short
+// diagnostic line: the HTML <title> when present (error and challenge pages
+// put the verdict there), otherwise the whitespace-collapsed head of the body.
+func upstreamBodySnippet(body []byte, decodeErr error) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		if decodeErr != nil {
+			return decodeErr.Error()
+		}
+		return "empty body"
+	}
+	lower := strings.ToLower(text)
+	if start := strings.Index(lower, "<title>"); start >= 0 {
+		rest := text[start+len("<title>"):]
+		if end := strings.Index(strings.ToLower(rest), "</title>"); end >= 0 {
+			if title := strings.Join(strings.Fields(rest[:end]), " "); title != "" {
+				return "page title: " + title
+			}
+		}
+	}
+	joined := strings.Join(strings.Fields(text), " ")
+	const maxSnippetRunes = 160
+	if runes := []rune(joined); len(runes) > maxSnippetRunes {
+		joined = string(runes[:maxSnippetRunes]) + "…"
+	}
+	return joined
+}
