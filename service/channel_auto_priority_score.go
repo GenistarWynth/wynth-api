@@ -20,6 +20,13 @@ type AutoPriorityScoreInput struct {
 	MonitorCheckCount               int64
 	FirstTokenSampleCount           int64
 	HasPreviousSnapshot             bool
+
+	// CohortCostFloor/CohortCostCeil, when > 0, are the local-group-wide effective
+	// cost multiplier bounds (across all upstream sources) for this input's cohort.
+	// They widen the price normalization range so cost differentiates channels even
+	// when this scoring run's cohort has a single member. 0 = unset (legacy behavior).
+	CohortCostFloor float64
+	CohortCostCeil  float64
 }
 
 type AutoPriorityScoreResult struct {
@@ -116,12 +123,24 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			}
 		}
 
+		// Widen the normalization range with the local-group-wide cost bounds
+		// (across sources) so cost still differentiates a single-member run cohort.
 		for _, idx := range indexes {
-			results[idx].EffectivePriceScore = normalizedAutoPriorityDescendingScore(results[idx].EffectiveCostMultiplier, minCost, maxCost)
+			if floor := inputs[idx].CohortCostFloor; floor > 0 && floor < minCost {
+				minCost = floor
+			}
+			if ceil := inputs[idx].CohortCostCeil; ceil > maxCost {
+				maxCost = ceil
+			}
 		}
-
-		if len(indexes) == 1 || nearlyEqualFloat64(minCost, maxCost) {
-			results[indexes[0]].EffectivePriceScore = 100
+		if nearlyEqualFloat64(minCost, maxCost) {
+			for _, idx := range indexes {
+				results[idx].EffectivePriceScore = 100
+			}
+		} else {
+			for _, idx := range indexes {
+				results[idx].EffectivePriceScore = normalizedAutoPriorityDescendingScore(results[idx].EffectiveCostMultiplier, minCost, maxCost)
+			}
 		}
 	}
 

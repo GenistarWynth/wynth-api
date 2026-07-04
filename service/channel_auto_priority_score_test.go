@@ -488,6 +488,95 @@ func TestScoreAutoPriorityCandidatesHandlesNonFiniteMultiplier(t *testing.T) {
 	assert.Equal(t, int64(321), results[0].NewPriority)
 }
 
+func TestScoreAutoPriorityCandidatesCrossSourceCohortCostBounds(t *testing.T) {
+	t.Run("legacy behavior preserved when cohort bounds are unset", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               901,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 1,
+				Availability:            floatPtr(1.0),
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 100, results[0].EffectivePriceScore, 0.0001)
+		assert.Equal(t, int64(991), results[0].ComputedPriority)
+	})
+
+	t.Run("cross-source cohort bounds let cost differentiate a single-member run cohort", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               911,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 0.05,
+				CacheAdjustedCostFactor: 1,
+				Availability:            floatPtr(1.0),
+				CohortCostFloor:         0.02,
+				CohortCostCeil:          0.08,
+			},
+			{
+				ChannelID:               912,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 0.06,
+				CacheAdjustedCostFactor: 1,
+				Availability:            floatPtr(1.0),
+				CohortCostFloor:         0.02,
+				CohortCostCeil:          0.08,
+			},
+			{
+				ChannelID:               913,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 0.08,
+				CacheAdjustedCostFactor: 1,
+				Availability:            floatPtr(1.0),
+				CohortCostFloor:         0.02,
+				CohortCostCeil:          0.08,
+			},
+		}, 1000)
+
+		require.Len(t, results, 3)
+		cheapest := resultByChannelID(results, 911)
+		middle := resultByChannelID(results, 912)
+		dearest := resultByChannelID(results, 913)
+		require.NotNil(t, cheapest)
+		require.NotNil(t, middle)
+		require.NotNil(t, dearest)
+
+		assert.Greater(t, cheapest.EffectivePriceScore, dearest.EffectivePriceScore)
+		assert.Greater(t, cheapest.ComputedPriority, dearest.ComputedPriority)
+		assert.False(t, cheapest.EffectivePriceScore == middle.EffectivePriceScore && middle.EffectivePriceScore == dearest.EffectivePriceScore,
+			"cost must differentiate priority across the widened cohort instead of all scoring equally")
+	})
+
+	t.Run("degenerate cohort bounds do not force spurious differentiation", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               921,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 0.05,
+				CacheAdjustedCostFactor: 1,
+				Availability:            floatPtr(1.0),
+				CohortCostFloor:         0.05,
+				CohortCostCeil:          0.05,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 100, results[0].EffectivePriceScore, 0.0001)
+	})
+}
+
 func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {
 	assert.True(t, autoPriorityDeltaBelowThreshold(100, 109, 10))
 	assert.False(t, autoPriorityDeltaBelowThreshold(100, 110, 10))

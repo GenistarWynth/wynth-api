@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
@@ -164,6 +165,32 @@ func ApplyChannelGroupFilter(query *gorm.DB, group string) *gorm.DB {
 		return query
 	}
 	return query.Where(channelGroupFilterCondition(), channelGroupFilterPattern(group))
+}
+
+// ChannelGroupType is a minimal projection of an enabled channel's local group
+// and channel type, used to resolve which price cohort a channel belongs to
+// without loading the full Channel row.
+type ChannelGroupType struct {
+	Id         int
+	LocalGroup string `gorm:"column:local_group"`
+	Type       int
+}
+
+// GetEnabledChannelGroupTypesInGroups returns the id/group/type projection for
+// every enabled channel whose group column matches one of the given groups.
+// "group" is a reserved word in some SQL dialects, so commonGroupCol supplies
+// the dialect-correct quoting for SQLite/MySQL/PostgreSQL.
+func GetEnabledChannelGroupTypesInGroups(ctx context.Context, groups []string) ([]ChannelGroupType, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+	var rows []ChannelGroupType
+	err := DB.WithContext(ctx).Model(&Channel{}).
+		Where("status = ?", common.ChannelStatusEnabled).
+		Where(commonGroupCol+" IN ?", groups).
+		Select("id", commonGroupCol+" as local_group", "type").
+		Find(&rows).Error
+	return rows, err
 }
 
 // Value implements driver.Valuer interface

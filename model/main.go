@@ -50,6 +50,13 @@ func initCol() {
 	}
 }
 
+// InitCommonColumnsForTest initializes the dialect-specific reserved-word
+// column identifiers (see initCol) for tests that open a *gorm.DB directly
+// instead of going through InitDB/InitLogDB, which normally set them.
+func InitCommonColumnsForTest() {
+	initCol()
+}
+
 var DB *gorm.DB
 
 var LOG_DB *gorm.DB

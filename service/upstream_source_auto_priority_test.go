@@ -1013,3 +1013,70 @@ func TestResolveAutoPriorityAbilityUpdateResultFailsWhenAbilityMissing(t *testin
 	require.Error(t, err)
 	assert.Equal(t, "ability priority update affected no rows", err.Error())
 }
+
+func TestAutoPriorityLocalGroupCostBoundsAggregatesAcrossSources(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+
+	sourceA := createSyncTestSource(t, nil)
+	sourceB := createSyncTestSource(t, nil)
+	_, _ = createGeneratedAutoPriorityTestChannel(t, sourceA.Id, 0.05, "cheap", 100)
+	_, _ = createGeneratedAutoPriorityTestChannel(t, sourceB.Id, 0.20, "expensive", 100)
+
+	bounds, err := autoPriorityLocalGroupCostBounds(context.Background(), []string{"default"}, []int{constant.ChannelTypeOpenAI})
+
+	require.NoError(t, err)
+	cohort := autoPriorityCohortKey("default", constant.ChannelTypeOpenAI)
+	require.Contains(t, bounds, cohort)
+	assert.InDelta(t, 0.05, bounds[cohort][0], 0.0001)
+	assert.InDelta(t, 0.20, bounds[cohort][1], 0.0001)
+}
+
+func TestAutoPriorityLocalGroupCostBoundsReturnsEmptyForNoGroups(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+
+	bounds, err := autoPriorityLocalGroupCostBounds(context.Background(), nil, []int{constant.ChannelTypeOpenAI})
+
+	require.NoError(t, err)
+	assert.Empty(t, bounds)
+}
+
+func TestRunUpstreamSourceAutoPriorityUsesCrossSourceCostBoundsWithinLocalGroup(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_000_000)
+
+	sourceA := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+	})
+	sourceB := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+	})
+
+	// Source A's generated channel is the pricier one in the shared "default"
+	// local group (createAutoPriorityTestChannel always uses that local group).
+	expensiveChannel, _ := createGeneratedAutoPriorityTestChannel(t, sourceA.Id, 0.20, "expensive", 100)
+	// Source B's generated channel is cheaper but lands in the SAME local group
+	// and channel type, so it should widen source A's price cohort.
+	_, _ = createGeneratedAutoPriorityTestChannel(t, sourceB.Id, 0.05, "cheap", 100)
+
+	service := UpstreamSourceService{Now: func() int64 { return now }}
+
+	result, err := service.RunAutoPriority(context.Background(), sourceA.Id, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Results, 1)
+	r := result.Results[0]
+	assert.Equal(t, expensiveChannel.Id, r.LocalChannelID)
+
+	// Without the cross-source cost bounds fix, source A's run only ever sees
+	// its own single channel, so the price cohort is degenerate and
+	// EffectivePriceScore is forced to 100 regardless of actual cost. With the
+	// fix, source A's 0.20 multiplier is scored against the group-wide
+	// [0.05, 0.20] range (which includes source B's cheaper channel) and lands
+	// at the bottom of that range.
+	assert.InDelta(t, 0, r.EffectivePriceScore, 0.0001)
+}
