@@ -497,13 +497,36 @@ func TestShouldUseStreamForAutomaticChannelTestUsesSupportedChannels(t *testing.
 	assert.False(t, shouldUseStreamForAutomaticChannelTest(nil))
 }
 
-func TestShouldUseStreamForAutomaticChannelTestSkipsGeneratedUpstreamChannels(t *testing.T) {
-	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		GeneratedByUpstreamSourceID: 7,
-	})
+func TestShouldUseStreamForAutomaticChannelTestStreamsGeneratedUpstreamChannels(t *testing.T) {
+	// Generated channels stream-probe too (so first-token latency is recorded),
+	// gated only by whether the channel type supports stream options.
+	bySource := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	bySource.SetOtherSettings(dto.ChannelOtherSettings{GeneratedByUpstreamSourceID: 7})
+	assert.True(t, shouldUseStreamForAutomaticChannelTest(bySource))
 
-	assert.False(t, shouldUseStreamForAutomaticChannelTest(channel))
+	byMapping := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	byMapping.SetOtherSettings(dto.ChannelOtherSettings{GeneratedByUpstreamMappingID: 7})
+	assert.True(t, shouldUseStreamForAutomaticChannelTest(byMapping))
+
+	// A generated channel of a type that does not support streaming still skips.
+	nonStream := &model.Channel{Type: constant.ChannelTypeMidjourney}
+	nonStream.SetOtherSettings(dto.ChannelOtherSettings{GeneratedByUpstreamSourceID: 7})
+	assert.False(t, shouldUseStreamForAutomaticChannelTest(nonStream))
+}
+
+func TestValidateStreamTestResponseBody(t *testing.T) {
+	t.Run("accepts a real SSE data frame", func(t *testing.T) {
+		require.NoError(t, validateStreamTestResponseBody([]byte("data: {\"id\":\"x\",\"choices\":[]}\n\ndata: [DONE]\n")))
+	})
+	t.Run("accepts a plain JSON object when the upstream ignored stream", func(t *testing.T) {
+		require.NoError(t, validateStreamTestResponseBody([]byte("{\"id\":\"x\",\"object\":\"chat.completion\",\"choices\":[]}")))
+	})
+	t.Run("rejects an empty body", func(t *testing.T) {
+		require.Error(t, validateStreamTestResponseBody([]byte("   ")))
+	})
+	t.Run("rejects a non-JSON non-SSE body", func(t *testing.T) {
+		require.Error(t, validateStreamTestResponseBody([]byte("just some text, not sse, not json")))
+	})
 }
 
 func TestSelectAutomaticChannelTestModelPrefersTextModel(t *testing.T) {

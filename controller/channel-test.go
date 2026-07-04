@@ -573,6 +573,22 @@ func testChannelWithOptions(ctx context.Context, channel *model.Channel, testUse
 			}
 		}
 	}
+	// Capture the RAW upstream body as the adaptor reads it, so probe validation
+	// judges what the upstream actually returned — not the adaptor's re-rendered
+	// stream output. A stream-ignoring JSON reply and a broken HTML page both
+	// collapse to "data: [DONE]" after re-rendering, so validating that would let
+	// a healthy channel fail and a broken one pass; the raw body distinguishes
+	// them (SSE frames / a JSON object = healthy, HTML/garbage = failed).
+	var rawUpstreamBody bytes.Buffer
+	if httpResp != nil && httpResp.Body != nil {
+		// Keep a handle to the real body: wrapping it in NopCloser makes the
+		// adaptor's Close a no-op, and the stream scanner returns at [DONE]
+		// without reading to EOF, so without this defer the upstream connection
+		// would leak on every healthy streaming probe.
+		upstreamBody := httpResp.Body
+		defer upstreamBody.Close()
+		httpResp.Body = io.NopCloser(io.TeeReader(upstreamBody, &rawUpstreamBody))
+	}
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
 	if respErr != nil {
 		return testResult{
@@ -609,7 +625,7 @@ func testChannelWithOptions(ctx context.Context, channel *model.Channel, testUse
 			completionTokens:    usage.CompletionTokens,
 		}
 	}
-	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
+	if bodyErr := validateTestResponseBody(rawUpstreamBody.Bytes(), isStream); bodyErr != nil {
 		return testResult{
 			context:             c,
 			localErr:            bodyErr,
@@ -801,6 +817,15 @@ func validateStreamTestResponseBody(respBody []byte) error {
 		return nil
 	}
 
+	// Some OpenAI-compatible / sub2api upstreams ignore stream=true and reply
+	// with a plain JSON completion body. Upstream errors were already caught by
+	// detectErrorFromTestResponseBody (see validateTestResponseBody), so accept a
+	// valid non-error JSON object as a healthy probe — first-token latency just
+	// stays 0 rather than flipping the channel to Failed.
+	if common.GetJsonType(b) == "object" {
+		return nil
+	}
+
 	return errors.New("stream response body does not contain a valid stream event")
 }
 
@@ -818,10 +843,10 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	if channel == nil {
 		return false
 	}
-	settings := channel.GetOtherSettings()
-	if settings.GeneratedByUpstreamSourceID > 0 || settings.GeneratedByUpstreamMappingID > 0 {
-		return false
-	}
+	// Generated upstream-source channels also stream-probe (when their type
+	// supports stream options) so first-token latency gets recorded like any
+	// other channel. Upstreams that ignore stream=true and return a plain JSON
+	// body are still treated as healthy — see validateStreamTestResponseBody.
 	return relaycommon.SupportsStreamOptions(channel.Type)
 }
 
