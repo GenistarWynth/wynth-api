@@ -278,6 +278,40 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 	assert.Equal(t, []string{"GPT-4o", "Claude-3"}, resolution.FixedModels)
 }
 
+func TestUpstreamSourceRuleMatchesPlatformGateHandlesUnknownPlatform(t *testing.T) {
+	platformKeyword := dto.UpstreamSourceLocalGroupRule{Platforms: []string{"openai"}, NameContains: []string{"对接"}}
+	platformOnly := dto.UpstreamSourceLocalGroupRule{Platforms: []string{"openai"}}
+	nameOnly := dto.UpstreamSourceLocalGroupRule{NameContains: []string{"对接"}}
+
+	cases := []struct {
+		name         string
+		rule         dto.UpstreamSourceLocalGroupRule
+		platform     string
+		groupName    string
+		wantMatch    bool
+		wantExcluded bool
+	}{
+		// Reported bug: a billing-tier group whose platform can't be inferred
+		// (empty — no OpenAI/Claude signal in "对接倍率") must still match a
+		// platform+keyword rule by its name instead of being silently excluded.
+		{"unknown platform matches platform+keyword rule by name", platformKeyword, "", "对接倍率", true, false},
+		{"unknown platform + name miss does not match", platformKeyword, "", "国产模型", false, false},
+		{"known conflicting platform excluded even if name matches", platformKeyword, "anthropic", "对接倍率", false, false},
+		{"known matching platform + name match", platformKeyword, "openai", "对接倍率", true, false},
+		{"known matching platform + name miss does not match", platformKeyword, "openai", "国产模型", false, false},
+		{"platform-only rule needs a known platform (unknown => no match)", platformOnly, "", "对接倍率", false, false},
+		{"platform-only rule matches its known platform", platformOnly, "openai", "对接倍率", true, false},
+		{"name-only rule unaffected by empty platform", nameOnly, "", "对接倍率", true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			matched, excluded := upstreamSourceRuleMatches(tc.rule, tc.platform, tc.groupName, "")
+			assert.Equal(t, tc.wantMatch, matched, "matched")
+			assert.Equal(t, tc.wantExcluded, excluded, "excluded")
+		})
+	}
+}
+
 func TestResolveMatchedRuleOverridesChannelTypePriorityWeight(t *testing.T) {
 	priority := int64(42)
 	weight := uint(9)

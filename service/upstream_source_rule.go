@@ -465,7 +465,14 @@ func upstreamSourceDefaultLocalGroup(config upstreamSourceSyncConfig) string {
 }
 
 func upstreamSourceRuleMatches(rule dto.UpstreamSourceLocalGroupRule, platform string, name string, description string) (bool, bool) {
-	if len(rule.Platforms) > 0 && !upstreamSourceRulePlatformMatches(platform, rule.Platforms) {
+	// A rule's platform filter EXCLUDES a group only when the group has a KNOWN
+	// platform that is not in the rule's list. A group whose platform could not be
+	// inferred (empty — common for billing-tier groups whose name/description carry
+	// no OpenAI/Claude signal, e.g. "对接倍率") is NOT excluded here; it falls
+	// through to keyword matching so a platform+keyword rule can still match it by
+	// name/description instead of silently matching nothing.
+	platformKnown := normalizeUpstreamSourceRulePlatform(platform) != ""
+	if len(rule.Platforms) > 0 && platformKnown && !upstreamSourceRulePlatformMatches(platform, rule.Platforms) {
 		return false, false
 	}
 	if upstreamSourceRuleKeywordsMatchAnyText([]string{name, description}, rule.ExcludeKeywords) {
@@ -475,12 +482,13 @@ func upstreamSourceRuleMatches(rule dto.UpstreamSourceLocalGroupRule, platform s
 		return true, false // no matchers => match every group (catch-all)
 	}
 
-	includeMatched := upstreamSourceKeywordsMatch(name, rule.NameContains) ||
-		upstreamSourceKeywordsMatch(description, rule.DescriptionContains)
-	if len(rule.Platforms) > 0 {
-		return (len(rule.NameContains) == 0 && len(rule.DescriptionContains) == 0) || includeMatched, false
+	if len(rule.NameContains) == 0 && len(rule.DescriptionContains) == 0 {
+		// Platform-only rule: require a positive (known) platform match. An
+		// unknown platform is not enough to match a platform-only rule.
+		return upstreamSourceRulePlatformMatches(platform, rule.Platforms), false
 	}
-	return includeMatched, false
+	return upstreamSourceKeywordsMatch(name, rule.NameContains) ||
+		upstreamSourceKeywordsMatch(description, rule.DescriptionContains), false
 }
 
 func upstreamSourceRulePlatformMatches(platform string, platforms []string) bool {
