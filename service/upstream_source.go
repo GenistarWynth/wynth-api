@@ -357,6 +357,34 @@ func validateUpstreamSourceSyncConfig(source *model.UpstreamSource) error {
 	return nil
 }
 
+// upstreamSourceResponseSnippet condenses an upstream response body into one
+// short diagnostic line for error messages: an empty-body marker, the HTML
+// <title> (Cloudflare/nginx error pages put the verdict there), or the
+// whitespace-collapsed head of the body (capped). Used so an undecodable or
+// status-only upstream reply (e.g. an expired session returning an empty 401)
+// surfaces its real cause instead of an opaque "unexpected end of JSON input".
+func upstreamSourceResponseSnippet(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return "(empty response body)"
+	}
+	lower := strings.ToLower(text)
+	if start := strings.Index(lower, "<title>"); start >= 0 {
+		rest := text[start+len("<title>"):]
+		if end := strings.Index(strings.ToLower(rest), "</title>"); end >= 0 {
+			if title := strings.Join(strings.Fields(rest[:end]), " "); title != "" {
+				return "page title: " + title
+			}
+		}
+	}
+	joined := strings.Join(strings.Fields(text), " ")
+	const maxSnippetRunes = 160
+	if runes := []rune(joined); len(runes) > maxSnippetRunes {
+		return string(runes[:maxSnippetRunes]) + "…"
+	}
+	return joined
+}
+
 func upstreamSourceGeneratedBaseURL(source *model.UpstreamSource) string {
 	if source == nil {
 		return ""

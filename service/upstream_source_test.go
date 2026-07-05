@@ -2691,3 +2691,15 @@ func TestGeneratedChannelUpdateMapOmitsPriorityWhenAutoPriorityManaged(t *testin
 	assert.Equal(t, channel.Priority, unmanaged["priority"],
 		"auto-priority off: sync writes the rule static priority")
 }
+
+func TestUpstreamSourceResponseSnippet(t *testing.T) {
+	assert.Equal(t, "(empty response body)", upstreamSourceResponseSnippet(nil))
+	assert.Equal(t, "(empty response body)", upstreamSourceResponseSnippet([]byte("   \n ")))
+	assert.Equal(t, "page title: Just a moment...",
+		upstreamSourceResponseSnippet([]byte("<html><head>\n<title> Just a moment... </title></head><body>x</body></html>")))
+	assert.Equal(t, `{"code":"401","message":"unauthorized"}`,
+		upstreamSourceResponseSnippet([]byte("{\"code\":\"401\",\"message\":\"unauthorized\"}")))
+	long := upstreamSourceResponseSnippet([]byte(strings.Repeat("token ", 60)))
+	assert.Contains(t, long, "…")
+	assert.NotContains(t, long, "  ") // whitespace collapsed
+}

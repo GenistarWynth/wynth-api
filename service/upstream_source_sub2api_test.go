@@ -754,3 +754,24 @@ func TestFormatNullableIntID(t *testing.T) {
 	id := int64(123)
 	assert.Equal(t, strconv.FormatInt(id, 10), formatNullableIntID(&id))
 }
+
+func TestSub2APIAdapterDiscoverGroupsSurfacesStatusOnEmptyBody(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	// Expired session: the upstream replies 401 with an EMPTY body. Previously
+	// this surfaced as "decode upstream response failed: unexpected end of JSON
+	// input"; it must now report the real HTTP status so the admin knows to
+	// re-import the session.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	adapter := Sub2APIAdapter{Client: server.Client()}
+
+	_, err := adapter.DiscoverGroups(context.Background(), source)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status 401")
+	assert.NotContains(t, err.Error(), "unexpected end of JSON input")
+}

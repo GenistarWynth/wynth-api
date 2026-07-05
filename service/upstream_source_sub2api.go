@@ -450,7 +450,14 @@ func sub2APIRequest[T any](ctx context.Context, adapter *Sub2APIAdapter, source 
 		if isUpstreamSourceCloudflareChallengeBody(resp.StatusCode, respBody) {
 			return zero, ErrUpstreamSourceTurnstileRequired
 		}
-		return zero, fmt.Errorf("decode upstream response failed: %w", err)
+		// An empty/truncated/non-JSON body on a non-2xx status is almost always a
+		// status-only upstream error (typically an expired session returning an
+		// empty 401), so report the HTTP status + a body snippet instead of an
+		// opaque "unexpected end of JSON input".
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return zero, fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, upstreamSourceResponseSnippet(respBody))
+		}
+		return zero, fmt.Errorf("decode upstream response failed (HTTP %d): %s: %w", resp.StatusCode, upstreamSourceResponseSnippet(respBody), err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if strings.TrimSpace(envelope.Message) == "" {

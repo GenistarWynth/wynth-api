@@ -495,7 +495,14 @@ func newAPIRequestWithCookies[T any](ctx context.Context, adapter *NewAPIAdapter
 		if isUpstreamSourceCloudflareChallengeBody(resp.StatusCode, respBody) {
 			return zero, nil, ErrUpstreamSourceTurnstileRequired
 		}
-		return zero, nil, fmt.Errorf("decode upstream response failed: %w", err)
+		// A non-2xx status with an empty/undecodable body is a status-only error
+		// (e.g. an expired session's empty 401). Return it as newAPIRequestError so
+		// isNewAPIAuthError still detects the 401/403 and can re-login, instead of
+		// an opaque "unexpected end of JSON input".
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return zero, nil, newAPIRequestError{StatusCode: resp.StatusCode, Message: upstreamSourceResponseSnippet(respBody)}
+		}
+		return zero, nil, fmt.Errorf("decode upstream response failed (HTTP %d): %s: %w", resp.StatusCode, upstreamSourceResponseSnippet(respBody), err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return zero, nil, newAPIRequestError{StatusCode: resp.StatusCode, Message: envelope.Message}
