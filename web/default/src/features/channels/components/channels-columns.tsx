@@ -157,11 +157,15 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
   )
 }
 
+// Auto-priority scores (availability / first-token / final) are already stored
+// on a 0–100 scale by the backend scorer, so render them directly as a percent.
+// (They are NOT 0–1 fractions — multiplying by 100 again showed values like
+// "9940%" / "10000%".)
 function formatAutoPriorityScore(value: number | undefined) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return '-'
   }
-  return `${Math.round(value * 100)}%`
+  return `${Math.round(value)}%`
 }
 
 function formatAutoPriorityNumber(
