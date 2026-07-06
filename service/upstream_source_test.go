@@ -2703,3 +2703,50 @@ func TestUpstreamSourceResponseSnippet(t *testing.T) {
 	assert.Contains(t, long, "…")
 	assert.NotContains(t, long, "  ") // whitespace collapsed
 }
+
+func TestRecomputeMappingSyncEligibilityAppliesRulesWithoutManualToggle(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, map[string]any{
+		"default_local_group": "fallback",
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "K12",
+				"local_group":   "openai",
+				"platforms":     []string{"openai"},
+				"name_contains": []string{"k12"},
+			},
+		},
+	})
+	rate := 1.0
+	// Matches the K12 rule, but sync was auto-disabled at an earlier discovery
+	// (before the rule existed) — the exact "add a rule later" case.
+	matching := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             false,
+		UpstreamGroupID:         "g-k12",
+		UpstreamGroupName:       "ChatGPT-K12",
+		UpstreamPlatform:        "openai",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier: &rate,
+	}
+	require.NoError(t, model.DB.Create(&matching).Error)
+	// Matches no rule but is currently enabled — rules are authoritative on save.
+	nonMatching := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "g-other",
+		UpstreamGroupName:       "Claude-Max",
+		UpstreamPlatform:        "anthropic",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier: &rate,
+	}
+	require.NoError(t, model.DB.Create(&nonMatching).Error)
+
+	require.NoError(t, RecomputeUpstreamSourceMappingSyncEligibility(context.Background(), source.Id))
+
+	var reloadedMatch, reloadedNon model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMatch, matching.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedNon, nonMatching.Id).Error)
+	assert.True(t, reloadedMatch.SyncEnabled, "a rule match must enable the mapping without a manual per-mapping toggle")
+	assert.False(t, reloadedNon.SyncEnabled, "a mapping matching no rule must be disabled")
+}

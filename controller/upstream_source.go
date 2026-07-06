@@ -132,6 +132,12 @@ func UpdateUpstreamSource(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// Rules are authoritative for sync eligibility: re-derive each mapping's
+	// sync_enabled from the just-saved rules so adding/editing a rule takes effect
+	// without a manual per-mapping toggle. Non-fatal — the config was already saved.
+	if err := service.RecomputeUpstreamSourceMappingSyncEligibility(c.Request.Context(), source.Id); err != nil {
+		common.SysError("failed to recompute upstream source mapping sync eligibility: " + service.SanitizeUpstreamSourceError(err))
+	}
 	recordManageAudit(c, "upstream_source.update", map[string]interface{}{
 		"id":   source.Id,
 		"name": source.Name,

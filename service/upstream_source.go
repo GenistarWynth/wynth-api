@@ -334,6 +334,47 @@ func resolveUpstreamSourceRuleForManualSync(config upstreamSourceSyncConfig, map
 	return resolution
 }
 
+// RecomputeUpstreamSourceMappingSyncEligibility re-derives every mapping's
+// sync_enabled flag from the source's CURRENT sync rules, so adding or editing a
+// rule takes effect immediately without a manual per-mapping toggle — rules are
+// the source of truth for what syncs. A mapping is enabled iff its discovery is
+// active and a rule matches it; everything else is disabled. Call it after the
+// sync config changes (it is also applied on discovery via the upsert).
+func RecomputeUpstreamSourceMappingSyncEligibility(ctx context.Context, sourceID int) error {
+	if sourceID == 0 {
+		return errors.New("source ID is required")
+	}
+	var source model.UpstreamSource
+	if err := model.DB.WithContext(ctx).First(&source, sourceID).Error; err != nil {
+		return err
+	}
+	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
+	if err != nil {
+		return err
+	}
+	var mappings []model.UpstreamSourceChannelMapping
+	if err := model.DB.WithContext(ctx).Where("source_id = ?", sourceID).Find(&mappings).Error; err != nil {
+		return err
+	}
+	for i := range mappings {
+		mapping := mappings[i]
+		// Probe rule-eligibility independent of the stored flag (mirrors
+		// resolveUpstreamSourceRuleForManualSync): a rule match with active
+		// discovery => enabled.
+		probe := mapping
+		probe.SyncEnabled = true
+		desired := resolveUpstreamSourceRule(config, &probe).SyncEligible
+		if desired == mapping.SyncEnabled {
+			continue
+		}
+		if err := model.DB.WithContext(ctx).Model(&model.UpstreamSourceChannelMapping{}).
+			Where("id = ?", mapping.Id).Update("sync_enabled", desired).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateUpstreamSourceSyncConfig(source *model.UpstreamSource) error {
 	if source == nil {
 		return errors.New("upstream source is required")

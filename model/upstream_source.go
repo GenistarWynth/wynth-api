@@ -197,6 +197,10 @@ func UpsertDiscoveredMappingsTx(tx *gorm.DB, sourceID int, mappings []UpstreamSo
 			"upstream_status",
 			"upstream_rate_multiplier",
 			"effective_rate_multiplier",
+			// NOTE: sync_enabled is intentionally NOT updated here — re-discovery
+			// preserves the admin's per-mapping selection. Rule changes re-align
+			// sync_enabled via RecomputeUpstreamSourceMappingSyncEligibility on
+			// config save instead.
 			"last_discovered_at",
 			"updated_time",
 		}),
