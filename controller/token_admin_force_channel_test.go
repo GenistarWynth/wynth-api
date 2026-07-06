@@ -164,20 +164,21 @@ func TestAdminForceTokenChannel_ScopedToTarget(t *testing.T) {
 	assert.False(t, found, "a cross-user token id must not be overridden")
 }
 
-func TestAdminForceTokenChannel_TTLDefaultsWhenOmitted(t *testing.T) {
+func TestAdminForceTokenChannel_NoExpiryWhenTTLOmitted(t *testing.T) {
 	db := setupTokenAdminTestDB(t)
 	seedUsersAndTokens(t, db)
 	seedForceChannelChannels(t, db)
 	withCleanOverrideCache(t, 10)
 
-	// TTLSeconds omitted (0) must clamp to the default and still produce an active override.
+	// TTLSeconds omitted (0) must store a no-expiry override, not clear it: the forced switch
+	// sticks until an admin clears it rather than auto-expiring.
 	c, rec := forceChannelCtx(t, 2, 10, common.RoleAdminUser, ForceChannelRequest{ChannelId: 100})
 	AdminForceTokenChannel(c)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.True(t, decodeSuccess(t, rec))
 	_, found := service.GetTokenChannelOverride(10)
-	assert.True(t, found, "an omitted TTL must fall back to the default, not clear the override")
+	assert.True(t, found, "an omitted TTL must store a no-expiry override, not clear it")
 }
 
 func withControllerAutoGroups(t *testing.T) {

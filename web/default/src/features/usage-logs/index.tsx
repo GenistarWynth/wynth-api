@@ -24,6 +24,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
+import { UserTokenForceChannelDialog } from '@/features/users/components/dialogs/user-token-force-channel-dialog'
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
 import {
   UsageLogsProvider,
@@ -66,6 +67,10 @@ function UsageLogsContent() {
     affinityTarget,
     affinityDialogOpen,
     setAffinityDialogOpen,
+    forceChannelTarget,
+    setForceChannelTarget,
+    forceChannelDialogOpen,
+    setForceChannelDialogOpen,
   } = useUsageLogsContext()
   const tabNavGroups = useMemo<NavGroup[]>(
     () => [
@@ -156,6 +161,19 @@ function UsageLogsContent() {
               }
             : null
         }
+      />
+
+      <UserTokenForceChannelDialog
+        open={forceChannelDialogOpen}
+        onOpenChange={(o) => {
+          setForceChannelDialogOpen(o)
+          if (!o) setForceChannelTarget(null)
+        }}
+        userId={forceChannelTarget?.userId ?? 0}
+        tokenId={forceChannelTarget?.tokenId ?? 0}
+        tokenName={forceChannelTarget?.tokenName ?? ''}
+        tokenGroup={forceChannelTarget?.group ?? ''}
+        initialChannelId={forceChannelTarget?.channelId}
       />
     </>
   )

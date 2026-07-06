@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "Force Channel": "强制渠道",
+    "Force this key to switch channels": "强制该密钥切换渠道",
+    "Force this API key to switch to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted. It overrides channel affinity, but if the forced channel fails the request still falls over to other channels.": "强制该 API 密钥切换到其所属分组下的指定渠道。下一次请求开始生效，当前正在进行的请求不会被中断。它会覆盖渠道亲和；但如果强制的渠道失败，请求仍会自动切换到其他渠道。",
     "Apply": "应用",
     "Search channels...": "搜索渠道...",
     "Clear override": "清除覆盖",

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -13,16 +14,21 @@ import (
 )
 
 // ForceChannelRequest is the body of the admin force-channel endpoint. TTLSeconds is
-// optional: <=0 falls back to the default TTL and values above the max are clamped
-// (see service.ClampTokenChannelOverrideTTL).
+// optional: <=0 (the default from the UI) stores the override with NO expiry — it is a
+// manual, sticky forced-switch that lasts until an admin clears it (or the channel is
+// disabled). A positive value is still honored and clamped to the max
+// (see service.ClampTokenChannelOverrideTTL), for callers that want an auto-expiring override.
 type ForceChannelRequest struct {
 	ChannelId  int `json:"channel_id"`
 	TTLSeconds int `json:"ttl_seconds"`
 }
 
-// AdminForceTokenChannel pins a target user's token to a specific same-group channel at
-// runtime. The override is cache-backed and TTL'd; subsequent requests for that token are
-// routed to the channel, while any in-flight request is left untouched. Set-time validation
+// AdminForceTokenChannel forces a target user's token to switch to a specific same-group
+// channel at runtime. The override is cache-backed and (by default) has no expiry, lasting
+// until an admin clears it; subsequent requests for that token are routed to the channel,
+// while any in-flight request is left untouched. This is a forced switch, not a hard pin:
+// it beats channel affinity, but if the forced channel fails mid-request the normal retry
+// path still fails over to other channels. Set-time validation
 // is deliberately coarse (channel exists + enabled + belongs to the token's effective group);
 // the authoritative per-request gate (model support, request path, live channel status) lives
 // in the distributor and fails gracefully rather than aborting live traffic.
@@ -81,7 +87,13 @@ func AdminForceTokenChannel(c *gin.Context) {
 		return
 	}
 
-	if err := service.SetTokenChannelOverride(tid, req.ChannelId, c.GetInt("id"), service.ClampTokenChannelOverrideTTL(req.TTLSeconds)); err != nil {
+	// Default to no expiry: the override sticks until an admin clears it (or the channel is
+	// disabled). A positive TTL is still honored and clamped, for auto-expiring overrides.
+	ttl := time.Duration(0)
+	if req.TTLSeconds > 0 {
+		ttl = service.ClampTokenChannelOverrideTTL(req.TTLSeconds)
+	}
+	if err := service.SetTokenChannelOverride(tid, req.ChannelId, c.GetInt("id"), ttl); err != nil {
 		common.ApiError(c, err)
 		return
 	}

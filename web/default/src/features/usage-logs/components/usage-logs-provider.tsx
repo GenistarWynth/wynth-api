@@ -20,6 +20,16 @@ For commercial licensing, please contact support@quantumnous.com
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import type { ChannelAffinityInfo } from '../types'
 
+// Target for the admin "force channel" action opened from a log row's channel badge.
+export interface ForceChannelTarget {
+  userId: number
+  tokenId: number
+  tokenName: string
+  group: string
+  // The channel used by the clicked row, pre-selected in the dialog.
+  channelId: number
+}
+
 interface UsageLogsContextValue {
   selectedUserId: number | null
   setSelectedUserId: (userId: number | null) => void
@@ -29,6 +39,10 @@ interface UsageLogsContextValue {
   setAffinityTarget: (target: ChannelAffinityInfo | null) => void
   affinityDialogOpen: boolean
   setAffinityDialogOpen: (open: boolean) => void
+  forceChannelTarget: ForceChannelTarget | null
+  setForceChannelTarget: (target: ForceChannelTarget | null) => void
+  forceChannelDialogOpen: boolean
+  setForceChannelDialogOpen: (open: boolean) => void
   sensitiveVisible: boolean
   setSensitiveVisible: (visible: boolean) => void
 }
@@ -43,6 +57,9 @@ export function UsageLogsProvider({ children }: { children: ReactNode }) {
   const [affinityTarget, setAffinityTarget] =
     useState<ChannelAffinityInfo | null>(null)
   const [affinityDialogOpen, setAffinityDialogOpen] = useState(false)
+  const [forceChannelTarget, setForceChannelTarget] =
+    useState<ForceChannelTarget | null>(null)
+  const [forceChannelDialogOpen, setForceChannelDialogOpen] = useState(false)
   const [sensitiveVisible, setSensitiveVisible] = useState(true)
 
   return (
@@ -56,6 +73,10 @@ export function UsageLogsProvider({ children }: { children: ReactNode }) {
         setAffinityTarget,
         affinityDialogOpen,
         setAffinityDialogOpen,
+        forceChannelTarget,
+        setForceChannelTarget,
+        forceChannelDialogOpen,
+        setForceChannelDialogOpen,
         sensitiveVisible,
         setSensitiveVisible,
       }}

@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "Force Channel": "Force Channel",
+    "Force this key to switch channels": "Force this key to switch channels",
+    "Force this API key to switch to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted. It overrides channel affinity, but if the forced channel fails the request still falls over to other channels.": "Force this API key to switch to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted. It overrides channel affinity, but if the forced channel fails the request still falls over to other channels.",
     "Apply": "Apply",
     "Search channels...": "Search channels...",
     "Clear override": "Clear override",

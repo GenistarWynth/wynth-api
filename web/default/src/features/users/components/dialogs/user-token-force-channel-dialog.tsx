@@ -31,11 +31,9 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/status-badge'
 import { searchChannels } from '@/features/channels/api'
-import type { ApiKey } from '@/features/keys/types'
 import {
   clearUserTokenForceChannel,
   forceUserTokenChannel,
@@ -45,37 +43,41 @@ import {
 interface UserTokenForceChannelDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  token: ApiKey | null
   userId: number
+  tokenId: number
+  tokenName: string
+  tokenGroup?: string
+  // Pre-selected channel when opening (e.g. the channel of the log row that was clicked).
+  initialChannelId?: number
 }
-
-const DEFAULT_TTL_MINUTES = '30'
 
 export function UserTokenForceChannelDialog({
   open,
   onOpenChange,
-  token,
   userId,
+  tokenId,
+  tokenName,
+  tokenGroup,
+  initialChannelId,
 }: UserTokenForceChannelDialogProps) {
   const { t } = useTranslation()
   const [channelId, setChannelId] = useState('')
-  const [ttlMinutes, setTtlMinutes] = useState(DEFAULT_TTL_MINUTES)
   const [submitting, setSubmitting] = useState(false)
 
-  const tokenGroup = token?.group?.trim() || ''
+  const group = tokenGroup?.trim() || ''
   // A fixed group narrows the channel candidates; "auto"/empty lists all enabled
   // channels and lets the backend validate group membership on apply.
-  const filterByGroup =
-    tokenGroup && tokenGroup !== 'auto' ? tokenGroup : undefined
+  const filterByGroup = group && group !== 'auto' ? group : undefined
+  const hasToken = tokenId > 0
 
   const {
     data: statusData,
     isLoading: statusLoading,
     refetch: refetchStatus,
   } = useQuery({
-    queryKey: ['token-force-channel', userId, token?.id],
-    queryFn: () => getUserTokenForceChannel(userId, token?.id ?? 0),
-    enabled: open && !!token,
+    queryKey: ['token-force-channel', userId, tokenId],
+    queryFn: () => getUserTokenForceChannel(userId, tokenId),
+    enabled: open && hasToken,
     staleTime: 0,
   })
 
@@ -87,7 +89,7 @@ export function UserTokenForceChannelDialog({
         status: 'enabled',
         page_size: 100,
       }),
-    enabled: open && !!token,
+    enabled: open && hasToken,
     staleTime: 30_000,
   })
 
@@ -103,30 +105,32 @@ export function UserTokenForceChannelDialog({
     [channelsData]
   )
 
-  // Prefill with the currently-forced channel on open; reset on close.
+  // Prefill on open: the currently-forced channel if any, else the clicked row's channel.
+  // Reset on close.
   useEffect(() => {
-    if (open && active && override) {
-      setChannelId(String(override.channel_id))
-    }
     if (!open) {
       setChannelId('')
-      setTtlMinutes(DEFAULT_TTL_MINUTES)
+      return
     }
-  }, [open, active, override])
+    if (active && override) {
+      setChannelId(String(override.channel_id))
+    } else if (initialChannelId && initialChannelId > 0) {
+      setChannelId(String(initialChannelId))
+    }
+  }, [open, active, override, initialChannelId])
 
   const handleForce = async () => {
-    if (!token) return
+    if (!hasToken) return
     const id = Number.parseInt(channelId, 10)
     if (!id) {
       toast.error(t('Select a channel first'))
       return
     }
-    const minutes = Number.parseInt(ttlMinutes, 10)
     setSubmitting(true)
     try {
-      const res = await forceUserTokenChannel(userId, token.id, {
+      // No ttl_seconds: the override is a sticky forced switch with no expiry.
+      const res = await forceUserTokenChannel(userId, tokenId, {
         channel_id: id,
-        ttl_seconds: Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : 0,
       })
       if (res.success) {
         toast.success(t('Channel override applied'))
@@ -168,10 +172,10 @@ export function UserTokenForceChannelDialog({
   }
 
   const handleClear = async () => {
-    if (!token) return
+    if (!hasToken) return
     setSubmitting(true)
     try {
-      const res = await clearUserTokenForceChannel(userId, token.id)
+      const res = await clearUserTokenForceChannel(userId, tokenId)
       if (res.success) {
         toast.success(t('Channel override cleared'))
         // Drop the local selection so Apply is disabled and the just-cleared
@@ -195,21 +199,20 @@ export function UserTokenForceChannelDialog({
           <DialogTitle>{t('Force Channel')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Route this API key to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted.'
+              'Force this API key to switch to a specific channel in its group. It takes effect on the next request; the request currently in flight is not interrupted. It overrides channel affinity, but if the forced channel fails the request still falls over to other channels.'
             )}
           </DialogDescription>
         </DialogHeader>
 
         <div className='flex flex-col gap-4'>
-          {token && (
+          {tokenName && (
             <div className='text-muted-foreground text-sm'>
               {t('API Key')}:{' '}
-              <span className='text-foreground font-medium'>{token.name}</span>
-              {tokenGroup && (
+              <span className='text-foreground font-medium'>{tokenName}</span>
+              {group && (
                 <>
                   {' · '}
-                  {t('Group')}:{' '}
-                  <span className='font-mono'>{tokenGroup}</span>
+                  {t('Group')}: <span className='font-mono'>{group}</span>
                 </>
               )}
             </div>
@@ -229,22 +232,6 @@ export function UserTokenForceChannelDialog({
               searchPlaceholder={t('Search channels...')}
               emptyText={t('No channels found in this group')}
             />
-          </div>
-
-          <div className='flex flex-col gap-2'>
-            <Label>{t('Duration (minutes)')}</Label>
-            <Input
-              type='number'
-              min={1}
-              value={ttlMinutes}
-              onChange={(e) => setTtlMinutes(e.target.value)}
-              placeholder={DEFAULT_TTL_MINUTES}
-            />
-            <p className='text-muted-foreground text-xs'>
-              {t(
-                'Defaults to 30 minutes. Maximum 24 hours; the override auto-expires.'
-              )}
-            </p>
           </div>
         </div>
 

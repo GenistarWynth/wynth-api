@@ -315,11 +315,21 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         header: t('Channel'),
         accessorFn: (row) => row.channel,
         cell: function ChannelCell({ row }) {
-          const { sensitiveVisible, setAffinityTarget, setAffinityDialogOpen } =
-            useUsageLogsContext()
+          const {
+            sensitiveVisible,
+            setAffinityTarget,
+            setAffinityDialogOpen,
+            setForceChannelTarget,
+            setForceChannelDialogOpen,
+          } = useUsageLogsContext()
           const log = row.original
 
           if (!isDisplayableLogType(log.type)) return null
+
+          // Clicking the channel badge lets an admin force this key to switch channels.
+          // Only meaningful when the row has a real token and channel.
+          const canForceChannel =
+            log.user_id > 0 && log.token_id > 0 && log.channel > 0
 
           const other = parseLogOther(log.other)
           const affinity = other?.admin_info?.channel_affinity
@@ -350,14 +360,42 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                   }
                 >
                   <div className='relative inline-flex w-fit items-center gap-1'>
-                    <StatusBadge
-                      label={channelIdDisplay}
-                      autoColor={String(log.channel)}
-                      copyText={String(log.channel)}
-                      size='sm'
-                      showDot={false}
-                      className='font-mono'
-                    />
+                    {canForceChannel ? (
+                      <button
+                        type='button'
+                        className='focus-visible:ring-ring rounded transition-opacity hover:opacity-70 focus-visible:ring-2 focus-visible:outline-none'
+                        title={t('Force this key to switch channels')}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setForceChannelTarget({
+                            userId: log.user_id,
+                            tokenId: log.token_id,
+                            tokenName: log.token_name,
+                            group: log.group,
+                            channelId: log.channel,
+                          })
+                          setForceChannelDialogOpen(true)
+                        }}
+                      >
+                        <StatusBadge
+                          label={channelIdDisplay}
+                          autoColor={String(log.channel)}
+                          size='sm'
+                          showDot={false}
+                          copyable={false}
+                          className='font-mono'
+                        />
+                      </button>
+                    ) : (
+                      <StatusBadge
+                        label={channelIdDisplay}
+                        autoColor={String(log.channel)}
+                        copyText={String(log.channel)}
+                        size='sm'
+                        showDot={false}
+                        className='font-mono'
+                      />
+                    )}
                     {showMultiKeyIndex && (
                       <StatusBadge
                         label={String(multiKeyIndex)}

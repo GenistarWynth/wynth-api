@@ -41,7 +41,6 @@ import {
   fetchUserTokenKey,
 } from '../../api'
 import { UserTokenEditDrawer } from './user-token-edit-drawer'
-import { UserTokenForceChannelDialog } from './user-token-force-channel-dialog'
 
 interface UserApiKeysDialogProps {
   open: boolean
@@ -93,9 +92,6 @@ export function UserApiKeysDialog({
   const [loading, setLoading] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null)
   const [editTarget, setEditTarget] = useState<ApiKey | null>(null)
-  const [forceChannelTarget, setForceChannelTarget] = useState<ApiKey | null>(
-    null
-  )
   const [togglingId, setTogglingId] = useState<number | null>(null)
   const [pendingRevealToken, setPendingRevealToken] = useState<ApiKey | null>(
     null
@@ -271,13 +267,6 @@ export function UserApiKeysDialog({
                   <Button
                     variant='ghost'
                     size='sm'
-                    onClick={() => setForceChannelTarget(tok)}
-                  >
-                    {t('Force Channel')}
-                  </Button>
-                  <Button
-                    variant='ghost'
-                    size='sm'
                     onClick={() => setEditTarget(tok)}
                   >
                     {t('Edit')}
@@ -303,13 +292,6 @@ export function UserApiKeysDialog({
         token={editTarget}
         userId={user.id}
         onSuccess={() => void load()}
-      />
-
-      <UserTokenForceChannelDialog
-        open={!!forceChannelTarget}
-        onOpenChange={(o) => !o && setForceChannelTarget(null)}
-        token={forceChannelTarget}
-        userId={user.id}
       />
 
       <ConfirmDialog
