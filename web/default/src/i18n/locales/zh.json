@@ -2074,7 +2074,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -5355,6 +5355,14 @@
     "{{count}} announcements will be removed from the list.": "{{count}} 个公告将从列表中移除。",
     "{{count}} groups deleted. Click \"Save Settings\" to apply.": "已删除 {{count}} 个分组。点击 \"保存设置\" 以应用。",
     "{{count}} model(s)": "{{count}} 个模型",
-    "{{processed}} of {{total}} log entries processed.": "已处理 {{processed}} / {{total}} 条日志。"
+    "{{processed}} of {{total}} log entries processed.": "已处理 {{processed}} / {{total}} 条日志。",
+    "Clamped to": "钳制为",
+    "Invalid (NaN)": "无效 (NaN)",
+    "Kind": "类型",
+    "Original value": "原始值",
+    "Overflow": "上溢",
+    "Quota clamped": "额度已钳制",
+    "Quota saturation protection triggered": "额度饱和保护已触发",
+    "Underflow": "下溢"
   }
 }

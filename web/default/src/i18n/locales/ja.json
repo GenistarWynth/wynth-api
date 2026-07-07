@@ -2072,7 +2072,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -5350,6 +5350,14 @@
     "{{count}} announcements will be removed from the list.": "{{count}} announcements will be removed from the list.",
     "{{count}} groups deleted. Click \"Save Settings\" to apply.": "{{count}} groups deleted. Click \"Save Settings\" to apply.",
     "{{count}} model(s)": "{{count}} model(s)",
-    "{{processed}} of {{total}} log entries processed.": "{{processed}} of {{total}} log entries processed."
+    "{{processed}} of {{total}} log entries processed.": "{{processed}} of {{total}} log entries processed.",
+    "Clamped to": "制限後の値",
+    "Invalid (NaN)": "無効 (NaN)",
+    "Kind": "種類",
+    "Original value": "元の値",
+    "Overflow": "オーバーフロー",
+    "Quota clamped": "クォータ制限適用",
+    "Quota saturation protection triggered": "クォータ飽和保護が作動しました",
+    "Underflow": "アンダーフロー"
   }
 }

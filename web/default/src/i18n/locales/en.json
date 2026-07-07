@@ -2074,7 +2074,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -5355,6 +5355,14 @@
     "{{count}} announcements will be removed from the list.": "{{count}} announcements will be removed from the list.",
     "{{count}} groups deleted. Click \"Save Settings\" to apply.": "{{count}} groups deleted. Click \"Save Settings\" to apply.",
     "{{count}} model(s)": "{{count}} model(s)",
-    "{{processed}} of {{total}} log entries processed.": "{{processed}} of {{total}} log entries processed."
+    "{{processed}} of {{total}} log entries processed.": "{{processed}} of {{total}} log entries processed.",
+    "Clamped to": "Clamped to",
+    "Invalid (NaN)": "Invalid (NaN)",
+    "Kind": "Kind",
+    "Original value": "Original value",
+    "Overflow": "Overflow",
+    "Quota clamped": "Quota clamped",
+    "Quota saturation protection triggered": "Quota saturation protection triggered",
+    "Underflow": "Underflow"
   }
 }
