@@ -261,6 +261,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 			EffectivePriceScore:     score.EffectivePriceScore,
 			AvailabilityScore:       score.AvailabilityScore,
 			FirstTokenScore:         score.FirstTokenScore,
+			ThroughputScore:         score.ThroughputScore,
 			FinalScore:              score.FinalScore,
 		}
 
@@ -456,6 +457,10 @@ func fillAutoPriorityScoreInputsForWindow(ctx context.Context, pending []upstrea
 			if stat.FirstTokenSampleCount > 0 {
 				scoreInput.FirstTokenLatencyMS = float64(stat.AverageFirstTokenLatencyMS)
 			}
+			scoreInput.ThroughputSampleCount = stat.ThroughputSampleCount
+			if stat.ThroughputSampleCount > 0 {
+				scoreInput.ThroughputTps = stat.AverageThroughputTps
+			}
 		}
 		scoreInputs[idx] = scoreInput
 	}
@@ -531,6 +536,7 @@ func markAutoPriorityGroupFailure(result *dto.UpstreamSourceAutoPriorityResult, 
 			EffectivePriceScore:     0,
 			AvailabilityScore:       0,
 			FirstTokenScore:         0,
+			ThroughputScore:         0,
 			FinalScore:              0,
 		}
 		resultSlots[candidate.resultIndex] = &slot
@@ -600,6 +606,7 @@ func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, window
 		EffectivePriceScore:     score.EffectivePriceScore,
 		AvailabilityScore:       score.AvailabilityScore,
 		FirstTokenScore:         score.FirstTokenScore,
+		ThroughputScore:         score.ThroughputScore,
 		FinalScore:              score.FinalScore,
 		OldPriority:             score.OldPriority,
 		NewPriority:             score.NewPriority,
@@ -608,5 +615,6 @@ func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, window
 		UsageLogCount:           score.UsageLogCount,
 		MonitorCheckCount:       score.MonitorCheckCount,
 		FirstTokenSampleCount:   score.FirstTokenSampleCount,
+		ThroughputSampleCount:   score.ThroughputSampleCount,
 	}
 }

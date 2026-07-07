@@ -185,6 +185,7 @@ export interface ChannelAutoPriorityScore {
   effective_price_score: number
   availability_score: number
   first_token_score: number
+  throughput_score: number
   final_score: number
   old_priority: number
   new_priority: number
@@ -193,6 +194,7 @@ export interface ChannelAutoPriorityScore {
   usage_log_count: number
   monitor_check_count: number
   first_token_sample_count: number
+  throughput_sample_count: number
 }
 
 export interface AdvancedCustomConfig {

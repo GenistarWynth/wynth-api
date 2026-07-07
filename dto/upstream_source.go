@@ -194,6 +194,7 @@ type UpstreamSourceAutoPriorityChannelResult struct {
 	EffectivePriceScore     float64 `json:"effective_price_score"`
 	AvailabilityScore       float64 `json:"availability_score"`
 	FirstTokenScore         float64 `json:"first_token_score"`
+	ThroughputScore         float64 `json:"throughput_score"`
 	FinalScore              float64 `json:"final_score"`
 }
 

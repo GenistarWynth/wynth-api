@@ -95,6 +95,7 @@ type ChannelAutoPriorityScore struct {
 	EffectivePriceScore     float64 `json:"effective_price_score"`
 	AvailabilityScore       float64 `json:"availability_score"`
 	FirstTokenScore         float64 `json:"first_token_score"`
+	ThroughputScore         float64 `json:"throughput_score"`
 	FinalScore              float64 `json:"final_score"`
 	OldPriority             int64   `json:"old_priority"`
 	NewPriority             int64   `json:"new_priority"`
@@ -103,6 +104,7 @@ type ChannelAutoPriorityScore struct {
 	UsageLogCount           int64   `json:"usage_log_count"`
 	MonitorCheckCount       int64   `json:"monitor_check_count"`
 	FirstTokenSampleCount   int64   `json:"first_token_sample_count"`
+	ThroughputSampleCount   int64   `json:"throughput_sample_count"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

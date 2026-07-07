@@ -113,8 +113,9 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		}}, 1000)
 
 		require.Len(t, results, 1)
-		// gate == 1 at the knee: FinalScore is the ungated weighted sum.
-		assert.InDelta(t, 0.80*100+0.17*50+0.03*70, results[0].FinalScore, 1e-9)
+		// gate == 1 at the knee: FinalScore is the ungated weighted sum. No first-token
+		// or throughput samples, so both use the neutral default.
+		assert.InDelta(t, 0.75*100+0.12*50+0.05*autoPriorityNeutralPerfScore+0.08*autoPriorityNeutralPerfScore, results[0].FinalScore, 1e-9)
 	})
 
 	t.Run("too few monitor checks bypass the availability gate", func(t *testing.T) {
@@ -128,9 +129,10 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		}}, 1000)
 
 		require.Len(t, results, 1)
-		// Only the additive 17% availability penalty applies; the gate is off.
-		assert.InDelta(t, 0.80*100+0.17*0+0.03*70, results[0].FinalScore, 1e-9)
-		assert.Equal(t, int64(821), results[0].ComputedPriority)
+		// Only the additive availability penalty applies; the gate is off. No first-token
+		// or throughput samples, so both use the neutral default.
+		assert.InDelta(t, 0.75*100+0.12*0+0.05*autoPriorityNeutralPerfScore+0.08*autoPriorityNeutralPerfScore, results[0].FinalScore, 1e-9)
+		assert.Equal(t, int64(841), results[0].ComputedPriority)
 	})
 
 	t.Run("same price in different cohorts still scores as 100", func(t *testing.T) {
@@ -318,7 +320,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		require.Len(t, results, 1)
 		result := results[0]
 		assert.Equal(t, int64(943), result.OldPriority)
-		assert.Equal(t, int64(949), result.ComputedPriority)
+		assert.Equal(t, int64(940), result.ComputedPriority)
 		assert.False(t, result.Applied)
 		assert.Equal(t, int64(943), result.NewPriority)
 		assert.Equal(t, "hysteresis_delta_below_threshold", result.Reason)
@@ -433,7 +435,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.Equal(t, int64(0), result.FirstTokenSampleCount)
 	})
 
-	t.Run("zero latency sample participates and beats neutral first token", func(t *testing.T) {
+	t.Run("first token is scored on an absolute curve: fast beats neutral, slow falls below", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
 				ChannelID:               602,
@@ -441,7 +443,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         200,
 				EffectiveRateMultiplier: 1,
-				FirstTokenLatencyMS:     0,
+				FirstTokenLatencyMS:     2000, // below the fast anchor -> 100
 				UsageLogCount:           1,
 				MonitorCheckCount:       1,
 				FirstTokenSampleCount:   1,
@@ -452,7 +454,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				ChannelType:             constant.ChannelTypeOpenAI,
 				CurrentPriority:         200,
 				EffectiveRateMultiplier: 1,
-				FirstTokenLatencyMS:     100,
+				FirstTokenLatencyMS:     90000, // above the slow anchor -> 0
 				UsageLogCount:           1,
 				MonitorCheckCount:       1,
 				FirstTokenSampleCount:   1,
@@ -460,14 +462,85 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		}, 1000)
 
 		require.Len(t, results, 2)
-		zeroLatency := resultByChannelID(results, 602)
-		slowLatency := resultByChannelID(results, 603)
+		fast := resultByChannelID(results, 602)
+		slow := resultByChannelID(results, 603)
 
-		require.NotNil(t, zeroLatency)
-		require.NotNil(t, slowLatency)
-		assert.Greater(t, zeroLatency.FirstTokenScore, slowLatency.FirstTokenScore)
-		assert.NotEqual(t, 70, zeroLatency.FirstTokenScore)
-		assert.NotEqual(t, 70, slowLatency.FirstTokenScore)
+		require.NotNil(t, fast)
+		require.NotNil(t, slow)
+		assert.InDelta(t, 100, fast.FirstTokenScore, 0.0001)
+		assert.InDelta(t, 0, slow.FirstTokenScore, 0.0001)
+		assert.Greater(t, fast.FirstTokenScore, slow.FirstTokenScore)
+	})
+
+	t.Run("a lone slow channel is not auto-scored 100 for first token", func(t *testing.T) {
+		// Regression: previously a single-member cohort was forced to 100 regardless of
+		// latency, so a channel serving 90s-first-token requests looked perfect.
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+			ChannelID:               610,
+			LocalGroup:              "solo",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         200,
+			EffectiveRateMultiplier: 1,
+			FirstTokenLatencyMS:     90000,
+			UsageLogCount:           1,
+			MonitorCheckCount:       1,
+			FirstTokenSampleCount:   1,
+		}}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, 0, results[0].FirstTokenScore, 0.0001)
+	})
+
+	t.Run("throughput is scored on an absolute curve and a lone slow channel scores low", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               620,
+				LocalGroup:              "tput",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         200,
+				EffectiveRateMultiplier: 1,
+				ThroughputTps:           50, // above the fast anchor -> 100
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				ThroughputSampleCount:   1,
+			},
+			{
+				ChannelID:               621,
+				LocalGroup:              "tput",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         200,
+				EffectiveRateMultiplier: 1,
+				ThroughputTps:           2, // near the slow anchor -> well below neutral
+				UsageLogCount:           1,
+				MonitorCheckCount:       1,
+				ThroughputSampleCount:   1,
+			},
+		}, 1000)
+
+		require.Len(t, results, 2)
+		fast := resultByChannelID(results, 620)
+		slow := resultByChannelID(results, 621)
+		require.NotNil(t, fast)
+		require.NotNil(t, slow)
+		assert.InDelta(t, 100, fast.ThroughputScore, 0.0001)
+		assert.Greater(t, fast.ThroughputScore, slow.ThroughputScore)
+		assert.Less(t, slow.ThroughputScore, autoPriorityNeutralPerfScore)
+	})
+
+	t.Run("missing throughput samples use the neutral default", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+			ChannelID:               630,
+			LocalGroup:              "tput",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         200,
+			EffectiveRateMultiplier: 1,
+			UsageLogCount:           1,
+			MonitorCheckCount:       1,
+			ThroughputSampleCount:   0,
+		}}, 1000)
+
+		require.Len(t, results, 1)
+		assert.InDelta(t, autoPriorityNeutralPerfScore, results[0].ThroughputScore, 0.0001)
 	})
 
 	t.Run("negative latency with sample count stays neutral", func(t *testing.T) {
@@ -585,7 +658,9 @@ func TestScoreAutoPriorityCandidatesCrossSourceCohortCostBounds(t *testing.T) {
 
 		require.Len(t, results, 1)
 		assert.InDelta(t, 100, results[0].EffectivePriceScore, 0.0001)
-		assert.Equal(t, int64(991), results[0].ComputedPriority)
+		// price 100 + availability 100, but no first-token/throughput samples (neutral 70):
+		// 0.75*100 + 0.12*100 + 0.05*70 + 0.08*70 = 96.1 -> 961.
+		assert.Equal(t, int64(961), results[0].ComputedPriority)
 	})
 
 	t.Run("cross-source cohort bounds let cost differentiate a single-member run cohort", func(t *testing.T) {

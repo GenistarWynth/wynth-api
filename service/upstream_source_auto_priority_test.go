@@ -104,7 +104,10 @@ func createAutoPriorityTestUsageLog(t *testing.T, channelID int, createdAt int64
 		ChannelId:        channelID,
 		PromptTokens:     100,
 		CompletionTokens: 50,
-		Other:            string(other),
+		// 50 tokens / 2s = 25 t/s, above the throughput fast anchor -> score 100, so a
+		// fully-healthy generated channel still reaches the max final score.
+		UseTime: 2,
+		Other:   string(other),
 	}).Error)
 }
 
@@ -512,6 +515,7 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.Equal(t, 100.0, r.EffectivePriceScore)
 	assert.Equal(t, 100.0, r.AvailabilityScore)
 	assert.Equal(t, 100.0, r.FirstTokenScore)
+	assert.Equal(t, 100.0, r.ThroughputScore)
 	assert.Equal(t, 100.0, r.FinalScore)
 
 	var reloadedChannel model.Channel

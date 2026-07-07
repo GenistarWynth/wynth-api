@@ -211,7 +211,7 @@ function AutoPriorityHint({ channel }: { channel: Channel }) {
 
   const tooltip = snapshot
     ? t(
-        'Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}.',
+        'Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.',
         {
           time: formatRelativeTime(
             settings.channel_auto_priority_last_run_at ?? 0
@@ -222,6 +222,7 @@ function AutoPriorityHint({ channel }: { channel: Channel }) {
           ),
           availability: formatAutoPriorityScore(snapshot.availability_score),
           firstToken: formatAutoPriorityScore(snapshot.first_token_score),
+          throughput: formatAutoPriorityScore(snapshot.throughput_score),
         }
       )
     : t('Auto priority may overwrite manual edits on the next run.')

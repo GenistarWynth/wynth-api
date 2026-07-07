@@ -16,9 +16,11 @@ type AutoPriorityScoreInput struct {
 	PreviousEffectiveCostMultiplier float64
 	Availability                    *float64
 	FirstTokenLatencyMS             float64
+	ThroughputTps                   float64
 	UsageLogCount                   int64
 	MonitorCheckCount               int64
 	FirstTokenSampleCount           int64
+	ThroughputSampleCount           int64
 	HasPreviousSnapshot             bool
 
 	// CohortCostFloor/CohortCostCeil, when > 0, are the local-group-wide effective
@@ -38,6 +40,7 @@ type AutoPriorityScoreResult struct {
 	EffectivePriceScore     float64
 	AvailabilityScore       float64
 	FirstTokenScore         float64
+	ThroughputScore         float64
 	FinalScore              float64
 	OldPriority             int64
 	ComputedPriority        int64
@@ -47,6 +50,7 @@ type AutoPriorityScoreResult struct {
 	UsageLogCount           int64
 	MonitorCheckCount       int64
 	FirstTokenSampleCount   int64
+	ThroughputSampleCount   int64
 }
 
 const (
@@ -62,6 +66,23 @@ const (
 	// Minimum monitor checks in the window before the gate trusts the
 	// availability ratio; protects fresh channels from one noisy failed probe.
 	autoPriorityMinAvailabilityGateSamples int64 = 3
+
+	// Neutral score for a performance metric (first-token, throughput) that has no
+	// samples in the window: it neither rewards nor hard-penalizes an unmeasured channel.
+	autoPriorityNeutralPerfScore float64 = 70
+
+	// First-token latency (TTFT) is scored on an ABSOLUTE, log-scaled curve, not
+	// relative to the cohort: <= fast anchor -> 100, >= slow anchor -> 0. Absolute
+	// anchoring is what lets a channel that is the only one measured still reflect
+	// its real latency instead of being auto-set to 100. Tunable.
+	autoPriorityFirstTokenFastMS float64 = 5000
+	autoPriorityFirstTokenSlowMS float64 = 60000
+
+	// Output throughput (tokens/sec) is scored on an ABSOLUTE, log-scaled ascending
+	// curve: >= fast anchor -> 100, <= slow anchor -> 0. Matches the "流 · N t/s"
+	// value shown in the usage logs (completion_tokens / use_time). Tunable.
+	autoPriorityThroughputSlowTps float64 = 1
+	autoPriorityThroughputFastTps float64 = 20
 )
 
 func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority int) []AutoPriorityScoreResult {
@@ -71,7 +92,6 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 	results := make([]AutoPriorityScoreResult, len(inputs))
 	priceCohorts := make(map[string][]int)
-	firstTokenCohorts := make(map[string][]int)
 
 	for i, input := range inputs {
 		cohort := autoPriorityCohortKey(input.LocalGroup, input.ChannelType)
@@ -83,10 +103,12 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			CacheAdjustedCostFactor: cacheFactor,
 			OldPriority:             input.CurrentPriority,
 			AvailabilityScore:       autoPriorityAvailabilityScore(input.Availability),
-			FirstTokenScore:         70,
+			FirstTokenScore:         autoPriorityNeutralPerfScore,
+			ThroughputScore:         autoPriorityNeutralPerfScore,
 			UsageLogCount:           input.UsageLogCount,
 			MonitorCheckCount:       input.MonitorCheckCount,
 			FirstTokenSampleCount:   input.FirstTokenSampleCount,
+			ThroughputSampleCount:   input.ThroughputSampleCount,
 		}
 
 		if !isValidAutoPriorityMultiplier(input.EffectiveRateMultiplier) {
@@ -94,8 +116,6 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			result.ComputedPriority = input.CurrentPriority
 			result.NewPriority = input.CurrentPriority
 			result.Applied = false
-			result.AvailabilityScore = autoPriorityAvailabilityScore(input.Availability)
-			result.FirstTokenScore = 70
 			results[i] = result
 			continue
 		}
@@ -107,8 +127,15 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			result.CacheAdjustedCostFactor = result.EffectiveCostMultiplier / input.EffectiveRateMultiplier
 		}
 		priceCohorts[cohort] = append(priceCohorts[cohort], i)
+
+		// First-token and throughput are scored on ABSOLUTE curves (not relative to the
+		// cohort): a channel that is the only one measured must reflect its real latency
+		// and speed, never be auto-set to 100. Missing samples keep the neutral default.
 		if hasSampledFirstTokenLatency(input.FirstTokenSampleCount, input.FirstTokenLatencyMS) {
-			firstTokenCohorts[cohort] = append(firstTokenCohorts[cohort], i)
+			result.FirstTokenScore = normalizedAutoPriorityDescendingScore(input.FirstTokenLatencyMS, autoPriorityFirstTokenFastMS, autoPriorityFirstTokenSlowMS)
+		}
+		if hasSampledThroughput(input.ThroughputSampleCount, input.ThroughputTps) {
+			result.ThroughputScore = absoluteAutoPriorityAscendingScore(input.ThroughputTps, autoPriorityThroughputSlowTps, autoPriorityThroughputFastTps)
 		}
 		results[i] = result
 	}
@@ -151,32 +178,6 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		}
 	}
 
-	for _, indexes := range firstTokenCohorts {
-		if len(indexes) == 0 {
-			continue
-		}
-
-		minLatency := inputs[indexes[0]].FirstTokenLatencyMS
-		maxLatency := minLatency
-		for _, idx := range indexes[1:] {
-			latency := inputs[idx].FirstTokenLatencyMS
-			if latency < minLatency {
-				minLatency = latency
-			}
-			if latency > maxLatency {
-				maxLatency = latency
-			}
-		}
-
-		for _, idx := range indexes {
-			results[idx].FirstTokenScore = normalizedAutoPriorityDescendingScore(inputs[idx].FirstTokenLatencyMS, minLatency, maxLatency)
-		}
-
-		if len(indexes) == 1 || nearlyEqualFloat64(minLatency, maxLatency) {
-			results[indexes[0]].FirstTokenScore = 100
-		}
-	}
-
 	for i := range results {
 		if results[i].Reason != "" {
 			continue
@@ -186,7 +187,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		// probes keep failing must fall to the bottom of the rotation no matter
 		// how cheap it is, and recover automatically once probes succeed again.
 		gate := autoPriorityAvailabilityGate(inputs[i].Availability, inputs[i].MonitorCheckCount)
-		results[i].FinalScore = gate * (0.80*results[i].EffectivePriceScore + 0.17*results[i].AvailabilityScore + 0.03*results[i].FirstTokenScore)
+		results[i].FinalScore = gate * (0.75*results[i].EffectivePriceScore + 0.12*results[i].AvailabilityScore + 0.05*results[i].FirstTokenScore + 0.08*results[i].ThroughputScore)
 		results[i].ComputedPriority = clampAutoPriorityPriority(int64(math.Round(results[i].FinalScore*10)), 0, int64(maxPriority))
 		results[i].NewPriority = results[i].ComputedPriority
 
@@ -275,6 +276,43 @@ func autoPriorityAvailabilityScore(avail *float64) float64 {
 
 func hasSampledFirstTokenLatency(sampleCount int64, latencyMS float64) bool {
 	return sampleCount > 0 && latencyMS >= 0 && !math.IsNaN(latencyMS) && !math.IsInf(latencyMS, 0)
+}
+
+func hasSampledThroughput(sampleCount int64, tps float64) bool {
+	return sampleCount > 0 && tps > 0 && !math.IsNaN(tps) && !math.IsInf(tps, 0)
+}
+
+// absoluteAutoPriorityAscendingScore maps value to [0, 100] on a log-scaled ASCENDING
+// curve between fixed anchors (higher value = higher score): value <= slowAnchor -> 0,
+// value >= fastAnchor -> 100. Used for throughput (tokens/sec), where more is better.
+// Absolute (not cohort-relative) so a lone channel is judged on its real speed.
+func absoluteAutoPriorityAscendingScore(value, slowAnchor, fastAnchor float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	if fastAnchor <= slowAnchor {
+		return 100
+	}
+	if value <= slowAnchor {
+		return 0
+	}
+	if value >= fastAnchor {
+		return 100
+	}
+
+	logDenominator := math.Log1p(fastAnchor - slowAnchor)
+	if logDenominator <= 0 || math.IsNaN(logDenominator) || math.IsInf(logDenominator, 0) {
+		return 100
+	}
+
+	score := 100 * (math.Log1p(value-slowAnchor) / logDenominator)
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+	return score
 }
 
 func normalizedAutoPriorityDescendingScore(value, minValue, maxValue float64) float64 {

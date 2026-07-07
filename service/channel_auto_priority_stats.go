@@ -19,6 +19,10 @@ type AutoPriorityUsageStats struct {
 	FirstTokenSampleCount      int64   `json:"first_token_sample_count"`
 	FirstTokenLatencyTotalMS   int64   `json:"first_token_latency_total_ms"`
 	AverageFirstTokenLatencyMS int64   `json:"average_first_token_latency_ms"`
+	ThroughputSampleCount      int64   `json:"throughput_sample_count"`
+	CompletionTokensTotal      int64   `json:"completion_tokens_total"`
+	UseTimeSecondsTotal        int64   `json:"use_time_seconds_total"`
+	AverageThroughputTps       float64 `json:"average_throughput_tps"`
 }
 
 type autoPriorityUsageLogOther struct {
@@ -111,6 +115,16 @@ func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) ma
 		if completionTokens < 0 {
 			completionTokens = 0
 		}
+
+		// Real per-channel throughput (tokens/sec), matching the "流 · N t/s" the usage
+		// log shows: completion tokens over whole-request wall time. use_time is whole
+		// seconds and includes the TTFT wait, so this is coarse but directionally right.
+		if log.UseTime > 0 && completionTokens > 0 {
+			stats.CompletionTokensTotal += int64(completionTokens)
+			stats.UseTimeSecondsTotal += int64(log.UseTime)
+			stats.ThroughputSampleCount++
+		}
+
 		completionRatio := other.CompletionRatio
 		if completionRatio <= 0 {
 			completionRatio = 1
@@ -153,6 +167,9 @@ func buildAutoPriorityUsageStatsFromLogs(logs []model.Log, windowStart int64) ma
 	for channelID, stats := range statsByChannel {
 		if stats.FirstTokenSampleCount > 0 {
 			stats.AverageFirstTokenLatencyMS = int64(math.Round(float64(stats.FirstTokenLatencyTotalMS) / float64(stats.FirstTokenSampleCount)))
+		}
+		if stats.UseTimeSecondsTotal > 0 {
+			stats.AverageThroughputTps = float64(stats.CompletionTokensTotal) / float64(stats.UseTimeSecondsTotal)
 		}
 		if stats.NormalCostUnits > 0 {
 			stats.CacheAdjustedCostFactor = stats.AdjustedCostUnits / stats.NormalCostUnits
