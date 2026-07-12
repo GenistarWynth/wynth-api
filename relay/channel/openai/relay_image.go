@@ -98,6 +98,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	// field (real OpenAI image events keep event == type).
 	usage := &dto.Usage{}
 	var lastStreamData []byte
+	completedImages := 0
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		raw := common.StringToByteSlice(data)
@@ -114,9 +115,19 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 				usage = &usageResp.Usage
 			}
 		}
-		writeOpenaiImageStreamChunk(c, raw)
+		var event struct {
+			Type string `json:"type"`
+		}
+		if err := common.Unmarshal(raw, &event); err == nil && event.Type == "image_generation.completed" {
+			completedImages++
+		}
+		if err := writeOpenaiImageStreamChunk(c, raw); err != nil {
+			sr.Stop(err)
+		}
 	})
 
+	complete := info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone
+	reconcileOpenAIImageCount(info, completedImages, complete)
 	// StreamScannerHandler consumes the upstream [DONE]; re-emit it so the
 	// client still receives a terminal data: [DONE].
 	if info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone {
@@ -130,16 +141,35 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 // writeOpenaiImageStreamChunk rebuilds the SSE frame for an image stream chunk:
 // it emits an "event:" line derived from the JSON "type" field (when present)
 // followed by the verbatim "data:" payload, mirroring helper.ResponseChunkData.
-func writeOpenaiImageStreamChunk(c *gin.Context, data []byte) {
+func writeOpenaiImageStreamChunk(c *gin.Context, data []byte) error {
 	var payload struct {
 		Type string `json:"type"`
 	}
 	_ = common.Unmarshal(data, &payload)
 	if eventName := strings.TrimSpace(payload.Type); eventName != "" {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", eventName)})
+		if _, err := fmt.Fprintf(c.Writer, "event: %s\n", eventName); err != nil {
+			return err
+		}
 	}
-	c.Render(-1, common.CustomEvent{Data: "data: " + string(data)})
-	_ = helper.FlushWriter(c)
+	if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", data); err != nil {
+		return err
+	}
+	return helper.FlushWriter(c)
+}
+
+func reconcileOpenAIImageCount(info *relaycommon.RelayInfo, actual int, complete bool) {
+	if info == nil || !info.PriceData.UsePrice || actual <= 0 {
+		return
+	}
+	requested, ok := info.PriceData.OtherRatios["n"]
+	if !ok || requested <= 0 {
+		return
+	}
+	count := float64(actual)
+	if !complete && requested > count {
+		count = requested
+	}
+	info.PriceData.AddOtherRatio("n", count)
 }
 
 // isOpenAIImageStreamErrorEvent detects upstream error chunks by JSON content
@@ -211,6 +241,7 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	normalizeOpenAIUsage(&usageResp.Usage)
+	reconcileOpenAIImageCount(info, len(imageResp.Data), true)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 
 	helper.SetEventStreamHeaders(c)

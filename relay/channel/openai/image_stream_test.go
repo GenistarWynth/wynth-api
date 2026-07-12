@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -36,6 +37,44 @@ func newImageTestContext(t *testing.T, body, contentType string, isStream bool) 
 // chunks are forwarded with rebuilt event lines, usage is extracted and
 // normalized (input_tokens -> prompt_tokens with details), and [DONE] is
 // re-emitted to the client.
+func TestReconcileOpenAIImageCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		usePrice  bool
+		requested float64
+		actual    int
+		complete  bool
+		want      float64
+	}{
+		{"json actual replaces requested", true, 3, 2, true, 2},
+		{"empty response preserves requested", true, 3, 0, true, 3},
+		{"non fixed pricing unchanged", false, 3, 2, true, 3},
+		{"clean stream uses completed count", true, 3, 2, true, 2},
+		{"disconnect never underbills requested", true, 3, 1, false, 3},
+		{"disconnect bills extra completed images", true, 1, 2, false, 2},
+		{"invalid requested count ignored", true, -1, 2, true, -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{PriceData: types.PriceData{UsePrice: tt.usePrice, OtherRatios: map[string]float64{"n": tt.requested}}}
+			reconcileOpenAIImageCount(info, tt.actual, tt.complete)
+			require.Equal(t, tt.want, info.PriceData.OtherRatios["n"])
+		})
+	}
+}
+
+func TestOpenaiImageStreamHandlerCountsCompletedEvents(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+	body := "data: {\"type\":\"image_generation.completed\"}\n\ndata: {\"type\":\"image_generation.completed\"}\n\ndata: [DONE]\n\n"
+	c, _, resp, info := newImageTestContext(t, body, "text/event-stream", true)
+	info.PriceData = types.PriceData{UsePrice: true, OtherRatios: map[string]float64{"n": 3}}
+	_, err := OpenaiImageStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.Equal(t, float64(2), info.PriceData.OtherRatios["n"])
+}
+
 func TestOpenaiImageStreamHandlerForwardsSSEAndUsage(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
