@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 
@@ -92,6 +93,9 @@ func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {
 	require.NotNil(t, apiErr)
 	require.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
 	require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	var clamp *common.QuotaClamp
+	require.True(t, errors.As(apiErr, &clamp))
+	require.Same(t, info.QuotaClamp, clamp)
 	require.Nil(t, info.Billing)
 }
 

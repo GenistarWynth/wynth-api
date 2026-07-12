@@ -1,11 +1,13 @@
 package common
 
 import (
+	"errors"
 	"math"
 	"testing"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // 2000 quota per call * n=18446744073686646784 overflows int64; the constant
@@ -105,4 +107,35 @@ func TestQuotaFromDecimalChecked(t *testing.T) {
 		assert.Equal(t, "QuotaFromDecimal", clamp.Op)
 		assert.Equal(t, QuotaClampOverflow, clamp.Kind)
 	}
+}
+
+func TestStrictQuotaConversionsReturnTypedClampErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		call func() (int, error)
+		kind QuotaClampKind
+		op   string
+	}{
+		{name: "float overflow", call: func() (int, error) { return QuotaFromFloatStrict(overflowingProduct) }, kind: QuotaClampOverflow, op: "QuotaFromFloat"},
+		{name: "float underflow", call: func() (int, error) { return QuotaFromFloatStrict(-overflowingProduct) }, kind: QuotaClampUnderflow, op: "QuotaFromFloat"},
+		{name: "float NaN", call: func() (int, error) { return QuotaFromFloatStrict(math.NaN()) }, kind: QuotaClampNaN, op: "QuotaFromFloat"},
+		{name: "round overflow", call: func() (int, error) { return QuotaRoundStrict(overflowingProduct) }, kind: QuotaClampOverflow, op: "QuotaRound"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			quota, err := tt.call()
+			require.Error(t, err)
+			assert.Zero(t, quota)
+
+			var clamp *QuotaClamp
+			require.True(t, errors.As(err, &clamp))
+			assert.Equal(t, tt.kind, clamp.Kind)
+			assert.Equal(t, tt.op, clamp.Op)
+		})
+	}
+
+	quota, err := QuotaRoundStrict(42.5)
+	require.NoError(t, err)
+	assert.Equal(t, 43, quota)
 }
