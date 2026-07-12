@@ -37,6 +37,16 @@ func TestChatCompletionsRequestToResponsesRequestInstructionsAndTools(t *testing
 	assert.Equal(t, "function_call_output", gjson.GetBytes(got.Input, "3.type").String())
 }
 
+func TestChatCompletionsRequestToResponsesRequestPreservesExplicitFalseParallelToolCalls(t *testing.T) {
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:            "gpt-test",
+		ParallelTooCalls: lo.ToPtr(false),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "false", string(got.ParallelToolCalls))
+}
+
 func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testing.T) {
 	_, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
 		Model: "gpt-test",

@@ -1,6 +1,7 @@
 package relayconvert
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -53,6 +54,17 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.Equal(t, `"user-1"`, string(got.User))
 	assert.Equal(t, `false`, string(got.Store))
 	assert.Equal(t, "abc", gjson.GetBytes(got.Metadata, "trace").String())
+}
+
+func TestResponsesRequestToChatCompletionsRequestPreservesExplicitFalseParallelToolCalls(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:             "gpt-test",
+		ParallelToolCalls: json.RawMessage("false"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got.ParallelTooCalls)
+
+	assert.False(t, *got.ParallelTooCalls)
 }
 
 func TestResponsesRequestToChatCompletionsRequestMultimodalInput(t *testing.T) {
