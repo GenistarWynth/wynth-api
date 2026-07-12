@@ -60,6 +60,22 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	return nil
 }
 
+func normalizeReasoningEffort(model, explicitEffort string) (string, string) {
+	effort := explicitEffort
+	if strings.HasSuffix(model, "-high") {
+		model = strings.TrimSuffix(model, "-high")
+		if effort == "" {
+			effort = "high"
+		}
+	} else if strings.HasSuffix(model, "-low") {
+		model = strings.TrimSuffix(model, "-low")
+		if effort == "" {
+			effort = "low"
+		}
+	}
+	return model, effort
+}
+
 func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
 	if request == nil {
 		return nil, errors.New("request is nil")
@@ -78,13 +94,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
-		if strings.HasSuffix(request.Model, "-high") {
-			request.ReasoningEffort = "high"
-			request.Model = strings.TrimSuffix(request.Model, "-high")
-		} else if strings.HasSuffix(request.Model, "-low") {
-			request.ReasoningEffort = "low"
-			request.Model = strings.TrimSuffix(request.Model, "-low")
-		}
+		request.Model, request.ReasoningEffort = normalizeReasoningEffort(request.Model, request.ReasoningEffort)
 		info.ReasoningEffort = request.ReasoningEffort
 		info.UpstreamModelName = request.Model
 	}
@@ -101,8 +111,23 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	if request.Model == "" && info != nil {
+	if info != nil && info.UpstreamModelName != "" && info.UpstreamModelName != request.Model {
 		request.Model = info.UpstreamModelName
+	}
+	effort := ""
+	if request.Reasoning != nil {
+		effort = request.Reasoning.Effort
+	}
+	request.Model, effort = normalizeReasoningEffort(request.Model, effort)
+	if effort != "" {
+		if request.Reasoning == nil {
+			request.Reasoning = &dto.Reasoning{}
+		}
+		request.Reasoning.Effort = effort
+	}
+	if info != nil {
+		info.UpstreamModelName = request.Model
+		info.ReasoningEffort = effort
 	}
 	return request, nil
 }
