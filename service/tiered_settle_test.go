@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
 
 // Claude Sonnet-style tiered expression: standard vs long-context
@@ -449,6 +450,42 @@ func ratioQuota(usage *dto.Usage, isClaudeSemantic bool, modelRatio, completionR
 	result := promptQuota.Add(completionQuota).Mul(ratio)
 	f, _ := result.Float64()
 	return f
+}
+
+func TestBuildTieredTokenParamsAnthropicCacheCreationBuckets(t *testing.T) {
+	tests := []struct {
+		name      string
+		aggregate int
+		cache5m   int
+		cache1h   int
+		wantCC    float64
+		wantCC1h  float64
+		wantLen   float64
+	}{
+		{name: "aggregate only", aggregate: 50, wantCC: 50, wantLen: 150},
+		{name: "partial split", aggregate: 100, cache5m: 30, cache1h: 20, wantCC: 80, wantCC1h: 20, wantLen: 200},
+		{name: "splits exceed aggregate", aggregate: 40, cache5m: 30, cache1h: 20, wantCC: 30, wantCC1h: 20, wantLen: 150},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := &dto.Usage{
+				PromptTokens:  100,
+				UsageSemantic: "anthropic",
+				PromptTokensDetails: dto.InputTokenDetails{
+					CachedCreationTokens: tt.aggregate,
+				},
+				ClaudeCacheCreation5mTokens: tt.cache5m,
+				ClaudeCacheCreation1hTokens: tt.cache1h,
+			}
+
+			params := BuildTieredTokenParams(usage, true, map[string]bool{"cc": true, "cc1h": true})
+
+			require.Equal(t, tt.wantCC, params.CC)
+			require.Equal(t, tt.wantCC1h, params.CC1h)
+			require.Equal(t, tt.wantLen, params.Len)
+		})
+	}
 }
 
 func TestBuildTieredTokenParams_GPT_WithCache(t *testing.T) {

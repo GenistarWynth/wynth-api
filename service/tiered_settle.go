@@ -22,12 +22,17 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens)
+	cc := float64(usage.PromptTokensDetails.CachedCreationTokens)
 	cc1h := float64(0)
+	cacheCreationTotal := cc
 
 	if usage.UsageSemantic == "anthropic" {
 		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
-		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
+		splitTotal := float64(usage.ClaudeCacheCreation5mTokens) + cc1h
+		if splitTotal > cacheCreationTotal {
+			cacheCreationTotal = splitTotal
+		}
+		cc = cacheCreationTotal - cc1h
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
@@ -40,7 +45,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	// Claude: input_tokens is text-only, so add cache read + cache creation.
 	inputLen := p
 	if isClaudeUsageSemantic {
-		inputLen = p + cr + cc5m + cc1h
+		inputLen = p + cr + cacheCreationTotal
 	}
 
 	if !isClaudeUsageSemantic {
@@ -48,7 +53,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 			p -= cr
 		}
 		if usedVars["cc"] {
-			p -= cc5m
+			p -= cc
 		}
 		if usedVars["cc1h"] {
 			p -= cc1h
@@ -79,7 +84,7 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		C:    c,
 		Len:  inputLen,
 		CR:   cr,
-		CC:   cc5m,
+		CC:   cc,
 		CC1h: cc1h,
 		Img:  img,
 		ImgO: imgO,

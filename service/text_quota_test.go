@@ -17,6 +17,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCalculateTextQuotaSummaryPreservesCacheOnlyCharges(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{
+		FinalRequestRelayFormat: types.RelayFormatClaude,
+		OriginModelName:         "claude-3-7-sonnet",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	tests := []struct {
+		name  string
+		usage *dto.Usage
+		want  int
+	}{
+		{
+			name: "cache read only",
+			usage: &dto.Usage{PromptTokensDetails: dto.InputTokenDetails{
+				CachedTokens: 100,
+			}},
+			want: 10,
+		},
+		{
+			name: "cache creation only",
+			usage: &dto.Usage{PromptTokensDetails: dto.InputTokenDetails{
+				CachedCreationTokens: 100,
+			}},
+			want: 125,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summary := calculateTextQuotaSummary(ctx, relayInfo, tt.usage)
+			require.Zero(t, summary.TotalTokens)
+			require.Equal(t, tt.want, summary.Quota)
+		})
+	}
+}
+
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
