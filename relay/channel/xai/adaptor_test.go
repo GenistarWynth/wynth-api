@@ -74,6 +74,14 @@ func TestConvertImageRequestOmitsUnsupportedFields(t *testing.T) {
 	assert.NotContains(t, upstream, "size")
 	assert.NotContains(t, upstream, "quality")
 	assert.NotContains(t, upstream, "style")
+
+	converted, err = (&Adaptor{}).ConvertImageRequest(nil, nil, dto.ImageRequest{Model: "grok-imagine-image", Prompt: "a fox"})
+	require.NoError(t, err)
+	body, err = common.Marshal(converted)
+	require.NoError(t, err)
+	upstream = nil
+	require.NoError(t, common.Unmarshal(body, &upstream))
+	assert.NotContains(t, upstream, "n")
 }
 
 func TestAdvertisedImageModelsRouteThroughImageConversion(t *testing.T) {
