@@ -45,6 +45,13 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			Input:              req.Input,
 			Instructions:       req.Instructions,
 			PreviousResponseID: req.PreviousResponseID,
+			Metadata:           req.Metadata,
+			Tools:              req.Tools,
+			ParallelToolCalls:  req.ParallelToolCalls,
+			Reasoning:          req.Reasoning,
+			ServiceTier:        req.ServiceTier,
+			PromptCacheKey:     req.PromptCacheKey,
+			Text:               req.Text,
 		}
 	default:
 		return types.NewErrorWithStatusCode(
