@@ -106,8 +106,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		case <-time.After(5 * time.Second):
 			logger.LogError(c, "timeout waiting for goroutines to exit")
 		}
-
-		close(stopChan)
 	}()
 
 	scanner.Split(bufio.ScanLines)
