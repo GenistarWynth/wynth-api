@@ -241,7 +241,6 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	normalizeOpenAIUsage(&usageResp.Usage)
-	reconcileOpenAIImageCount(info, len(imageResp.Data), true)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 
 	helper.SetEventStreamHeaders(c)
@@ -254,6 +253,7 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if info != nil {
 		info.SetFirstResponseTime()
 	}
+	emittedImages := 0
 	for _, image := range imageResp.Data {
 		payload := map[string]any{
 			"type":       "image_generation.completed",
@@ -272,20 +272,24 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 			payload["usage"] = usageResp.Usage
 		}
 		if err := writeOpenaiImageStreamPayload(c, "image_generation.completed", payload); err != nil {
+			reconcileOpenAIImageCount(info, emittedImages, false)
 			if info != nil && info.StreamStatus != nil {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
 			}
 			return &usageResp.Usage, nil
 		}
+		emittedImages++
 	}
 	if err := writeOpenaiImageStreamDone(c); err != nil {
+		reconcileOpenAIImageCount(info, emittedImages, false)
 		if info != nil && info.StreamStatus != nil {
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
 		}
 		return &usageResp.Usage, nil
 	}
+	reconcileOpenAIImageCount(info, emittedImages, true)
 	if info != nil {
-		info.ReceivedResponseCount += len(imageResp.Data)
+		info.ReceivedResponseCount += emittedImages
 		if info.StreamStatus == nil {
 			info.StreamStatus = relaycommon.NewStreamStatus()
 		}
