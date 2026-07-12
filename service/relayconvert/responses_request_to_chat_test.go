@@ -2,7 +2,9 @@ package relayconvert
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -11,6 +13,59 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func TestResponsesRequestToChatNamespaceAndToolSearch(t *testing.T) {
+	tools := json.RawMessage(`[
+		{"type":"namespace","name":"mcp","tools":[{"type":"function","name":"lookup","description":"Lookup","parameters":{"type":"object"}}]},
+		{"type":"tool_search"}
+	]`)
+	choice := json.RawMessage(`{"type":"tool_search"}`)
+
+	conversion, err := ConvertResponsesRequestToChat(&dto.OpenAIResponsesRequest{Model: "gpt-test", Tools: tools, ToolChoice: choice})
+	require.NoError(t, err)
+	require.Len(t, conversion.Request.Tools, 2)
+	assert.Equal(t, "mcp__lookup", conversion.Request.Tools[0].Function.Name)
+	assert.Equal(t, ResponsesNamespacedTool{Namespace: "mcp", Name: "lookup"}, conversion.ReverseToolNames["mcp__lookup"])
+	assert.True(t, conversion.ToolSearchDeclared)
+	assert.Equal(t, "tool_search", conversion.Request.Tools[1].Function.Name)
+	assert.Equal(t, "tool_search", conversion.Request.ToolChoice.(map[string]any)["function"].(map[string]any)["name"])
+}
+
+func TestResponsesRequestToChatRejectsFlattenedToolConflicts(t *testing.T) {
+	_, err := ConvertResponsesRequestToChat(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Tools: json.RawMessage(`[
+			{"type":"function","name":"mcp__lookup"},
+			{"type":"namespace","name":"mcp","tools":[{"type":"function","name":"lookup"}]}
+		]`),
+	})
+	require.ErrorContains(t, err, "conflicts")
+
+	_, err = ConvertResponsesRequestToChat(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Tools: json.RawMessage(`[{"type":"function","name":"tool_search"},{"type":"tool_search"}]`),
+	})
+	require.ErrorContains(t, err, "tool_search conflicts")
+}
+
+func TestResponsesRequestToChatNamespaceNamesAreUTF8Safe(t *testing.T) {
+	flat := flattenResponsesToolName(strings.Repeat("命", 30), strings.Repeat("名", 30))
+	assert.LessOrEqual(t, len(flat), 64)
+	assert.True(t, utf8.ValidString(flat))
+}
+
+func TestResponsesRequestToChatHistoricalNamespaceCall(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []map[string]any{{
+			"type": "function_call", "call_id": "call_1", "namespace": "mcp", "name": "lookup", "arguments": map[string]any{"q": "x"},
+		}}),
+	})
+	require.NoError(t, err)
+	toolCalls := got.Messages[0].ParseToolCalls()
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "mcp__lookup", toolCalls[0].Function.Name)
+}
 
 func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *testing.T) {
 	stream := true

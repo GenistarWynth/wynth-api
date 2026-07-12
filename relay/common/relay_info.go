@@ -86,6 +86,16 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+type ResponsesNamespacedTool struct {
+	Namespace string
+	Name      string
+}
+
+type ResponsesChatConversionMetadata struct {
+	ReverseToolNames   map[string]ResponsesNamespacedTool
+	ToolSearchDeclared bool
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -221,7 +231,8 @@ type RelayInfo struct {
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
 
-	Request dto.Request
+	Request                 dto.Request
+	ResponsesChatConversion *ResponsesChatConversionMetadata
 
 	// RequestConversionChain records request format conversions in order, e.g.
 	// ["openai", "openai_responses"] or ["openai", "claude"].

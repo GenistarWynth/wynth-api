@@ -16,7 +16,12 @@ const (
 	chatFinishReasonContentFilter = "content_filter"
 )
 
-func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+type ResponsesToolRestoreMetadata struct {
+	ReverseToolNames   map[string]ResponsesNamespacedTool
+	ToolSearchDeclared bool
+}
+
+func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string, metadata ...*ResponsesToolRestoreMetadata) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
@@ -71,8 +76,12 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 		})
 	}
 
+	var restore *ResponsesToolRestoreMetadata
+	if len(metadata) > 0 {
+		restore = metadata[0]
+	}
 	for i, toolCall := range choice.Message.ParseToolCalls() {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out))
+		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out), restore)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -154,6 +163,7 @@ type ChatToResponsesStreamState struct {
 	outputOrder       []chatToResponsesOutputRef
 	text              strings.Builder
 	reasoning         strings.Builder
+	toolRestore       *ResponsesToolRestoreMetadata
 }
 
 type chatToResponsesStreamTool struct {
@@ -163,6 +173,7 @@ type chatToResponsesStreamTool struct {
 	Name        string
 	Arguments   strings.Builder
 	Done        bool
+	Announced   bool
 }
 
 type chatToResponsesOutputRef struct {
@@ -170,7 +181,11 @@ type chatToResponsesOutputRef struct {
 	ToolIndex int
 }
 
-func NewChatToResponsesStreamState(id string, model string) *ChatToResponsesStreamState {
+func NewChatToResponsesStreamState(id string, model string, metadata ...*ResponsesToolRestoreMetadata) *ChatToResponsesStreamState {
+	var restore *ResponsesToolRestoreMetadata
+	if len(metadata) > 0 {
+		restore = metadata[0]
+	}
 	return &ChatToResponsesStreamState{
 		ID:              id,
 		Model:           model,
@@ -180,6 +195,7 @@ func NewChatToResponsesStreamState(id string, model string) *ChatToResponsesStre
 		textOutputIndex: -1,
 		reasoningIndex:  -1,
 		toolsByIndex:    make(map[int]*chatToResponsesStreamTool),
+		toolRestore:     restore,
 	}
 }
 
@@ -319,43 +335,55 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 	events := make([]ChatToResponsesStreamEvent, 0, 2)
 	if tool == nil {
 		tool = &chatToResponsesStreamTool{
-			ChatIndex:   chatIndex,
-			OutputIndex: s.nextIndex("tool", chatIndex),
-			ID:          strings.TrimSpace(toolCall.ID),
-			Name:        strings.TrimSpace(toolCall.Function.Name),
+			ChatIndex: chatIndex, OutputIndex: s.nextIndex("tool", chatIndex),
+			ID: strings.TrimSpace(toolCall.ID),
 		}
 		if tool.ID == "" {
 			tool.ID = fmt.Sprintf("%s_call_%d", s.ID, chatIndex)
 		}
 		s.toolsByIndex[chatIndex] = tool
+	}
+	if id := strings.TrimSpace(toolCall.ID); id != "" {
+		tool.ID = id
+	}
+	if name := toolCall.Function.Name; name != "" {
+		tool.Name += name
+	}
+
+	announce := tool.Name != "" || s.toolRestore == nil
+	if announce && s.toolRestore != nil {
+		for name := range s.toolRestore.ReverseToolNames {
+			if name != tool.Name && strings.HasPrefix(name, tool.Name) {
+				announce = false
+				break
+			}
+		}
+		if announce && s.toolRestore.ToolSearchDeclared && tool.Name != "tool_search" && strings.HasPrefix("tool_search", tool.Name) {
+			announce = false
+		}
+	}
+	if !tool.Announced && announce {
+		tool.Announced = true
+		item := s.toolOutput(tool, "in_progress")
+		item.Arguments = []byte(`""`)
 		events = append(events, responsesStreamEvent(responsesEventOutputItemAdded, dto.ResponsesStreamResponse{
-			Type:        responsesEventOutputItemAdded,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-			Item: &dto.ResponsesOutput{
-				Type:      responsesOutputTypeFunctionCall,
-				ID:        tool.ID,
-				Status:    "in_progress",
-				CallId:    tool.ID,
-				Name:      tool.Name,
-				Arguments: []byte(`""`),
-			},
+			Type: responsesEventOutputItemAdded, OutputIndex: intPtr(tool.OutputIndex), ItemID: tool.ID, Item: item,
 		}))
+		if tool.Arguments.Len() > 0 && item.Type == responsesOutputTypeFunctionCall {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
+				Type: responsesEventFunctionArgsDelta, OutputIndex: intPtr(tool.OutputIndex), ItemID: tool.ID, Delta: tool.Arguments.String(),
+			}))
+		}
 	}
-	if strings.TrimSpace(toolCall.ID) != "" {
-		tool.ID = strings.TrimSpace(toolCall.ID)
-	}
-	if strings.TrimSpace(toolCall.Function.Name) != "" {
-		tool.Name = strings.TrimSpace(toolCall.Function.Name)
-	}
+
 	if toolCall.Function.Arguments != "" {
 		tool.Arguments.WriteString(toolCall.Function.Arguments)
-		events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
-			Type:        responsesEventFunctionArgsDelta,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-			Delta:       toolCall.Function.Arguments,
-		}))
+		if tool.Announced && s.toolOutput(tool, "in_progress").Type == responsesOutputTypeFunctionCall {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
+				Type: responsesEventFunctionArgsDelta, OutputIndex: intPtr(tool.OutputIndex),
+				ItemID: tool.ID, Delta: toolCall.Function.Arguments,
+			}))
+		}
 	}
 	return events, nil
 }
@@ -400,11 +428,19 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 			continue
 		}
 		tool.Done = true
-		events = append(events, responsesStreamEvent(responsesEventFunctionArgsDone, dto.ResponsesStreamResponse{
-			Type:        responsesEventFunctionArgsDone,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-		}))
+		if !tool.Announced {
+			tool.Announced = true
+			item := s.toolOutput(tool, "in_progress")
+			item.Arguments = []byte(`""`)
+			events = append(events, responsesStreamEvent(responsesEventOutputItemAdded, dto.ResponsesStreamResponse{
+				Type: responsesEventOutputItemAdded, OutputIndex: intPtr(tool.OutputIndex), ItemID: tool.ID, Item: item,
+			}))
+		}
+		if s.toolOutput(tool, status).Type == responsesOutputTypeFunctionCall {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDone, dto.ResponsesStreamResponse{
+				Type: responsesEventFunctionArgsDone, OutputIndex: intPtr(tool.OutputIndex), ItemID: tool.ID,
+			}))
+		}
 		events = append(events, responsesStreamEvent(responsesEventOutputItemDone, dto.ResponsesStreamResponse{
 			Type:        responsesEventOutputItemDone,
 			OutputIndex: intPtr(tool.OutputIndex),
@@ -525,14 +561,24 @@ func (s *ChatToResponsesStreamState) reasoningOutput(status string) *dto.Respons
 }
 
 func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool, status string) *dto.ResponsesOutput {
-	return &dto.ResponsesOutput{
-		Type:      responsesOutputTypeFunctionCall,
-		ID:        tool.ID,
-		Status:    status,
-		CallId:    tool.ID,
-		Name:      tool.Name,
-		Arguments: chatArgumentsRawMessage(tool.Arguments.String()),
+	output := &dto.ResponsesOutput{
+		Type: responsesOutputTypeFunctionCall, ID: tool.ID, Status: status, CallId: tool.ID,
+		Name: tool.Name, Arguments: chatArgumentsRawMessage(tool.Arguments.String()),
 	}
+	if s.toolRestore == nil {
+		return output
+	}
+	if s.toolRestore.ToolSearchDeclared && tool.Name == "tool_search" {
+		output.Type = "tool_search_call"
+		output.Name = ""
+		output.Arguments = toolSearchArgumentsRawMessage(tool.Arguments.String())
+		return output
+	}
+	if original, ok := s.toolRestore.ReverseToolNames[tool.Name]; ok {
+		output.Name = original.Name
+		output.Namespace = original.Namespace
+	}
+	return output
 }
 
 func responseOutputStatus(resp *dto.OpenAIResponsesResponse) string {
@@ -542,18 +588,32 @@ func responseOutputStatus(resp *dto.OpenAIResponsesResponse) string {
 	return "incomplete"
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) (dto.ResponsesOutput, error) {
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, metadata *ResponsesToolRestoreMetadata) (dto.ResponsesOutput, error) {
 	callID := strings.TrimSpace(toolCall.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("%s_call_%d", responseID, index)
 	}
 	if toolCall.Type == "" || toolCall.Type == "function" {
+		if metadata != nil && metadata.ToolSearchDeclared && toolCall.Function.Name == "tool_search" {
+			return dto.ResponsesOutput{
+				Type: "tool_search_call", ID: callID, Status: status, CallId: callID,
+				Arguments: toolSearchArgumentsRawMessage(toolCall.Function.Arguments),
+			}, nil
+		}
+		name := toolCall.Function.Name
+		namespace := ""
+		if metadata != nil {
+			if original, ok := metadata.ReverseToolNames[name]; ok {
+				name, namespace = original.Name, original.Namespace
+			}
+		}
 		return dto.ResponsesOutput{
 			Type:      responsesOutputTypeFunctionCall,
 			ID:        callID,
 			Status:    status,
 			CallId:    callID,
-			Name:      toolCall.Function.Name,
+			Name:      name,
+			Namespace: namespace,
 			Arguments: chatArgumentsRawMessage(toolCall.Function.Arguments),
 		}, nil
 	}
@@ -564,6 +624,18 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 		CallId:    callID,
 		Arguments: toolCall.Custom,
 	}, nil
+}
+
+func toolSearchArgumentsRawMessage(arguments string) []byte {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return []byte(`{}`)
+	}
+	var value any
+	if common.Unmarshal([]byte(trimmed), &value) == nil {
+		return []byte(trimmed)
+	}
+	return chatArgumentsRawMessage(arguments)
 }
 
 func chatArgumentsRawMessage(arguments string) []byte {

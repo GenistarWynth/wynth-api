@@ -16,6 +16,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func responsesToolRestoreMetadata(info *relaycommon.RelayInfo) *relayconvert.ResponsesToolRestoreMetadata {
+	if info == nil || info.ResponsesChatConversion == nil {
+		return nil
+	}
+	reverse := make(map[string]relayconvert.ResponsesNamespacedTool, len(info.ResponsesChatConversion.ReverseToolNames))
+	for name, tool := range info.ResponsesChatConversion.ReverseToolNames {
+		reverse[name] = relayconvert.ResponsesNamespacedTool{Namespace: tool.Namespace, Name: tool.Name}
+	}
+	return &relayconvert.ResponsesToolRestoreMetadata{
+		ReverseToolNames: reverse, ToolSearchDeclared: info.ResponsesChatConversion.ToolSearchDeclared,
+	}
+}
+
 func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -36,7 +49,8 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	responseID := helper.GetResponseID(c)
-	responsesResp, usage, err := service.ChatCompletionsResponseToResponsesResponse(&chatResp, responseID)
+	restore := responsesToolRestoreMetadata(info)
+	responsesResp, usage, err := relayconvert.ChatCompletionsResponseToResponsesResponse(&chatResp, responseID, restore)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -62,7 +76,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	defer service.CloseResponseBodyGracefully(resp)
 
 	responseID := helper.GetResponseID(c)
-	state := relayconvert.NewChatToResponsesStreamState(responseID, info.UpstreamModelName)
+	state := relayconvert.NewChatToResponsesStreamState(responseID, info.UpstreamModelName, responsesToolRestoreMetadata(info))
 	streamErr := (*types.NewAPIError)(nil)
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {

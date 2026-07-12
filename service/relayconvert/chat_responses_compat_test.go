@@ -423,6 +423,30 @@ func TestResponsesBufferedAccumulatorDoesNotDuplicatePendingArgsWithOutputIndexA
 	assert.Empty(t, acc.pendingByItemID)
 }
 
+func TestChatCompletionsResponseToResponsesRestoresNamespaceAndToolSearch(t *testing.T) {
+	metadata := &ResponsesToolRestoreMetadata{
+		ReverseToolNames: map[string]ResponsesNamespacedTool{
+			"mcp__lookup": {Namespace: "mcp", Name: "lookup"},
+		},
+		ToolSearchDeclared: true,
+	}
+	chat := &dto.OpenAITextResponse{Choices: []dto.OpenAITextResponseChoice{{
+		Message: assistantMessageWithTool("", "call_1", "mcp__lookup", `{"q":"x"}`),
+	}}}
+	resp, _, err := ChatCompletionsResponseToResponsesResponse(chat, "resp_1", metadata)
+	require.NoError(t, err)
+	require.Len(t, resp.Output, 1)
+	assert.Equal(t, "lookup", resp.Output[0].Name)
+	assert.Equal(t, "mcp", resp.Output[0].Namespace)
+
+	chat.Choices[0].Message = assistantMessageWithTool("", "call_2", "tool_search", `{"query":"db"}`)
+	resp, _, err = ChatCompletionsResponseToResponsesResponse(chat, "resp_2", metadata)
+	require.NoError(t, err)
+	require.Len(t, resp.Output, 1)
+	assert.Equal(t, "tool_search_call", resp.Output[0].Type)
+	assert.JSONEq(t, `{"query":"db"}`, string(resp.Output[0].Arguments))
+}
+
 func TestChatCompletionsResponseToResponsesPreservesTextToolCallsAndUsage(t *testing.T) {
 	chat := &dto.OpenAITextResponse{
 		Id:      "chatcmpl_1",
@@ -486,6 +510,47 @@ func TestChatCompletionsResponseToResponsesMapsIncompleteFinishReasons(t *testin
 			assert.Equal(t, "incomplete", resp.Output[0].Status)
 		})
 	}
+}
+
+func TestChatCompletionsStreamRestoresFragmentedNamespaceToolName(t *testing.T) {
+	state := NewChatToResponsesStreamState("resp_ns", "gpt-test", &ResponsesToolRestoreMetadata{
+		ReverseToolNames: map[string]ResponsesNamespacedTool{
+			"mcp__lookup": {Namespace: "mcp", Name: "lookup"},
+		},
+	})
+	toolIndex := 0
+	first := mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{Choices: []dto.ChatCompletionsStreamResponseChoice{{
+		Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{{
+			Index: &toolIndex, ID: "call_1", Function: dto.FunctionResponse{Name: "mcp__"},
+		}}},
+	}}})
+	require.Len(t, first, 1)
+	assert.Equal(t, responsesEventCreated, first[0].Type)
+
+	second := mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{Choices: []dto.ChatCompletionsStreamResponseChoice{{
+		Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ToolCalls: []dto.ToolCallResponse{{
+			Index: &toolIndex, Function: dto.FunctionResponse{Name: "lookup", Arguments: `{"q":"x"}`},
+		}}},
+	}}})
+	require.NotEmpty(t, second)
+	var added *dto.ResponsesOutput
+	for _, event := range second {
+		if event.Type == responsesEventOutputItemAdded {
+			added = event.Payload.Item
+			break
+		}
+	}
+	require.NotNil(t, added)
+	assert.Equal(t, "lookup", added.Name)
+	assert.Equal(t, "mcp", added.Namespace)
+
+	finishReason := "tool_calls"
+	done := mustResponsesEventsFromChatChunk(t, state, &dto.ChatCompletionsStreamResponse{Choices: []dto.ChatCompletionsStreamResponseChoice{{FinishReason: &finishReason}}})
+	require.NotEmpty(t, done)
+	last := done[len(done)-1].Payload.Item
+	require.NotNil(t, last)
+	assert.Equal(t, "lookup", last.Name)
+	assert.Equal(t, "mcp", last.Namespace)
 }
 
 func TestChatCompletionsStreamToResponsesEventsAggregatesUsageAndToolArgs(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -108,11 +109,18 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	case dto.AdvancedCustomConverterNone:
 		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
 	case dto.AdvancedCustomConverterOpenAIResponsesToOpenAIChatCompletions:
-		chatReq, err := service.ResponsesRequestToChatCompletionsRequest(&request)
+		conversion, err := relayconvert.ConvertResponsesRequestToChat(&request)
 		if err != nil {
 			return nil, err
 		}
-		return a.convertOpenAICompatibleRequest(c, info, chatReq)
+		reverse := make(map[string]relaycommon.ResponsesNamespacedTool, len(conversion.ReverseToolNames))
+		for name, tool := range conversion.ReverseToolNames {
+			reverse[name] = relaycommon.ResponsesNamespacedTool{Namespace: tool.Namespace, Name: tool.Name}
+		}
+		info.ResponsesChatConversion = &relaycommon.ResponsesChatConversionMetadata{
+			ReverseToolNames: reverse, ToolSearchDeclared: conversion.ToolSearchDeclared,
+		}
+		return a.convertOpenAICompatibleRequest(c, info, conversion.Request)
 	default:
 		return nil, fmt.Errorf("converter %q does not support OpenAI Responses requests", converter)
 	}
