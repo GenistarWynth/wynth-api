@@ -38,9 +38,29 @@ func AcquireTokenConcurrencyLease(ctx context.Context, tokenID int) func() {
 	if _, err := pipe.Exec(ctx); err != nil {
 		return noop
 	}
+	leaseCtx, stopLease := context.WithCancel(context.Background())
+	go func() {
+		ticker := time.NewTicker(tokenConcurrencyLeaseTTL / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				expiresAt := time.Now().Add(tokenConcurrencyLeaseTTL).UnixMilli()
+				refresh := common.RDB.TxPipeline()
+				refresh.ZAddXX(leaseCtx, tokenConcurrencyKey(tokenID), &redis.Z{Score: float64(expiresAt), Member: member})
+				refresh.Expire(leaseCtx, tokenConcurrencyKey(tokenID), tokenConcurrencyLeaseTTL)
+				_, _ = refresh.Exec(leaseCtx)
+			case <-leaseCtx.Done():
+				return
+			}
+		}
+	}()
 	var once sync.Once
 	return func() {
-		once.Do(func() { _ = common.RDB.ZRem(context.Background(), tokenConcurrencyKey(tokenID), member).Err() })
+		once.Do(func() {
+			stopLease()
+			_ = common.RDB.ZRem(context.Background(), tokenConcurrencyKey(tokenID), member).Err()
+		})
 	}
 }
 
