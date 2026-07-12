@@ -39,7 +39,9 @@ func AcquireTokenConcurrencyLease(ctx context.Context, tokenID int) func() {
 		return noop
 	}
 	leaseCtx, stopLease := context.WithCancel(context.Background())
+	leaseStopped := make(chan struct{})
 	go func() {
+		defer close(leaseStopped)
 		ticker := time.NewTicker(tokenConcurrencyLeaseTTL / 3)
 		defer ticker.Stop()
 		for {
@@ -59,6 +61,7 @@ func AcquireTokenConcurrencyLease(ctx context.Context, tokenID int) func() {
 	return func() {
 		once.Do(func() {
 			stopLease()
+			<-leaseStopped
 			_ = common.RDB.ZRem(context.Background(), tokenConcurrencyKey(tokenID), member).Err()
 		})
 	}
