@@ -66,6 +66,33 @@ export const isBasePricingUnset = (snapshot?: ModelPricingSnapshot) =>
     !hasPricingValue(snapshot.price) &&
     !hasPricingValue(snapshot.ratio))
 
+export const deriveUnsetPriceModels = (
+  enabledChannelModels: string[],
+  snapshots: ModelPricingSnapshot[]
+): ModelRow[] => {
+  const snapshotsByName = new Map(
+    snapshots.map((snapshot) => [snapshot.name, snapshot])
+  )
+  const enabledNames = new Set(
+    enabledChannelModels.map((name) => name.trim()).filter(Boolean)
+  )
+
+  return [...enabledNames]
+    .filter((name) => isBasePricingUnset(snapshotsByName.get(name)))
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => {
+      const saved = snapshotsByName.get(name)
+      return {
+        ...(saved ?? { name, hasConflict: false }),
+        saved,
+        draft: saved,
+        isDraftChanged: false,
+        isDraftDeleted: false,
+        isDraftNew: !saved,
+      }
+    })
+}
+
 const toNumberOrNull = (value?: string) => {
   if (!hasPricingValue(value)) return null
   const num = Number(value)
@@ -228,7 +255,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(billingExprMap),
   ])
 
-  return Array.from(modelNames).map((name) => {
+  return [...modelNames].map((name) => {
     const price = priceMap[name]?.toString() || ''
     const ratio = ratioMap[name]?.toString() || ''
     const cache = cacheMap[name]?.toString() || ''
