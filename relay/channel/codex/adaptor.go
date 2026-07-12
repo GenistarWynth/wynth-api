@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
+	codexidentity "github.com/QuantumNous/new-api/relay/channel/codex/identity"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -304,6 +305,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 	if req.Get("originator") == "" {
 		req.Set("originator", "codex_cli_rs")
 	}
+	codexidentity.NormalizeIdentityHeaders(*req)
 
 	// chatgpt.com/backend-api/codex/responses is strict about Content-Type.
 	// Clients may omit it or include parameters like `application/json; charset=utf-8`,

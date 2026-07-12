@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	codexidentity "github.com/QuantumNous/new-api/relay/channel/codex/identity"
 	"github.com/google/uuid"
 )
 
@@ -158,4 +159,5 @@ func setCodexWhamRequestHeaders(req *http.Request, accessToken string, accountID
 	if req.Header.Get("originator") == "" {
 		req.Header.Set("originator", "codex_cli_rs")
 	}
+	codexidentity.NormalizeIdentityHeaders(req.Header)
 }
