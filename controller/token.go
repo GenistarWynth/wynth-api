@@ -7,8 +7,10 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
@@ -36,19 +38,34 @@ func validateTokenWriteInput(c *gin.Context, token *model.Token) bool {
 	return true
 }
 
-func buildMaskedTokenResponse(token *model.Token) *model.Token {
+func buildMaskedTokenResponse(token *model.Token, concurrency int) *dto.TokenResponse {
 	if token == nil {
 		return nil
 	}
-	maskedToken := *token
-	maskedToken.Key = token.GetMaskedKey()
-	return &maskedToken
+	return &dto.TokenResponse{
+		Id: token.Id, UserId: token.UserId, Key: token.GetMaskedKey(), Status: token.Status, Name: token.Name,
+		CreatedTime: token.CreatedTime, AccessedTime: token.AccessedTime, ExpiredTime: token.ExpiredTime,
+		RemainQuota: token.RemainQuota, UnlimitedQuota: token.UnlimitedQuota, ModelLimitsEnabled: token.ModelLimitsEnabled,
+		ModelLimits: token.ModelLimits, AllowIps: token.AllowIps, UsedQuota: token.UsedQuota, Group: token.Group,
+		CrossGroupRetry: token.CrossGroupRetry, Concurrency: concurrency,
+	}
 }
 
-func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
-	maskedTokens := make([]*model.Token, 0, len(tokens))
+func buildMaskedTokenResponses(c *gin.Context, tokens []*model.Token) []*dto.TokenResponse {
+	ids := make([]int, 0, len(tokens))
 	for _, token := range tokens {
-		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token))
+		if token != nil {
+			ids = append(ids, token.Id)
+		}
+	}
+	counts := service.GetTokenConcurrencyCounts(c.Request.Context(), ids)
+	maskedTokens := make([]*dto.TokenResponse, 0, len(tokens))
+	for _, token := range tokens {
+		concurrency := 0
+		if token != nil {
+			concurrency = counts[token.Id]
+		}
+		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token, concurrency))
 	}
 	return maskedTokens
 }
@@ -63,7 +80,7 @@ func GetAllTokens(c *gin.Context) {
 	}
 	total, _ := model.CountUserTokens(userId)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
+	pageInfo.SetItems(buildMaskedTokenResponses(c, tokens))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -80,7 +97,7 @@ func SearchTokens(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
+	pageInfo.SetItems(buildMaskedTokenResponses(c, tokens))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -96,7 +113,7 @@ func GetToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, buildMaskedTokenResponse(token))
+	common.ApiSuccess(c, buildMaskedTokenResponse(token, service.GetTokenConcurrencyCounts(c.Request.Context(), []int{token.Id})[token.Id]))
 }
 
 func GetTokenKey(c *gin.Context) {
@@ -305,7 +322,7 @@ func UpdateToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    buildMaskedTokenResponse(cleanToken),
+		"data":    buildMaskedTokenResponse(cleanToken, 0),
 	})
 }
 

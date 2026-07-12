@@ -49,7 +49,7 @@ func AdminGetUserTokens(c *gin.Context) {
 	}
 	total, _ := model.CountUserTokens(targetUser.Id)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
+	pageInfo.SetItems(buildMaskedTokenResponses(c, tokens))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -67,7 +67,7 @@ func AdminSearchUserTokens(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
+	pageInfo.SetItems(buildMaskedTokenResponses(c, tokens))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -86,7 +86,7 @@ func AdminGetUserToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, buildMaskedTokenResponse(token))
+	common.ApiSuccess(c, buildMaskedTokenResponse(token, service.GetTokenConcurrencyCounts(c.Request.Context(), []int{token.Id})[token.Id]))
 }
 
 func AdminUpdateUserToken(c *gin.Context) {
@@ -151,7 +151,7 @@ func AdminUpdateUserToken(c *gin.Context) {
 	recordManageAuditFor(c, targetUser.Id, "user.token.update", map[string]interface{}{
 		"token_id": cleanToken.Id, "name": cleanToken.Name, "status_only": statusOnly != "",
 	})
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildMaskedTokenResponse(cleanToken)})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": buildMaskedTokenResponse(cleanToken, 0)})
 }
 
 func AdminDeleteUserToken(c *gin.Context) {

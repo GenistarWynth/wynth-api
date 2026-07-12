@@ -432,6 +432,8 @@ func TokenAuth() func(c *gin.Context) {
 		if err != nil {
 			return
 		}
+		releaseTokenConcurrency := service.AcquireTokenConcurrencyLease(c.Request.Context(), token.Id)
+		defer releaseTokenConcurrency()
 		c.Next()
 	}
 }
