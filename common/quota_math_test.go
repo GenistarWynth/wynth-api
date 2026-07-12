@@ -139,3 +139,32 @@ func TestStrictQuotaConversionsReturnTypedClampErrors(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 43, quota)
 }
+
+func TestStrictQuotaConversionsAcceptExactInt32Bounds(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		call func(float64) (int, error)
+	}{
+		{name: "float", call: QuotaFromFloatStrict},
+		{name: "round", call: QuotaRoundStrict},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			quota, err := tt.call(float64(MaxQuota))
+			require.NoError(t, err)
+			assert.Equal(t, MaxQuota, quota)
+
+			quota, err = tt.call(float64(MinQuota))
+			require.NoError(t, err)
+			assert.Equal(t, MinQuota, quota)
+
+			_, err = tt.call(float64(MaxQuota) + 1)
+			var clamp *QuotaClamp
+			require.ErrorAs(t, err, &clamp)
+			assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+
+			_, err = tt.call(float64(MinQuota) - 1)
+			require.ErrorAs(t, err, &clamp)
+			assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
+		})
+	}
+}

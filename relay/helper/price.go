@@ -85,7 +85,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var cacheCreationRatio1h float64
 	var audioRatio float64
 	var audioCompletionRatio float64
-	var freeModel bool
+	freeModel := !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0
 	if !usePrice {
 		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
 		if meta.MaxTokens != 0 {
@@ -112,18 +112,21 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		imageRatio, _ = ratio_setting.GetImageRatio(info.OriginModelName)
 		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
-		ratio := modelRatio * groupRatioInfo.GroupRatio
-		preConsumedQuota, err = common.QuotaFromFloatStrict(float64(preConsumedTokens) * ratio)
-		if err != nil {
-			return types.PriceData{}, err
+		if !freeModel {
+			preConsumedQuota, err = common.QuotaFromFloatStrict(float64(preConsumedTokens) * modelRatio * groupRatioInfo.GroupRatio)
+			if err != nil {
+				return types.PriceData{}, err
+			}
 		}
 	} else {
-		if meta.ImagePriceRatio != 0 {
+		if meta.ImagePriceRatio != 0 && !freeModel {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		preConsumedQuota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		if err != nil {
-			return types.PriceData{}, err
+		if !freeModel {
+			preConsumedQuota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+			if err != nil {
+				return types.PriceData{}, err
+			}
 		}
 	}
 
@@ -199,12 +202,14 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 
 	var quota int
 	var err error
-	freeModel := false
+	freeModel := !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0
 
 	if usePrice {
-		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		if err != nil {
-			return types.PriceData{}, err
+		if !freeModel {
+			quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+			if err != nil {
+				return types.PriceData{}, err
+			}
 		}
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
@@ -214,9 +219,11 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		}
 	} else {
 		// 按量计费：以模型倍率的一半作为预扣额度
-		quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		if err != nil {
-			return types.PriceData{}, err
+		if !freeModel {
+			quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+			if err != nil {
+				return types.PriceData{}, err
+			}
 		}
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
@@ -279,12 +286,14 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 
 	// Expression coefficients are $/1M tokens prices; convert to quota the same way per-call billing does.
 	quotaBeforeGroup := rawCost / 1_000_000 * common.QuotaPerUnit
-	preConsumedQuota, err := billingexpr.QuotaRoundStrict(quotaBeforeGroup * groupRatioInfo.GroupRatio)
-	if err != nil {
-		return types.PriceData{}, err
+	freeModel := !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0
+	var preConsumedQuota int
+	if !freeModel {
+		preConsumedQuota, err = billingexpr.QuotaRoundStrict(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+		if err != nil {
+			return types.PriceData{}, err
+		}
 	}
-
-	freeModel := false
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 		if groupRatioInfo.GroupRatio == 0 {
 			preConsumedQuota = 0
