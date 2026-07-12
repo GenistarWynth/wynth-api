@@ -44,6 +44,15 @@ func TestCompactSSEProducesTerminalJSONPreservingUnknownFields(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), "data:")
 }
 
+func TestCompactSSEDoneItemReplacesAddedSnapshot(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"c\",\"type\":\"compaction\"}}\n\n" +
+		"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"c\",\"type\":\"compaction\",\"encrypted_content\":\"complete\"}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"output\":[],\"usage\":{\"total_tokens\":1}}}\n\n"
+	w, err, _ := runCompactHandler(t, "text/event-stream", body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"id":"r1","output":[{"id":"c","type":"compaction","encrypted_content":"complete"}],"usage":{"total_tokens":1}}`, w.Body.String())
+}
+
 func TestCompactSSERrejectsFailedAndTruncatedStreams(t *testing.T) {
 	cases := []string{
 		"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"secret upstream detail\",\"type\":\"server_error\"}}}\n\n",

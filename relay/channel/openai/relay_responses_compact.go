@@ -71,7 +71,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 func normalizeCompactSSE(body []byte) ([]byte, error) {
 	var terminal json.RawMessage
 	items := make([]json.RawMessage, 0)
-	seen := make(map[string]struct{})
+	itemIndexes := make(map[string]int)
 	scanner := bufio.NewScanner(bytes.NewReader(body))
 	scanner.Buffer(make([]byte, 64*1024), compactResponseBodyLimit)
 	for scanner.Scan() {
@@ -93,10 +93,14 @@ func normalizeCompactSSE(body []byte) ([]byte, error) {
 				continue
 			}
 			key := compactItemIdentity(event.Item)
-			if _, ok := seen[key]; !ok {
-				seen[key] = struct{}{}
-				items = append(items, append(json.RawMessage(nil), event.Item...))
+			if index, ok := itemIndexes[key]; ok {
+				if event.Type == "response.output_item.done" {
+					items[index] = append(json.RawMessage(nil), event.Item...)
+				}
+				continue
 			}
+			itemIndexes[key] = len(items)
+			items = append(items, append(json.RawMessage(nil), event.Item...))
 		case "response.completed":
 			if len(terminal) != 0 || len(event.Response) == 0 {
 				return nil, errors.New("contradictory terminal response")
