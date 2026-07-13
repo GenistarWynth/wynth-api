@@ -149,7 +149,7 @@ func runAccountPoolRuntimeAttempts(
 			if newAPIError := applyAccountPoolRuntimeSelection(c, info, request); newAPIError != nil {
 				selectedAccountID := service.GetSelectedAccountPoolAccountID(c)
 				accountRetryTimes := service.GetSelectedAccountPoolAccountRetryTimes(c)
-				if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+				if shouldRecordAccountPoolRuntimeFailure(c, info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 					// Selection failed before we know the upstream model; pass "".
 					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c), "")
 					service.ForgetSelectedAccountPoolRuntimeAffinity(c)
@@ -209,7 +209,7 @@ func runAccountPoolRuntimeAttempts(
 		// Normal failure path: record failure and fall through to next-account retry.
 		poolModeRetryIndex = 0
 		poolModeLastAccountID = 0
-		if shouldRecordAccountPoolRuntimeAttempt(info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
+		if shouldRecordAccountPoolRuntimeFailure(c, info) && selectedAccountID > 0 && !types.IsSkipRetryError(newAPIError) {
 			upstreamModel := ""
 			if info != nil {
 				upstreamModel = info.UpstreamModelName
@@ -234,6 +234,13 @@ func accountPoolRuntimeStatusCodeInList(statusCode int, codes []int) bool {
 		}
 	}
 	return false
+}
+
+func shouldRecordAccountPoolRuntimeFailure(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	if !shouldRecordAccountPoolRuntimeAttempt(info) {
+		return false
+	}
+	return c == nil || c.Request == nil || c.Request.Context().Err() == nil
 }
 
 func shouldRecordAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo) bool {
