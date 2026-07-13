@@ -404,6 +404,83 @@ func TestStreamScannerHandler_PingFailureStopsIdleUpstream(t *testing.T) {
 	require.ErrorIs(t, err, io.ErrClosedPipe, "upstream body must close after ping failure")
 }
 
+type blockingPingWriter struct {
+	gin.ResponseWriter
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingPingWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ": PING") {
+		w.once.Do(func() { close(w.started) })
+		<-w.release
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *blockingPingWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func TestStreamScannerHandler_CancelWhileCallbackWaitsForWriteLock(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled := setting.PingIntervalEnabled
+	oldSeconds := setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writer := &blockingPingWriter{ResponseWriter: c.Writer, started: make(chan struct{}), release: make(chan struct{})}
+	c.Writer = writer
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: pr}, info, func(string, *StreamResult) { handled.Add(1) })
+		close(done)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ping did not acquire write lock")
+	}
+	_, err := io.WriteString(pw, "data: queued\n")
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	close(writer.release)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not return after releasing write lock")
+	}
+	assert.Zero(t, handled.Load(), "callback must re-check cancellation after acquiring write lock")
+}
+
+func TestStreamScannerHandler_NilRequestDoesNotPanic(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = nil
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	require.NotPanics(t, func() {
+		StreamScannerHandler(c, &http.Response{Body: io.NopCloser(strings.NewReader("data: [DONE]\n"))}, info, func(string, *StreamResult) {})
+	})
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+}
+
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled

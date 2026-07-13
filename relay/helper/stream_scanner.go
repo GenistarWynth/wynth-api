@@ -88,6 +88,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	info.StreamStatus = relaycommon.NewStreamStatus()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	requestCtx := context.Background()
+	if c != nil && c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
 
 	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
 
@@ -192,7 +196,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 					return
 				case <-stopChan:
 					return
-				case <-c.Request.Context().Done():
+				case <-requestCtx.Done():
 					// 监听客户端断开连接
 					return
 				case <-pingTimeout.C:
@@ -217,17 +221,22 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}()
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
-			if aborted.Load() || (c.Request != nil && c.Request.Context().Err() != nil) {
+			if aborted.Load() || requestCtx.Err() != nil {
 				return
 			}
 			sr.reset()
+			shouldReturn := false
 			func() {
 				writeMutex.Lock()
 				defer writeMutex.Unlock()
+				if aborted.Load() || requestCtx.Err() != nil {
+					shouldReturn = true
+					return
+				}
 				ExtendWriteDeadline(c)
 				dataHandler(data, sr)
 			}()
-			if sr.IsStopped() {
+			if shouldReturn || sr.IsStopped() {
 				return
 			}
 		}
@@ -290,8 +299,8 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 		}
 
-		if c.Request != nil && c.Request.Context().Err() != nil {
-			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+		if requestCtx.Err() != nil {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestCtx.Err())
 			return
 		}
 		if ctx.Err() != nil {
@@ -314,11 +323,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 	case <-stopChan:
 		// EndReason already set by the goroutine that triggered stopChan
-	case <-c.Request.Context().Done():
+	case <-requestCtx.Done():
 		aborted.Store(true)
 		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
 		// 避免为已放弃的请求继续消费上游 token。
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestCtx.Err())
 	}
 
 	cleanup()
