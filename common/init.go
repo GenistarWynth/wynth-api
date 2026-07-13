@@ -65,6 +65,9 @@ func InitEnv() {
 		CryptoSecret = SessionSecret
 		CryptoSecretStable = sessionSecretStable
 	}
+	if err := InitSessionCookieSettings(); err != nil {
+		log.Fatal(err)
+	}
 	if os.Getenv("SQLITE_PATH") != "" {
 		SQLitePath = os.Getenv("SQLITE_PATH")
 	}
