@@ -11,6 +11,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNormalizedEmailLockName(t *testing.T) {
+	first := normalizedEmailLockName(" User@Example.COM ")
+	assert.LessOrEqual(t, len(first), 64)
+	assert.Equal(t, first, normalizedEmailLockName("user@example.com"))
+	assert.NotEqual(t, first, normalizedEmailLockName("other@example.com"))
+	assert.Contains(t, first, "new-api:email:")
+}
+
+func TestCompleteLockedTransactionReleasesAfterCompletion(t *testing.T) {
+	transactionErr := errors.New("transaction failed")
+	releaseErr := errors.New("release failed")
+	tests := []struct {
+		name            string
+		transactionErr  error
+		releaseErr      error
+		wantTransaction bool
+		wantRelease     bool
+	}{
+		{name: "commit then release"},
+		{name: "rollback then release", transactionErr: transactionErr, wantTransaction: true},
+		{name: "release failure after commit", releaseErr: releaseErr, wantRelease: true},
+		{name: "transaction error stays primary and release error is retained", transactionErr: transactionErr, releaseErr: releaseErr, wantTransaction: true, wantRelease: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := make([]string, 0, 2)
+			err := completeLockedTransaction(func() error {
+				events = append(events, "transaction complete")
+				return tt.transactionErr
+			}, func() error {
+				events = append(events, "release")
+				return tt.releaseErr
+			})
+			assert.Equal(t, []string{"transaction complete", "release"}, events)
+			assert.Equal(t, tt.wantTransaction, errors.Is(err, transactionErr))
+			assert.Equal(t, tt.wantRelease, errors.Is(err, releaseErr))
+		})
+	}
+}
+
 func setupUserUpdateTestState(t *testing.T) {
 	t.Helper()
 	truncateTables(t)

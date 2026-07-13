@@ -989,7 +989,7 @@ func CreateUser(c *gin.Context) {
 		Role:        user.Role, // 保持管理员设置的角色
 	}
 	authzTouched := false
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+	if err := model.WithNormalizedEmailTransaction(cleanUser.Email, func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
 		}

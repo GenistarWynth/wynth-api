@@ -254,48 +254,79 @@ func EnsureEmailAvailable(email string, excludeUserID int) error {
 	return nil
 }
 
-// withNormalizedEmailLock serializes concurrent writers that target the same
-// normalized email inside tx, so a "check then write" sequence cannot be raced
-// by two transactions. PostgreSQL uses a transaction-scoped advisory lock.
-// MySQL uses a connection-scoped named lock; GORM transactions remain pinned to
-// one sql.Conn, so acquisition and release execute on the same connection.
-// SQLite relies on its single-writer behavior. Empty emails need no lock.
-func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) error) (err error) {
+// normalizedEmailLockName returns a bounded, stable MySQL named-lock key.
+// The 192-bit digest prefix leaves enough entropy while keeping the complete
+// domain-prefixed name below MySQL's 64-character limit.
+func normalizedEmailLockName(email string) string {
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(NormalizeEmail(email))))
+	return "new-api:email:" + digest[:48]
+}
+
+func completeLockedTransaction(completeTransaction func() error, release func() error) error {
+	transactionErr := completeTransaction()
+	releaseErr := release()
+	if releaseErr == nil {
+		return transactionErr
+	}
+	releaseErr = fmt.Errorf("release normalized email lock: %w", releaseErr)
+	if transactionErr != nil {
+		return errors.Join(transactionErr, releaseErr)
+	}
+	return releaseErr
+}
+
+func acquireMySQLNormalizedEmailLock(conn *gorm.DB, email string) (string, error) {
+	lockName := normalizedEmailLockName(email)
+	var acquired sql.NullInt64
+	if err := conn.Raw("SELECT GET_LOCK(?, ?)", lockName, mysqlEmailLockTimeoutSecs).Scan(&acquired).Error; err != nil {
+		return "", fmt.Errorf("acquire normalized email lock: %w", err)
+	}
+	if !acquired.Valid || acquired.Int64 != 1 {
+		return "", errors.New("timed out acquiring normalized email lock")
+	}
+	return lockName, nil
+}
+
+func releaseMySQLNormalizedEmailLock(conn *gorm.DB, lockName string) error {
+	var released sql.NullInt64
+	if err := conn.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&released).Error; err != nil {
+		return err
+	}
+	if !released.Valid || released.Int64 != 1 {
+		return errors.New("normalized email lock was not released")
+	}
+	return nil
+}
+
+// WithNormalizedEmailTransaction owns the complete transaction that persists an
+// email. On MySQL, DB.Connection pins one connection across GET_LOCK, transaction
+// commit or rollback, and RELEASE_LOCK. PostgreSQL uses a transaction-scoped
+// advisory lock. SQLite relies on its single-writer transaction behavior.
+func WithNormalizedEmailTransaction(email string, fn func(tx *gorm.DB) error) error {
 	email = NormalizeEmail(email)
 	if email == "" {
+		return DB.Transaction(fn)
+	}
+	if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
+		return DB.Connection(func(conn *gorm.DB) error {
+			lockName, err := acquireMySQLNormalizedEmailLock(conn, email)
+			if err != nil {
+				return err
+			}
+			return completeLockedTransaction(
+				func() error { return conn.Transaction(fn) },
+				func() error { return releaseMySQLNormalizedEmailLock(conn, lockName) },
+			)
+		})
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
+				return err
+			}
+		}
 		return fn(tx)
-	}
-	switch {
-	case common.UsingMainDatabase(common.DatabaseTypePostgreSQL):
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
-			return err
-		}
-	case common.UsingMainDatabase(common.DatabaseTypeMySQL):
-		lockName := fmt.Sprintf("new-api:email:%x", sha256.Sum256([]byte(email)))
-		var acquired sql.NullInt64
-		if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, mysqlEmailLockTimeoutSecs).Scan(&acquired).Error; err != nil {
-			return fmt.Errorf("acquire normalized email lock: %w", err)
-		}
-		if !acquired.Valid || acquired.Int64 != 1 {
-			return errors.New("timed out acquiring normalized email lock")
-		}
-		defer func() {
-			var released sql.NullInt64
-			releaseErr := tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&released).Error
-			if releaseErr == nil && (!released.Valid || released.Int64 != 1) {
-				releaseErr = errors.New("normalized email lock was not released")
-			}
-			if releaseErr != nil {
-				releaseErr = fmt.Errorf("release normalized email lock: %w", releaseErr)
-				if err == nil {
-					err = releaseErr
-				} else {
-					err = errors.Join(err, releaseErr)
-				}
-			}
-		}()
-	}
-	return fn(tx)
+	})
 }
 
 func GetMaxUserId() int {
@@ -515,14 +546,12 @@ func (user *User) prepareForInsert(tx *gorm.DB) error {
 // end up sharing one address. The email is normalized before check and store.
 func BindEmailToUser(user *User, email string) error {
 	email = NormalizeEmail(email)
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		return withNormalizedEmailLock(tx, email, func(tx *gorm.DB) error {
-			if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
-				return err
-			}
-			user.Email = email
-			return user.UpdateWithTx(tx, false)
-		})
+	if err := WithNormalizedEmailTransaction(email, func(tx *gorm.DB) error {
+		if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
+			return err
+		}
+		user.Email = email
+		return user.UpdateWithTx(tx, false)
 	}); err != nil {
 		return err
 	}
@@ -549,23 +578,21 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 }
 
 func (user *User) Insert(inviterId int) error {
-	if err := DB.Transaction(func(tx *gorm.DB) error {
-		return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
-			if err := user.prepareForInsert(tx); err != nil {
-				return err
-			}
-			user.Quota = common.QuotaForNewUser
-			user.AffCode = common.GetRandomString(4)
+	if err := WithNormalizedEmailTransaction(user.Email, func(tx *gorm.DB) error {
+		if err := user.prepareForInsert(tx); err != nil {
+			return err
+		}
+		user.Quota = common.QuotaForNewUser
+		user.AffCode = common.GetRandomString(4)
 
-			// 初始化用户设置，包括默认的边栏配置
-			if user.Setting == "" {
-				defaultSetting := dto.UserSetting{}
-				// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
-				user.SetSetting(defaultSetting)
-			}
+		// 初始化用户设置，包括默认的边栏配置
+		if user.Setting == "" {
+			defaultSetting := dto.UserSetting{}
+			// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
+			user.SetSetting(defaultSetting)
+		}
 
-			return tx.Create(user).Error
-		})
+		return tx.Create(user).Error
 	}); err != nil {
 		return err
 	}
@@ -614,21 +641,19 @@ func (user *User) FinishInsert(inviterId int) {
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
 func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
-	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
-		if err := user.prepareForInsert(tx); err != nil {
-			return err
-		}
-		user.Quota = common.QuotaForNewUser
-		user.AffCode = common.GetRandomString(4)
+	if err := user.prepareForInsert(tx); err != nil {
+		return err
+	}
+	user.Quota = common.QuotaForNewUser
+	user.AffCode = common.GetRandomString(4)
 
-		// 初始化用户设置
-		if user.Setting == "" {
-			defaultSetting := dto.UserSetting{}
-			user.SetSetting(defaultSetting)
-		}
+	// 初始化用户设置
+	if user.Setting == "" {
+		defaultSetting := dto.UserSetting{}
+		user.SetSetting(defaultSetting)
+	}
 
-		return tx.Create(user).Error
-	})
+	return tx.Create(user).Error
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
