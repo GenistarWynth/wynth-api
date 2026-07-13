@@ -351,6 +351,59 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 
 // ---------- Ping tests ----------
 
+type pingFailWriter struct {
+	gin.ResponseWriter
+}
+
+func (w *pingFailWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ": PING") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *pingFailWriter) WriteString(s string) (int, error) {
+	if strings.Contains(s, ": PING") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.WriteString(s)
+}
+
+func TestStreamScannerHandler_PingFailureStopsIdleUpstream(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled := setting.PingIntervalEnabled
+	oldSeconds := setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+	})
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Writer = &pingFailWriter{ResponseWriter: c.Writer}
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: pr}, info, func(string, *StreamResult) {})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ping failure did not stop idle upstream promptly")
+	}
+
+	assert.Equal(t, relaycommon.StreamEndReasonPingFail, info.StreamStatus.EndReason)
+	_, err := io.WriteString(pw, "data: generated-after-failure\n")
+	require.ErrorIs(t, err, io.ErrClosedPipe, "upstream body must close after ping failure")
+}
+
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled
