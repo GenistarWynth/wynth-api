@@ -61,6 +61,25 @@ func TestValidateAndFillMatchesNormalizedEmailCaseInsensitive(t *testing.T) {
 	assert.Equal(t, "email-login", login.Username)
 }
 
+func TestValidateAndFillRejectsAmbiguousLegacyEmailButKeepsExactUsername(t *testing.T) {
+	setupUserUpdateTestState(t)
+	hash, err := common.Password2Hash("Password123")
+	require.NoError(t, err)
+	for _, user := range []User{
+		{Username: "legacy-a", Password: hash, Email: "legacy@example.com", AffCode: "legacy-a", Status: common.UserStatusEnabled},
+		{Username: "legacy-b", Password: hash, Email: "LEGACY@example.com", AffCode: "legacy-b", Status: common.UserStatusEnabled},
+	} {
+		require.NoError(t, DB.Create(&user).Error)
+	}
+
+	emailLogin := User{Username: " Legacy@Example.COM ", Password: "Password123"}
+	require.ErrorIs(t, emailLogin.ValidateAndFill(), ErrInvalidCredentials)
+
+	usernameLogin := User{Username: "legacy-b", Password: "Password123"}
+	require.NoError(t, usernameLogin.ValidateAndFill())
+	assert.Equal(t, "legacy-b", usernameLogin.Username)
+}
+
 func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
 	setupUserUpdateTestState(t)
 
@@ -131,10 +150,10 @@ func TestConcurrentInsertDoesNotPersistDuplicateNormalizedEmail(t *testing.T) {
 			successes++
 		}
 	}
-	assert.LessOrEqual(t, successes, 1)
+	require.Equal(t, 1, successes)
 	var count int64
 	require.NoError(t, DB.Model(&User{}).Where("LOWER(email) = ?", "race@example.com").Count(&count).Error)
-	assert.LessOrEqual(t, count, int64(1))
+	require.Equal(t, int64(1), count)
 }
 
 func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {

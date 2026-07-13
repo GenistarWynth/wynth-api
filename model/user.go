@@ -1,6 +1,7 @@
 package model
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,7 +18,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const UserNameMaxLength = 20
+const (
+	UserNameMaxLength         = 20
+	mysqlEmailLockTimeoutSecs = 5
+)
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
@@ -252,17 +256,11 @@ func EnsureEmailAvailable(email string, excludeUserID int) error {
 
 // withNormalizedEmailLock serializes concurrent writers that target the same
 // normalized email inside tx, so a "check then write" sequence cannot be raced
-// by two transactions. It must be called inside an active transaction; the lock
-// is scoped to that transaction and released on commit/rollback.
-//
-//   - PostgreSQL: transaction-level advisory lock keyed by the normalized email.
-//   - MySQL (default REPEATABLE READ): a locking read that takes a next-key/gap
-//     lock on the email index, blocking concurrent inserts of the same value.
-//   - SQLite: no explicit lock; the single-writer model already serializes the
-//     write, so a racing second write fails instead of duplicating.
-//
-// An empty email is allowed to repeat and needs no serialization.
-func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) error) error {
+// by two transactions. PostgreSQL uses a transaction-scoped advisory lock.
+// MySQL uses a connection-scoped named lock; GORM transactions remain pinned to
+// one sql.Conn, so acquisition and release execute on the same connection.
+// SQLite relies on its single-writer behavior. Empty emails need no lock.
+func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) error) (err error) {
 	email = NormalizeEmail(email)
 	if email == "" {
 		return fn(tx)
@@ -273,10 +271,29 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 			return err
 		}
 	case common.UsingMainDatabase(common.DatabaseTypeMySQL):
-		var ids []int
-		if err := tx.Raw("SELECT id FROM users WHERE email = ? FOR UPDATE", email).Scan(&ids).Error; err != nil {
-			return err
+		lockName := fmt.Sprintf("new-api:email:%x", sha256.Sum256([]byte(email)))
+		var acquired sql.NullInt64
+		if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, mysqlEmailLockTimeoutSecs).Scan(&acquired).Error; err != nil {
+			return fmt.Errorf("acquire normalized email lock: %w", err)
 		}
+		if !acquired.Valid || acquired.Int64 != 1 {
+			return errors.New("timed out acquiring normalized email lock")
+		}
+		defer func() {
+			var released sql.NullInt64
+			releaseErr := tx.Raw("SELECT RELEASE_LOCK(?)", lockName).Scan(&released).Error
+			if releaseErr == nil && (!released.Valid || released.Int64 != 1) {
+				releaseErr = errors.New("normalized email lock was not released")
+			}
+			if releaseErr != nil {
+				releaseErr = fmt.Errorf("release normalized email lock: %w", releaseErr)
+				if err == nil {
+					err = releaseErr
+				} else {
+					err = errors.Join(err, releaseErr)
+				}
+			}
+		}()
 	}
 	return fn(tx)
 }
@@ -767,8 +784,23 @@ func (user *User) ValidateAndFill() (err error) {
 	if username == "" || password == "" {
 		return ErrUserEmptyCredentials
 	}
-	// Usernames remain exact-match; email identifiers are normalized and matched case-insensitively.
-	err = DB.Where("username = ? OR LOWER(email) = ?", username, NormalizeEmail(username)).First(user).Error
+	// Preserve deterministic exact username login. Only fall back to normalized
+	// email when no username matches, and reject ambiguous legacy email rows.
+	err = DB.Where("username = ?", username).First(user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		var matches []User
+		err = emailQuery(DB, username).Limit(2).Find(&matches).Error
+		if err == nil {
+			switch len(matches) {
+			case 0:
+				err = gorm.ErrRecordNotFound
+			case 1:
+				*user = matches[0]
+			default:
+				return ErrInvalidCredentials
+			}
+		}
+	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrInvalidCredentials
