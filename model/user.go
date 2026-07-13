@@ -2,9 +2,9 @@ package model
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strconv"
 	"strings"
 
@@ -83,7 +83,7 @@ func (user *User) SetAccessToken(token string) {
 func (user *User) GetSetting() dto.UserSetting {
 	setting := dto.UserSetting{}
 	if user.Setting != "" {
-		err := json.Unmarshal([]byte(user.Setting), &setting)
+		err := common.Unmarshal([]byte(user.Setting), &setting)
 		if err != nil {
 			common.SysLog("failed to unmarshal setting: " + err.Error())
 		}
@@ -92,7 +92,7 @@ func (user *User) GetSetting() dto.UserSetting {
 }
 
 func (user *User) SetSetting(setting dto.UserSetting) {
-	settingBytes, err := json.Marshal(setting)
+	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		common.SysLog("failed to marshal setting: " + err.Error())
 		return
@@ -153,7 +153,7 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 	// 普通用户不包含admin区域
 
 	// 转换为JSON字符串
-	configBytes, err := json.Marshal(defaultConfig)
+	configBytes, err := common.Marshal(defaultConfig)
 	if err != nil {
 		common.SysLog("生成默认边栏配置失败: " + err.Error())
 		return ""
@@ -189,6 +189,21 @@ func CheckUserExistOrDeleted(username string, email string) (bool, error) {
 
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func ValidateNormalizedEmail(email string) (string, error) {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return "", nil
+	}
+	if len(email) > 50 {
+		return "", errors.New("email exceeds maximum length")
+	}
+	address, err := mail.ParseAddress(email)
+	if err != nil || address.Address != email {
+		return "", errors.New("invalid email address")
+	}
+	return email, nil
 }
 
 func emailQuery(tx *gorm.DB, email string) *gorm.DB {
@@ -752,8 +767,8 @@ func (user *User) ValidateAndFill() (err error) {
 	if username == "" || password == "" {
 		return ErrUserEmptyCredentials
 	}
-	// find by username or email
-	err = DB.Where("username = ? OR email = ?", username, username).First(user).Error
+	// Usernames remain exact-match; email identifiers are normalized and matched case-insensitively.
+	err = DB.Where("username = ? OR LOWER(email) = ?", username, NormalizeEmail(username)).First(user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrInvalidCredentials

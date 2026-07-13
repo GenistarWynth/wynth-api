@@ -264,7 +264,11 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		user.DisplayName = provider.GetName() + " User"
 	}
 	if oauthUser.Email != "" {
-		user.Email = model.NormalizeEmail(oauthUser.Email)
+		var err error
+		user.Email, err = model.ValidateNormalizedEmail(oauthUser.Email)
+		if err != nil {
+			return nil, err
+		}
 		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
 				return nil, &OAuthEmailAlreadyTakenError{}

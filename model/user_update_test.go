@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -23,6 +24,41 @@ func setupUserUpdateTestState(t *testing.T) {
 		common.RedisEnabled = oldRedisEnabled
 		common.BatchUpdateEnabled = oldBatchUpdateEnabled
 	})
+}
+
+func TestValidateNormalizedEmail(t *testing.T) {
+	tests := []struct {
+		name    string
+		email   string
+		want    string
+		wantErr bool
+	}{
+		{name: "normalizes", email: " User@Example.COM ", want: "user@example.com"},
+		{name: "rejects malformed", email: "not-an-email", wantErr: true},
+		{name: "rejects over max length", email: "abcdefghijklmnopqrstuvwxyz12345678901234567890@example.com", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ValidateNormalizedEmail(tt.email)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestValidateAndFillMatchesNormalizedEmailCaseInsensitive(t *testing.T) {
+	setupUserUpdateTestState(t)
+	hash, err := common.Password2Hash("Password123")
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&User{Username: "email-login", Password: hash, Email: "user@example.com", Status: common.UserStatusEnabled}).Error)
+
+	login := User{Username: " USER@EXAMPLE.COM ", Password: "Password123"}
+	require.NoError(t, login.ValidateAndFill())
+	assert.Equal(t, "email-login", login.Username)
 }
 
 func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
@@ -68,6 +104,37 @@ func TestInsertRejectsDuplicateEmailWithoutUniqueIndex(t *testing.T) {
 	var count int64
 	require.NoError(t, DB.Model(&User{}).Where("username = ?", "oauth-user").Count(&count).Error)
 	assert.Zero(t, count)
+}
+
+func TestConcurrentInsertDoesNotPersistDuplicateNormalizedEmail(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i, email := range []string{"race@example.com", " RACE@EXAMPLE.COM "} {
+		wg.Add(1)
+		go func(i int, email string) {
+			defer wg.Done()
+			<-start
+			user := &User{Username: "race-user-" + string(rune('a'+i)), Email: email, Status: common.UserStatusEnabled}
+			errs <- user.Insert(0)
+		}(i, email)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		}
+	}
+	assert.LessOrEqual(t, successes, 1)
+	var count int64
+	require.NoError(t, DB.Model(&User{}).Where("LOWER(email) = ?", "race@example.com").Count(&count).Error)
+	assert.LessOrEqual(t, count, int64(1))
 }
 
 func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {
