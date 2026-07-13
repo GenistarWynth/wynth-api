@@ -56,6 +56,23 @@ func buildSSEBody(n int) string {
 
 // ---------- Basic correctness ----------
 
+func TestCopyCodexSSEHeadersUsesCopyPolicyAndHandlesNil(t *testing.T) {
+	assert.NotPanics(t, func() {
+		copyCodexSSEHeaders(nil, nil)
+		copyCodexSSEHeaders(&gin.Context{}, &http.Response{})
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	resp := &http.Response{Header: http.Header{
+		"X-Reasoning-Included": {"true"},
+		"X-Codex-Turn-State":   {"state-1", "state-2"},
+	}}
+	copyCodexSSEHeaders(c, resp)
+	assert.Equal(t, "true", recorder.Header().Get("X-Reasoning-Included"))
+	assert.Equal(t, []string{"state-1", "state-2"}, recorder.Header().Values("X-Codex-Turn-State"))
+}
+
 func TestStreamScannerHandler_NilInputs(t *testing.T) {
 	t.Parallel()
 
