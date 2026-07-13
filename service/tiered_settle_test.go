@@ -814,3 +814,11 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 		}
 	})
 }
+
+func TestBuildTieredTokenParamsNormalizesNativeCacheWriteAndNegativeRead(t *testing.T) {
+	usage := &dto.Usage{PromptTokens: 10, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: -4, CachedCreationTokens: 3, CacheWriteTokens: 7}}
+	params := BuildTieredTokenParams(usage, false, map[string]bool{"cr": true, "cc": true})
+	require.Zero(t, params.CR)
+	require.Equal(t, float64(7), params.CC)
+	require.Equal(t, float64(3), params.P)
+}

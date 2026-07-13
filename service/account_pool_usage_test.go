@@ -120,6 +120,7 @@ func TestPostTextConsumeQuotaRecordsSelectedAccountUsageMetrics(t *testing.T) {
 		PromptTokensDetails: dto.InputTokenDetails{
 			CachedTokens:         25,
 			CachedCreationTokens: 7,
+			CacheWriteTokens:     11,
 		},
 	}
 
@@ -130,7 +131,7 @@ func TestPostTextConsumeQuotaRecordsSelectedAccountUsageMetrics(t *testing.T) {
 	assert.Equal(t, int64(100), reloaded.TotalPromptTokens)
 	assert.Equal(t, int64(50), reloaded.TotalCompletionTokens)
 	assert.Equal(t, int64(25), reloaded.TotalCachedTokens)
-	assert.Equal(t, int64(7), reloaded.TotalCacheWriteTokens)
+	assert.Equal(t, int64(11), reloaded.TotalCacheWriteTokens)
 	assert.Equal(t, int64(275), reloaded.LastFirstTokenLatencyMS)
 	assert.Equal(t, int64(1), reloaded.FirstTokenLatencySampleCount)
 	assert.Equal(t, int64(1), reloaded.LatencySampleCount)

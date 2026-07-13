@@ -537,3 +537,19 @@ func TestTryTieredSettleNoClampInRange(t *testing.T) {
 	require.NotNil(t, result)
 	require.Nil(t, relayInfo.QuotaClamp, "in-range settlement must not record a clamp")
 }
+
+func TestCacheWriteBillingNormalizesNegativesAndCacheOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{OriginModelName: "gpt-5.6-sol", PriceData: types.PriceData{ModelRatio: 1, CompletionRatio: 1, CacheRatio: 0.1, CacheCreationRatio: 1.25, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}, StartTime: time.Now()}
+
+	negative := calculateTextQuotaSummary(ctx, info, &dto.Usage{PromptTokens: 100, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: -20, CachedCreationTokens: -3, CacheWriteTokens: -5}})
+	require.Zero(t, negative.CacheTokens)
+	require.Zero(t, negative.CacheCreationTokens)
+	require.Equal(t, 100, negative.Quota)
+
+	cacheOnly := calculateTextQuotaSummary(ctx, info, &dto.Usage{TotalTokens: 0, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 10, CachedCreationTokens: 5, CacheWriteTokens: 20}})
+	require.Equal(t, 10, cacheOnly.CacheTokens)
+	require.Equal(t, 20, cacheOnly.CacheCreationTokens)
+	require.Equal(t, 26, cacheOnly.Quota)
+}
