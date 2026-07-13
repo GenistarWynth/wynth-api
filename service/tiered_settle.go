@@ -30,8 +30,15 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	cacheCreationTotal := cc
 
 	if usage.UsageSemantic == "anthropic" {
+		cc5m := float64(usage.ClaudeCacheCreation5mTokens)
+		if cc5m < 0 {
+			cc5m = 0
+		}
 		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
-		splitTotal := float64(usage.ClaudeCacheCreation5mTokens) + cc1h
+		if cc1h < 0 {
+			cc1h = 0
+		}
+		splitTotal := cc5m + cc1h
 		if splitTotal > cacheCreationTotal {
 			cacheCreationTotal = splitTotal
 		}

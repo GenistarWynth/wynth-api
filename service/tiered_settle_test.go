@@ -3,11 +3,15 @@ package service
 import (
 	"math"
 	"math/rand"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
@@ -821,4 +825,29 @@ func TestBuildTieredTokenParamsNormalizesNativeCacheWriteAndNegativeRead(t *test
 	require.Zero(t, params.CR)
 	require.Equal(t, float64(7), params.CC)
 	require.Equal(t, float64(3), params.P)
+}
+
+func TestNativeCacheWriteRatioAndTieredSettlementAgree(t *testing.T) {
+	usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 50, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 100, CacheWriteTokens: 200}}
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ratioInfo := &relaycommon.RelayInfo{OriginModelName: "gpt-5.6-sol", StartTime: time.Now(), PriceData: types.PriceData{ModelRatio: 1, CompletionRatio: 2, CacheRatio: 0.1, CacheCreationRatio: 1.25, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}}
+	ratioQuota := calculateTextQuotaSummary(ctx, ratioInfo, usage).Quota
+
+	expr := `tier("default", p * 2 + c * 4 + cr * 0.2 + cc * 2.5)`
+	tieredInfo := makeRelayInfo(expr, 1, usage.PromptTokens, usage.CompletionTokens)
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(expr))
+	ok, tieredQuota, result := TryTieredSettle(tieredInfo, params)
+	require.True(t, ok)
+	require.NotNil(t, result)
+	require.Equal(t, 1060, ratioQuota)
+	require.Equal(t, ratioQuota, tieredQuota)
+}
+
+func TestBuildTieredTokenParamsClampsNegativeClaudeSplits(t *testing.T) {
+	usage := &dto.Usage{PromptTokens: 10, UsageSemantic: "anthropic", ClaudeCacheCreation5mTokens: -4, ClaudeCacheCreation1hTokens: -8}
+	params := BuildTieredTokenParams(usage, true, map[string]bool{"cc": true, "cc1h": true})
+	require.Zero(t, params.CC)
+	require.Zero(t, params.CC1h)
+	require.Equal(t, float64(10), params.Len)
 }

@@ -210,7 +210,13 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	}
 	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
+	if summary.CacheCreationTokens5m < 0 {
+		summary.CacheCreationTokens5m = 0
+	}
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
+	if summary.CacheCreationTokens1h < 0 {
+		summary.CacheCreationTokens1h = 0
+	}
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)

@@ -543,9 +543,11 @@ func TestCacheWriteBillingNormalizesNegativesAndCacheOnly(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	info := &relaycommon.RelayInfo{OriginModelName: "gpt-5.6-sol", PriceData: types.PriceData{ModelRatio: 1, CompletionRatio: 1, CacheRatio: 0.1, CacheCreationRatio: 1.25, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}, StartTime: time.Now()}
 
-	negative := calculateTextQuotaSummary(ctx, info, &dto.Usage{PromptTokens: 100, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: -20, CachedCreationTokens: -3, CacheWriteTokens: -5}})
+	negative := calculateTextQuotaSummary(ctx, info, &dto.Usage{PromptTokens: 100, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: -20, CachedCreationTokens: -3, CacheWriteTokens: -5}, ClaudeCacheCreation5mTokens: -7, ClaudeCacheCreation1hTokens: -9})
 	require.Zero(t, negative.CacheTokens)
 	require.Zero(t, negative.CacheCreationTokens)
+	require.Zero(t, negative.CacheCreationTokens5m)
+	require.Zero(t, negative.CacheCreationTokens1h)
 	require.Equal(t, 100, negative.Quota)
 
 	cacheOnly := calculateTextQuotaSummary(ctx, info, &dto.Usage{TotalTokens: 0, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 10, CachedCreationTokens: 5, CacheWriteTokens: 20}})

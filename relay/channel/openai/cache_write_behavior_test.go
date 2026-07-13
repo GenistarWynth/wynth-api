@@ -47,6 +47,24 @@ func TestResponsesHandlersPreserveBothCacheCreationRepresentations(t *testing.T)
 	assert.Equal(t, 7, usage.PromptTokensDetails.CacheCreationTokensTotal())
 }
 
+func TestStreamingResponsesPreservesBothCacheCreationRepresentations(t *testing.T) {
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1,\"total_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":2,\"cached_creation_tokens\":9,\"cache_write_tokens\":7}}}}\n\n"
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.6-sol"}}
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldStreamingTimeout })
+	usage, apiErr := OaiResponsesStreamHandler(ctx, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 9, usage.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 7, usage.PromptTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 9, usage.PromptTokensDetails.CacheCreationTokensTotal())
+}
+
 func TestCompactHandlerPreservesBothCacheCreationRepresentations(t *testing.T) {
 	body := `{"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11,"input_tokens_details":{"cached_tokens":2,"cached_creation_tokens":8,"cache_write_tokens":7}}}`
 	gin.SetMode(gin.TestMode)
