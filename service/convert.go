@@ -235,7 +235,7 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	usage := &dto.ClaudeUsage{
 		InputTokens:              oaiUsage.PromptTokens,
 		OutputTokens:             oaiUsage.CompletionTokens,
-		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CacheCreationTokensTotal(),
 		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {
