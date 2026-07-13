@@ -51,6 +51,28 @@ func TestCompleteLockedTransactionReleasesAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestCompleteLockedTransactionReleasesAfterPanic(t *testing.T) {
+	events := make([]string, 0, 2)
+	panicValue := &struct{ message string }{message: "transaction panic"}
+
+	var recovered any
+	func() {
+		defer func() {
+			recovered = recover()
+		}()
+		_ = completeLockedTransaction(func() error {
+			events = append(events, "completion")
+			panic(panicValue)
+		}, func() error {
+			events = append(events, "release")
+			return nil
+		})
+	}()
+
+	assert.Equal(t, []string{"completion", "release"}, events)
+	assert.Same(t, panicValue, recovered)
+}
+
 func setupUserUpdateTestState(t *testing.T) {
 	t.Helper()
 	truncateTables(t)

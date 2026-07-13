@@ -262,17 +262,24 @@ func normalizedEmailLockName(email string) string {
 	return "new-api:email:" + digest[:48]
 }
 
-func completeLockedTransaction(completeTransaction func() error, release func() error) error {
-	transactionErr := completeTransaction()
-	releaseErr := release()
-	if releaseErr == nil {
-		return transactionErr
-	}
-	releaseErr = fmt.Errorf("release normalized email lock: %w", releaseErr)
-	if transactionErr != nil {
-		return errors.Join(transactionErr, releaseErr)
-	}
-	return releaseErr
+func completeLockedTransaction(completeTransaction func() error, release func() error) (err error) {
+	defer func() {
+		panicValue := recover()
+		releaseErr := release()
+		if panicValue != nil {
+			panic(panicValue)
+		}
+		if releaseErr == nil {
+			return
+		}
+		releaseErr = fmt.Errorf("release normalized email lock: %w", releaseErr)
+		if err != nil {
+			err = errors.Join(err, releaseErr)
+			return
+		}
+		err = releaseErr
+	}()
+	return completeTransaction()
 }
 
 func acquireMySQLNormalizedEmailLock(conn *gorm.DB, email string) (string, error) {
@@ -281,7 +288,10 @@ func acquireMySQLNormalizedEmailLock(conn *gorm.DB, email string) (string, error
 	if err := conn.Raw("SELECT GET_LOCK(?, ?)", lockName, mysqlEmailLockTimeoutSecs).Scan(&acquired).Error; err != nil {
 		return "", fmt.Errorf("acquire normalized email lock: %w", err)
 	}
-	if !acquired.Valid || acquired.Int64 != 1 {
+	if !acquired.Valid {
+		return "", errors.New("GET_LOCK returned NULL")
+	}
+	if acquired.Int64 != 1 {
 		return "", errors.New("timed out acquiring normalized email lock")
 	}
 	return lockName, nil
