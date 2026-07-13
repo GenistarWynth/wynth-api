@@ -481,6 +481,134 @@ func TestStreamScannerHandler_NilRequestDoesNotPanic(t *testing.T) {
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 }
 
+type panicPingWriter struct {
+	gin.ResponseWriter
+	started  chan struct{}
+	panicNow chan struct{}
+	once     sync.Once
+}
+
+func (w *panicPingWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ": PING") {
+		w.once.Do(func() { close(w.started) })
+		<-w.panicNow
+		panic("ping writer panic")
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *panicPingWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+func TestStreamScannerHandler_PingPanicDropsQueuedCallback(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled, oldSeconds := setting.PingIntervalEnabled, setting.PingIntervalSeconds
+	setting.PingIntervalEnabled, setting.PingIntervalSeconds = true, 1
+	t.Cleanup(func() { setting.PingIntervalEnabled, setting.PingIntervalSeconds = oldEnabled, oldSeconds })
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writer := &panicPingWriter{ResponseWriter: c.Writer, started: make(chan struct{}), panicNow: make(chan struct{})}
+	c.Writer = writer
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: pr}, info, func(string, *StreamResult) { handled.Add(1) })
+		close(done)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ping write did not start")
+	}
+	_, err := io.WriteString(pw, "data: queued-during-ping\n")
+	require.NoError(t, err)
+	close(writer.panicNow)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop after ping panic")
+	}
+	assert.Zero(t, handled.Load())
+	assert.Equal(t, relaycommon.StreamEndReasonPanic, info.StreamStatus.EndReason)
+}
+
+type panicAfterReader struct {
+	first    []byte
+	queued   []byte
+	stage    int
+	queueNow chan struct{}
+	closed   chan struct{}
+	once     sync.Once
+}
+
+func (r *panicAfterReader) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		r.stage++
+		return copy(p, r.first), nil
+	case 1:
+		r.stage++
+		<-r.queueNow
+		return copy(p, r.queued), nil
+	default:
+		panic("scanner reader panic")
+	}
+}
+func (r *panicAfterReader) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func TestStreamScannerHandler_ScannerPanicDropsQueuedCallbacks(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+	body := &panicAfterReader{
+		first:    []byte("data: first\n"),
+		queued:   []byte("data: second\ndata: third\n"),
+		queueNow: make(chan struct{}),
+		closed:   make(chan struct{}),
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: body}, info, func(string, *StreamResult) {
+			if handled.Add(1) == 1 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first callback did not start")
+	}
+	close(body.queueNow)
+	select {
+	case <-body.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scanner panic did not trigger cleanup")
+	}
+	close(releaseFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop after scanner panic")
+	}
+	assert.Equal(t, int64(1), handled.Load())
+	assert.Equal(t, relaycommon.StreamEndReasonPanic, info.StreamStatus.EndReason)
+}
+
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
 	oldEnabled := setting.PingIntervalEnabled
