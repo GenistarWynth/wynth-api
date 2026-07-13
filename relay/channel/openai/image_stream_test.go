@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
@@ -33,6 +34,42 @@ func newImageTestContext(t *testing.T, body, contentType string, isStream bool) 
 		IsStream:    isStream,
 	}
 	return c, recorder, resp, info
+}
+
+func TestNormalizeOpenAIImageUsageMapsNativeCacheWriteTokens(t *testing.T) {
+	usage := dto.Usage{InputTokensDetails: &dto.InputTokenDetails{CacheWriteTokens: 17}}
+
+	normalizeOpenAIUsage(&usage)
+
+	require.Equal(t, 17, usage.PromptTokensDetails.CacheWriteTokens)
+}
+
+type cancelOnCloseBody struct {
+	io.Reader
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	b.cancel()
+	return nil
+}
+
+func TestOpenaiImageStreamSkipsDoneWhenCleanupObservesCancellation(t *testing.T) {
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	c, recorder, resp, info := newImageTestContext(t, "", "text/event-stream", true)
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(ctx)
+	resp.Body = &cancelOnCloseBody{Reader: strings.NewReader("data: [DONE]\n"), cancel: cancel}
+
+	usage, err := OpenaiImageStreamHandler(c, info, resp)
+
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+	require.NotContains(t, recorder.Body.String(), "[DONE]")
 }
 
 func TestOpenaiImageDoResponseUsesInfoIsStream(t *testing.T) {

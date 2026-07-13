@@ -80,6 +80,7 @@ func normalizeOpenAIUsage(usage *dto.Usage) {
 	if usage.InputTokensDetails != nil {
 		usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
 		usage.PromptTokensDetails.CachedCreationTokens = usage.InputTokensDetails.CachedCreationTokens
+		usage.PromptTokensDetails.CacheWriteTokens = usage.InputTokensDetails.CacheWriteTokens
 		usage.PromptTokensDetails.ImageTokens = usage.InputTokensDetails.ImageTokens
 		usage.PromptTokensDetails.TextTokens = usage.InputTokensDetails.TextTokens
 		usage.PromptTokensDetails.AudioTokens = usage.InputTokensDetails.AudioTokens
@@ -140,7 +141,8 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 
 	// StreamScannerHandler consumes the upstream [DONE]; re-emit it so the
 	// client still receives a terminal data: [DONE].
-	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone {
+	if info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone &&
+		(c == nil || c.Request == nil || c.Request.Context().Err() == nil) {
 		helper.Done(c)
 	}
 

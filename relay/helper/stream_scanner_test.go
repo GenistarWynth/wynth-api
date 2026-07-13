@@ -236,6 +236,47 @@ func TestStreamScannerHandler_DataWithExtraSpaces(t *testing.T) {
 	assert.Equal(t, "{\"trimmed\":true}", got)
 }
 
+func TestStreamScannerHandler_CancelDropsQueuedChunks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c, resp, info := setupStreamTest(t, pr)
+	resp.Body = pr
+	c.Request = c.Request.WithContext(ctx)
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			if handled.Add(1) == 1 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+		})
+		close(done)
+	}()
+	_, err := io.WriteString(pw, "data: first\ndata: second\ndata: third\n")
+	require.NoError(t, err)
+
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first callback did not start")
+	}
+	cancel()
+	close(releaseFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not join after cancellation")
+	}
+
+	assert.Equal(t, int64(1), handled.Load(), "buffered chunks must be dropped after cancellation")
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+}
+
 // TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns pins the
 // disconnect contract: when the client goes away, the handler must return
 // promptly (all goroutines joined, so the gin.Context can never leak into a

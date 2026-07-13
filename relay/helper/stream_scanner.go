@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -99,6 +100,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
+		aborted     atomic.Bool
 	)
 
 	stop := func() {
@@ -213,6 +215,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}()
 		sr := newStreamResult(info.StreamStatus)
 		for data := range dataChan {
+			if aborted.Load() || (c.Request != nil && c.Request.Context().Err() != nil) {
+				return
+			}
 			sr.reset()
 			func() {
 				writeMutex.Lock()
@@ -283,11 +288,19 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 		}
 
+		if c.Request != nil && c.Request.Context().Err() != nil {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
 		if err := scanner.Err(); err != nil {
 			if err != io.EOF {
 				logger.LogError(c, "scanner error: "+err.Error())
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
 			}
+			return
 		}
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 	})
@@ -295,10 +308,12 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	// 主循环等待完成或超时
 	select {
 	case <-ticker.C:
+		aborted.Store(true)
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
 	case <-stopChan:
 		// EndReason already set by the goroutine that triggered stopChan
 	case <-c.Request.Context().Done():
+		aborted.Store(true)
 		// 客户端断开：立即 cleanup 关闭上游 resp.Body，解除 scanner 阻塞并让上游停止生成，
 		// 避免为已放弃的请求继续消费上游 token。
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
