@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
@@ -71,6 +72,50 @@ func TestCompleteLockedTransactionReleasesAfterPanic(t *testing.T) {
 
 	assert.Equal(t, []string{"completion", "release"}, events)
 	assert.Same(t, panicValue, recovered)
+}
+
+func TestCompleteLockedTransactionObservesReleaseFailureAfterPanic(t *testing.T) {
+	panicValue := &struct{ message string }{message: "transaction panic"}
+	releaseErr := errors.New("release failed")
+	oldReport := reportLockedTransactionReleaseError
+	var reported string
+	reportLockedTransactionReleaseError = func(message string) { reported = message }
+	t.Cleanup(func() { reportLockedTransactionReleaseError = oldReport })
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = completeLockedTransaction(
+			func() error { panic(panicValue) },
+			func() error { return releaseErr },
+		)
+	}()
+
+	assert.ErrorContains(t, errors.New(reported), "release normalized email lock")
+	assert.ErrorContains(t, errors.New(reported), releaseErr.Error())
+	assert.Same(t, panicValue, recovered)
+}
+
+func TestClassifyMySQLGetLockResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		result  sql.NullInt64
+		wantErr string
+	}{
+		{name: "NULL", result: sql.NullInt64{}, wantErr: "GET_LOCK returned NULL"},
+		{name: "timeout", result: sql.NullInt64{Int64: 0, Valid: true}, wantErr: "timed out acquiring normalized email lock"},
+		{name: "success", result: sql.NullInt64{Int64: 1, Valid: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyMySQLGetLockResult(tt.result)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			assert.EqualError(t, err, tt.wantErr)
+		})
+	}
 }
 
 func setupUserUpdateTestState(t *testing.T) {
