@@ -71,6 +71,14 @@ func TestCopyCodexSSEHeadersUsesCopyPolicyAndHandlesNil(t *testing.T) {
 	copyCodexSSEHeaders(c, resp)
 	assert.Equal(t, "true", recorder.Header().Get("X-Reasoning-Included"))
 	assert.Equal(t, []string{"state-1", "state-2"}, recorder.Header().Values("X-Codex-Turn-State"))
+
+	deniedRecorder := httptest.NewRecorder()
+	deniedContext, _ := gin.CreateTestContext(deniedRecorder)
+	copyCodexSSEHeadersWithPolicy(deniedContext, resp, func(_ *gin.Context, name string, _ []string) bool {
+		return name != "X-Codex-Turn-State"
+	})
+	assert.Equal(t, "true", deniedRecorder.Header().Get("X-Reasoning-Included"))
+	assert.Empty(t, deniedRecorder.Header().Values("X-Codex-Turn-State"))
 }
 
 func TestStreamScannerHandler_NilInputs(t *testing.T) {

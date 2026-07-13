@@ -1,3 +1,12 @@
+import {
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  GripVertical,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -24,18 +33,10 @@ import {
   useMemo,
   useState,
 } from 'react'
-import {
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  GripVertical,
-  Plus,
-  Search,
-  Trash2,
-} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+
+import { Dialog } from '@/components/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -55,7 +56,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { Dialog } from '@/components/dialog'
+import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
 // Types

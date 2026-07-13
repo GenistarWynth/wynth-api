@@ -12,6 +12,9 @@ func TestOpenAIResponsesRequestPreservesCodexFields(t *testing.T) {
 	input := `{"model":"gpt-5","client_metadata":{"nested":[1,false,{"x":0}]},"reasoning":{"effort":"high","mode":false,"context":0},"prompt_cache_options":{"mode":"24h","ttl":0,"breakpoint":{"unknown":[false,0]}},"prompt_cache_retention":{"legacy":true}}`
 	var request OpenAIResponsesRequest
 	require.NoError(t, common.UnmarshalJsonStr(input, &request))
+	assert.Equal(t, `{"nested":[1,false,{"x":0}]}`, string(request.ClientMetadata))
+	assert.Equal(t, `{"mode":"24h","ttl":0,"breakpoint":{"unknown":[false,0]}}`, string(request.PromptCacheOptions))
+	assert.Equal(t, `{"legacy":true}`, string(request.PromptCacheRetention))
 	output, err := common.Marshal(request)
 	require.NoError(t, err)
 	assert.JSONEq(t, input, string(output))

@@ -41,13 +41,13 @@ func NewStreamScanner(reader io.Reader) *bufio.Scanner {
 	return scanner
 }
 
-func copyCodexSSEHeaders(c *gin.Context, resp *http.Response) {
-	if c == nil || c.Writer == nil || resp == nil {
+func copyCodexSSEHeadersWithPolicy(c *gin.Context, resp *http.Response, shouldCopy func(*gin.Context, string, []string) bool) {
+	if c == nil || c.Writer == nil || resp == nil || shouldCopy == nil {
 		return
 	}
 	for _, name := range []string{"X-Reasoning-Included", "X-Codex-Turn-State"} {
 		values := resp.Header.Values(name)
-		if !service.ShouldCopyUpstreamHeader(c, name, values) {
+		if !shouldCopy(c, name, values) {
 			continue
 		}
 		for _, value := range values {
@@ -56,6 +56,10 @@ func copyCodexSSEHeaders(c *gin.Context, resp *http.Response) {
 			}
 		}
 	}
+}
+
+func copyCodexSSEHeaders(c *gin.Context, resp *http.Response) {
+	copyCodexSSEHeadersWithPolicy(c, resp, service.ShouldCopyUpstreamHeader)
 }
 
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
