@@ -26,11 +26,25 @@ func runCompactHandler(t *testing.T, contentType, body string) (*httptest.Respon
 }
 
 func TestCompactJSONCompatibility(t *testing.T) {
-	body := `{"id":"r1","object":"response.compaction","output":[{"type":"compaction","encrypted_content":"x","future_field":7}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5},"future_top":"kept"}`
+	body := `{"id":"r1","object":"response.compaction","output":[{"type":"compaction","encrypted_content":"x","future_field":7}],"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15,"input_tokens_details":{"cached_tokens":4,"cached_creation_tokens":5,"cache_write_tokens":6}},"future_top":"kept"}`
 	w, err, total := runCompactHandler(t, "application/json", body)
 	require.NoError(t, err)
 	assert.JSONEq(t, body, w.Body.String())
-	assert.Equal(t, 5, total)
+	assert.Equal(t, 15, total)
+}
+
+func TestCompactUsagePropagatesNativeAndLegacyCacheWriteTokens(t *testing.T) {
+	body := `{"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15,"input_tokens_details":{"cached_tokens":4,"cached_creation_tokens":5,"cache_write_tokens":6}}}`
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+
+	usage, apiErr := OaiResponsesCompactionHandler(c, resp)
+	require.Nil(t, apiErr)
+	assert.Equal(t, 4, usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 5, usage.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 6, usage.PromptTokensDetails.CacheWriteTokens)
 }
 
 func TestCompactSSEProducesTerminalJSONPreservingUnknownFields(t *testing.T) {
@@ -56,6 +70,7 @@ func TestCompactSSEDoneItemReplacesAddedSnapshot(t *testing.T) {
 func TestCompactSSERrejectsFailedAndTruncatedStreams(t *testing.T) {
 	cases := []string{
 		"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"secret upstream detail\",\"type\":\"server_error\"}}}\n\n",
+		"data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"r1\",\"output\":[]}}\n\n",
 		"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"a\"}}\n\n",
 		"data: {not-json}\n\n",
 	}
