@@ -35,6 +35,7 @@ type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 
 	ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError
+	ValidateMappedRequest(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError
 
 	// ── Billing ──────────────────────────────────────────────────────
 

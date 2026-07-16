@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -80,6 +81,12 @@ const (
 // ---------------------------------------------------------------------------
 
 type BaseBilling struct{}
+
+// ValidateMappedRequest performs validation that depends on the final upstream
+// model name. Most task adaptors do not need a second validation phase.
+func (BaseBilling) ValidateMappedRequest(_ *gin.Context, _ *relaycommon.RelayInfo) *dto.TaskError {
+	return nil
+}
 
 // EstimateBilling returns nil (no extra ratios; use base model price).
 func (BaseBilling) EstimateBilling(_ *gin.Context, _ *relaycommon.RelayInfo) map[string]float64 {

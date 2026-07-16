@@ -191,6 +191,13 @@ func countLogs(t *testing.T) int64 {
 	return count
 }
 
+func reloadTask(t *testing.T, id int64) model.Task {
+	t.Helper()
+	var task model.Task
+	require.NoError(t, model.DB.First(&task, id).Error)
+	return task
+}
+
 // ===========================================================================
 // RefundTaskQuota tests
 // ===========================================================================
@@ -314,6 +321,12 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Progress = "42%"
+	task.FailReason = "preserve-positive"
+	task.Properties.Input = "positive-input"
+	task.PrivateData.NodeName = "node-positive"
+	require.NoError(t, model.DB.Create(task).Error)
+	before := reloadTask(t, task.ID)
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
@@ -325,6 +338,14 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	// task.Quota should be updated to actualQuota
 	assert.Equal(t, actualQuota, task.Quota)
+	persisted := reloadTask(t, task.ID)
+	assert.Equal(t, actualQuota, persisted.Quota)
+	assert.Equal(t, before.Status, persisted.Status)
+	assert.Equal(t, before.Progress, persisted.Progress)
+	assert.Equal(t, before.FailReason, persisted.FailReason)
+	assert.Equal(t, before.Properties, persisted.Properties)
+	assert.Equal(t, before.PrivateData, persisted.PrivateData)
+	assert.Equal(t, before.UpdatedAt, persisted.UpdatedAt)
 
 	// Log type should be Consume (additional charge)
 	log := getLastLog(t)
@@ -347,6 +368,12 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Progress = "73%"
+	task.FailReason = "preserve-negative"
+	task.Properties.Input = "negative-input"
+	task.PrivateData.NodeName = "node-negative"
+	require.NoError(t, model.DB.Create(task).Error)
+	before := reloadTask(t, task.ID)
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
@@ -358,6 +385,14 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	// task.Quota updated
 	assert.Equal(t, actualQuota, task.Quota)
+	persisted := reloadTask(t, task.ID)
+	assert.Equal(t, actualQuota, persisted.Quota)
+	assert.Equal(t, before.Status, persisted.Status)
+	assert.Equal(t, before.Progress, persisted.Progress)
+	assert.Equal(t, before.FailReason, persisted.FailReason)
+	assert.Equal(t, before.Properties, persisted.Properties)
+	assert.Equal(t, before.PrivateData, persisted.PrivateData)
+	assert.Equal(t, before.UpdatedAt, persisted.UpdatedAt)
 
 	// Log type should be Refund
 	log := getLastLog(t)
@@ -376,6 +411,9 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 	seedUser(t, userID, initQuota)
 
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
+	task.Progress = "55%"
+	require.NoError(t, model.DB.Create(task).Error)
+	before := reloadTask(t, task.ID)
 
 	RecalculateTaskQuota(ctx, task, preConsumed, "exact match")
 
@@ -384,6 +422,7 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 
 	// No log created (delta is zero)
 	assert.Equal(t, int64(0), countLogs(t))
+	assert.Equal(t, before, reloadTask(t, task.ID))
 }
 
 func TestRecalculate_ActualQuotaZero(t *testing.T) {
@@ -577,6 +616,7 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
+	assert.Equal(t, actualQuota, reloaded.Quota)
 
 	// Settlement should refund the over-charge (5000 - 3000 = 2000 back to user)
 	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -584,6 +624,61 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 
 	// task.Quota should be updated to actualQuota
 	assert.Equal(t, actualQuota, task.Quota)
+}
+
+func TestCASGuardedSettle_Lose(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 24, 24, 24
+	const initQuota, preConsumed = 10000, 5000
+	const actualQuota = 3000
+	const tokenRemain = 8000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-cas-settle-lose", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
+	require.NoError(t, model.DB.Model(&model.Task{}).
+		Where("id = ?", task.ID).
+		Update("status", model.TaskStatusSuccess).Error)
+
+	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusSuccess), actualQuota)
+
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
+	persisted := reloadTask(t, task.ID)
+	assert.EqualValues(t, model.TaskStatusSuccess, persisted.Status)
+	assert.Equal(t, preConsumed, persisted.Quota)
+}
+
+func TestCASGuardedSettle_ReloadDoesNotRepeat(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 25, 25, 25
+	const initQuota, preConsumed = 10000, 5000
+	const actualQuota = 3000
+	const tokenRemain = 8000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-cas-settle-once", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
+	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusSuccess), actualQuota)
+
+	reloaded := reloadTask(t, task.ID)
+	RecalculateTaskQuota(ctx, &reloaded, actualQuota, "repeat settlement")
+
+	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+(preConsumed-actualQuota), getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(1), countLogs(t))
+	assert.Equal(t, actualQuota, reloadTask(t, task.ID).Quota)
 }
 
 func TestNonTerminalUpdate_NoBilling(t *testing.T) {

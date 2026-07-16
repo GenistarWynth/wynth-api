@@ -175,6 +175,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if apiErr := rejectUnsupportedAccountPoolRuntime(c, info, "task"); apiErr != nil {
 		return nil, service.TaskErrorFromAPIError(apiErr)
 	}
+	if taskErr := adaptor.ValidateMappedRequest(c, info); taskErr != nil {
+		return nil, taskErr
+	}
 
 	// 3. 预生成公开 task ID（仅首次）
 	if info.PublicTaskID == "" {
