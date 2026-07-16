@@ -142,7 +142,7 @@ func TestOpenaiImageStreamHandlerForwardsSSEAndUsage(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `data: {"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"image_tokens":2,"text_tokens":1}}}`)
 	require.Contains(t, recorder.Body.String(), `data: [DONE]`)
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
-	require.Equal(t, 3.0, info.PriceData.OtherRatios["n"], "streams without completed events keep the requested count")
+	require.Equal(t, 3.0, info.PriceData.OtherRatios()["n"], "streams without completed events keep the requested count")
 }
 
 func TestOpenaiImageStreamHandlerUsesCompletedEventCount(t *testing.T) {
@@ -173,7 +173,7 @@ func TestOpenaiImageStreamHandlerUsesCompletedEventCount(t *testing.T) {
 
 	require.Nil(t, err)
 	require.Equal(t, 7, usage.TotalTokens)
-	require.Equal(t, 2.0, info.PriceData.OtherRatios["n"])
+	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
 }
 
 // blockingBody serves one SSE chunk, then blocks until Close (the scanner's
@@ -282,7 +282,7 @@ func TestOpenaiImageStreamHandlerClientDisconnectKeepsRequestedCount(t *testing.
 		[]relaycommon.StreamEndReason{relaycommon.StreamEndReasonClientGone, relaycommon.StreamEndReasonHandlerStop},
 		info.StreamStatus.EndReason)
 	require.Contains(t, recorder.Body.String(), `"b64_json":"first"`)
-	require.Equal(t, 3.0, info.PriceData.OtherRatios["n"], "client abort must not reduce the billed image count")
+	require.Equal(t, 3.0, info.PriceData.OtherRatios()["n"], "client abort must not reduce the billed image count")
 }
 
 // TestOpenaiImageStreamHandlerClientDisconnectRaisesCount covers the other
@@ -316,7 +316,7 @@ func TestOpenaiImageStreamHandlerClientDisconnectRaisesCount(t *testing.T) {
 	require.Contains(t,
 		[]relaycommon.StreamEndReason{relaycommon.StreamEndReasonClientGone, relaycommon.StreamEndReasonHandlerStop},
 		info.StreamStatus.EndReason)
-	require.Equal(t, 2.0, info.PriceData.OtherRatios["n"], "completed events beyond the recorded n must raise the charge even on abort")
+	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"], "completed events beyond the recorded n must raise the charge even on abort")
 }
 
 // TestOpenaiImageStreamHandlerWrapsJSONResponse covers the non-SSE fallback:
@@ -348,7 +348,7 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"revised_prompt":"draw a cat"`)
 	require.Contains(t, recorder.Body.String(), `data: [DONE]`)
 	require.Equal(t, 2, strings.Count(recorder.Body.String(), `event: image_generation.completed`))
-	require.Equal(t, 2.0, info.PriceData.OtherRatios["n"])
+	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"])
 }
 
 func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
@@ -392,7 +392,7 @@ func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
 			_, err := OpenaiImageHandler(c, info, resp)
 
 			require.Nil(t, err)
-			require.Equal(t, tt.wantCount, info.PriceData.OtherRatios["n"])
+			require.Equal(t, tt.wantCount, info.PriceData.OtherRatios()["n"])
 			require.Equal(t, tt.body, recorder.Body.String())
 		})
 	}

@@ -109,6 +109,16 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 			wantN: dto.MaxImageN,
 		},
 		{
+			name:  "explicit n is accepted",
+			body:  `{"model":"gpt-image-1","prompt":"a cat","n":3}`,
+			wantN: 3,
+		},
+		{
+			name:  "zero n defaults to 1",
+			body:  `{"model":"gpt-image-1","prompt":"a cat","n":0}`,
+			wantN: 1,
+		},
+		{
 			name:  "absent n defaults to 1",
 			body:  `{"model":"gpt-image-1","prompt":"a cat"}`,
 			wantN: 1,
@@ -127,6 +137,7 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, req.N)
 			require.Equal(t, tt.wantN, *req.N)
+			require.Equal(t, float64(tt.wantN), req.GetTokenCountMeta().BillingRatios["n"])
 		})
 	}
 
@@ -146,4 +157,26 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), boundErr)
 	})
+}
+
+func TestImageRequestGetTokenCountMetaNormalizesBillingCount(t *testing.T) {
+	zero := uint(0)
+	three := uint(3)
+
+	for _, tt := range []struct {
+		name  string
+		n     *uint
+		wantN float64
+	}{
+		{name: "absent count", wantN: 1},
+		{name: "zero count", n: &zero, wantN: 1},
+		{name: "explicit count", n: &three, wantN: 3},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := (&dto.ImageRequest{Model: "dall-e-3", N: tt.n, Size: "1024x1792", Quality: "hd"}).GetTokenCountMeta()
+
+			require.Equal(t, tt.wantN, meta.BillingRatios["n"])
+			require.Equal(t, 3.0, meta.ImagePriceRatio, "size/quality stays independent from image count")
+		})
+	}
 }

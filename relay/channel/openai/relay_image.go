@@ -158,7 +158,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		upstreamFinished := info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone ||
 			info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF
 		requestedN := 1.0
-		if n, ok := info.PriceData.OtherRatios["n"]; ok {
+		if n, ok := info.PriceData.OtherRatios()["n"]; ok {
 			requestedN = n
 		}
 		if upstreamFinished || float64(completedImages) > requestedN {

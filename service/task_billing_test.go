@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"os"
 	"testing"
@@ -140,6 +141,56 @@ func makeTask(userId, channelId, quota, tokenId int, billingSource string, subsc
 			},
 		},
 	}
+}
+
+func TestTaskBillingOtherFiltersHistoricalOtherRatios(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.OtherRatios = map[string]float64{
+		"duration": 2,
+		"identity": 1,
+		"zero":     0,
+		"negative": -1,
+		"nan":      math.NaN(),
+		"pos_inf":  math.Inf(1),
+		"neg_inf":  math.Inf(-1),
+	}
+
+	other := taskBillingOther(task)
+
+	assert.Equal(t, 2.0, other["duration"])
+	assert.Equal(t, 1.0, other["identity"])
+	assert.NotContains(t, other, "zero")
+	assert.NotContains(t, other, "negative")
+	assert.NotContains(t, other, "nan")
+	assert.NotContains(t, other, "pos_inf")
+	assert.NotContains(t, other, "neg_inf")
+}
+
+func TestTaskBillingContextPriceDataFiltersHistoricalMultiplier(t *testing.T) {
+	priceData := taskBillingContextPriceData(&model.TaskBillingContext{
+		OtherRatios: map[string]float64{
+			"duration": 2,
+			"quality":  3,
+			"identity": 1,
+			"zero":     0,
+			"negative": -1,
+			"nan":      math.NaN(),
+			"pos_inf":  math.Inf(1),
+			"neg_inf":  math.Inf(-1),
+		},
+	})
+
+	require.NotNil(t, priceData)
+	assert.Equal(t, 6.0, priceData.OtherRatioMultiplier())
+	assert.Equal(t, map[string]float64{
+		"duration": 2,
+		"quality":  3,
+		"identity": 1,
+	}, priceData.OtherRatios())
+
+	assert.Nil(t, taskBillingContextPriceData(&model.TaskBillingContext{
+		OtherRatios: map[string]float64{"zero": 0, "nan": math.NaN()},
+	}))
 }
 
 // ---------------------------------------------------------------------------

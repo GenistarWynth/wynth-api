@@ -3,6 +3,8 @@ package types
 import (
 	"fmt"
 	"math"
+
+	"github.com/shopspring/decimal"
 )
 
 type GroupRatioInfo struct {
@@ -23,7 +25,7 @@ type PriceData struct {
 	ImageRatio           float64
 	AudioRatio           float64
 	AudioCompletionRatio float64
-	OtherRatios          map[string]float64
+	otherRatios          map[string]float64
 	UsePrice             bool
 	Quota                int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume    int // 按量计费的预消耗额度
@@ -31,15 +33,83 @@ type PriceData struct {
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {
-	if p.OtherRatios == nil {
-		p.OtherRatios = make(map[string]float64)
-	}
-	// NaN/Inf would poison every downstream quota multiplication
-	// (int(NaN * quota) wraps to a negative charge).
-	if !(ratio > 0) || math.IsInf(ratio, 1) {
+	if !isValidOtherRatio(ratio) {
 		return
 	}
-	p.OtherRatios[key] = ratio
+	if p.otherRatios == nil {
+		p.otherRatios = make(map[string]float64)
+	}
+	p.otherRatios[key] = ratio
+}
+
+func (p *PriceData) ReplaceOtherRatios(ratios map[string]float64) bool {
+	p.otherRatios = nil
+	for key, ratio := range ratios {
+		p.AddOtherRatio(key, ratio)
+	}
+	return len(p.otherRatios) > 0
+}
+
+func (p *PriceData) HasOtherRatio(key string) bool {
+	ratio, ok := p.otherRatios[key]
+	return ok && isValidOtherRatio(ratio)
+}
+
+func (p *PriceData) OtherRatios() map[string]float64 {
+	if len(p.otherRatios) == 0 {
+		return nil
+	}
+
+	ratios := make(map[string]float64, len(p.otherRatios))
+	for key, ratio := range p.otherRatios {
+		if isValidOtherRatio(ratio) {
+			ratios[key] = ratio
+		}
+	}
+	if len(ratios) == 0 {
+		return nil
+	}
+	return ratios
+}
+
+func (p *PriceData) OtherRatioMultiplier() float64 {
+	multiplier, _ := p.otherRatioMultiplierDecimal().Float64()
+	return multiplier
+}
+
+func (p *PriceData) otherRatioMultiplierDecimal() decimal.Decimal {
+	multiplier := decimal.NewFromInt(1)
+	for _, ratio := range p.otherRatios {
+		if isValidOtherRatio(ratio) && ratio != 1 {
+			multiplier = multiplier.Mul(decimal.NewFromFloat(ratio))
+		}
+	}
+	return multiplier
+}
+
+func (p *PriceData) ApplyOtherRatiosToFloat(value float64) float64 {
+	if value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return value
+	}
+	result, _ := decimal.NewFromFloat(value).Mul(p.otherRatioMultiplierDecimal()).Float64()
+	return result
+}
+
+func (p *PriceData) ApplyOtherRatiosToDecimal(value decimal.Decimal) decimal.Decimal {
+	return value.Mul(p.otherRatioMultiplierDecimal())
+}
+
+func (p *PriceData) RemoveOtherRatiosFromFloat(value float64) float64 {
+	if value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return value
+	}
+	result, _ := decimal.NewFromFloat(value).Div(p.otherRatioMultiplierDecimal()).Float64()
+	return result
+}
+
+func isValidOtherRatio(ratio float64) bool {
+	// NaN/Inf would poison every downstream quota multiplication.
+	return ratio > 0 && !math.IsInf(ratio, 0)
 }
 
 func (p *PriceData) ToSetting() string {
