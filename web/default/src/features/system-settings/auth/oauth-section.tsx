@@ -16,13 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import * as z from 'zod'
-import axios from 'axios'
-import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import axios from 'axios'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import * as z from 'zod'
+
+import { CopyButton } from '@/components/copy-button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   Form,
   FormControl,
@@ -35,6 +38,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import {
@@ -45,6 +49,10 @@ import {
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  buildOAuthCallbackUrl,
+  resolveOAuthSiteUrl,
+} from './oauth-callback-url'
 
 /**
  * react-hook-form 7 treats dotted `name` strings as nested paths. To keep
@@ -115,6 +123,48 @@ type FlatOAuthDefaults = {
 const oauthTabContentClassName =
   'grid min-w-0 gap-x-5 gap-y-6 lg:grid-cols-2 [&>[data-slot=form-item]]:min-w-0 lg:[&>[data-slot=form-item]:has([data-slot=switch])]:col-span-2'
 
+type OAuthSetupValue = {
+  label: string
+  value: string
+  copyLabel: string
+}
+
+type OAuthSetupGuideProps = {
+  description: string
+  values: OAuthSetupValue[]
+  action?: ReactNode
+}
+
+function OAuthSetupGuide(props: OAuthSetupGuideProps) {
+  return (
+    <Alert className='lg:col-span-2'>
+      <AlertDescription className='flex flex-col gap-3 text-left'>
+        <p>{props.description}</p>
+        <dl className='flex flex-col gap-2'>
+          {props.values.map((item) => (
+            <div key={item.label} className='flex flex-col gap-1'>
+              <dt className='text-foreground text-xs font-medium'>
+                {item.label}
+              </dt>
+              <dd className='bg-muted flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5'>
+                <code className='min-w-0 flex-1 text-xs break-all'>
+                  {item.value}
+                </code>
+                <CopyButton
+                  value={item.value}
+                  tooltip={item.copyLabel}
+                  aria-label={item.copyLabel}
+                />
+              </dd>
+            </div>
+          ))}
+        </dl>
+        {props.action}
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 const buildFormDefaults = (defaults: FlatOAuthDefaults): OAuthFormValues => ({
   GitHubOAuthEnabled: defaults.GitHubOAuthEnabled,
   GitHubClientId: defaults.GitHubClientId ?? '',
@@ -175,12 +225,34 @@ const normalizeFormValues = (values: OAuthFormValues): FlatOAuthDefaults => ({
 
 type OAuthSectionProps = {
   defaultValues: FlatOAuthDefaults
+  serverAddress: string
 }
 
 export function OAuthSection(props: OAuthSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [activeTab, setActiveTab] = useState('github')
+  const siteUrl = resolveOAuthSiteUrl(props.serverAddress, t('Site URL'))
+  const githubCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'github',
+    t('Site URL')
+  )
+  const discordCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'discord',
+    t('Site URL')
+  )
+  const oidcCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'oidc',
+    t('Site URL')
+  )
+  const linuxDOCallbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    'linuxdo',
+    t('Site URL')
+  )
 
   const formDefaults = useMemo(
     () => buildFormDefaults(props.defaultValues),
@@ -304,6 +376,24 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsList>
 
               <TabsContent value='github' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  description={t(
+                    'Set these values in the provider application before enabling login.'
+                  )}
+                  values={[
+                    {
+                      label: t('Homepage URL'),
+                      value: siteUrl,
+                      copyLabel: t('Copy homepage URL'),
+                    },
+                    {
+                      label: t('Authorization callback URL'),
+                      value: githubCallbackUrl,
+                      copyLabel: t('Copy callback URL'),
+                    },
+                  ]}
+                />
+
                 <FormField
                   control={form.control}
                   name='GitHubOAuthEnabled'
@@ -376,6 +466,24 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsContent>
 
               <TabsContent value='discord' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  description={t(
+                    'Set these values in the provider application before enabling login.'
+                  )}
+                  values={[
+                    {
+                      label: t('Homepage URL'),
+                      value: siteUrl,
+                      copyLabel: t('Copy homepage URL'),
+                    },
+                    {
+                      label: t('Redirect URL'),
+                      value: discordCallbackUrl,
+                      copyLabel: t('Copy redirect URL'),
+                    },
+                  ]}
+                />
+
                 <FormField
                   control={form.control}
                   name='discord.enabled'
@@ -448,6 +556,19 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsContent>
 
               <TabsContent value='oidc' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  description={t(
+                    'OIDC discovery can fill the endpoint fields automatically when the provider supports it.'
+                  )}
+                  values={[
+                    {
+                      label: t('Redirect URL'),
+                      value: oidcCallbackUrl,
+                      copyLabel: t('Copy redirect URL'),
+                    },
+                  ]}
+                />
+
                 <FormField
                   control={form.control}
                   name='oidc.enabled'
@@ -700,6 +821,29 @@ export function OAuthSection(props: OAuthSectionProps) {
               </TabsContent>
 
               <TabsContent value='linuxdo' className={oauthTabContentClassName}>
+                <OAuthSetupGuide
+                  description={t(
+                    'Set these values in the provider application before enabling login.'
+                  )}
+                  values={[
+                    {
+                      label: t('OAuth callback URL'),
+                      value: linuxDOCallbackUrl,
+                      copyLabel: t('Copy callback URL'),
+                    },
+                  ]}
+                  action={
+                    <a
+                      href='https://connect.linux.do/'
+                      target='_blank'
+                      rel='noreferrer'
+                      className='inline-flex text-sm font-medium'
+                    >
+                      {t('Manage your LinuxDO OAuth app')}
+                    </a>
+                  }
+                />
+
                 <FormField
                   control={form.control}
                   name='LinuxDOOAuthEnabled'

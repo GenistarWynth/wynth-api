@@ -18,18 +18,32 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
+import { CopyButton } from '@/components/copy-button'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+
 import { SettingsSection } from '../../components/settings-section'
+import { buildOAuthCallbackUrl } from '../oauth-callback-url'
 import { ProviderFormDialog } from './components/provider-form-dialog'
 import { ProviderTable } from './components/provider-table'
 import { useCustomOAuthProviders } from './hooks/use-custom-oauth-providers'
 import type { CustomOAuthProvider } from './types'
 
-export function CustomOAuthSection() {
+type CustomOAuthSectionProps = {
+  serverAddress: string
+}
+
+export function CustomOAuthSection(props: CustomOAuthSectionProps) {
   const { t } = useTranslation()
   const { data: providers = [], isLoading } = useCustomOAuthProviders()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProvider, setEditingProvider] =
     useState<CustomOAuthProvider | null>(null)
+  const callbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    '{slug}',
+    t('Site URL')
+  )
 
   const handleCreate = () => {
     setEditingProvider(null)
@@ -60,6 +74,27 @@ export function CustomOAuthSection() {
 
   return (
     <SettingsSection title={t('Custom OAuth Providers')}>
+      <Alert>
+        <AlertTitle>{t('Callback URL format')}</AlertTitle>
+        <AlertDescription className='flex flex-col gap-2 text-left'>
+          <p>
+            {t(
+              'Use this callback URL pattern when registering a custom OAuth provider.'
+            )}
+          </p>
+          <div className='bg-muted flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5'>
+            <code className='min-w-0 flex-1 text-xs break-all'>
+              {callbackUrl}
+            </code>
+            <CopyButton
+              value={callbackUrl}
+              tooltip={t('Copy callback URL')}
+              aria-label={t('Copy callback URL')}
+            />
+          </div>
+        </AlertDescription>
+      </Alert>
+
       <ProviderTable
         providers={providers}
         onEdit={handleEdit}
@@ -70,6 +105,7 @@ export function CustomOAuthSection() {
         open={dialogOpen}
         onOpenChange={handleDialogChange}
         provider={editingProvider}
+        serverAddress={props.serverAddress}
       />
     </SettingsSection>
   )
