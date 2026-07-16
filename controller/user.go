@@ -787,8 +787,7 @@ func UpdateSelf(c *gin.Context) {
 		}
 
 		// 保存更新后的设置
-		user.SetSetting(currentSetting)
-		if err := user.Update(false); err != nil {
+		if err := model.UpdateUserSetting(userId, currentSetting); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -815,8 +814,7 @@ func UpdateSelf(c *gin.Context) {
 		}
 
 		// 保存更新后的设置
-		user.SetSetting(currentSetting)
-		if err := user.Update(false); err != nil {
+		if err := model.UpdateUserSetting(userId, currentSetting); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -1480,8 +1478,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 更新用户设置
-	user.SetSetting(settings)
-	if err := user.Update(false); err != nil {
+	if err := model.UpdateUserSetting(userId, settings); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 		return
 	}

@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -135,6 +137,117 @@ func TestAccountPoolCapabilityAutoDetectJobTimeoutScalesWithAccountCount(t *test
 
 	job.accountIDs = make([]int, 100)
 	assert.Equal(t, accountPoolCapabilityAutoDetectMaxJobTimeout, accountPoolCapabilityAutoDetectJobTimeout(job))
+}
+
+func TestStartAccountPoolCapabilityAutoDetectWorkerCancellationClosesStableDone(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	oldMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = oldMaster })
+	resetAccountPoolCapabilityAutoDetectWorkerForTest(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartAccountPoolCapabilityAutoDetectWorker(ctx)
+	assert.Equal(t, done, StartAccountPoolCapabilityAutoDetectWorker(context.Background()), "repeated starts must return the stable done channel")
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for capability auto-detect worker shutdown")
+	}
+}
+
+func TestStartAccountPoolCapabilityAutoDetectWorkerAlreadyCanceledSkipsInitialTick(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	now := common.GetTimestamp()
+	account := model.AccountPoolAccount{
+		PoolID:             pool.Id,
+		Name:               "canceled-initial-tick",
+		Status:             model.AccountPoolAccountStatusEnabled,
+		ExpiresAt:          now - 1,
+		AutoPauseOnExpired: true,
+	}
+	require.NoError(t, model.DB.Create(&account).Error)
+
+	oldMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = oldMaster })
+	resetAccountPoolCapabilityAutoDetectWorkerForTest(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := StartAccountPoolCapabilityAutoDetectWorker(ctx)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for already-canceled capability worker")
+	}
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status, "an already-canceled worker must not run its initial expiry sweep")
+}
+
+func TestRunDueAccountPoolCapabilityAutoDetectCancellationStopsBeforeNextJob(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	now := int64(40_000)
+	for _, name := range []string{"cancel-first", "cancel-second"} {
+		pool, err := service.CreatePool(AccountPoolCreateParams{
+			Name:                           name,
+			CapabilityCheckEnabled:         true,
+			CapabilityCheckIntervalMinutes: 15,
+		})
+		require.NoError(t, err)
+		createAccountPoolCapabilityAutoDetectAccount(t, service, pool.Id, name+"-account", model.AccountPoolAccountStatusEnabled, 0)
+	}
+	jobs, err := listDueAccountPoolCapabilityAutoDetectJobs(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, jobs, 2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	detectorStarted := make(chan struct{}, 1)
+	detectorCalls := 0
+	resultCh := make(chan []AccountPoolCapabilityPoolResult, 1)
+	go func() {
+		resultCh <- runDueAccountPoolCapabilityAutoDetectWithDetector(ctx, now, func(ctx context.Context, _ AccountPoolCapabilityDetectRequest) (AccountPoolCapabilityPoolResult, error) {
+			detectorCalls++
+			detectorStarted <- struct{}{}
+			<-ctx.Done()
+			return AccountPoolCapabilityPoolResult{}, ctx.Err()
+		})
+	}()
+
+	select {
+	case <-detectorStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the first capability detector")
+	}
+	cancel()
+
+	var results []AccountPoolCapabilityPoolResult
+	select {
+	case results = <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("capability runner did not return after cancellation")
+	}
+	assert.Equal(t, 1, detectorCalls, "shutdown cancellation must not start a later job")
+	assert.Empty(t, results, "shutdown cancellation must not be recorded as a capability failure")
+}
+
+func resetAccountPoolCapabilityAutoDetectWorkerForTest(t *testing.T) {
+	t.Helper()
+	accountPoolCapabilityAutoDetectOnce = sync.Once{}
+	accountPoolCapabilityAutoDetectDone = make(chan struct{})
+	accountPoolCapabilityAutoDetectRunning.Store(false)
+	t.Cleanup(func() {
+		accountPoolCapabilityAutoDetectOnce = sync.Once{}
+		accountPoolCapabilityAutoDetectDone = make(chan struct{})
+		accountPoolCapabilityAutoDetectRunning.Store(false)
+	})
 }
 
 func createAccountPoolCapabilityAutoDetectAccount(t *testing.T, service AccountPoolService, poolID int, name string, status string, lastCapabilityCheckAt int64) model.AccountPoolAccount {

@@ -115,19 +115,23 @@ func resetAccountPoolProxyHealthForTest() {
 
 // accountPoolProxyProbeFunc is the injectable probe implementation. Tests replace it
 // with a fake; production uses tcpProbeAccountPoolProxy.
-// Signature: (proxy, timeoutSeconds) → (healthy, latencyMS).
+// Signature: (ctx, proxy, timeoutSeconds) → (healthy, latencyMS).
 var accountPoolProxyProbeFunc = tcpProbeAccountPoolProxy
 
 // tcpProbeAccountPoolProxy performs a lightweight TCP dial to the proxy's host:port
 // to check reachability. It returns healthy=true if the connection succeeds within
 // timeoutSeconds, and the round-trip latency in milliseconds.
-func tcpProbeAccountPoolProxy(proxy model.AccountPoolProxy, timeoutSeconds int) (bool, int64) {
+func tcpProbeAccountPoolProxy(ctx context.Context, proxy model.AccountPoolProxy, timeoutSeconds int) (bool, int64) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 10
 	}
 	addr := net.JoinHostPort(proxy.Host, strconv.Itoa(proxy.Port))
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeoutSeconds)*time.Second)
+	dialer := net.Dialer{Timeout: time.Duration(timeoutSeconds) * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	latencyMS := time.Since(start).Milliseconds()
 	if err != nil {
 		return false, latencyMS
@@ -138,28 +142,42 @@ func tcpProbeAccountPoolProxy(proxy model.AccountPoolProxy, timeoutSeconds int) 
 
 // runAccountPoolProxyProbeAndRecord calls the injectable probe function for proxy and
 // records the result in the health store with now as the observation timestamp.
-func runAccountPoolProxyProbeAndRecord(proxy model.AccountPoolProxy, timeoutSeconds int, now int64) {
-	healthy, latencyMS := accountPoolProxyProbeFunc(proxy, timeoutSeconds)
+func runAccountPoolProxyProbeAndRecord(ctx context.Context, proxy model.AccountPoolProxy, timeoutSeconds int, now int64) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	healthy, latencyMS := accountPoolProxyProbeFunc(ctx, proxy, timeoutSeconds)
+	if ctx.Err() != nil {
+		return
+	}
 	recordAccountPoolProxyProbe(proxy.Id, healthy, latencyMS, now)
 }
 
 // --- background prober ---
 
-var accountPoolProxyProberOnce sync.Once
+var (
+	accountPoolProxyProberOnce sync.Once
+	accountPoolProxyProberDone = make(chan struct{})
+)
 
 // StartAccountPoolProxyProber starts a background worker that probes all enabled
 // account-pool proxies on each tick of the configured interval, updating the in-memory
 // health store. It is a no-op on non-master nodes. It can be called multiple times
 // safely; the prober runs at most once per process.
-func StartAccountPoolProxyProber(ctx context.Context, interval time.Duration) {
-	if !common.IsMasterNode {
-		return
+func StartAccountPoolProxyProber(ctx context.Context, interval time.Duration) <-chan struct{} {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if interval <= 0 {
 		interval = accountPoolProxyProberTickInterval
 	}
 	accountPoolProxyProberOnce.Do(func() {
+		if !common.IsMasterNode {
+			close(accountPoolProxyProberDone)
+			return
+		}
 		gopool.Go(func() {
+			defer close(accountPoolProxyProberDone)
 			logger.LogInfo(ctx, "account pool proxy prober started")
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
@@ -175,6 +193,7 @@ func StartAccountPoolProxyProber(ctx context.Context, interval time.Duration) {
 			}
 		})
 	})
+	return accountPoolProxyProberDone
 }
 
 func runAccountPoolProxyProberOnceRecovering(ctx context.Context) {
@@ -206,7 +225,7 @@ func runAccountPoolProxyProberOnce(ctx context.Context) {
 		wg.Add(1)
 		gopool.Go(func() {
 			defer wg.Done()
-			runAccountPoolProxyProbeAndRecord(p, 10, now)
+			runAccountPoolProxyProbeAndRecord(ctx, p, 10, now)
 		})
 	}
 	wg.Wait()

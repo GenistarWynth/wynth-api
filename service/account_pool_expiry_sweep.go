@@ -1,6 +1,8 @@
 package service
 
 import (
+	"context"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
@@ -18,10 +20,17 @@ import (
 //
 // Returns the number of accounts paused.
 func RunAccountPoolExpiryAutoPause(now int64) (int64, error) {
+	return RunAccountPoolExpiryAutoPauseContext(context.Background(), now)
+}
+
+func RunAccountPoolExpiryAutoPauseContext(ctx context.Context, now int64) (int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if now <= 0 {
 		now = common.GetTimestamp()
 	}
-	tx := model.DB.Model(&model.AccountPoolAccount{}).
+	tx := model.DB.WithContext(ctx).Model(&model.AccountPoolAccount{}).
 		Where("auto_pause_on_expired = ? AND expires_at > 0 AND expires_at <= ? AND status = ?",
 			true, now, model.AccountPoolAccountStatusEnabled).
 		Updates(map[string]any{

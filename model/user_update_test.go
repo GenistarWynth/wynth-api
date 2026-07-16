@@ -5,9 +5,13 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,6 +135,153 @@ func setupUserUpdateTestState(t *testing.T) {
 		common.RedisEnabled = oldRedisEnabled
 		common.BatchUpdateEnabled = oldBatchUpdateEnabled
 	})
+}
+
+func setupUserCacheRedisTest(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+
+	oldRDB := common.RDB
+	oldRedisEnabled := common.RedisEnabled
+	oldSyncFrequency := common.SyncFrequency
+	common.RDB = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	common.RedisEnabled = true
+	common.SyncFrequency = 60
+	t.Cleanup(func() {
+		require.NoError(t, common.RDB.Close())
+		common.RDB = oldRDB
+		common.RedisEnabled = oldRedisEnabled
+		common.SyncFrequency = oldSyncFrequency
+		mr.Close()
+	})
+
+	return mr
+}
+
+func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Username:     "stale-profile",
+		DisplayName:  "Before",
+		Password:     "password-hash",
+		Quota:        100,
+		UsedQuota:    10,
+		RequestCount: 2,
+		Status:       common.UserStatusEnabled,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	stale := user
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
+		"quota":         175,
+		"used_quota":    35,
+		"request_count": 8,
+	}).Error)
+
+	stale.Username = "fresh-profile"
+	stale.DisplayName = "After"
+	require.NoError(t, stale.Update(false))
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, 175, stored.Quota)
+	assert.Equal(t, 35, stored.UsedQuota)
+	assert.Equal(t, 8, stored.RequestCount)
+	assert.Equal(t, "fresh-profile", stored.Username)
+	assert.Equal(t, "After", stored.DisplayName)
+	assert.Equal(t, stored.Quota, stale.Quota)
+	assert.Equal(t, stored.UsedQuota, stale.UsedQuota)
+	assert.Equal(t, stored.RequestCount, stale.RequestCount)
+}
+
+func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Username:     "setting-only",
+		Password:     "password-hash",
+		Quota:        200,
+		UsedQuota:    20,
+		RequestCount: 3,
+		Status:       common.UserStatusEnabled,
+	}
+	user.SetSetting(dto.UserSetting{Language: "en"})
+	require.NoError(t, DB.Create(&user).Error)
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
+		"quota":         260,
+		"used_quota":    45,
+		"request_count": 11,
+	}).Error)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, 260, stored.Quota)
+	assert.Equal(t, 45, stored.UsedQuota)
+	assert.Equal(t, 11, stored.RequestCount)
+	assert.Equal(t, "zh", stored.GetSetting().Language)
+}
+
+func TestUserUpdatePreservesAtomicQuotaInRedisCache(t *testing.T) {
+	setupUserUpdateTestState(t)
+	mr := setupUserCacheRedisTest(t)
+
+	user := User{
+		Username: "cached-user",
+		Password: "password-hash",
+		Email:    "before@example.com",
+		Group:    "default",
+		Quota:    100,
+		Status:   common.UserStatusEnabled,
+	}
+	user.SetSetting(dto.UserSetting{Language: "en"})
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, populateUserCache(user))
+	assert.Greater(t, mr.TTL(getUserCacheKey(user.Id)), time.Duration(0))
+
+	require.NoError(t, cacheDecrUserQuota(user.Id, 30))
+
+	stale := user
+	stale.Username = "updated-cached-user"
+	stale.Email = "after@example.com"
+	stale.Group = "vip"
+	stale.Status = common.UserStatusDisabled
+	stale.SetSetting(dto.UserSetting{Language: "zh"})
+	require.NoError(t, stale.Update(false))
+
+	cached, err := cacheGetUserBase(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, 70, cached.Quota)
+	assert.Equal(t, "updated-cached-user", cached.Username)
+	assert.Equal(t, "after@example.com", cached.Email)
+	assert.Equal(t, "vip", cached.Group)
+	assert.Equal(t, common.UserStatusDisabled, cached.Status)
+	assert.Equal(t, stale.Setting, cached.Setting)
+}
+
+func TestUpdateUserSettingInvalidatesCacheWhenFieldRefreshFails(t *testing.T) {
+	setupUserUpdateTestState(t)
+	mr := setupUserCacheRedisTest(t)
+
+	user := User{Username: "cache-fallback", Password: "password-hash", Status: common.UserStatusEnabled}
+	user.SetSetting(dto.UserSetting{Language: "en"})
+	require.NoError(t, DB.Create(&user).Error)
+
+	cacheKey := getUserCacheKey(user.Id)
+	mr.Set(cacheKey, "wrong-type")
+	mr.SetTTL(cacheKey, time.Minute)
+
+	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+	assert.False(t, mr.Exists(cacheKey))
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	assert.Equal(t, "zh", stored.GetSetting().Language)
 }
 
 func TestValidateNormalizedEmail(t *testing.T) {

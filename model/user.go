@@ -725,11 +725,16 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		}
 	}
 	newUser := *user
-	tx.First(&user, user.Id)
-	if err = tx.Model(user).Updates(newUser).Error; err != nil {
+	currentUser := User{}
+	if err = tx.First(&currentUser, user.Id).Error; err != nil {
 		return err
 	}
-	return nil
+	if err = tx.Model(&currentUser).
+		Omit("quota", "used_quota", "request_count").
+		Updates(newUser).Error; err != nil {
+		return err
+	}
+	return tx.First(user, user.Id).Error
 }
 
 func (user *User) Edit(updatePassword bool) error {
@@ -759,11 +764,39 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 		updates["password"] = newUser.Password
 	}
 
-	tx.First(&user, user.Id)
-	if err = tx.Model(user).Updates(updates).Error; err != nil {
+	currentUser := User{}
+	if err = tx.First(&currentUser, user.Id).Error; err != nil {
 		return err
 	}
-	return nil
+	if err = tx.Model(&currentUser).Updates(updates).Error; err != nil {
+		return err
+	}
+	return tx.First(user, user.Id).Error
+}
+
+func UpdateUserSetting(id int, setting dto.UserSetting) error {
+	if id <= 0 {
+		return errors.New("user id must be positive")
+	}
+
+	settingBytes, err := common.Marshal(setting)
+	if err != nil {
+		return err
+	}
+	settingValue := string(settingBytes)
+	if err = DB.Model(&User{}).Where("id = ?", id).Update("setting", settingValue).Error; err != nil {
+		return err
+	}
+
+	if err = updateUserSettingCache(id, settingValue); err == nil {
+		return nil
+	}
+	cacheUpdateErr := err
+	if err = invalidateUserCache(id); err == nil {
+		common.SysLog("failed to update user setting cache; invalidated user cache: " + cacheUpdateErr.Error())
+		return nil
+	}
+	return errors.Join(cacheUpdateErr, err)
 }
 
 func (user *User) ClearBinding(bindingType string) error {

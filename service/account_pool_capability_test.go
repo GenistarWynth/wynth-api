@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -897,6 +899,101 @@ func TestAccountPoolCapabilityDetectPoolCapabilitiesDeletedPoolReturnsError(t *t
 	assert.Zero(t, result.Total)
 	require.NotNil(t, result.Results)
 	assert.Empty(t, result.Results)
+}
+
+func TestAccountPoolCapabilityDetectPoolCapabilitiesCancellationDoesNotPersist(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	accounts := make([]AccountPoolAccountView, 0, 2)
+	for _, name := range []string{"cancel-first-account", "cancel-second-account"} {
+		account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+			PoolID: pool.Id,
+			Name:   name,
+			Status: model.AccountPoolAccountStatusEnabled,
+			Credential: AccountPoolCredentialConfig{
+				Type:   AccountPoolCredentialTypeAPIKey,
+				APIKey: "sk-cancel-detect",
+			},
+			SupportedModels: []string{"existing-model"},
+		})
+		require.NoError(t, err)
+		accounts = append(accounts, account)
+	}
+
+	const (
+		sentinelCheckAt     = int64(123456789)
+		sentinelCheckStatus = "sentinel-status"
+		sentinelCheckError  = "sentinel-error"
+		sentinelCheckModels = `["sentinel-model"]`
+	)
+	accountIDs := []int{accounts[0].Id, accounts[1].Id}
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id IN ?", accountIDs).
+		Updates(map[string]any{
+			"last_capability_check_at":     sentinelCheckAt,
+			"last_capability_check_status": sentinelCheckStatus,
+			"last_capability_check_error":  sentinelCheckError,
+			"last_capability_check_models": sentinelCheckModels,
+		}).Error)
+
+	requestStarted := make(chan struct{}, 2)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		requestStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	channel := createAccountPoolCapabilityTestChannel(t, server.URL)
+	_, err := service.CreateBinding(AccountPoolBindingCreateParams{
+		PoolID:    pool.Id,
+		ChannelID: channel.Id,
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, detectErr := service.DetectPoolCapabilities(ctx, AccountPoolCapabilityDetectRequest{
+			PoolID:     pool.Id,
+			AccountIDs: accountIDs,
+			ChannelID:  channel.Id,
+			Mode:       AccountPoolCapabilityModeModelsEndpoint,
+			Apply:      true,
+		})
+		errCh <- detectErr
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first capability request")
+	}
+	cancel()
+
+	var detectErr error
+	select {
+	case detectErr = <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for capability detection cancellation")
+	}
+	assert.Error(t, detectErr)
+	assert.True(t, errors.Is(detectErr, context.Canceled), "expected context cancellation, got %v", detectErr)
+	assert.Equal(t, int32(1), requestCount.Load())
+
+	for _, account := range accounts {
+		stored := loadAccountPoolCapabilityTestAccount(t, account.Id)
+		assert.Equal(t, `["existing-model"]`, stored.SupportedModels)
+		assert.Equal(t, sentinelCheckAt, stored.LastCapabilityCheckAt)
+		assert.Equal(t, sentinelCheckStatus, stored.LastCapabilityCheckStatus)
+		assert.Equal(t, sentinelCheckError, stored.LastCapabilityCheckError)
+		assert.Equal(t, sentinelCheckModels, stored.LastCapabilityCheckModels)
+	}
 }
 
 func createAccountPoolCapabilityTestChannel(t *testing.T, baseURL string) model.Channel {

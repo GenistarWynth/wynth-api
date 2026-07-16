@@ -1,8 +1,12 @@
 package service
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,13 +92,13 @@ func TestAccountPoolProxyProbeSeamRecordsHealthAndLatencyFromFakeProbe(t *testin
 
 	// Install a fake probe that reports healthy with 25 ms latency.
 	old := accountPoolProxyProbeFunc
-	accountPoolProxyProbeFunc = func(_ model.AccountPoolProxy, _ int) (bool, int64) {
+	accountPoolProxyProbeFunc = func(_ context.Context, _ model.AccountPoolProxy, _ int) (bool, int64) {
 		return true, 25
 	}
 	t.Cleanup(func() { accountPoolProxyProbeFunc = old })
 
 	proxy := model.AccountPoolProxy{Id: proxyID, Protocol: "http", Host: "h.local", Port: 8080}
-	runAccountPoolProxyProbeAndRecord(proxy, 1, now)
+	runAccountPoolProxyProbeAndRecord(context.Background(), proxy, 1, now)
 
 	assert.True(t, accountPoolProxyHealthy(proxyID, now), "fake-probe result healthy must be stored")
 	assert.Equal(t, int64(25), accountPoolProxyLatency(proxyID))
@@ -108,7 +112,7 @@ func TestAccountPoolProxyProbeSeamRecordsUnhealthyFromFakeProbe(t *testing.T) {
 
 	// Install a fake probe that reports unhealthy.
 	old := accountPoolProxyProbeFunc
-	accountPoolProxyProbeFunc = func(_ model.AccountPoolProxy, _ int) (bool, int64) {
+	accountPoolProxyProbeFunc = func(_ context.Context, _ model.AccountPoolProxy, _ int) (bool, int64) {
 		return false, 0
 	}
 	t.Cleanup(func() { accountPoolProxyProbeFunc = old })
@@ -116,7 +120,7 @@ func TestAccountPoolProxyProbeSeamRecordsUnhealthyFromFakeProbe(t *testing.T) {
 	proxy := model.AccountPoolProxy{Id: proxyID, Protocol: "http", Host: "h2.local", Port: 8080}
 	// Drive to threshold using the seam.
 	for i := 0; i < accountPoolProxyHealthConsecutiveFailThreshold; i++ {
-		runAccountPoolProxyProbeAndRecord(proxy, 1, now)
+		runAccountPoolProxyProbeAndRecord(context.Background(), proxy, 1, now)
 	}
 
 	assert.False(t, accountPoolProxyHealthy(proxyID, now), "fake-probe unhealthy result must eventually mark proxy unhealthy")
@@ -229,4 +233,55 @@ func TestAccountPoolProxyHealthAwareResolutionHealthyProxyResolvesAsToday(t *tes
 
 	require.NoError(t, err)
 	assert.Equal(t, "http://healthy.local:7071", proxyURL, "known-healthy proxy must resolve as normal")
+}
+
+func TestStartAccountPoolProxyProberCancellationStopsBlockingProbe(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	resetAccountPoolProxyHealthForTest()
+	proxy := createAccountPoolRuntimeTestProxy(t, AccountPoolService{}, AccountPoolProxyCreateParams{
+		Name:     "cancel-probe",
+		Protocol: "http",
+		Host:     "cancel.local",
+		Port:     8080,
+	})
+
+	oldMaster := common.IsMasterNode
+	common.IsMasterNode = true
+	t.Cleanup(func() { common.IsMasterNode = oldMaster })
+	accountPoolProxyProberOnce = sync.Once{}
+	accountPoolProxyProberDone = make(chan struct{})
+
+	probeStarted := make(chan struct{}, 1)
+	probeCanceled := make(chan struct{}, 1)
+	oldProbe := accountPoolProxyProbeFunc
+	accountPoolProxyProbeFunc = func(ctx context.Context, _ model.AccountPoolProxy, _ int) (bool, int64) {
+		probeStarted <- struct{}{}
+		<-ctx.Done()
+		probeCanceled <- struct{}{}
+		return false, 0
+	}
+	t.Cleanup(func() { accountPoolProxyProbeFunc = oldProbe })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartAccountPoolProxyProber(ctx, time.Hour)
+	assert.Equal(t, done, StartAccountPoolProxyProber(context.Background(), time.Hour), "repeated starts must return the stable done channel")
+	requireProxyWorkerSignal(t, probeStarted, "blocking probe start")
+
+	cancel()
+	requireProxyWorkerSignal(t, probeCanceled, "probe cancellation")
+	requireProxyWorkerSignal(t, done, "proxy prober shutdown")
+
+	accountPoolProxyHealth.mu.Lock()
+	health, recorded := accountPoolProxyHealth.store[proxy.Id]
+	assert.True(t, !recorded || health.consecutiveFailures == 0, "shutdown cancellation must not count as a failed proxy probe")
+	accountPoolProxyHealth.mu.Unlock()
+}
+
+func requireProxyWorkerSignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+	}
 }

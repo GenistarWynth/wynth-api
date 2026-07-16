@@ -303,25 +303,13 @@ func RedisHSetField(key, field string, value interface{}) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HSET field: key=%s, field=%s, value=%v", key, field, value))
 	}
-	ttlCmd := RDB.TTL(context.Background(), key)
-	ttl, err := ttlCmd.Result()
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("failed to get TTL: %w", err)
-	}
-
-	if ttl > 0 {
-		ctx := context.Background()
-		txn := RDB.TxPipeline()
-
-		hsetCmd := txn.HSet(ctx, key, field, value)
-		if err := hsetCmd.Err(); err != nil {
-			return err
-		}
-
-		txn.Expire(ctx, key, ttl)
-
-		_, err = txn.Exec(ctx)
-		return err
-	}
-	return nil
+	const script = `
+local ttl = redis.call("TTL", KEYS[1])
+if ttl <= 0 then
+    return 0
+end
+redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
+return 1
+`
+	return RDB.Eval(context.Background(), script, []string{key}, field, value).Err()
 }
