@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -38,9 +39,49 @@ func (s *lifecycleTestServer) Close() error {
 	return s.closeFn()
 }
 
+func TestServerLifecycleStartedCallbackRunsOnceBeforeImmediateErrorCleanup(t *testing.T) {
+	listenErr := errors.New("listen failed immediately")
+	listenResult := make(chan error, 1)
+	listenResult <- listenErr
+	workerDone := make(chan struct{})
+	close(workerDone)
+
+	var eventsMu sync.Mutex
+	events := make([]string, 0, 3)
+	recordEvent := func(event string) {
+		eventsMu.Lock()
+		events = append(events, event)
+		eventsMu.Unlock()
+	}
+	lifecycle := serverLifecycle{
+		server:  &lifecycleTestServer{listenResult: listenResult},
+		signals: make(chan os.Signal),
+		timeout: time.Second,
+		started: func() {
+			recordEvent("started")
+		},
+		stopWorkers: func() {
+			recordEvent("stop workers")
+		},
+		workerDone: []<-chan struct{}{workerDone},
+		flush: func() error {
+			recordEvent("flush")
+			return nil
+		},
+	}
+
+	err := lifecycle.run()
+
+	assert.ErrorIs(t, err, listenErr)
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	assert.Equal(t, []string{"started", "stop workers", "flush"}, events)
+}
+
 func TestServerLifecycleDrainsWorkersBeforeFlush(t *testing.T) {
 	listenResult := make(chan error, 1)
 	shutdownCalled := make(chan struct{}, 1)
+	finalHandlerDone := make(chan struct{})
 	workerDone := make(chan struct{})
 	flushCalled := make(chan struct{}, 1)
 	stopCalled := make(chan struct{}, 1)
@@ -50,6 +91,7 @@ func TestServerLifecycleDrainsWorkersBeforeFlush(t *testing.T) {
 		listenResult: listenResult,
 		shutdownFn: func(context.Context) error {
 			shutdownCalled <- struct{}{}
+			<-finalHandlerDone
 			listenResult <- http.ErrServerClosed
 			return nil
 		},
@@ -76,6 +118,13 @@ func TestServerLifecycleDrainsWorkersBeforeFlush(t *testing.T) {
 
 	requireSignal(t, stopCalled, "worker cancellation")
 	requireSignal(t, shutdownCalled, "HTTP shutdown")
+	select {
+	case <-flushCalled:
+		t.Fatal("flush ran before the in-flight handler completed")
+	default:
+	}
+
+	close(finalHandlerDone)
 	select {
 	case <-flushCalled:
 		t.Fatal("flush ran before the worker drained")

@@ -64,6 +64,7 @@ type serverLifecycle struct {
 	server      gracefulHTTPServer
 	signals     <-chan os.Signal
 	timeout     time.Duration
+	started     func()
 	stopWorkers func()
 	workerDone  []<-chan struct{}
 	flush       func() error
@@ -96,9 +97,15 @@ func newServerShutdownSignalChannel() chan os.Signal {
 
 func (l serverLifecycle) run() error {
 	serverErr := make(chan error, 1)
+	serverStarted := make(chan struct{})
 	go func() {
+		close(serverStarted)
 		serverErr <- l.server.ListenAndServe()
 	}()
+	<-serverStarted
+	if l.started != nil {
+		l.started()
+	}
 
 	select {
 	case err := <-serverErr:
@@ -359,9 +366,6 @@ func runApplication() (runErr error) {
 		port = strconv.Itoa(*common.Port)
 	}
 
-	// Log startup success message
-	common.LogStartupSuccess(startTime, port)
-
 	httpServer := &http.Server{
 		Addr:    ":" + port,
 		Handler: server,
@@ -371,9 +375,12 @@ func runApplication() (runErr error) {
 	defer signal.Stop(shutdownSignals)
 
 	err = (serverLifecycle{
-		server:      httpServer,
-		signals:     shutdownSignals,
-		timeout:     configuredServerShutdownTimeout(),
+		server:  httpServer,
+		signals: shutdownSignals,
+		timeout: configuredServerShutdownTimeout(),
+		started: func() {
+			common.LogStartupSuccess(startTime, port)
+		},
 		stopWorkers: stopAccountPoolWorkers,
 		workerDone: []<-chan struct{}{
 			accountPoolCapabilityWorkerDone,
