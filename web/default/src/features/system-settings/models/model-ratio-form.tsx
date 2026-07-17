@@ -18,9 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { Code2, Eye, RotateCcw, Save } from 'lucide-react'
-import { memo, useCallback, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Button } from '@/components/ui/button'
@@ -41,6 +42,7 @@ import {
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
+import { resolveEnabledModelsError } from './model-ratio-behavior'
 import {
   ModelRatioVisualEditor,
   type ModelRatioVisualEditorHandle,
@@ -179,6 +181,18 @@ export const ModelRatioForm = memo(function ModelRatioForm({
     queryFn: getEnabledModels,
     enabled: isUnsetVariant,
   })
+  const enabledModelsError = resolveEnabledModelsError({
+    enabled: isUnsetVariant,
+    isError: enabledModelsQuery.isError,
+    error: enabledModelsQuery.error,
+    data: enabledModelsQuery.data,
+    fallback: t('Failed to load enabled models'),
+  })
+
+  useEffect(() => {
+    if (!enabledModelsError) return
+    toast.error(enabledModelsError, { id: 'enabled-models-load-error' })
+  }, [enabledModelsError])
 
   const handleFieldChange = useCallback(
     (field: keyof ModelFormValues, value: string) => {
@@ -270,7 +284,12 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
               candidateModelNames={
-                isUnsetVariant ? enabledModelsQuery.data?.data : undefined
+                isUnsetVariant && enabledModelsQuery.data?.success
+                  ? enabledModelsQuery.data.data
+                  : undefined
+              }
+              candidateModelsLoading={
+                isUnsetVariant && enabledModelsQuery.isLoading
               }
               filterMode={isUnsetVariant ? 'unset' : 'all'}
               onSave={handleSave}

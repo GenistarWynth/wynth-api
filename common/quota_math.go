@@ -27,8 +27,8 @@ const (
 )
 
 // QuotaClamp describes a single saturation event: a quota conversion whose
-// input fell outside the representable int32 range (or was NaN) and was
-// therefore clamped. It is surfaced to billing callers so the event can be
+// input reached or crossed a reserved int32 safety boundary (or was NaN) and
+// was therefore clamped. It is surfaced to billing callers so the event can be
 // recorded on the related consume/task log for admin auditing.
 type QuotaClamp struct {
 	Op       string         `json:"op"`       // "QuotaFromFloat" | "QuotaRound" | "QuotaFromDecimal"
@@ -61,22 +61,22 @@ func (c *QuotaClamp) AuditMap() map[string]interface{} {
 	}
 }
 
-// saturateQuota converts an already-rounded quota value to int, clamping to
-// the int32 range. Whenever clamping (what would otherwise be an integer
-// wraparound) or a NaN fallback is triggered it logs a warning, because in
-// normal operation a single request never approaches these bounds — hitting
-// them signals a bug or an abusive request. `op` names the caller. When a
-// clamp occurs it returns a non-nil *QuotaClamp so callers can additionally
-// record the event (e.g. on the consume log); the returned pointer is nil for
-// in-range values.
+// saturateQuota converts an already-rounded quota value to int, clamping at
+// the reserved int32 safety boundaries. Values at or beyond either boundary
+// are saturation events; only MinQuota < value < MaxQuota returns a nil clamp.
+// Whenever a boundary clamp or a NaN fallback is triggered it logs a warning,
+// because in normal operation a single request never approaches these bounds —
+// hitting them signals a bug or an abusive request. `op` names the caller. When
+// a clamp occurs it returns a non-nil *QuotaClamp so callers can additionally
+// record the event (e.g. on the consume log).
 func saturateQuota(value float64, op string) (int, *QuotaClamp) {
 	var clamp *QuotaClamp
 	switch {
 	case math.IsNaN(value):
 		clamp = &QuotaClamp{Op: op, Kind: QuotaClampNaN, Original: value, Clamped: 0}
-	case value > MaxQuota:
+	case value >= MaxQuota:
 		clamp = &QuotaClamp{Op: op, Kind: QuotaClampOverflow, Original: value, Clamped: MaxQuota}
-	case value < MinQuota:
+	case value <= MinQuota:
 		clamp = &QuotaClamp{Op: op, Kind: QuotaClampUnderflow, Original: value, Clamped: MinQuota}
 	default:
 		return int(value), nil

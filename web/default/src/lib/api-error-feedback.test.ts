@@ -21,6 +21,7 @@ import { test } from 'node:test'
 
 import { AxiosHeaders, type AxiosAdapter } from 'axios'
 
+import { getEnabledModels } from '@/features/channels/api'
 import {
   getRedemptions,
   searchRedemptions,
@@ -61,6 +62,7 @@ test('feature-owned feedback requests opt out of both Axios error handlers', asy
     await resetPlanSubscriptions(22, { advance_reset_time: true })
     await deleteStaleSystemInstances()
     await deleteStaleSystemInstance('node/one')
+    await getEnabledModels()
   } finally {
     api.defaults.adapter = originalAdapter
   }
@@ -74,6 +76,7 @@ test('feature-owned feedback requests opt out of both Axios error handlers', asy
       'post /api/subscription/admin/plans/22/subscriptions/reset',
       'delete /api/system-info/stale-instances',
       'delete /api/system-info/instances/node%2Fone',
+      'get /api/channel/models_enabled',
     ]
   )
   for (const config of captured) {
