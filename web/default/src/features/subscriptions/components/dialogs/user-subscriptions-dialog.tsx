@@ -37,6 +37,10 @@ import {
   SheetDescription,
 } from '@/components/ui/sheet'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { StaticDataTable } from '@/components/data-table'
 import {
   sideDrawerContentClassName,
@@ -45,12 +49,15 @@ import {
 } from '@/components/drawer-layout'
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
+import { Switch } from '@/components/ui/switch'
+import { isVerificationRequiredError } from '@/lib/secure-verification'
 import {
   getAdminPlans,
   getUserSubscriptions,
   createUserSubscription,
   invalidateUserSubscription,
   deleteUserSubscription,
+  resetUserSubscriptionsByPlan,
 } from '../../api'
 import { formatQuota } from '@/lib/format'
 import { formatTimestamp } from '../../lib'
@@ -60,6 +67,7 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   user: { id: number; username?: string } | null
+  canResetQuota: boolean
   onSuccess?: () => void
 }
 
@@ -71,7 +79,7 @@ function SubscriptionStatusBadge(props: {
   const now = Date.now() / 1000
   const isExpired = (props.sub.end_time || 0) > 0 && props.sub.end_time < now
   const isActive = props.sub.status === 'active' && !isExpired
-  if (isActive)
+  if (isActive) {
     return (
       <StatusBadge
         label={props.t('Active')}
@@ -79,7 +87,8 @@ function SubscriptionStatusBadge(props: {
         copyable={false}
       />
     )
-  if (props.sub.status === 'cancelled')
+  }
+  if (props.sub.status === 'cancelled') {
     return (
       <StatusBadge
         label={props.t('Invalidated')}
@@ -87,6 +96,7 @@ function SubscriptionStatusBadge(props: {
         copyable={false}
       />
     )
+  }
   return (
     <StatusBadge
       label={props.t('Expired')}
@@ -103,10 +113,27 @@ export function UserSubscriptionsDialog(props: Props) {
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
+  const [resetting, setResetting] = useState(false)
+  const [advanceResetTime, setAdvanceResetTime] = useState(true)
+  const [resetAction, setResetAction] = useState<{
+    planId: number
+    planTitle: string
+  } | null>(null)
   const [confirmAction, setConfirmAction] = useState<{
     type: 'invalidate' | 'delete'
     subId: number
   } | null>(null)
+  const {
+    open: verificationOpen,
+    setOpen: setVerificationOpen,
+    methods: verificationMethods,
+    state: verificationState,
+    executeVerification,
+    withVerification,
+    cancel: cancelVerification,
+    setCode: setVerificationCode,
+    switchMethod: switchVerificationMethod,
+  } = useSecureVerification()
 
   const planTitleMap = useMemo(() => {
     const map = new Map<number, string>()
@@ -188,6 +215,47 @@ export function UserSubscriptionsDialog(props: Props) {
     }
   }
 
+  const performReset = async () => {
+    if (!props.user?.id || !resetAction) return null
+    const res = await resetUserSubscriptionsByPlan(props.user.id, {
+      plan_id: resetAction.planId,
+      advance_reset_time: advanceResetTime,
+    })
+    if (!res.success) {
+      throw new Error(res.message || t('Operation failed'))
+    }
+    toast.success(
+      t('Reset {{count}} active subscriptions', {
+        count: res.data?.reset_count || 0,
+      })
+    )
+    await loadData()
+    props.onSuccess?.()
+    setResetAction(null)
+    return res
+  }
+
+  const handleResetConfirm = async () => {
+    if (!props.user?.id || !resetAction) return
+    setResetting(true)
+    try {
+      await withVerification(performReset, {
+        preferredMethod: 'passkey',
+        title: t('Reset subscription quota'),
+        description: t(
+          'Reset active {{plan}} subscriptions for this user?',
+          { plan: resetAction.planTitle }
+        ),
+      })
+    } catch (error) {
+      if (!isVerificationRequiredError(error)) {
+        toast.error(error instanceof Error ? error.message : t('Operation failed'))
+      }
+    } finally {
+      setResetting(false)
+    }
+  }
+
   return (
     <>
       <Sheet open={props.open} onOpenChange={props.onOpenChange}>
@@ -202,8 +270,7 @@ export function UserSubscriptionsDialog(props: Props) {
           <div className={sideDrawerFormClassName()}>
             <div className='flex gap-2'>
               <Select
-                items={[
-                  ...plans.map((p) => ({
+                items={plans.map((p) => ({
                     value: String(p.plan.id),
                     label: (
                       <>
@@ -211,8 +278,7 @@ export function UserSubscriptionsDialog(props: Props) {
                         {Number(p.plan.price_amount || 0).toFixed(2)})
                       </>
                     ),
-                  })),
-                ]}
+                  }))}
                 value={selectedPlanId}
                 onValueChange={(v) => v !== null && setSelectedPlanId(v)}
               >
@@ -321,6 +387,23 @@ export function UserSubscriptionsDialog(props: Props) {
 
                     return (
                       <div className='flex justify-end gap-1'>
+                        {props.canResetQuota && isActive ? (
+                          <Button
+                            size='sm'
+                            variant='outline'
+                            onClick={() => {
+                              setAdvanceResetTime(true)
+                              setResetAction({
+                                planId: sub.plan_id,
+                                planTitle:
+                                  planTitleMap.get(sub.plan_id) ||
+                                  `#${sub.plan_id}`,
+                              })
+                            }}
+                          >
+                            {t('Reset quota')}
+                          </Button>
+                        ) : null}
                         <Button
                           size='sm'
                           variant='outline'
@@ -378,6 +461,42 @@ export function UserSubscriptionsDialog(props: Props) {
           destructive={confirmAction.type === 'delete'}
         />
       )}
+
+      {resetAction && (
+        <ConfirmDialog
+          open
+          onOpenChange={(nextOpen) => !nextOpen && setResetAction(null)}
+          title={t('Reset subscription quota')}
+          desc={t('Reset active {{plan}} subscriptions for this user?', {
+            plan: resetAction.planTitle,
+          })}
+          confirmText={t('Reset quota')}
+          handleConfirm={handleResetConfirm}
+          isLoading={resetting}
+        >
+          <label className='flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm'>
+            <span>{t('Advance next reset time')}</span>
+            <Switch
+              checked={advanceResetTime}
+              onCheckedChange={(checked) => setAdvanceResetTime(!!checked)}
+              aria-label={t('Advance next reset time')}
+            />
+          </label>
+        </ConfirmDialog>
+      )}
+
+      <SecureVerificationDialog
+        open={verificationOpen}
+        onOpenChange={setVerificationOpen}
+        methods={verificationMethods}
+        state={verificationState}
+        onVerify={async (method, code) => {
+          await executeVerification(method, code)
+        }}
+        onCancel={cancelVerification}
+        onCodeChange={setVerificationCode}
+        onMethodChange={switchVerificationMethod}
+      />
     </>
   )
 }

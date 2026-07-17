@@ -87,13 +87,17 @@ func (mi *Model) Delete() error {
 }
 
 func GetVendorModelCounts() (map[int64]int64, error) {
+	return GetVendorModelCountsByFilters("", "", "", "")
+}
+
+func GetVendorModelCountsByFilters(keyword string, vendor string, status string, syncOfficial string) (map[int64]int64, error) {
 	var stats []struct {
 		VendorID int64
 		Count    int64
 	}
-	if err := DB.Model(&Model{}).
-		Select("vendor_id as vendor_id, count(*) as count").
-		Group("vendor_id").
+	if err := applyModelSearchFilters(DB.Model(&Model{}), keyword, vendor, status, syncOfficial).
+		Select("models.vendor_id as vendor_id, count(*) as count").
+		Group("models.vendor_id").
 		Scan(&stats).Error; err != nil {
 		return nil, err
 	}
@@ -105,8 +109,7 @@ func GetVendorModelCounts() (map[int64]int64, error) {
 }
 
 func GetAllModels(offset int, limit int) ([]*Model, error) {
-	var models []*Model
-	err := DB.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
+	models, _, err := SearchModels("", "", "", "", offset, limit)
 	return models, err
 }
 
@@ -192,20 +195,9 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 	return result, nil
 }
 
-func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Model, int64, error) {
+func SearchModels(keyword string, vendor string, status string, syncOfficial string, offset int, limit int) ([]*Model, int64, error) {
 	var models []*Model
-	db := DB.Model(&Model{})
-	if keyword != "" {
-		like := "%" + keyword + "%"
-		db = db.Where("model_name LIKE ? OR description LIKE ? OR tags LIKE ?", like, like, like)
-	}
-	if vendor != "" {
-		if vid, err := strconv.Atoi(vendor); err == nil {
-			db = db.Where("models.vendor_id = ?", vid)
-		} else {
-			db = db.Joins("JOIN vendors ON vendors.id = models.vendor_id").Where("vendors.name LIKE ?", "%"+vendor+"%")
-		}
-	}
+	db := applyModelSearchFilters(DB.Model(&Model{}), keyword, vendor, status, syncOfficial)
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -214,4 +206,53 @@ func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Mode
 		return nil, 0, err
 	}
 	return models, total, nil
+}
+
+func applyModelSearchFilters(db *gorm.DB, keyword string, vendor string, status string, syncOfficial string) *gorm.DB {
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		db = db.Where("models.model_name LIKE ? OR models.description LIKE ? OR models.tags LIKE ?", like, like, like)
+	}
+	if vendor != "" {
+		if vid, err := strconv.Atoi(vendor); err == nil {
+			db = db.Where("models.vendor_id = ?", vid)
+		} else {
+			db = db.Joins("JOIN vendors ON vendors.id = models.vendor_id").Where("vendors.name LIKE ?", "%"+vendor+"%")
+		}
+	}
+	if statusValue, ok := parseModelStatusFilter(status); ok {
+		db = db.Where("models.status = ?", statusValue)
+	}
+	if syncValue, ok := parseModelSyncFilter(syncOfficial); ok {
+		db = db.Where("models.sync_official = ?", syncValue)
+	}
+	return db
+}
+
+func parseModelStatusFilter(status string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "all":
+		return 0, false
+	case "enabled", "1":
+		return 1, true
+	case "disabled", "0":
+		return 0, true
+	default:
+		value, err := strconv.Atoi(status)
+		return value, err == nil
+	}
+}
+
+func parseModelSyncFilter(syncOfficial string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(syncOfficial)) {
+	case "", "all":
+		return 0, false
+	case "yes", "1":
+		return 1, true
+	case "no", "0":
+		return 0, true
+	default:
+		value, err := strconv.Atoi(syncOfficial)
+		return value, err == nil
+	}
 }

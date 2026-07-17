@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo } from 'react'
+import { AxiosError } from 'axios'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import {
   DISABLED_ROW_DESKTOP,
@@ -29,8 +31,16 @@ import {
   useDataTable,
 } from '@/components/data-table'
 import { getRedemptions, searchRedemptions } from '../api'
-import { REDEMPTION_STATUS, getRedemptionStatusOptions } from '../constants'
+import {
+  ERROR_MESSAGES,
+  REDEMPTION_STATUS,
+  getRedemptionStatusOptions,
+} from '../constants'
 import { isRedemptionExpired } from '../lib'
+import {
+  loadRedemptionList,
+  resolveRedemptionListRequest,
+} from '../lib/list-request'
 import type { Redemption } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useRedemptionsColumns } from './redemptions-columns'
@@ -67,25 +77,50 @@ export function RedemptionsTable() {
     columnFilters: [{ columnId: 'status', searchKey: 'status', type: 'array' }],
   })
 
+  const statusFilter =
+    (columnFilters.find((filter) => filter.id === 'status')?.value as
+      | string[]
+      | undefined) ?? []
+  const listRequest = resolveRedemptionListRequest({
+    keyword: globalFilter,
+    status: statusFilter,
+    page: pagination.pageIndex + 1,
+    pageSize: pagination.pageSize,
+  })
+
   // Fetch data with React Query
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       'redemptions',
-      pagination.pageIndex + 1,
-      pagination.pageSize,
-      globalFilter,
+      listRequest.mode,
+      listRequest.params,
       refreshTrigger,
     ],
     queryFn: async () => {
-      const hasFilter = globalFilter?.trim()
-      const params = {
-        p: pagination.pageIndex + 1,
-        page_size: pagination.pageSize,
-      }
+      const result = await loadRedemptionList(listRequest, {
+        list: getRedemptions,
+        search: searchRedemptions,
+        onRejected: (error, mode) => {
+          const status =
+            error instanceof AxiosError ? error.response?.status : undefined
+          if (status === 401 || status === 500) return
 
-      const result = hasFilter
-        ? await searchRedemptions({ ...params, keyword: globalFilter })
-        : await getRedemptions(params)
+          const messageKey =
+            mode === 'search'
+              ? ERROR_MESSAGES.SEARCH_FAILED
+              : ERROR_MESSAGES.LOAD_FAILED
+          toast.error(t(messageKey))
+        },
+      })
+
+      if (!result.success) {
+        const messageKey =
+          listRequest.mode === 'search'
+            ? ERROR_MESSAGES.SEARCH_FAILED
+            : ERROR_MESSAGES.LOAD_FAILED
+        toast.error(result.message || t(messageKey))
+        return { items: [], total: 0 }
+      }
 
       return {
         items: result.data?.items || [],
@@ -104,17 +139,11 @@ export function RedemptionsTable() {
     columnFilters,
     globalFilter,
     pagination,
-    globalFilterFn: (row, _columnId, filterValue) => {
-      const name = String(row.getValue('name')).toLowerCase()
-      const id = String(row.getValue('id'))
-      const searchValue = String(filterValue).toLowerCase()
-
-      return name.includes(searchValue) || id.includes(searchValue)
-    },
     onPaginationChange,
     onGlobalFilterChange,
     onColumnFiltersChange,
-    manualPagination: !globalFilter,
+    manualPagination: true,
+    manualFiltering: true,
     totalCount: data?.total || 0,
     ensurePageInRange,
   })
@@ -147,13 +176,10 @@ export function RedemptionsTable() {
           },
         ],
       }}
-      getRowClassName={(row, { isMobile }) =>
-        isDisabledRedemptionRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
-      }
+      getRowClassName={(row, { isMobile }) => {
+        if (!isDisabledRedemptionRow(row.original)) return undefined
+        return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+      }}
       bulkActions={<DataTableBulkActions table={table} />}
     />
   )

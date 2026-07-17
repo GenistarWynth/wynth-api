@@ -64,6 +64,12 @@ var auditContentTemplates = map[string]string{
 	"account_pool.binding_delete": "Deleted account pool binding ${id} from pool ${pool_id}",
 
 	"redemption.create": "Created ${count} redemption codes named ${name} (${quota} each)",
+
+	"subscription.plan_reset":      "Reset active subscriptions for plan ${plan_id}",
+	"subscription.user_plan_reset": "Reset active plan ${plan_id} subscriptions for user ${target_user_id}",
+
+	"system_instance.delete_stale":     "Deleted stale system instance ${node_name}",
+	"system_instance.delete_stale_all": "Deleted ${deleted_count} stale system instances",
 }
 
 // auditContentEN 按 action 模板渲染英文兜底文本；未登记的 action 退回 action 本身。
