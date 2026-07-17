@@ -110,7 +110,7 @@ type ResolvedCurrencyFormatOptions = Omit<
   locale: Intl.LocalesArgument | undefined
 }
 
-type DisplayMeta =
+export type DisplayMeta =
   | {
       kind: 'currency'
       symbol: string
@@ -156,14 +156,16 @@ export function parseCurrencyDisplayType(
   return isCurrencyDisplayType(value) ? value : fallback
 }
 
-function getConfig(): CurrencyConfig {
-  const { config } = useSystemConfigStore.getState()
-  const currency = config?.currency ?? DEFAULT_CURRENCY_CONFIG
+function getConfig(currencyConfig?: CurrencyConfig): CurrencyConfig {
+  const currency =
+    currencyConfig ??
+    useSystemConfigStore.getState().config?.currency ??
+    DEFAULT_CURRENCY_CONFIG
   return {
     ...DEFAULT_CURRENCY_CONFIG,
     ...currency,
     quotaPerUnit:
-      currency?.quotaPerUnit && currency.quotaPerUnit > 0
+      Number.isFinite(currency?.quotaPerUnit) && currency.quotaPerUnit > 0
         ? currency.quotaPerUnit
         : DEFAULT_CURRENCY_CONFIG.quotaPerUnit,
     usdExchangeRate:
@@ -322,16 +324,24 @@ function formatCurrencyValue(
 }
 
 /**
- * Get the current currency configuration and display metadata.
+ * Resolve a complete currency configuration and its display metadata.
  *
- * @returns Object containing config and display metadata
+ * @param currencyConfig Optional explicit config; omitted calls read the store.
+ * @returns An immutable snapshot containing resolved config and display metadata.
  *
  * @internal
  * This is primarily for internal use. Most consumers should use the
  * higher-level formatting functions instead.
  */
-export function getCurrencyDisplay() {
-  const config = getConfig()
+export type CurrencyDisplaySnapshot = Readonly<{
+  config: Readonly<CurrencyConfig>
+  meta: Readonly<DisplayMeta>
+}>
+
+export function getCurrencyDisplay(
+  currencyConfig?: CurrencyConfig
+): CurrencyDisplaySnapshot {
+  const config = getConfig(currencyConfig)
   const meta = getDisplayMeta(config)
   return { config, meta }
 }
