@@ -80,7 +80,7 @@ test('feature-owned feedback requests opt out of both Axios error handlers', asy
     ]
   )
   for (const config of captured) {
-    assert.equal(config.skipErrorHandler, true, config.url)
-    assert.equal(config.skipBusinessError, true, config.url)
+    assert.equal(config.skipErrorHandler, true, config.url ?? 'missing URL')
+    assert.equal(config.skipBusinessError, true, config.url ?? 'missing URL')
   }
 })
