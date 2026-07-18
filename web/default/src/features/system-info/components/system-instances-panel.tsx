@@ -24,6 +24,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
@@ -436,7 +437,7 @@ function SystemInstancesList(props: SystemInstancesTableProps) {
                   {formatTimestampRelative(
                     instance.last_seen_at,
                     'seconds',
-                    i18n.language
+                    toIntlLocale(i18n.language)
                   )}
                 </TableCell>
                 <TableCell className='py-2.5 pr-4 text-right align-middle'>

@@ -41,6 +41,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 import { safeJsonParse } from '../utils/json-parser'
+import {
+  normalizeGroupRatioDraft,
+  serializeGroupRatioDraft,
+} from './group-ratio-draft'
 
 type GroupRatioVisualEditorProps = {
   groupRatio: string
@@ -59,7 +63,7 @@ type SimpleGroup = {
 type GroupPricingRow = {
   _id: string
   name: string
-  ratio: number
+  ratio: string
   selectable: boolean
   description: string
 }
@@ -79,11 +83,6 @@ function createGroupPricingId() {
   return `gpr_${groupPricingIdCounter}`
 }
 
-function normalizeRatio(value: unknown): number {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : 1
-}
-
 function buildGroupPricingRows(
   groupRatio: string,
   userUsableGroups: string
@@ -101,7 +100,7 @@ function buildGroupPricingRows(
   return [...names].map((name) => ({
     _id: createGroupPricingId(),
     name,
-    ratio: normalizeRatio(ratioMap[name]),
+    ratio: normalizeGroupRatioDraft(ratioMap[name]),
     selectable: Object.hasOwn(usableMap, name),
     description: String(usableMap[name] ?? ''),
   }))
@@ -114,7 +113,7 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
   for (const row of rows) {
     const name = row.name.trim()
     if (!name) continue
-    groupRatio[name] = normalizeRatio(row.ratio)
+    groupRatio[name] = serializeGroupRatioDraft(row.ratio)
     if (row.selectable) {
       userUsableGroups[name] = row.description
     }
@@ -790,7 +789,7 @@ function GroupPricingTable({
       {
         _id: createGroupPricingId(),
         name,
-        ratio: 1,
+        ratio: '1',
         selectable: true,
         description: '',
       },
@@ -865,13 +864,9 @@ function GroupPricingTable({
                     type='number'
                     min={0}
                     step={0.1}
-                    value={String(row.ratio)}
+                    value={row.ratio}
                     onChange={(event) =>
-                      updateRow(
-                        row._id,
-                        'ratio',
-                        normalizeRatio(event.target.value)
-                      )
+                      updateRow(row._id, 'ratio', event.target.value)
                     }
                   />
                 ),

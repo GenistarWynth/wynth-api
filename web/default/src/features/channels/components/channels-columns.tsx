@@ -35,6 +35,7 @@ import {
   formatQuotaWithCurrency,
   getCurrencyLabel,
 } from '@/lib/currency'
+import { toIntlLocale } from '@/i18n/languages'
 import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -365,7 +366,7 @@ function WeightCell({ channel }: { channel: Channel }) {
  * Balance cell component with click to update
  */
 export function BalanceCell({ channel }: { channel: Channel }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const layout = useContext(ChannelRowActionsLayoutContext)
   const isTagRow = isTagAggregateRow(channel)
@@ -381,12 +382,14 @@ export function BalanceCell({ channel }: { channel: Channel }) {
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
   const showSymbol = layout !== 'card'
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   const usedDisplay = withSuffix(
     formatQuotaWithCurrency(usedQuota, {
       digitsLarge: 2,
       digitsSmall: 4,
       abbreviate: true,
       showSymbol,
+      locale,
     })
   )
   const remainingDisplay = withSuffix(
@@ -395,6 +398,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
       digitsSmall: 4,
       abbreviate: false,
       showSymbol,
+      locale,
     })
   )
   const usedLabel = `${t('Used:')} ${usedDisplay}`
