@@ -6,9 +6,62 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
-### Added — Upstream source login for Cloudflare-Turnstile-gated gateways
-- Upstream sources can now authenticate to gateways that gate login behind Cloudflare Turnstile: paste an already-authenticated session (cookie / token) via manual import, or use an optional headless-browser login sidecar (`browserless`, gated by `--profile upstream-browser` and `UPSTREAM_BROWSER_CDP_URL` in `docker-compose.yml`).
-- Upstream source credentials/sessions are now encrypted at rest.
+## [v1.0.0-rc.35] - 2026-07-18
+
+### Added - Codex and Responses compatibility
+- Added Responses request metadata, reasoning context, prompt-cache controls,
+  sticky turn state, and configurable Codex field passthrough.
+- Added GPT-5.6 Sol, Terra, and Luna model options, together with the current
+  Codex channel options for GPT-5.4 Mini and GPT-5.5 and their compact forms.
+- Added native cache-write token accounting and compact request/response
+  compatibility while retaining Wynth's namespace-tool conversion behavior.
+
+### Added - Providers, billing, and administration
+- Added Seedance 2.0 resolution/video billing, safety and priority fields, and
+  Wan 2.7 media mapping.
+- Added Ollama non-stream tool-call handling, nested usage-token details,
+  tiered-pricing estimates, ratio handling, quota-unit transfers, and safer
+  pre-consume settlement.
+- Added redemption cleanup, subscription quota reset, stale-instance cleanup,
+  model filtering, and related admin workflows.
+
+### Added - Security and operations
+- Added outbound destination validation at dial time, DNS-result validation,
+  address-range blocking, and redirect-hop safety while preserving configured
+  provider and account-pool proxies.
+- Hardened username/email/password handling, read-only token authorization,
+  secure session cookies, redeem failure messages, OAuth setup, and graceful
+  shutdown/accounting cache behavior.
+- Upstream sources can now authenticate to gateways that gate login behind
+  Cloudflare Turnstile: paste an already-authenticated session (cookie / token)
+  via manual import, or use an optional headless-browser login sidecar
+  (`browserless`, gated by `--profile upstream-browser` and
+  `UPSTREAM_BROWSER_CDP_URL` in `docker-compose.yml`).
+- Upstream source credentials and sessions are encrypted at rest.
+
+### Changed - Web applications and delivery
+- Refined channel management, advanced custom routes, model pricing sync,
+  playground controls, group-ratio editing, home iframe behavior, and mobile
+  user cards across the default and classic frontends.
+- Added stream timing, first-token, duration, and throughput presentation to
+  usage logs, with localized compact pricing details.
+- Updated build tooling, dependencies, Make targets, Docker publishing and
+  signing workflows, and classic-to-default transition guidance.
+
+### Fixed - Stream lifecycle and frontend behavior
+- Prevented stale writes after client disconnects, reconciled image billing,
+  and kept stream workers and account-pool failure handling consistent.
+- Fixed locale normalization, unset-price model messaging, referral copy,
+  channel filter persistence, resized table layout, OAuth callback copy, and
+  browser-translation interference with React roots.
+
+### Notes
+- This release contains the Wynth adaptations represented by the frozen
+  upstream audit through `7c28993f`. Ten newer upstream commits remain outside
+  that audit and will require a separate review.
+- Responses WebSocket support, live Codex E2E verification, full Programmatic
+  Tool Calling semantics, and the multi-agent beta remain explicitly outside
+  the verified compatibility claim.
 
 ## [v1.0.0-rc.16] — 2026-06-28
 
