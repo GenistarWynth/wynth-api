@@ -16,36 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  HtmlContent,
-  type HtmlContentVariant,
-} from '@/components/html-content'
-import { Markdown } from '@/components/ui/markdown'
+export const HOME_IFRAME_SANDBOX =
+  'allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts allow-top-navigation-by-user-activation'
 
-type RichContentMode = 'markdown' | 'html'
-
-interface RichContentProps {
-  content: string
-  mode?: RichContentMode
-  breaks?: boolean
-  className?: string
-  htmlVariant?: HtmlContentVariant
+type IframeMessageTarget = {
+  postMessage(message: unknown, targetOrigin: string): void
 }
 
-export function RichContent(props: RichContentProps) {
-  if (props.mode === 'html') {
-    return (
-      <HtmlContent
-        content={props.content}
-        className={props.className}
-        variant={props.htmlVariant}
-      />
-    )
+export function postHomeIframePreferences(
+  target: IframeMessageTarget | null | undefined,
+  theme: string,
+  language: string
+): void {
+  try {
+    target?.postMessage({ themeMode: theme }, '*')
+    target?.postMessage({ lang: language }, '*')
+  } catch {
+    // Cross-origin frames may reject access while navigating.
   }
-
-  return (
-    <Markdown breaks={props.breaks} className={props.className}>
-      {props.content}
-    </Markdown>
-  )
 }
