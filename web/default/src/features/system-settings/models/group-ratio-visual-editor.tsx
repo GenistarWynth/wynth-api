@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useMemo, useEffect, useCallback, memo } from 'react'
 import { Plus, Trash2, GripVertical, ChevronDown } from 'lucide-react'
+import { useState, useMemo, useEffect, useCallback, memo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
@@ -40,7 +40,12 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-import { safeJsonParse } from '../utils/json-parser'
+import {
+  parseAutoGroups,
+  parseGroupDescriptionMap,
+  parseGroupRatioMap,
+  parseNestedGroupRatioMap,
+} from './group-ratio-config'
 import {
   normalizeGroupRatioDraft,
   serializeGroupRatioDraft,
@@ -87,14 +92,8 @@ function buildGroupPricingRows(
   groupRatio: string,
   userUsableGroups: string
 ): GroupPricingRow[] {
-  const ratioMap = safeJsonParse<Record<string, number>>(groupRatio, {
-    fallback: {},
-    context: 'group ratios',
-  })
-  const usableMap = safeJsonParse<Record<string, string>>(userUsableGroups, {
-    fallback: {},
-    context: 'user usable groups',
-  })
+  const ratioMap = parseGroupRatioMap(groupRatio)
+  const usableMap = parseGroupDescriptionMap(userUsableGroups)
   const names = new Set([...Object.keys(ratioMap), ...Object.keys(usableMap)])
 
   return [...names].map((name) => ({
@@ -128,14 +127,8 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
 function groupPricingSignature(rows: GroupPricingRow[]): string {
   const serialized = serializeGroupPricingRows(rows)
   return JSON.stringify({
-    groupRatio: safeJsonParse(serialized.GroupRatio, {
-      fallback: {},
-      silent: true,
-    }),
-    userUsableGroups: safeJsonParse(serialized.UserUsableGroups, {
-      fallback: {},
-      silent: true,
-    }),
+    groupRatio: parseGroupRatioMap(serialized.GroupRatio),
+    userUsableGroups: parseGroupDescriptionMap(serialized.UserUsableGroups),
   })
 }
 
@@ -144,11 +137,8 @@ function sourceGroupPricingSignature(
   userUsableGroups: string
 ): string {
   return JSON.stringify({
-    groupRatio: safeJsonParse(groupRatio, { fallback: {}, silent: true }),
-    userUsableGroups: safeJsonParse(userUsableGroups, {
-      fallback: {},
-      silent: true,
-    }),
+    groupRatio: parseGroupRatioMap(groupRatio),
+    userUsableGroups: parseGroupDescriptionMap(userUsableGroups),
   })
 }
 
@@ -182,10 +172,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 
   // Parse topup group ratios
   const topupRatioList = useMemo(() => {
-    const map = safeJsonParse<Record<string, number>>(topupGroupRatio, {
-      fallback: {},
-      context: 'topup group ratios',
-    })
+    const map = parseGroupRatioMap(topupGroupRatio)
     return Object.entries(map).map(([name, value]) => ({
       name,
       value: String(value),
@@ -194,21 +181,12 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 
   // Parse auto groups
   const autoGroupsList = useMemo(() => {
-    return safeJsonParse<string[]>(autoGroups, {
-      fallback: [],
-      context: 'auto groups',
-    })
+    return parseAutoGroups(autoGroups)
   }, [autoGroups])
 
   // Parse group-group ratios
   const groupGroupRatioList = useMemo(() => {
-    const map = safeJsonParse<Record<string, Record<string, number>>>(
-      groupGroupRatio,
-      {
-        fallback: {},
-        context: 'group-group ratios',
-      }
-    )
+    const map = parseNestedGroupRatioMap(groupGroupRatio)
     return Object.entries(map).map(([userGroup, overrides]) => ({
       userGroup,
       overrides: Object.entries(overrides).map(([targetGroup, ratio]) => ({
@@ -239,10 +217,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 
     const fieldName =
       simpleDialogType === 'groupRatio' ? groupRatio : topupGroupRatio
-    const map = safeJsonParse<Record<string, number>>(fieldName, {
-      fallback: {},
-      silent: true,
-    })
+    const map = parseGroupRatioMap(fieldName)
 
     if (simpleEditData && simpleEditData.name !== name) {
       delete map[simpleEditData.name]
@@ -261,10 +236,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
     name: string
   ) => {
     const fieldName = type === 'groupRatio' ? groupRatio : topupGroupRatio
-    const map = safeJsonParse<Record<string, number>>(fieldName, {
-      fallback: {},
-      silent: true,
-    })
+    const map = parseGroupRatioMap(fieldName)
     delete map[name]
 
     const field = type === 'groupRatio' ? 'GroupRatio' : 'TopupGroupRatio'
@@ -308,13 +280,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   const handleUserGroupSave = () => {
     if (!userGroupInput.trim()) return
 
-    const map = safeJsonParse<Record<string, Record<string, number>>>(
-      groupGroupRatio,
-      {
-        fallback: {},
-        silent: true,
-      }
-    )
+    const map = parseNestedGroupRatioMap(groupGroupRatio)
 
     if (!map[userGroupInput.trim()]) {
       map[userGroupInput.trim()] = {}
@@ -325,13 +291,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   }
 
   const handleUserGroupDelete = (userGroup: string) => {
-    const map = safeJsonParse<Record<string, Record<string, number>>>(
-      groupGroupRatio,
-      {
-        fallback: {},
-        silent: true,
-      }
-    )
+    const map = parseNestedGroupRatioMap(groupGroupRatio)
     delete map[userGroup]
     onChange('GroupGroupRatio', JSON.stringify(map, null, 2))
   }
@@ -355,13 +315,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   ) => {
     if (!groupOverrideUserGroup) return
 
-    const map = safeJsonParse<Record<string, Record<string, number>>>(
-      groupGroupRatio,
-      {
-        fallback: {},
-        silent: true,
-      }
-    )
+    const map = parseNestedGroupRatioMap(groupGroupRatio)
 
     if (!map[groupOverrideUserGroup]) {
       map[groupOverrideUserGroup] = {}
@@ -378,13 +332,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   }
 
   const handleOverrideDelete = (userGroup: string, targetGroup: string) => {
-    const map = safeJsonParse<Record<string, Record<string, number>>>(
-      groupGroupRatio,
-      {
-        fallback: {},
-        silent: true,
-      }
-    )
+    const map = parseNestedGroupRatioMap(groupGroupRatio)
 
     if (map[userGroup]) {
       delete map[userGroup][targetGroup]
@@ -1017,7 +965,7 @@ function SimpleGroupDialog({
             value={value}
             onChange={(e) => {
               const val = e.target.value
-              if (val === '' || !isNaN(Number.parseFloat(val))) {
+              if (val === '' || !Number.isNaN(Number.parseFloat(val))) {
                 setValue(val)
               }
             }}
@@ -1063,7 +1011,7 @@ function GroupOverrideDialog({
   const handleSave = () => {
     if (!targetGroup.trim() || !ratio.trim()) return
     const parsedRatio = Number.parseFloat(ratio)
-    if (isNaN(parsedRatio)) return
+    if (Number.isNaN(parsedRatio)) return
 
     onSave(targetGroup.trim(), parsedRatio, editData?.targetGroup)
     setTargetGroup('')
@@ -1117,7 +1065,7 @@ function GroupOverrideDialog({
             value={ratio}
             onChange={(e) => {
               const val = e.target.value
-              if (val === '' || !isNaN(Number.parseFloat(val))) {
+              if (val === '' || !Number.isNaN(Number.parseFloat(val))) {
                 setRatio(val)
               }
             }}
