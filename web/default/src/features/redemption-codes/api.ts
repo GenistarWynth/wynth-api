@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { serializeRedemptionListParams } from './lib/list-request'
 import type {
   Redemption,
   ApiResponse,
@@ -34,8 +35,11 @@ import type {
 export async function getRedemptions(
   params: GetRedemptionsParams = {}
 ): Promise<GetRedemptionsResponse> {
-  const { p = 1, page_size = 10 } = params
-  const res = await api.get(`/api/redemption/?p=${p}&page_size=${page_size}`)
+  const query = serializeRedemptionListParams(params)
+  const res = await api.get(`/api/redemption/?${query}`, {
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  })
   return res.data
 }
 
@@ -43,10 +47,11 @@ export async function getRedemptions(
 export async function searchRedemptions(
   params: SearchRedemptionsParams
 ): Promise<GetRedemptionsResponse> {
-  const { keyword = '', p = 1, page_size = 10 } = params
-  const res = await api.get(
-    `/api/redemption/search?keyword=${keyword}&p=${p}&page_size=${page_size}`
-  )
+  const query = serializeRedemptionListParams(params)
+  const res = await api.get(`/api/redemption/search?${query}`, {
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  })
   return res.data
 }
 

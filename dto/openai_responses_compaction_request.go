@@ -10,17 +10,37 @@ import (
 )
 
 type OpenAIResponsesCompactionRequest struct {
-	Model              string          `json:"model"`
-	Input              json.RawMessage `json:"input,omitempty"`
-	Instructions       json.RawMessage `json:"instructions,omitempty"`
-	PreviousResponseID string          `json:"previous_response_id,omitempty"`
-	Metadata           json.RawMessage `json:"metadata,omitempty"`
-	Tools              json.RawMessage `json:"tools,omitempty"`
-	ParallelToolCalls  json.RawMessage `json:"parallel_tool_calls,omitempty"`
-	Reasoning          *Reasoning      `json:"reasoning,omitempty"`
-	ServiceTier        string          `json:"service_tier,omitempty"`
-	PromptCacheKey     json.RawMessage `json:"prompt_cache_key,omitempty"`
-	Text               json.RawMessage `json:"text,omitempty"`
+	Model                string          `json:"model"`
+	Input                json.RawMessage `json:"input,omitempty"`
+	Instructions         json.RawMessage `json:"instructions,omitempty"`
+	PreviousResponseID   string          `json:"previous_response_id,omitempty"`
+	Metadata             json.RawMessage `json:"metadata,omitempty"`
+	Tools                json.RawMessage `json:"tools,omitempty"`
+	ParallelToolCalls    json.RawMessage `json:"parallel_tool_calls,omitempty"`
+	Reasoning            *Reasoning      `json:"reasoning,omitempty"`
+	ServiceTier          string          `json:"service_tier,omitempty"`
+	PromptCacheKey       json.RawMessage `json:"prompt_cache_key,omitempty"`
+	PromptCacheOptions   json.RawMessage `json:"prompt_cache_options,omitempty"`
+	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
+	Text                 json.RawMessage `json:"text,omitempty"`
+}
+
+func (r *OpenAIResponsesCompactionRequest) ToResponsesRequest() *OpenAIResponsesRequest {
+	return &OpenAIResponsesRequest{
+		Model:                r.Model,
+		Input:                r.Input,
+		Instructions:         r.Instructions,
+		PreviousResponseID:   r.PreviousResponseID,
+		Metadata:             r.Metadata,
+		Tools:                r.Tools,
+		ParallelToolCalls:    r.ParallelToolCalls,
+		Reasoning:            r.Reasoning,
+		ServiceTier:          r.ServiceTier,
+		PromptCacheKey:       r.PromptCacheKey,
+		PromptCacheOptions:   r.PromptCacheOptions,
+		PromptCacheRetention: r.PromptCacheRetention,
+		Text:                 r.Text,
+	}
 }
 
 func (r *OpenAIResponsesCompactionRequest) GetTokenCountMeta() *types.TokenCountMeta {

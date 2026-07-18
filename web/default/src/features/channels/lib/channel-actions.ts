@@ -19,7 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import type { QueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+
 import { formatCurrencyFromUSD } from '@/lib/currency'
+
 import {
   copyChannel,
   deleteChannel,
@@ -444,10 +446,7 @@ export async function handleBatchEnable(
   }
 
   try {
-    const response = await batchUpdateChannelStatus(
-      ids,
-      CHANNEL_STATUS.ENABLED
-    )
+    const response = await batchUpdateChannelStatus(ids, CHANNEL_STATUS.ENABLED)
     const successCount = response.success ? response.data || 0 : 0
     const failCount = ids.length - successCount
 
@@ -640,18 +639,23 @@ export async function handleFixAbilities(
     const response = await fixChannelAbilities()
     if (response.success && response.data) {
       toast.success(
-        i18next.t('Fixed abilities: {{success}} succeeded, {{fails}} failed', {
-          success: response.data.success,
-          fails: response.data.fails,
-        })
+        i18next.t(
+          'Channel consistency repaired: {{success}} succeeded, {{fails}} failed',
+          {
+            success: response.data.success,
+            fails: response.data.fails,
+          }
+        )
       )
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
       onSuccess?.(response.data)
     } else {
-      toast.error(response.message || i18next.t('Failed to fix abilities'))
+      toast.error(
+        response.message || i18next.t('Failed to repair channel consistency')
+      )
     }
   } catch (_error) {
-    toast.error(i18next.t('Failed to fix abilities'))
+    toast.error(i18next.t('Failed to repair channel consistency'))
   }
 }
 

@@ -132,7 +132,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if err := validateAccountPoolRuntimeChannel(channel); err != nil {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -145,7 +145,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		if len(probeCandidateModels) == 0 {
 			result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "probe_models requires candidate_models")
 			if req.Apply {
-				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 					return result, writeErr
 				}
 			}
@@ -160,7 +160,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if strings.TrimSpace(baseURL) == "" {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "channel base url is required")
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -171,7 +171,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if err != nil {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -191,9 +191,12 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	}
 	runtimeCredential, err := resolveAccountPoolCapabilityRuntimeCredential(ctx, credential, tokenState, proxyURL)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
+		}
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -202,7 +205,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if strings.TrimSpace(runtimeCredential) == "" {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "account pool runtime credential is empty")
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -217,7 +220,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if err != nil {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -244,13 +247,16 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 				requestBody,
 			)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return result, ctxErr
+				}
 				status := AccountPoolCapabilityStatusConfigError
 				if isAccountPoolCapabilityNetworkError(err) {
 					status = AccountPoolCapabilityStatusNetworkError
 				}
 				result = accountPoolCapabilityFailResult(result, status, err.Error())
 				if req.Apply {
-					if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 						return result, writeErr
 					}
 				}
@@ -267,7 +273,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 					accountPoolCapabilityProbeCandidateError(candidateModel, statusCode, body),
 				)
 				if req.Apply {
-					if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 						return result, writeErr
 					}
 				}
@@ -281,7 +287,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 					accountPoolCapabilityProbeCandidateError(candidateModel, statusCode, body),
 				)
 				if req.Apply {
-					if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+					if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 						return result, writeErr
 					}
 				}
@@ -298,7 +304,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 				result.Errors = []string{sanitizeAccountPoolCapabilityError("no candidate models were supported by upstream account")}
 			}
 			if req.Apply {
-				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 					return result, writeErr
 				}
 			}
@@ -309,7 +315,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		if err != nil {
 			result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 			if req.Apply {
-				if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+				if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 					return result, writeErr
 				}
 			}
@@ -337,7 +343,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		}
 		result.AppliedModels = appliedModels
 
-		if err := persistAccountPoolCapabilitySuccess(account.Id, appliedModels, result.DetectedModels, cleanedModelMapping, result.Status); err != nil {
+		if err := persistAccountPoolCapabilitySuccess(ctx, account.Id, appliedModels, result.DetectedModels, cleanedModelMapping, result.Status); err != nil {
 			return result, err
 		}
 		return result, nil
@@ -345,7 +351,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	default:
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, "unsupported capability detection mode")
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -362,13 +368,16 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 		normalizeAccountPoolCapabilityTimeout(req.TimeoutSeconds),
 	)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
+		}
 		status := AccountPoolCapabilityStatusConfigError
 		if isAccountPoolCapabilityNetworkError(err) {
 			status = AccountPoolCapabilityStatusNetworkError
 		}
 		result = accountPoolCapabilityFailResult(result, status, err.Error())
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -382,7 +391,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 			accountPoolCapabilityHTTPErrorMessage(statusCode, body),
 		)
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -393,7 +402,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if err := common.Unmarshal(body, &payload); err != nil {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusUpstreamError, fmt.Sprintf("decode upstream models response: %v", err))
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -408,7 +417,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if len(detectedModels) == 0 {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusUnsupported, "upstream returned no supported models")
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -419,7 +428,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if err != nil {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusConfigError, err.Error())
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -431,7 +440,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	if len(schedulerModels) == 0 {
 		result = accountPoolCapabilityFailResult(result, AccountPoolCapabilityStatusUnsupported, "no candidate models matched detected account capabilities")
 		if req.Apply {
-			if writeErr := persistAccountPoolCapabilityFailure(account.Id, result); writeErr != nil {
+			if writeErr := persistAccountPoolCapabilityFailure(ctx, account.Id, result); writeErr != nil {
 				return result, writeErr
 			}
 		}
@@ -455,7 +464,7 @@ func (s AccountPoolService) DetectAccountCapability(ctx context.Context, req Acc
 	}
 	result.AppliedModels = appliedModels
 
-	if err := persistAccountPoolCapabilitySuccess(account.Id, appliedModels, result.DetectedModels, cleanedModelMapping, result.Status); err != nil {
+	if err := persistAccountPoolCapabilitySuccess(ctx, account.Id, appliedModels, result.DetectedModels, cleanedModelMapping, result.Status); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -469,20 +478,38 @@ func (s AccountPoolService) DetectPoolCapabilities(ctx context.Context, req Acco
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, err := getAccountPoolExistingPool(req.PoolID); err != nil {
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	var pool model.AccountPool
+	if err := model.DB.WithContext(ctx).
+		Where("status <> ?", model.AccountPoolStatusDeleted).
+		First(&pool, req.PoolID).Error; err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return result, ctxErr
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return result, errors.New("account pool not found")
 		}
+		return result, err
+	}
+	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 
 	accountIDs := normalizeAccountPoolCapabilityAccountIDs(req.AccountIDs)
 	if len(accountIDs) == 0 {
 		var accounts []model.AccountPoolAccount
-		if err := model.DB.
+		if err := model.DB.WithContext(ctx).
 			Where("pool_id = ? AND status <> ?", req.PoolID, model.AccountPoolAccountStatusDeleted).
 			Order("id asc").
 			Find(&accounts).Error; err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return result, ctxErr
+			}
+			return result, err
+		}
+		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		accountIDs = make([]int, 0, len(accounts))
@@ -494,12 +521,18 @@ func (s AccountPoolService) DetectPoolCapabilities(ctx context.Context, req Acco
 	result.Total = len(accountIDs)
 	result.Results = make([]AccountPoolCapabilityDetectResult, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		accountReq := req
 		accountReq.AccountID = accountID
 		accountReq.AccountIDs = nil
 
 		detectResult, err := s.DetectAccountCapability(ctx, accountReq)
 		if err != nil {
+			return result, err
+		}
+		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		result.Results = append(result.Results, detectResult)
@@ -908,7 +941,13 @@ func resolveAccountPoolCapabilityRuntimeCredential(
 	return strings.TrimSpace(result.AccessToken), nil
 }
 
-func persistAccountPoolCapabilitySuccess(accountID int, supportedModels []string, detectedModels []string, modelMapping map[string]string, status string) error {
+func persistAccountPoolCapabilitySuccess(ctx context.Context, accountID int, supportedModels []string, detectedModels []string, modelMapping map[string]string, status string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	supportedModelsJSON, err := common.Marshal(supportedModels)
 	if err != nil {
 		return err
@@ -931,12 +970,18 @@ func persistAccountPoolCapabilitySuccess(accountID int, supportedModels []string
 		}
 		updates["model_mapping"] = string(modelMappingJSON)
 	}
-	return model.DB.Model(&model.AccountPoolAccount{}).
+	return model.DB.WithContext(ctx).Model(&model.AccountPoolAccount{}).
 		Where("id = ?", accountID).
 		Updates(updates).Error
 }
 
-func persistAccountPoolCapabilityFailure(accountID int, result AccountPoolCapabilityDetectResult) error {
+func persistAccountPoolCapabilityFailure(ctx context.Context, accountID int, result AccountPoolCapabilityDetectResult) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	errorText := ""
 	if len(result.Errors) > 0 {
 		errorText = sanitizeAccountPoolCapabilityError(result.Errors[0])
@@ -951,7 +996,7 @@ func persistAccountPoolCapabilityFailure(accountID int, result AccountPoolCapabi
 		"last_capability_check_error":  errorText,
 		"last_capability_check_models": string(detectedModelsJSON),
 	}
-	return model.DB.Model(&model.AccountPoolAccount{}).
+	return model.DB.WithContext(ctx).Model(&model.AccountPoolAccount{}).
 		Where("id = ?", accountID).
 		Updates(updates).Error
 }

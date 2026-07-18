@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row } from '@tanstack/react-table'
+import { Refresh01Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { Pencil, Power, PowerOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -26,6 +28,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import type { PlanRecord } from '../types'
+import { resolveSubscriptionResetPermissions } from '../lib/reset'
+import { useAuthStore } from '@/stores/auth-store'
 import { useSubscriptions } from './subscriptions-provider'
 
 interface DataTableRowActionsProps {
@@ -34,9 +38,14 @@ interface DataTableRowActionsProps {
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
+  const currentUser = useAuthStore((state) => state.auth.user)
   const { setOpen, setCurrentRow, complianceConfirmed } = useSubscriptions()
   const isEnabled = row.original.plan.enabled
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
+  const { canResetPlan } = resolveSubscriptionResetPermissions(
+    currentUser?.role ?? 0,
+    false
+  )
 
   const handleEdit = () => {
     setCurrentRow(row.original)
@@ -46,6 +55,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleToggleStatus = () => {
     setCurrentRow(row.original)
     setOpen('toggle-status')
+  }
+
+  const handleResetSubscriptions = () => {
+    setCurrentRow(row.original)
+    setOpen('reset-subscriptions')
   }
 
   return (
@@ -66,6 +80,25 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         </TooltipTrigger>
         <TooltipContent>{t('Edit')}</TooltipContent>
       </Tooltip>
+
+      {canResetPlan ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='ghost'
+                size='icon-sm'
+                disabled={!complianceConfirmed}
+                onClick={handleResetSubscriptions}
+                aria-label={t('Reset subscription quota')}
+              />
+            }
+          >
+            <HugeiconsIcon icon={Refresh01Icon} />
+          </TooltipTrigger>
+          <TooltipContent>{t('Reset subscription quota')}</TooltipContent>
+        </Tooltip>
+      ) : null}
 
       <Tooltip>
         <TooltipTrigger

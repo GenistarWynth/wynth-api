@@ -74,3 +74,56 @@ func TestTaskDurationBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMultipartDirectNormalizesImageInputs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name       string
+		body       string
+		wantImages []string
+		wantAction string
+	}{
+		{
+			name:       "single Image is trimmed into Images",
+			body:       `{"model":"wan2.7-i2v","prompt":"animate","image":" https://example.com/first.png "}`,
+			wantImages: []string{"https://example.com/first.png"},
+			wantAction: constant.TaskActionGenerate,
+		},
+		{
+			name:       "blank entries are removed from Images",
+			body:       `{"model":"wan2.7-i2v","prompt":"animate","images":[" "," https://example.com/first.png ",""," https://example.com/last.png "]}`,
+			wantImages: []string{"https://example.com/first.png", "https://example.com/last.png"},
+			wantAction: constant.TaskActionGenerate,
+		},
+		{
+			name:       "existing Images are not replaced by InputReference",
+			body:       `{"model":"wan2.7-i2v","prompt":"animate","images":["https://example.com/first.png","https://example.com/last.png"],"input_reference":"https://example.com/reference.png"}`,
+			wantImages: []string{"https://example.com/first.png", "https://example.com/last.png"},
+			wantAction: constant.TaskActionGenerate,
+		},
+		{
+			name:       "blank Image does not create an empty Images entry",
+			body:       `{"model":"wan2.7-t2v","prompt":"animate","image":"   "}`,
+			wantImages: nil,
+			wantAction: constant.TaskActionTextGenerate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Request = request
+			info := &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
+
+			taskErr := ValidateMultipartDirect(context, info)
+
+			require.Nil(t, taskErr)
+			stored, err := GetTaskRequest(context)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantImages, stored.Images)
+			require.Equal(t, tt.wantAction, info.Action)
+		})
+	}
+}

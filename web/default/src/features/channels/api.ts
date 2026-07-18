@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
 import { getGroups as getUserGroups } from '@/features/users/api'
+
 import type {
   AddChannelRequest,
   BatchDeleteParams,
@@ -604,7 +605,10 @@ export async function getEnabledModels(): Promise<{
   message?: string
   data?: string[]
 }> {
-  const res = await api.get('/api/channel/models_enabled')
+  const res = await api.get('/api/channel/models_enabled', {
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  })
   return res.data
 }
 

@@ -2,7 +2,9 @@ package model
 
 import (
 	"math"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +32,25 @@ func setupQuotaDataCacheTestDB(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&QuotaData{}))
 }
 
+func expectedQuotaDataForTest(params QuotaDataLogParams) QuotaData {
+	return QuotaData{
+		UserID:              params.UserID,
+		Username:            params.Username,
+		ModelName:           params.ModelName,
+		CreatedAt:           params.CreatedAt - (params.CreatedAt % 3600),
+		UseGroup:            params.UseGroup,
+		TokenID:             params.TokenID,
+		ChannelID:           params.ChannelID,
+		NodeName:            params.NodeName,
+		TokenUsed:           params.TokenUsed,
+		InputTokens:         params.InputTokens,
+		CacheReadTokens:     params.CacheReadTokens,
+		CacheCreationTokens: params.CacheCreationTokens,
+		Count:               1,
+		Quota:               params.Quota,
+	}
+}
+
 func TestLogQuotaDataAggregatesCacheTokens(t *testing.T) {
 	setupQuotaDataCacheTestDB(t)
 
@@ -45,6 +66,122 @@ func TestLogQuotaDataAggregatesCacheTokens(t *testing.T) {
 	assert.Equal(t, 200, row.InputTokens)
 	assert.Equal(t, 100, row.CacheReadTokens)
 	assert.Equal(t, 12, row.CacheCreationTokens)
+}
+
+func TestSaveQuotaDataCacheKeepsLiveAggregationAvailableDuringPersistence(t *testing.T) {
+	setupQuotaDataCacheTestDB(t)
+	resetQuotaDataCacheForTest()
+
+	firstParams := QuotaDataLogParams{
+		UserID:              1,
+		Username:            "first-user",
+		ModelName:           "first-model",
+		CreatedAt:           7201,
+		UseGroup:            "first-group",
+		TokenID:             11,
+		ChannelID:           21,
+		NodeName:            "first-node",
+		Quota:               10,
+		TokenUsed:           100,
+		InputTokens:         70,
+		CacheReadTokens:     20,
+		CacheCreationTokens: 10,
+	}
+	liveParams := QuotaDataLogParams{
+		UserID:              2,
+		Username:            "live-user",
+		ModelName:           "live-model",
+		CreatedAt:           10805,
+		UseGroup:            "live-group",
+		TokenID:             12,
+		ChannelID:           22,
+		NodeName:            "live-node",
+		Quota:               20,
+		TokenUsed:           200,
+		InputTokens:         140,
+		CacheReadTokens:     40,
+		CacheCreationTokens: 20,
+	}
+	LogQuotaData(firstParams)
+
+	persistenceEntered := make(chan struct{})
+	releasePersistence := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseDBBarrier := func() {
+		releaseOnce.Do(func() {
+			close(releasePersistence)
+		})
+	}
+	defer releaseDBBarrier()
+
+	var blockFirstQuery sync.Once
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register("test:block_first_quota_data_flush_query", func(*gorm.DB) {
+		blockFirstQuery.Do(func() {
+			close(persistenceEntered)
+			<-releasePersistence
+		})
+	}))
+
+	firstFlushDone := make(chan struct{})
+	go func() {
+		SaveQuotaDataCache()
+		close(firstFlushDone)
+	}()
+
+	select {
+	case <-persistenceEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first quota-data snapshot to enter persistence")
+	}
+
+	secondLogDone := make(chan struct{})
+	go func() {
+		LogQuotaData(liveParams)
+		close(secondLogDone)
+	}()
+
+	logReturnedBeforeRelease := false
+	select {
+	case <-secondLogDone:
+		logReturnedBeforeRelease = true
+	case <-time.After(time.Second):
+	}
+	if !logReturnedBeforeRelease {
+		releaseDBBarrier()
+		select {
+		case <-firstFlushDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("first quota-data flush did not finish after releasing the DB barrier")
+		}
+		select {
+		case <-secondLogDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("LogQuotaData remained blocked after the first flush completed")
+		}
+		t.Fatal("LogQuotaData did not return while the detached snapshot was blocked in persistence")
+	}
+
+	liveRowsBeforeRelease := snapshotQuotaDataCacheForTest()
+
+	releaseDBBarrier()
+	select {
+	case <-firstFlushDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first quota-data flush")
+	}
+
+	assert.Equal(t, []QuotaData{expectedQuotaDataForTest(liveParams)}, liveRowsBeforeRelease,
+		"new quota data must remain in the live cache while the detached snapshot persists")
+
+	SaveQuotaDataCache()
+
+	var rows []QuotaData
+	require.NoError(t, DB.Order("user_id ASC").Find(&rows).Error)
+	require.Len(t, rows, 2, "the detached and live snapshots must each persist exactly once")
+	for i := range rows {
+		rows[i].Id = 0
+	}
+	assert.Equal(t, []QuotaData{expectedQuotaDataForTest(firstParams), expectedQuotaDataForTest(liveParams)}, rows)
 }
 
 func TestQuotaDataGroupQueriesIncludeCacheTokens(t *testing.T) {

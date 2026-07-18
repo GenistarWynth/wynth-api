@@ -21,6 +21,37 @@ func buildChannelAffinityTemplateContextForTest(meta channelAffinityMeta) *gin.C
 	return ctx
 }
 
+func TestCodexAffinityTemplatePassesTurnStateWithoutOverwritingOrigin(t *testing.T) {
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotEmpty(t, setting.Rules)
+
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		RuleName:      setting.Rules[0].Name,
+		ParamTemplate: setting.Rules[0].ParamOverrideTemplate,
+	})
+	merged, applied := ApplyChannelAffinityOverrideTemplate(ctx, map[string]interface{}{})
+	require.True(t, applied)
+
+	overrideContext := map[string]interface{}{
+		"request_headers": map[string]interface{}{
+			"x-codex-turn-state": "incoming-state",
+		},
+		"header_override": map[string]interface{}{
+			"x-codex-turn-state": "existing-state",
+		},
+	}
+	_, err := relaycommon.ApplyParamOverride([]byte(`{"model":"gpt-5"}`), merged, overrideContext)
+	require.NoError(t, err)
+	headers, ok := overrideContext["header_override"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "existing-state", headers["x-codex-turn-state"])
+
+	delete(headers, "x-codex-turn-state")
+	_, err = relaycommon.ApplyParamOverride([]byte(`{"model":"gpt-5"}`), merged, overrideContext)
+	require.NoError(t, err)
+	require.Equal(t, "incoming-state", headers["x-codex-turn-state"])
+}
+
 func TestApplyChannelAffinityOverrideTemplate_NoTemplate(t *testing.T) {
 	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
 		RuleName: "rule-no-template",

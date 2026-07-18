@@ -2,6 +2,7 @@ package helper
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,6 +56,31 @@ func buildSSEBody(n int) string {
 }
 
 // ---------- Basic correctness ----------
+
+func TestCopyCodexSSEHeadersUsesCopyPolicyAndHandlesNil(t *testing.T) {
+	assert.NotPanics(t, func() {
+		copyCodexSSEHeaders(nil, nil)
+		copyCodexSSEHeaders(&gin.Context{}, &http.Response{})
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	resp := &http.Response{Header: http.Header{
+		"X-Reasoning-Included": {"true"},
+		"X-Codex-Turn-State":   {"state-1", "state-2"},
+	}}
+	copyCodexSSEHeaders(c, resp)
+	assert.Equal(t, "true", recorder.Header().Get("X-Reasoning-Included"))
+	assert.Equal(t, []string{"state-1", "state-2"}, recorder.Header().Values("X-Codex-Turn-State"))
+
+	deniedRecorder := httptest.NewRecorder()
+	deniedContext, _ := gin.CreateTestContext(deniedRecorder)
+	copyCodexSSEHeadersWithPolicy(deniedContext, resp, func(_ *gin.Context, name string, _ []string) bool {
+		return name != "X-Codex-Turn-State"
+	})
+	assert.Equal(t, "true", deniedRecorder.Header().Get("X-Reasoning-Included"))
+	assert.Empty(t, deniedRecorder.Header().Values("X-Codex-Turn-State"))
+}
 
 func TestStreamScannerHandler_NilInputs(t *testing.T) {
 	t.Parallel()
@@ -210,7 +236,378 @@ func TestStreamScannerHandler_DataWithExtraSpaces(t *testing.T) {
 	assert.Equal(t, "{\"trimmed\":true}", got)
 }
 
+func TestStreamScannerHandler_CancelDropsQueuedChunks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	c, resp, info := setupStreamTest(t, pr)
+	resp.Body = pr
+	c.Request = c.Request.WithContext(ctx)
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			if handled.Add(1) == 1 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+		})
+		close(done)
+	}()
+	_, err := io.WriteString(pw, "data: first\ndata: second\ndata: third\n")
+	require.NoError(t, err)
+
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first callback did not start")
+	}
+	cancel()
+	close(releaseFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not join after cancellation")
+	}
+
+	assert.Equal(t, int64(1), handled.Load(), "buffered chunks must be dropped after cancellation")
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+}
+
+// TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns pins the
+// disconnect contract: when the client goes away, the handler must return
+// promptly (all goroutines joined, so the gin.Context can never leak into a
+// pooled reuse), the upstream body must be closed to stop token generation,
+// and no data received after the disconnect may be processed or written.
+func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() {
+		_ = pr.Close()
+		_ = pw.Close()
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+
+	resp := &http.Response{Body: pr}
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	var count atomic.Int64
+	firstHandled := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			count.Add(1)
+			_ = StringData(c, data)
+			if data == "first" {
+				close(firstHandled)
+			}
+		})
+		close(done)
+	}()
+
+	_, err := fmt.Fprint(pw, "data: first\n")
+	require.NoError(t, err)
+
+	select {
+	case <-firstHandled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first chunk")
+	}
+
+	cancel()
+
+	// The handler must return without any further upstream input: cleanup
+	// closes resp.Body, which unblocks the scanner goroutine.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after client disconnect")
+	}
+
+	// Upstream read side must be closed so the provider stops generating
+	// (and billing) for a request nobody is listening to.
+	_, err = fmt.Fprint(pw, "data: second\n")
+	require.ErrorIs(t, err, io.ErrClosedPipe, "upstream body should be closed after client disconnect")
+
+	assert.Equal(t, int64(1), count.Load(), "no chunk after disconnect should be processed")
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+
+	body := recorder.Body.String()
+	assert.Contains(t, body, "first")
+	assert.NotContains(t, body, "second")
+}
+
 // ---------- Ping tests ----------
+
+type pingFailWriter struct {
+	gin.ResponseWriter
+}
+
+func (w *pingFailWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ": PING") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *pingFailWriter) WriteString(s string) (int, error) {
+	if strings.Contains(s, ": PING") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.WriteString(s)
+}
+
+func TestStreamScannerHandler_PingFailureStopsIdleUpstream(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled := setting.PingIntervalEnabled
+	oldSeconds := setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+	})
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Writer = &pingFailWriter{ResponseWriter: c.Writer}
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: pr}, info, func(string, *StreamResult) {})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ping failure did not stop idle upstream promptly")
+	}
+
+	assert.Equal(t, relaycommon.StreamEndReasonPingFail, info.StreamStatus.EndReason)
+	_, err := io.WriteString(pw, "data: generated-after-failure\n")
+	require.ErrorIs(t, err, io.ErrClosedPipe, "upstream body must close after ping failure")
+}
+
+type blockingPingWriter struct {
+	gin.ResponseWriter
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingPingWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ": PING") {
+		w.once.Do(func() { close(w.started) })
+		<-w.release
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *blockingPingWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func TestStreamScannerHandler_CancelWhileCallbackWaitsForWriteLock(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled := setting.PingIntervalEnabled
+	oldSeconds := setting.PingIntervalSeconds
+	setting.PingIntervalEnabled = true
+	setting.PingIntervalSeconds = 1
+	t.Cleanup(func() {
+		setting.PingIntervalEnabled = oldEnabled
+		setting.PingIntervalSeconds = oldSeconds
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writer := &blockingPingWriter{ResponseWriter: c.Writer, started: make(chan struct{}), release: make(chan struct{})}
+	c.Writer = writer
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: pr}, info, func(string, *StreamResult) { handled.Add(1) })
+		close(done)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ping did not acquire write lock")
+	}
+	_, err := io.WriteString(pw, "data: queued\n")
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	close(writer.release)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not return after releasing write lock")
+	}
+	assert.Zero(t, handled.Load(), "callback must re-check cancellation after acquiring write lock")
+}
+
+func TestStreamScannerHandler_NilRequestDoesNotPanic(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = nil
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	require.NotPanics(t, func() {
+		StreamScannerHandler(c, &http.Response{Body: io.NopCloser(strings.NewReader("data: [DONE]\n"))}, info, func(string, *StreamResult) {})
+	})
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+}
+
+type panicPingWriter struct {
+	gin.ResponseWriter
+	started  chan struct{}
+	panicNow chan struct{}
+	once     sync.Once
+}
+
+func (w *panicPingWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ": PING") {
+		w.once.Do(func() { close(w.started) })
+		<-w.panicNow
+		panic("ping writer panic")
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *panicPingWriter) WriteString(s string) (int, error) { return w.Write([]byte(s)) }
+
+func TestStreamScannerHandler_PingPanicDropsQueuedCallback(t *testing.T) {
+	setting := operation_setting.GetGeneralSetting()
+	oldEnabled, oldSeconds := setting.PingIntervalEnabled, setting.PingIntervalSeconds
+	setting.PingIntervalEnabled, setting.PingIntervalSeconds = true, 1
+	t.Cleanup(func() { setting.PingIntervalEnabled, setting.PingIntervalSeconds = oldEnabled, oldSeconds })
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	writer := &panicPingWriter{ResponseWriter: c.Writer, started: make(chan struct{}), panicNow: make(chan struct{})}
+	c.Writer = writer
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: pr}, info, func(string, *StreamResult) { handled.Add(1) })
+		close(done)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ping write did not start")
+	}
+	_, err := io.WriteString(pw, "data: queued-during-ping\n")
+	require.NoError(t, err)
+	close(writer.panicNow)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop after ping panic")
+	}
+	assert.Zero(t, handled.Load())
+	assert.Equal(t, relaycommon.StreamEndReasonPanic, info.StreamStatus.EndReason)
+}
+
+type panicAfterReader struct {
+	first    []byte
+	queued   []byte
+	stage    int
+	queueNow chan struct{}
+	closed   chan struct{}
+	once     sync.Once
+}
+
+func (r *panicAfterReader) Read(p []byte) (int, error) {
+	switch r.stage {
+	case 0:
+		r.stage++
+		return copy(p, r.first), nil
+	case 1:
+		r.stage++
+		<-r.queueNow
+		return copy(p, r.queued), nil
+	default:
+		panic("scanner reader panic")
+	}
+}
+func (r *panicAfterReader) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
+
+func TestStreamScannerHandler_ScannerPanicDropsQueuedCallbacks(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	info := &relaycommon.RelayInfo{DisablePing: true, ChannelMeta: &relaycommon.ChannelMeta{}}
+	body := &panicAfterReader{
+		first:    []byte("data: first\n"),
+		queued:   []byte("data: second\ndata: third\n"),
+		queueNow: make(chan struct{}),
+		closed:   make(chan struct{}),
+	}
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var handled atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, &http.Response{Body: body}, info, func(string, *StreamResult) {
+			if handled.Add(1) == 1 {
+				close(firstStarted)
+				<-releaseFirst
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first callback did not start")
+	}
+	close(body.queueNow)
+	select {
+	case <-body.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scanner panic did not trigger cleanup")
+	}
+	close(releaseFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream did not stop after scanner panic")
+	}
+	assert.Equal(t, int64(1), handled.Load())
+	assert.Equal(t, relaycommon.StreamEndReasonPanic, info.StreamStatus.EndReason)
+}
 
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()

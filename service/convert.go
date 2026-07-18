@@ -227,15 +227,17 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	if oaiUsage == nil {
 		return nil
 	}
+	cacheCreationTotal := oaiUsage.PromptTokensDetails.CacheCreationTokensTotal()
 	cacheCreation5m, cacheCreation1h := NormalizeCacheCreationSplit(
-		oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		cacheCreationTotal,
 		oaiUsage.ClaudeCacheCreation5mTokens,
 		oaiUsage.ClaudeCacheCreation1hTokens,
 	)
+	cacheCreationTotal = cacheCreation5m + cacheCreation1h
 	usage := &dto.ClaudeUsage{
 		InputTokens:              oaiUsage.PromptTokens,
 		OutputTokens:             oaiUsage.CompletionTokens,
-		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: cacheCreationTotal,
 		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {
@@ -248,8 +250,23 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 }
 
 func NormalizeCacheCreationSplit(totalTokens int, tokens5m int, tokens1h int) (int, int) {
-	remainder := lo.Max([]int{totalTokens - tokens5m - tokens1h, 0})
-	return tokens5m + remainder, tokens1h
+	if totalTokens < 0 {
+		totalTokens = 0
+	}
+	if tokens5m < 0 {
+		tokens5m = 0
+	}
+	if tokens1h < 0 {
+		tokens1h = 0
+	}
+	knownTotal := tokens5m + tokens1h
+	if knownTotal >= totalTokens {
+		return tokens5m, tokens1h
+	}
+	// Native OpenAI cache writes do not carry retention information. Preserve
+	// every known split token and assign only the unclassified remainder to the
+	// generic/5m bucket rather than inventing 1h retention.
+	return tokens5m + totalTokens - knownTotal, tokens1h
 }
 
 func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse {

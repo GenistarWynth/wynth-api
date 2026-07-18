@@ -16,20 +16,88 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Plus } from 'lucide-react'
+import { Add01Icon, Delete02Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Button } from '@/components/ui/button'
+import { deleteInvalidRedemptions } from '../api'
+import { ERROR_MESSAGES } from '../constants'
 import { useRedemptions } from './redemptions-provider'
 
 export function RedemptionsPrimaryButtons() {
   const { t } = useTranslation()
-  const { setOpen } = useRedemptions()
+  const { setOpen, triggerRefresh } = useRedemptions()
+  const [showDeleteInvalidConfirm, setShowDeleteInvalidConfirm] =
+    useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const handleDeleteInvalid = async () => {
+    setIsDeleting(true)
+    try {
+      const result = await deleteInvalidRedemptions()
+      if (!result.success) {
+        toast.error(result.message || t(ERROR_MESSAGES.DELETE_INVALID_FAILED))
+        return
+      }
+
+      toast.success(
+        t('Successfully deleted {{count}} invalid redemption codes', {
+          count: result.data || 0,
+        })
+      )
+      triggerRefresh()
+      setShowDeleteInvalidConfirm(false)
+    } catch {
+      toast.error(t(ERROR_MESSAGES.DELETE_INVALID_FAILED))
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   return (
-    <div className='flex gap-2'>
-      <Button size='sm' onClick={() => setOpen('create')}>
-        <Plus className='h-4 w-4' />
-        {t('Create Code')}
-      </Button>
-    </div>
+    <>
+      <div className='flex flex-wrap gap-2'>
+        <Button
+          size='sm'
+          variant='outline'
+          onClick={() => setShowDeleteInvalidConfirm(true)}
+        >
+          <HugeiconsIcon
+            icon={Delete02Icon}
+            data-icon='inline-start'
+            className='text-destructive'
+          />
+          {t('Delete Invalid')}
+        </Button>
+        <Button size='sm' onClick={() => setOpen('create')}>
+          <HugeiconsIcon icon={Add01Icon} data-icon='inline-start' />
+          {t('Create Code')}
+        </Button>
+      </div>
+
+      <ConfirmDialog
+        destructive
+        open={showDeleteInvalidConfirm}
+        onOpenChange={setShowDeleteInvalidConfirm}
+        handleConfirm={handleDeleteInvalid}
+        isLoading={isDeleting}
+        className='max-w-md'
+        title={t('Delete Invalid Redemption Codes?')}
+        desc={
+          <>
+            {t('This will delete all')} <strong>{t('used')}</strong>,{' '}
+            <strong>{t('disabled')}</strong>
+            {t(', and')} <strong>{t('expired')}</strong>{' '}
+            {t('redemption codes.')}
+            <br />
+            {t('This action cannot be undone.')}
+          </>
+        }
+        confirmText={t('Delete Invalid')}
+      />
+    </>
   )
 }

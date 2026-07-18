@@ -75,6 +75,8 @@ var DefaultCollapseSidebar = false // default value of collapse sidebar
 var SessionSecret = uuid.New().String()
 var CryptoSecret = uuid.New().String()
 var CryptoSecretStable = false
+var SessionCookieSecure = false
+var SessionCookieTrustedURLs []string
 
 // UpstreamBrowserCDPURL is the Chrome DevTools Protocol endpoint used for headless-browser
 // upstream logins (e.g. Cloudflare Turnstile challenges). Empty disables headless-browser login.

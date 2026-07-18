@@ -5,6 +5,10 @@ import (
 )
 
 var defaultCacheRatio = map[string]float64{
+	"gpt-5.6":                             0.1,
+	"gpt-5.6-sol":                         0.1,
+	"gpt-5.6-terra":                       0.1,
+	"gpt-5.6-luna":                        0.1,
 	"gemini-3-flash-preview":              0.1,
 	"gemini-3-pro-preview":                0.1,
 	"gemini-3.1-pro-preview":              0.1,
@@ -81,6 +85,10 @@ var defaultCacheRatio = map[string]float64{
 }
 
 var defaultCreateCacheRatio = map[string]float64{
+	"gpt-5.6":                             1.25,
+	"gpt-5.6-sol":                         1.25,
+	"gpt-5.6-terra":                       1.25,
+	"gpt-5.6-luna":                        1.25,
 	"claude-3-sonnet-20240229":            1.25,
 	"claude-3-opus-20240229":              1.25,
 	"claude-3-haiku-20240307":             1.25,
@@ -121,8 +129,6 @@ var defaultCreateCacheRatio = map[string]float64{
 	"claude-opus-4-8-medium":              1.25,
 	"claude-opus-4-8-low":                 1.25,
 }
-
-//var defaultCreateCacheRatio = map[string]float64{}
 
 var cacheRatioMap = types.NewRWMap[string, float64]()
 var createCacheRatioMap = types.NewRWMap[string, float64]()

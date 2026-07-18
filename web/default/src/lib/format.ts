@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import dayjs from '@/lib/dayjs'
+
 import {
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyDisplay,
+  type CurrencyDisplaySnapshot,
 } from './currency'
 
 // ============================================================================
@@ -77,12 +79,15 @@ export function formatQuota(quota: number): string {
 }
 
 /**
- * Parse quota from the current display input back to quota units.
+ * Parse display input back to quota units using an optional resolved snapshot.
  */
-export function parseQuotaFromDollars(amount: number): number {
+export function parseQuotaFromDollars(
+  amount: number,
+  currencyDisplay?: CurrencyDisplaySnapshot
+): number {
   if (!Number.isFinite(amount)) return 0
 
-  const { config, meta } = getCurrencyDisplay()
+  const { config, meta } = currencyDisplay ?? getCurrencyDisplay()
 
   // Tokens-only or raw quota mode
   if (meta.kind === 'tokens') {
@@ -98,11 +103,14 @@ export function parseQuotaFromDollars(amount: number): number {
 }
 
 /**
- * Convert quota units to the configured display amount.
+ * Convert quota units to the display amount using an optional resolved snapshot.
  * Reverse of parseQuotaFromDollars.
  */
-export function quotaUnitsToDollars(units: number): number {
-  const { config, meta } = getCurrencyDisplay()
+export function quotaUnitsToDollars(
+  units: number,
+  currencyDisplay?: CurrencyDisplaySnapshot
+): number {
+  const { config, meta } = currencyDisplay ?? getCurrencyDisplay()
 
   if (meta.kind === 'tokens') {
     return units

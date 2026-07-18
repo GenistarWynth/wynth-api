@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { UserSubscriptionsDialog } from '@/features/subscriptions/components/dialogs/user-subscriptions-dialog'
+import { resolveSubscriptionResetPermissions } from '@/features/subscriptions/lib/reset'
 import { useAuthStore } from '@/stores/auth-store'
 import { manageUser, resetUserPasskey, resetUserTwoFA } from '../api'
 import {
@@ -56,7 +57,7 @@ import {
   isUserDeleted,
 } from '../constants'
 import { getUserActionMessage } from '../lib'
-import { type User, type ManageUserAction } from '../types'
+import type { User, ManageUserAction } from '../types'
 import { UserApiKeysDialog } from './dialogs/user-api-keys-dialog'
 import { UserBindingDialog } from './dialogs/user-binding-dialog'
 import { useUsers } from './users-provider'
@@ -71,6 +72,10 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { setOpen, setCurrentRow, triggerRefresh } = useUsers()
   const { user: currentUser } = useAuthStore((state) => state.auth)
   const currentUserIsRoot = (currentUser?.role ?? 0) === USER_ROLE.ROOT
+  const canResetSubscriptionQuota = resolveSubscriptionResetPermissions(
+    currentUser?.role ?? 0,
+    (currentUser?.role ?? 0) > user.role
+  ).canResetUser
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
@@ -312,6 +317,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         open={subscriptionsDialogOpen}
         onOpenChange={setSubscriptionsDialogOpen}
         user={{ id: user.id, username: user.username }}
+        canResetQuota={canResetSubscriptionQuota}
         onSuccess={triggerRefresh}
       />
 

@@ -17,11 +17,37 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
-import type { SystemInstanceListResponse } from './types'
+import { buildSystemInstanceDeletePath } from './lib/instance-cleanup'
+import type {
+  SystemInstanceDeleteResponse,
+  SystemInstanceListResponse,
+} from './types'
 
 export async function listSystemInstances() {
   const res = await api.get<SystemInstanceListResponse>(
     '/api/system-info/instances'
+  )
+  return res.data
+}
+
+export async function deleteStaleSystemInstances() {
+  const res = await api.delete<SystemInstanceDeleteResponse>(
+    '/api/system-info/stale-instances',
+    {
+      skipErrorHandler: true,
+      skipBusinessError: true,
+    }
+  )
+  return res.data
+}
+
+export async function deleteStaleSystemInstance(nodeName: string) {
+  const res = await api.delete<SystemInstanceDeleteResponse>(
+    buildSystemInstanceDeletePath(nodeName),
+    {
+      skipErrorHandler: true,
+      skipBusinessError: true,
+    }
   )
   return res.data
 }

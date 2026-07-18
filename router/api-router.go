@@ -83,7 +83,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/self/groups", controller.GetUserGroups)
 				selfRoute.GET("/self", controller.GetSelf)
 				selfRoute.GET("/models", controller.GetUserModels)
-				selfRoute.PUT("/self", controller.UpdateSelf)
+				selfRoute.PUT("/self", middleware.CriticalRateLimit(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", controller.GenerateAccessToken)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
@@ -196,9 +196,22 @@ func SetApiRouter(router *gin.Engine) {
 			// User subscription management (admin)
 			subscriptionAdminRoute.GET("/users/:id/subscriptions", controller.AdminListUserSubscriptions)
 			subscriptionAdminRoute.POST("/users/:id/subscriptions", controller.AdminCreateUserSubscription)
+			subscriptionAdminRoute.POST(
+				"/users/:id/subscriptions/reset",
+				middleware.CriticalRateLimit(),
+				middleware.SecureVerificationRequired(),
+				controller.AdminResetUserSubscriptionsByPlan,
+			)
 			subscriptionAdminRoute.POST("/user_subscriptions/:id/invalidate", controller.AdminInvalidateUserSubscription)
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
 		}
+		apiRouter.POST(
+			"/subscription/admin/plans/:id/subscriptions/reset",
+			middleware.RootAuth(),
+			middleware.CriticalRateLimit(),
+			middleware.SecureVerificationRequired(),
+			controller.AdminResetPlanSubscriptions,
+		)
 
 		// Subscription payment callbacks (no auth)
 		apiRouter.POST("/subscription/epay/notify", anonymousRequestBodyLimit, controller.SubscriptionEpayNotify)
@@ -358,6 +371,18 @@ func SetApiRouter(router *gin.Engine) {
 		systemInfoRoute.Use(middleware.RootAuth())
 		{
 			systemInfoRoute.GET("/instances", controller.ListSystemInstances)
+			systemInfoRoute.DELETE(
+				"/stale-instances",
+				middleware.CriticalRateLimit(),
+				middleware.SecureVerificationRequired(),
+				controller.DeleteStaleSystemInstances,
+			)
+			systemInfoRoute.DELETE(
+				"/instances/*node_name",
+				middleware.CriticalRateLimit(),
+				middleware.SecureVerificationRequired(),
+				controller.DeleteStaleSystemInstance,
+			)
 		}
 
 		dataRoute := apiRouter.Group("/data")

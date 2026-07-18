@@ -32,10 +32,37 @@ export type InterfaceLanguageCode =
 export function normalizeInterfaceLanguage(value?: string | null): string {
   if (!value) return 'en'
 
-  const normalized = value.trim().replace(/_/g, '-').toLowerCase()
+  const normalized = value.trim().replaceAll('_', '-').toLowerCase()
   if (normalized.startsWith('zh')) return 'zh'
 
   return INTERFACE_LANGUAGE_OPTIONS.some((lang) => lang.code === normalized)
     ? normalized
     : 'en'
+}
+
+/**
+ * Map browser locale detection onto the interface language codes supported by
+ * Wynth. The app has one Chinese resource, so regional Chinese tags share it.
+ */
+export function convertDetectedLanguage(value: string): string {
+  const normalized = value.trim().replaceAll('_', '-').toLowerCase()
+  return normalized.startsWith('zh') ? 'zh' : value
+}
+
+/**
+ * Convert an i18next language code into a valid BCP-47 tag for Intl APIs.
+ * Invalid values return undefined so Intl falls back to the runtime locale.
+ */
+export function toIntlLocale(value?: string | null): string | undefined {
+  if (!value) return undefined
+
+  const normalized = value.trim().replaceAll('_', '-')
+  if (normalized === 'zh' || normalized === 'zhCN') return 'zh-CN'
+  if (normalized === 'zhTW') return 'zh-TW'
+
+  try {
+    return Intl.getCanonicalLocales(normalized)[0]
+  } catch {
+    return undefined
+  }
 }

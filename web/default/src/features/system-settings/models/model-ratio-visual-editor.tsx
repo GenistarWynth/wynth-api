@@ -34,11 +34,10 @@ import type {
   VisibilityState,
   SortingState,
 } from '@tanstack/react-table'
-import { useMediaQuery } from '@/hooks'
 import { Copy, Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
+
 import {
   DataTableBulkActions,
   DataTableToolbar,
@@ -47,7 +46,10 @@ import {
   DataTableView,
   useDataTable,
 } from '@/components/data-table'
+import { Button } from '@/components/ui/button'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
+import { useMediaQuery } from '@/hooks'
+
 import { safeJsonParse } from '../utils/json-parser'
 import {
   ModelPricingEditorPanel,
@@ -61,35 +63,12 @@ import {
   isBasePricingUnset,
   type ModelRow,
 } from './model-pricing-snapshots'
+import {
+  areModelRatioVisualEditorPropsEqual,
+  buildBatchPricingCopyTargets,
+  type ModelRatioVisualEditorProps,
+} from './model-ratio-behavior'
 import { buildModelRatioColumns } from './model-ratio-table-columns'
-
-type ModelRatioVisualEditorProps = {
-  savedModelPrice: string
-  savedModelRatio: string
-  savedCacheRatio: string
-  savedCreateCacheRatio: string
-  savedCompletionRatio: string
-  savedImageRatio: string
-  savedAudioRatio: string
-  savedAudioCompletionRatio: string
-  savedBillingMode: string
-  savedBillingExpr: string
-  modelPrice: string
-  modelRatio: string
-  cacheRatio: string
-  createCacheRatio: string
-  completionRatio: string
-  imageRatio: string
-  audioRatio: string
-  audioCompletionRatio: string
-  billingMode: string
-  billingExpr: string
-  candidateModelNames?: string[]
-  filterMode?: 'all' | 'unset'
-  onChange: (field: string, value: string) => void
-  onSave: () => void | Promise<void>
-  isSaving: boolean
-}
 
 export type ModelRatioVisualEditorHandle = {
   commitOpenEditor: () => Promise<boolean>
@@ -123,6 +102,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
     billingMode,
     billingExpr,
     candidateModelNames,
+    candidateModelsLoading,
     filterMode = 'all',
     onChange,
     onSave,
@@ -630,7 +610,10 @@ const ModelRatioVisualEditorComponent = forwardRef<
       return
     }
 
-    persistPricingData(sourceData, targetNames)
+    persistPricingData(
+      sourceData,
+      buildBatchPricingCopyTargets(sourceData.name, targetNames)
+    )
     table.resetRowSelection()
     toast.success(
       t('Applied {{name}} pricing to {{count}} models', {
@@ -661,7 +644,9 @@ const ModelRatioVisualEditorComponent = forwardRef<
   if (table.getState().globalFilter) {
     emptyStateText = t('No models match your search')
   } else if (filterMode === 'unset') {
-    emptyStateText = t('No models with unset prices')
+    emptyStateText = candidateModelsLoading
+      ? t('Loading...')
+      : t('No models with unset prices')
   }
 
   return (
@@ -816,24 +801,5 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
 export const ModelRatioVisualEditor = memo(
   ModelRatioVisualEditorComponent,
-  // Custom equality check - only re-render if JSON props actually changed
-  (prevProps, nextProps) => {
-    return (
-      prevProps.modelPrice === nextProps.modelPrice &&
-      prevProps.modelRatio === nextProps.modelRatio &&
-      prevProps.cacheRatio === nextProps.cacheRatio &&
-      prevProps.createCacheRatio === nextProps.createCacheRatio &&
-      prevProps.completionRatio === nextProps.completionRatio &&
-      prevProps.imageRatio === nextProps.imageRatio &&
-      prevProps.audioRatio === nextProps.audioRatio &&
-      prevProps.audioCompletionRatio === nextProps.audioCompletionRatio &&
-      prevProps.billingMode === nextProps.billingMode &&
-      prevProps.billingExpr === nextProps.billingExpr &&
-      prevProps.candidateModelNames === nextProps.candidateModelNames &&
-      prevProps.filterMode === nextProps.filterMode &&
-      prevProps.onChange === nextProps.onChange &&
-      prevProps.onSave === nextProps.onSave &&
-      prevProps.isSaving === nextProps.isSaving
-    )
-  }
+  areModelRatioVisualEditorPropsEqual
 )

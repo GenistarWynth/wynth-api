@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestShouldRecordAccountPoolFailureSkipsDownstreamCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+
+	assert.False(t, shouldRecordAccountPoolRuntimeFailure(c, &relaycommon.RelayInfo{}))
+
+	live, _ := gin.CreateTestContext(httptest.NewRecorder())
+	live.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	assert.True(t, shouldRecordAccountPoolRuntimeFailure(live, &relaycommon.RelayInfo{}), "live request records upstream failures")
+}
 
 func TestAccountPoolRelayHookNoopsForUnboundChannel(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)

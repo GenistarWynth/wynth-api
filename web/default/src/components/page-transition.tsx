@@ -30,6 +30,8 @@ import {
   TABLE_STAGGER_VARIANTS,
 } from '@/lib/motion'
 
+import { getPageTransitionKey } from './page-transition-key'
+
 interface PageTransitionProps {
   children: ReactNode
   className?: string
@@ -57,7 +59,7 @@ export function PageTransition(props: PageTransitionProps) {
 export function AnimatedOutlet() {
   const shouldReduce = useReducedMotion()
   const routeKey = useRouterState({
-    select: (s) => s.location.pathname,
+    select: getPageTransitionKey,
   })
 
   if (shouldReduce) {
@@ -127,7 +129,7 @@ export function TableStaggerContainer(props: StaggerContainerProps) {
   const shouldReduce = useReducedMotion()
 
   if (shouldReduce) {
-    return <>{props.children}</>
+    return props.children
   }
 
   return (

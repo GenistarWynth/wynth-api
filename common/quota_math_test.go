@@ -140,7 +140,39 @@ func TestStrictQuotaConversionsReturnTypedClampErrors(t *testing.T) {
 	assert.Equal(t, 43, quota)
 }
 
-func TestStrictQuotaConversionsAcceptExactInt32Bounds(t *testing.T) {
+func TestCheckedQuotaConversionsClampExactInt32Bounds(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(float64) (int, *QuotaClamp)
+	}{
+		{name: "float", call: QuotaFromFloatChecked},
+		{name: "round", call: QuotaRoundChecked},
+		{
+			name: "decimal",
+			call: func(value float64) (int, *QuotaClamp) {
+				return QuotaFromDecimalChecked(decimal.NewFromFloat(value))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			quota, clamp := tt.call(float64(MaxQuota))
+			assert.Equal(t, MaxQuota, quota)
+			require.NotNil(t, clamp)
+			assert.Equal(t, QuotaClampOverflow, clamp.Kind)
+			assert.Equal(t, MaxQuota, clamp.Clamped)
+
+			quota, clamp = tt.call(float64(MinQuota))
+			assert.Equal(t, MinQuota, quota)
+			require.NotNil(t, clamp)
+			assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
+			assert.Equal(t, MinQuota, clamp.Clamped)
+		})
+	}
+}
+
+func TestStrictQuotaConversionsRejectExactInt32Bounds(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		call func(float64) (int, error)
@@ -149,22 +181,23 @@ func TestStrictQuotaConversionsAcceptExactInt32Bounds(t *testing.T) {
 		{name: "round", call: QuotaRoundStrict},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			quota, err := tt.call(float64(MaxQuota))
-			require.NoError(t, err)
-			assert.Equal(t, MaxQuota, quota)
+			for _, boundary := range []struct {
+				name  string
+				value float64
+				kind  QuotaClampKind
+			}{
+				{name: "max", value: float64(MaxQuota), kind: QuotaClampOverflow},
+				{name: "min", value: float64(MinQuota), kind: QuotaClampUnderflow},
+			} {
+				t.Run(boundary.name, func(t *testing.T) {
+					quota, err := tt.call(boundary.value)
+					assert.Zero(t, quota)
 
-			quota, err = tt.call(float64(MinQuota))
-			require.NoError(t, err)
-			assert.Equal(t, MinQuota, quota)
-
-			_, err = tt.call(float64(MaxQuota) + 1)
-			var clamp *QuotaClamp
-			require.ErrorAs(t, err, &clamp)
-			assert.Equal(t, QuotaClampOverflow, clamp.Kind)
-
-			_, err = tt.call(float64(MinQuota) - 1)
-			require.ErrorAs(t, err, &clamp)
-			assert.Equal(t, QuotaClampUnderflow, clamp.Kind)
+					var clamp *QuotaClamp
+					require.ErrorAs(t, err, &clamp)
+					assert.Equal(t, boundary.kind, clamp.Kind)
+				})
+			}
 		})
 	}
 }

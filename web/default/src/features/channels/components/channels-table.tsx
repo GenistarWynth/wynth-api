@@ -1,3 +1,12 @@
+import { useQuery } from '@tanstack/react-query'
+import { getRouteApi } from '@tanstack/react-router'
+import type {
+  ColumnFiltersState,
+  OnChangeFn,
+  SortingState,
+  Row,
+} from '@tanstack/react-table'
+import { Eye, EyeOff } from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -16,22 +25,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getRouteApi } from '@tanstack/react-router'
-import type { OnChangeFn, SortingState, Row } from '@tanstack/react-table'
-import { Eye, EyeOff } from 'lucide-react'
-import { useMediaQuery } from '@/hooks'
+import { useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getLobeIcon } from '@/lib/lobe-icon'
-import { useTableUrlState } from '@/hooks/use-table-url-state'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+
 import {
   DISABLED_ROW_DESKTOP,
   DISABLED_ROW_MOBILE,
@@ -39,6 +35,17 @@ import {
   useDebouncedColumnFilter,
   useDataTable,
 } from '@/components/data-table'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { useMediaQuery } from '@/hooks'
+import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { getLobeIcon } from '@/lib/lobe-icon'
+
 import { getChannels, searchChannels, getGroups } from '../api'
 import {
   DEFAULT_PAGE_SIZE,
@@ -52,16 +59,31 @@ import {
   getChannelTypeIcon,
   getChannelTypeLabel,
 } from '../lib'
+import {
+  persistChannelStatusFilter,
+  resolveChannelStatusFilter,
+} from '../lib/channel-status-filter'
 import type { Channel, ChannelSortBy } from '../types'
-import { useChannelsColumns } from './channels-columns'
 import { ChannelCard } from './channel-card'
+import { useChannelsColumns } from './channels-columns'
 import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 
 const route = getRouteApi('/_authenticated/channels/')
-const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY =
-  'channels:column-visibility'
+const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY = 'channels:column-visibility'
+const CHANNELS_COLUMN_SIZING_STORAGE_KEY = 'channels:column-sizing'
 const CHANNELS_VIEW_MODE_STORAGE_KEY = 'channels:view-mode'
+const CHANNELS_COLUMN_FILTERS = [
+  {
+    columnId: 'status',
+    searchKey: 'status',
+    type: 'array' as const,
+    deserialize: resolveChannelStatusFilter,
+  },
+  { columnId: 'type', searchKey: 'type', type: 'array' as const },
+  { columnId: 'group', searchKey: 'group', type: 'array' as const },
+  { columnId: 'model', searchKey: 'model', type: 'string' as const },
+]
 
 const CHANNEL_SORTABLE_COLUMNS = new Set<ChannelSortBy>([
   'id',
@@ -85,6 +107,7 @@ export function ChannelsTable() {
   const {
     enableTagMode,
     idSort,
+    batchMode,
     sensitiveVisible,
     setSensitiveVisible,
   } = useChannels()
@@ -110,13 +133,20 @@ export function ChannelsTable() {
       defaultPageSize: isMobile ? 10 : DEFAULT_PAGE_SIZE,
     },
     globalFilter: { enabled: true, key: 'filter' },
-    columnFilters: [
-      { columnId: 'status', searchKey: 'status', type: 'array' },
-      { columnId: 'type', searchKey: 'type', type: 'array' },
-      { columnId: 'group', searchKey: 'group', type: 'array' },
-      { columnId: 'model', searchKey: 'model', type: 'string' },
-    ],
+    columnFilters: CHANNELS_COLUMN_FILTERS,
   })
+
+  const handleColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (
+    updater
+  ) => {
+    onColumnFiltersChange((previous) => {
+      const next = typeof updater === 'function' ? updater(previous) : updater
+      persistChannelStatusFilter(
+        next.find((filter) => filter.id === 'status')?.value
+      )
+      return next
+    })
+  }
 
   // Extract filters from column filters
   const statusFilter =
@@ -270,7 +300,7 @@ export function ChannelsTable() {
   const typeCounts = data?.data?.type_counts
 
   // Columns configuration
-  const columns = useChannelsColumns()
+  const columns = useChannelsColumns({ enableSelection: batchMode })
 
   // React Table instance
   const { table } = useDataTable({
@@ -283,12 +313,17 @@ export function ChannelsTable() {
       tag: false,
     },
     columnVisibilityStorageKey: CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY,
+    columnSizingStorageKey: isMobile
+      ? false
+      : CHANNELS_COLUMN_SIZING_STORAGE_KEY,
     columnFilters,
     pagination,
     globalFilter,
-    enableRowSelection: (row: Row<Channel>) => !isTagAggregateRow(row.original),
+    enableRowSelection: batchMode
+      ? (row: Row<Channel>) => !isTagAggregateRow(row.original)
+      : false,
     onSortingChange: handleSortingChange,
-    onColumnFiltersChange,
+    onColumnFiltersChange: handleColumnFiltersChange,
     onPaginationChange,
     onGlobalFilterChange,
     getSubRows: (row: Channel & { children?: Channel[] }) => row.children,
@@ -296,8 +331,13 @@ export function ChannelsTable() {
     manualSorting: true,
     manualFiltering: true,
     withExpandedRowModel: true,
+    enableColumnResizing: !isMobile,
     ensurePageInRange,
   })
+
+  useEffect(() => {
+    if (!batchMode) table.resetRowSelection()
+  }, [batchMode, table])
 
   // Prepare filter options from existing channel types only.
   const typeFilterOptions = useMemo(() => {
@@ -443,7 +483,7 @@ export function ChannelsTable() {
         }
         return DISABLED_ROW_DESKTOP
       }}
-      bulkActions={<DataTableBulkActions table={table} />}
+      bulkActions={batchMode ? <DataTableBulkActions table={table} /> : null}
     />
   )
 }

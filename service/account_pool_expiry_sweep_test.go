@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -51,4 +52,29 @@ func TestRunAccountPoolExpiryAutoPause(t *testing.T) {
 	assertStatus(notExpired, model.AccountPoolAccountStatusEnabled)
 	assertStatus(noExpiry, model.AccountPoolAccountStatusEnabled)
 	assertStatus(alreadyDisabled, model.AccountPoolAccountStatusDisabled)
+}
+
+func TestRunAccountPoolExpiryAutoPauseContextAlreadyCanceledDoesNotUpdate(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	now := common.GetTimestamp()
+	account := model.AccountPoolAccount{
+		PoolID:             pool.Id,
+		Name:               "canceled-expiry-sweep",
+		Status:             model.AccountPoolAccountStatusEnabled,
+		ExpiresAt:          now - 1,
+		AutoPauseOnExpired: true,
+	}
+	require.NoError(t, model.DB.Create(&account).Error)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	count, err := RunAccountPoolExpiryAutoPauseContext(ctx, now)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, count)
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)
 }

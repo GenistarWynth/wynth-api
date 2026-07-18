@@ -93,3 +93,70 @@ describe('channel form auto retry settings', () => {
     assert.equal(settings.custom_existing, true)
   })
 })
+
+describe('Codex channel field passthrough settings', () => {
+  const passthroughKeys = [
+    'allow_service_tier',
+    'disable_store',
+    'allow_safety_identifier',
+    'allow_include_obfuscation',
+  ] as const
+
+  test('writes all enabled controls as explicit true values', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Codex channel',
+        type: 57,
+        models: 'gpt-test',
+        group: ['default'],
+        allow_service_tier: true,
+        disable_store: true,
+        allow_safety_identifier: true,
+        allow_include_obfuscation: true,
+      },
+      1
+    )
+
+    const settings = JSON.parse(String(payload.settings))
+    for (const key of passthroughKeys) assert.equal(settings[key], true)
+  })
+
+  test('writes all disabled controls as explicit false values', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Codex channel',
+        type: 57,
+        models: 'gpt-test',
+        group: ['default'],
+      },
+      1
+    )
+
+    const settings = JSON.parse(String(payload.settings))
+    for (const key of passthroughKeys) {
+      assert.equal(Object.hasOwn(settings, key), true)
+      assert.equal(settings[key], false)
+    }
+  })
+
+  test('restores enabled and disabled controls from existing settings', () => {
+    const defaults = transformChannelToFormDefaults(
+      baseChannel({
+        type: 57,
+        settings: JSON.stringify({
+          allow_service_tier: true,
+          disable_store: false,
+          allow_safety_identifier: true,
+          allow_include_obfuscation: false,
+        }),
+      })
+    )
+
+    assert.equal(defaults.allow_service_tier, true)
+    assert.equal(defaults.disable_store, false)
+    assert.equal(defaults.allow_safety_identifier, true)
+    assert.equal(defaults.allow_include_obfuscation, false)
+  })
+})

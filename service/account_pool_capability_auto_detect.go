@@ -24,6 +24,7 @@ const (
 var (
 	accountPoolCapabilityAutoDetectOnce    sync.Once
 	accountPoolCapabilityAutoDetectRunning atomic.Bool
+	accountPoolCapabilityAutoDetectDone    = make(chan struct{})
 )
 
 type accountPoolCapabilityAutoDetectJob struct {
@@ -136,18 +137,30 @@ func runDueAccountPoolCapabilityAutoDetectWithDetector(ctx context.Context, now 
 			return (&AccountPoolService{}).DetectPoolCapabilities(ctx, req)
 		}
 	}
+	if ctx.Err() != nil {
+		return nil
+	}
 
 	jobs, err := listDueAccountPoolCapabilityAutoDetectJobs(ctx, now)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		logger.LogWarn(ctx, fmt.Sprintf("account pool capability auto-detect: list due jobs failed: %v", err))
 		return nil
 	}
 
 	results := make([]AccountPoolCapabilityPoolResult, 0, len(jobs))
 	for _, job := range jobs {
+		if ctx.Err() != nil {
+			break
+		}
 		jobCtx, cancel := context.WithTimeout(ctx, accountPoolCapabilityAutoDetectJobTimeout(job))
 		result, err := detector(jobCtx, job.request)
 		cancel()
+		if ctx.Err() != nil {
+			break
+		}
 		if err != nil {
 			result = accountPoolCapabilityAutoDetectErrorResult(job, err)
 			logger.LogWarn(ctx, fmt.Sprintf("account pool capability auto-detect: pool_id=%d failed: %v", job.pool.Id, err))
@@ -194,34 +207,59 @@ func accountPoolCapabilityAutoDetectErrorResult(job accountPoolCapabilityAutoDet
 	return result
 }
 
-func StartAccountPoolCapabilityAutoDetectWorker() {
+func StartAccountPoolCapabilityAutoDetectWorker(ctx context.Context) <-chan struct{} {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	accountPoolCapabilityAutoDetectOnce.Do(func() {
 		if !common.IsMasterNode {
+			close(accountPoolCapabilityAutoDetectDone)
 			return
 		}
 		gopool.Go(func() {
-			logger.LogInfo(context.Background(), fmt.Sprintf("account pool capability auto-detect worker started: tick=%s", accountPoolCapabilityAutoDetectTickInterval))
+			defer close(accountPoolCapabilityAutoDetectDone)
+			logger.LogInfo(ctx, fmt.Sprintf("account pool capability auto-detect worker started: tick=%s", accountPoolCapabilityAutoDetectTickInterval))
 			ticker := time.NewTicker(accountPoolCapabilityAutoDetectTickInterval)
 			defer ticker.Stop()
 
-			runDueAccountPoolCapabilityAutoDetectOnceRecovering()
-			for range ticker.C {
-				runDueAccountPoolCapabilityAutoDetectOnceRecovering()
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			runDueAccountPoolCapabilityAutoDetectOnceRecovering(ctx)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					runDueAccountPoolCapabilityAutoDetectOnceRecovering(ctx)
+				}
 			}
 		})
 	})
+	return accountPoolCapabilityAutoDetectDone
 }
 
-func runDueAccountPoolCapabilityAutoDetectOnceRecovering() {
+func runDueAccountPoolCapabilityAutoDetectOnceRecovering(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	defer func() {
 		if r := recover(); r != nil {
-			logger.LogWarn(context.Background(), fmt.Sprintf("account pool capability auto-detect: worker tick panic: %v", r))
+			logger.LogWarn(ctx, fmt.Sprintf("account pool capability auto-detect: worker tick panic: %v", r))
 		}
 	}()
-	runDueAccountPoolCapabilityAutoDetectOnce()
+	runDueAccountPoolCapabilityAutoDetectOnce(ctx)
 }
 
-func runDueAccountPoolCapabilityAutoDetectOnce() {
+func runDueAccountPoolCapabilityAutoDetectOnce(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return
+	}
 	if !accountPoolCapabilityAutoDetectRunning.CompareAndSwap(false, true) {
 		return
 	}
@@ -231,10 +269,16 @@ func runDueAccountPoolCapabilityAutoDetectOnce() {
 	// Expiry auto-pause sweep: cheap bulk DB update, run every tick regardless of
 	// per-pool capability-check config so opted-in expired accounts are persistently
 	// paused + visible (runtime selection already excludes them immediately).
-	if paused, err := RunAccountPoolExpiryAutoPause(now); err != nil {
-		logger.LogWarn(context.Background(), fmt.Sprintf("account pool expiry auto-pause sweep failed: %v", err))
+	if paused, err := RunAccountPoolExpiryAutoPauseContext(ctx, now); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		logger.LogWarn(ctx, fmt.Sprintf("account pool expiry auto-pause sweep failed: %v", err))
 	} else if paused > 0 {
-		logger.LogInfo(context.Background(), fmt.Sprintf("account pool expiry auto-pause: paused %d expired account(s)", paused))
+		logger.LogInfo(ctx, fmt.Sprintf("account pool expiry auto-pause: paused %d expired account(s)", paused))
 	}
-	(&AccountPoolService{}).RunDueAccountPoolCapabilityAutoDetect(context.Background(), now)
+	if ctx.Err() != nil {
+		return
+	}
+	(&AccountPoolService{}).RunDueAccountPoolCapabilityAutoDetect(ctx, now)
 }

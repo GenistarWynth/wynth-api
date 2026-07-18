@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -49,13 +52,150 @@ var classicBuildFS embed.FS
 //go:embed web/classic/dist/index.html
 var classicIndexPage []byte
 
+const defaultServerShutdownTimeout = 120 * time.Second
+
+type gracefulHTTPServer interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
+	Close() error
+}
+
+type serverLifecycle struct {
+	server      gracefulHTTPServer
+	signals     <-chan os.Signal
+	timeout     time.Duration
+	started     func()
+	stopWorkers func()
+	workerDone  []<-chan struct{}
+	flush       func() error
+}
+
+func normalizeServerShutdownTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultServerShutdownTimeout
+	}
+	return timeout
+}
+
+func configuredServerShutdownTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("SHUTDOWN_TIMEOUT_SECONDS"))
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	maxSeconds := int64(time.Duration(1<<63-1) / time.Second)
+	if err != nil || seconds <= 0 || seconds > maxSeconds {
+		return defaultServerShutdownTimeout
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func serverShutdownSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
+}
+
+func newServerShutdownSignalChannel() chan os.Signal {
+	return make(chan os.Signal, 1)
+}
+
+func (l serverLifecycle) run() error {
+	serverErr := make(chan error, 1)
+	serverStarted := make(chan struct{})
+	go func() {
+		close(serverStarted)
+		serverErr <- l.server.ListenAndServe()
+	}()
+	<-serverStarted
+	if l.started != nil {
+		l.started()
+	}
+
+	select {
+	case err := <-serverErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		return errors.Join(err, l.cleanup())
+	case <-l.signals:
+		return l.cleanup()
+	}
+}
+
+func (l serverLifecycle) cleanup() error {
+	if l.stopWorkers != nil {
+		l.stopWorkers()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), normalizeServerShutdownTimeout(l.timeout))
+	defer cancel()
+
+	var cleanupErrors []error
+	contextErrorRecorded := false
+	appendCleanupError := func(err error) {
+		if err == nil {
+			return
+		}
+		cleanupErrors = append(cleanupErrors, err)
+	}
+	appendContextError := func(err error) {
+		if err == nil {
+			return
+		}
+		if contextErr := ctx.Err(); contextErr != nil && errors.Is(err, contextErr) {
+			if contextErrorRecorded {
+				return
+			}
+			contextErrorRecorded = true
+		}
+		appendCleanupError(err)
+	}
+	serverClosed := false
+	forceClose := func() {
+		if serverClosed {
+			return
+		}
+		serverClosed = true
+		if err := l.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			appendCleanupError(err)
+		}
+	}
+
+	if err := l.server.Shutdown(ctx); err != nil {
+		appendContextError(err)
+		forceClose()
+	}
+
+drainWorkers:
+	for _, done := range l.workerDone {
+		if done == nil {
+			continue
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			appendContextError(ctx.Err())
+			forceClose()
+			break drainWorkers
+		}
+	}
+
+	if l.flush != nil {
+		if err := l.flush(); err != nil {
+			appendCleanupError(err)
+		}
+	}
+	return errors.Join(cleanupErrors...)
+}
+
 func main() {
+	if err := runApplication(); err != nil {
+		common.FatalLog(err.Error())
+	}
+}
+
+func runApplication() (runErr error) {
 	startTime := time.Now()
 
 	err := InitResources()
 	if err != nil {
-		common.FatalLog("failed to initialize resources: " + err.Error())
-		return
+		return fmt.Errorf("failed to initialize resources: %w", err)
 	}
 
 	common.SysLog("New API " + common.Version + " started")
@@ -67,9 +207,8 @@ func main() {
 	}
 
 	defer func() {
-		err := model.CloseDB()
-		if err != nil {
-			common.FatalLog("failed to close database: " + err.Error())
+		if closeErr := model.CloseDB(); closeErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("failed to close database: %w", closeErr))
 		}
 	}()
 
@@ -82,6 +221,7 @@ func main() {
 		common.SysLog(fmt.Sprintf("sync frequency: %d seconds", common.SyncFrequency))
 
 		// Add panic recovery and retry for InitChannelCache
+		var initChannelCacheErr error
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -89,12 +229,15 @@ func main() {
 					// Retry once
 					_, _, fixErr := model.FixAbility()
 					if fixErr != nil {
-						common.FatalLog(fmt.Sprintf("InitChannelCache failed: %s", fixErr.Error()))
+						initChannelCacheErr = fmt.Errorf("InitChannelCache failed: %w", fixErr)
 					}
 				}
 			}()
 			model.InitChannelCache()
 		}()
+		if initChannelCacheErr != nil {
+			return initChannelCacheErr
+		}
 
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
@@ -111,7 +254,7 @@ func main() {
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
 		if err != nil {
-			common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
+			return fmt.Errorf("failed to parse CHANNEL_UPDATE_FREQUENCY: %w", err)
 		}
 		go controller.AutomaticallyUpdateChannels(frequency)
 	}
@@ -125,7 +268,10 @@ func main() {
 	// Upstream source auto-sync task
 	service.StartUpstreamSourceAutoSyncWorker()
 	service.StartUpstreamSourceAutoPriorityWorker()
-	service.StartAccountPoolCapabilityAutoDetectWorker()
+
+	accountPoolWorkerCtx, stopAccountPoolWorkers := context.WithCancel(context.Background())
+	accountPoolCapabilityWorkerDone := service.StartAccountPoolCapabilityAutoDetectWorker(accountPoolWorkerCtx)
+	accountPoolProxyWorkerDone := service.StartAccountPoolProxyProber(accountPoolWorkerCtx, 0)
 
 	// Per-channel monitor batch: master-only, sync.Once-guarded ticker that every
 	// minute probes channels whose per-channel monitor is due and records their
@@ -134,9 +280,6 @@ func main() {
 	// (system-task-runner refactor, #5680) previously dropped it and silently
 	// orphaned the monitor batch, so the dialog showed "no data" for every channel.
 	go controller.AutomaticallyTestChannels()
-
-	// Account pool proxy health prober (probes enabled proxies on each tick)
-	service.StartAccountPoolProxyProber(context.Background(), 0)
 
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
@@ -194,7 +337,7 @@ func main() {
 	// This will cause SSE not to work!!!
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.RequestId())
-	server.Use(middleware.PoweredBy())
+	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
 	// Initialize session store
@@ -203,7 +346,7 @@ func main() {
 		Path:     "/",
 		MaxAge:   2592000, // 30 days
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   common.SessionCookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
 	server.Use(sessions.Sessions("session", store))
@@ -223,13 +366,37 @@ func main() {
 		port = strconv.Itoa(*common.Port)
 	}
 
-	// Log startup success message
-	common.LogStartupSuccess(startTime, port)
-
-	err = server.Run(":" + port)
-	if err != nil {
-		common.FatalLog("failed to start HTTP server: " + err.Error())
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: server,
 	}
+	shutdownSignals := newServerShutdownSignalChannel()
+	signal.Notify(shutdownSignals, serverShutdownSignals()...)
+	defer signal.Stop(shutdownSignals)
+
+	err = (serverLifecycle{
+		server:  httpServer,
+		signals: shutdownSignals,
+		timeout: configuredServerShutdownTimeout(),
+		started: func() {
+			common.LogStartupSuccess(startTime, port)
+		},
+		stopWorkers: stopAccountPoolWorkers,
+		workerDone: []<-chan struct{}{
+			accountPoolCapabilityWorkerDone,
+			accountPoolProxyWorkerDone,
+		},
+		flush: func() error {
+			if common.DataExportEnabled {
+				model.SaveQuotaDataCache()
+			}
+			return nil
+		},
+	}).run()
+	if err != nil {
+		return fmt.Errorf("HTTP server lifecycle failed: %w", err)
+	}
+	return nil
 }
 
 func InjectUmamiAnalytics() {

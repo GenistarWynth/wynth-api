@@ -16,15 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { formatQuota } from '@/lib/format'
+
+import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Dialog } from '@/components/dialog'
-import { QUOTA_PER_DOLLAR } from '../../constants'
+import { formatQuota } from '@/lib/format'
+import { useSystemConfigStore } from '@/stores/system-config-store'
+
+import { deriveRewardTransferState } from '../../lib/reward-transfer'
 
 interface TransferDialogProps {
   open: boolean
@@ -42,17 +45,30 @@ export function TransferDialog({
   transferring,
 }: TransferDialogProps) {
   const { t } = useTranslation()
-  const [amount, setAmount] = useState(QUOTA_PER_DOLLAR)
+  const currencyConfig = useSystemConfigStore((state) => state.config.currency)
+  const initialTransferState = deriveRewardTransferState({
+    amount: 0,
+    availableQuota,
+    currencyConfig,
+  })
+  const [amount, setAmount] = useState(initialTransferState.minimumAmount)
+  const transferState = deriveRewardTransferState({
+    amount,
+    availableQuota,
+    currencyConfig,
+  })
 
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAmount(QUOTA_PER_DOLLAR)
+      setAmount(initialTransferState.minimumAmount)
     }
-  }, [open])
+  }, [initialTransferState.minimumAmount, open])
 
   const handleConfirm = async () => {
-    const success = await onConfirm(amount)
+    if (!transferState.canTransfer) return
+
+    const success = await onConfirm(transferState.transferQuota)
     if (success) {
       onOpenChange(false)
     }
@@ -78,7 +94,10 @@ export function TransferDialog({
           >
             {t('Cancel')}
           </Button>
-          <Button onClick={handleConfirm} disabled={transferring}>
+          <Button
+            onClick={handleConfirm}
+            disabled={transferring || !transferState.canTransfer}
+          >
             {transferring && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
             {t('Transfer')}
           </Button>
@@ -107,13 +126,13 @@ export function TransferDialog({
             type='number'
             value={amount}
             onChange={(e) => setAmount(Number(e.target.value))}
-            min={QUOTA_PER_DOLLAR}
-            max={availableQuota}
-            step={QUOTA_PER_DOLLAR}
+            min={transferState.minimumAmount}
+            max={transferState.maximumAmount}
+            step={transferState.minimumAmount}
             className='font-mono text-lg'
           />
           <p className='text-muted-foreground text-xs'>
-            {t('Minimum:')} {formatQuota(QUOTA_PER_DOLLAR)}
+            {t('Minimum:')} {formatQuota(transferState.minimumQuota)}
           </p>
         </div>
       </div>

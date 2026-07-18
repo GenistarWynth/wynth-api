@@ -122,6 +122,7 @@ export type SiteSettings = {
 }
 
 export type AuthSettings = {
+  ServerAddress: string
   PasswordLoginEnabled: boolean
   PasswordRegisterEnabled: boolean
   EmailVerificationEnabled: boolean

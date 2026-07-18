@@ -408,6 +408,15 @@ const AUDIT_TEMPLATES: Record<string, string> = {
   'subscription.plan_create': 'Created a subscription plan',
   'subscription.plan_update': 'Updated a subscription plan',
   'subscription.bind': 'Bound a subscription',
+  'subscription.plan_reset':
+    'Reset active subscriptions for plan {{plan_id}}',
+  'subscription.user_plan_reset':
+    'Reset active plan {{plan_id}} subscriptions for user {{target_user_id}}',
+  // System instances
+  'system_instance.delete_stale':
+    'Deleted stale system instance {{node_name}}',
+  'system_instance.delete_stale_all':
+    'Deleted {{deleted_count}} stale system instances',
   // Logs
   'log.clear': 'Cleared historical logs',
   // Generic middleware fallback

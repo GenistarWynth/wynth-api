@@ -23,10 +23,14 @@ import type {
   PlanPayload,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
+  ResetUserSubscriptionsRequest,
+  ResetPlanSubscriptionsRequest,
+  SubscriptionResetResult,
   SubscriptionPayResponse,
   SubscriptionPayRequest,
   SelfSubscriptionData,
 } from './types'
+import { resolveSubscriptionResetRequest } from './lib/reset'
 
 // ============================================================================
 // Admin Plan Management
@@ -101,6 +105,36 @@ export async function deleteUserSubscription(
   const res = await api.delete(
     `/api/subscription/admin/user_subscriptions/${subId}`
   )
+  return res.data
+}
+
+export async function resetUserSubscriptionsByPlan(
+  userId: number,
+  data: ResetUserSubscriptionsRequest
+): Promise<ApiResponse<SubscriptionResetResult>> {
+  const request = resolveSubscriptionResetRequest(
+    { scope: 'user', userId, planId: data.plan_id },
+    data.advance_reset_time
+  )
+  const res = await api.post(request.url, request.body, {
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  })
+  return res.data
+}
+
+export async function resetPlanSubscriptions(
+  planId: number,
+  data: ResetPlanSubscriptionsRequest
+): Promise<ApiResponse<SubscriptionResetResult>> {
+  const request = resolveSubscriptionResetRequest(
+    { scope: 'plan', planId },
+    data.advance_reset_time
+  )
+  const res = await api.post(request.url, request.body, {
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  })
   return res.data
 }
 

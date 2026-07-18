@@ -16,20 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  type ReactNode,
-  useEffect,
-  useState,
-  useMemo,
-  useCallback,
-  useRef,
-} from 'react'
-import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRight,
+  AlertCircle,
+  Boxes,
+  CheckCircle2,
+  Circle,
   HelpCircle,
+  KeyRound,
   Loader2,
   Sparkles,
   Trash2,
@@ -44,12 +40,31 @@ import {
   Settings,
   SlidersHorizontal,
   Wand2,
+  Server,
 } from 'lucide-react'
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+} from 'react'
+import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getLobeIcon } from '@/lib/lobe-icon'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
+
+import {
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+  sideDrawerSectionClassName,
+  sideDrawerSwitchItemClassName,
+} from '@/components/drawer-layout'
+import { JsonEditor } from '@/components/json-editor'
+import { MultiSelect } from '@/components/multi-select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -92,19 +107,15 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-  sideDrawerSectionClassName,
-  sideDrawerSwitchItemClassName,
-} from '@/components/drawer-layout'
-import { JsonEditor } from '@/components/json-editor'
-import { MultiSelect } from '@/components/multi-select'
-import {
   SecureVerificationDialog,
   useSecureVerification,
 } from '@/features/auth/secure-verification'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
+import type { ChannelConnectionInfo } from '@/lib/channel-connection-info'
+import { getLobeIcon } from '@/lib/lobe-icon'
+import { cn } from '@/lib/utils'
+
 import {
   fetchModels,
   getAllModels,
@@ -144,6 +155,7 @@ import {
   validateModelMappingJson,
   hasAdvancedSettingsErrors,
 } from '../../lib'
+import { createChannelConnectionClipboardController } from '../../lib/channel-connection-clipboard'
 import {
   collectInvalidStatusCodeEntries,
   collectNewDisallowedStatusCodeRedirects,
@@ -159,6 +171,14 @@ import {
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import {
+  ADVANCED_SETTINGS_CHILD_SECTION_IDS,
+  ADVANCED_SETTINGS_SECTION_IDS,
+  CHANNEL_EDITOR_MAIN_SECTION_IDS,
+  CHANNEL_EDITOR_SECTION_IDS,
+  hasConfiguredOverrideValue,
+  isAdvancedNavigationTarget,
+} from './channel-editor-navigation'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -181,6 +201,24 @@ type ModelMappingGuardrail = {
   exposedTargetModels: string[]
 }
 
+type ChannelEditorSectionStatus = 'complete' | 'configured' | 'error' | 'idle'
+
+type ChannelEditorNavChildItem = {
+  id: string
+  title: string
+  configured?: boolean
+}
+
+type ChannelEditorNavItem = {
+  id: string
+  title: string
+  statusLabel: string
+  status: ChannelEditorSectionStatus
+  icon: ReactNode
+  configured?: boolean
+  children?: ChannelEditorNavChildItem[]
+}
+
 // Helper functions
 const createEmptyModelMappingGuardrail = (): ModelMappingGuardrail => ({
   invalidJson: false,
@@ -199,6 +237,42 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
+const ADVANCED_CUSTOM_ROUTE_TYPE_BADGE_LIMIT = 3
+
+export function AdvancedCustomRouteTypeBadges({
+  labels,
+}: {
+  labels: string[]
+}) {
+  const { t } = useTranslation()
+  const translatedLabels = labels.map((label) => t(label))
+  const visibleLabels = translatedLabels.slice(
+    0,
+    ADVANCED_CUSTOM_ROUTE_TYPE_BADGE_LIMIT
+  )
+  const remainingCount = translatedLabels.length - visibleLabels.length
+  const fullTitle = translatedLabels.join(', ')
+
+  return (
+    <div className='flex flex-wrap gap-2'>
+      {visibleLabels.map((label) => (
+        <Badge
+          key={label}
+          variant='secondary'
+          className='max-w-40'
+          title={label}
+        >
+          <span className='truncate'>{label}</span>
+        </Badge>
+      ))}
+      {remainingCount > 0 ? (
+        <Badge variant='secondary' title={fullTitle}>
+          +{remainingCount}
+        </Badge>
+      ) : null}
+    </div>
+  )
+}
 
 function readAdvancedSettingsPreference(): boolean {
   if (typeof window === 'undefined') return false
@@ -207,10 +281,10 @@ function readAdvancedSettingsPreference(): boolean {
 
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
-    values.param_override?.trim() ||
-    values.header_override?.trim() ||
+    hasConfiguredOverrideValue(values.param_override) ||
+    hasConfiguredOverrideValue(values.header_override) ||
     values.advanced_custom?.trim() ||
-    values.status_code_mapping?.trim() ||
+    hasConfiguredOverrideValue(values.status_code_mapping) ||
     values.tag?.trim() ||
     values.remark?.trim() ||
     values.priority ||
@@ -222,7 +296,14 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    values.allow_service_tier ||
+    values.disable_store ||
+    values.allow_safety_identifier ||
+    values.allow_include_obfuscation ||
+    values.allow_inference_geo ||
+    values.allow_speed ||
     values.claude_beta_query ||
+    values.disable_task_polling_sleep ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
     values.upstream_model_update_ignored_models?.trim()
@@ -274,6 +355,163 @@ function SubHeading({ title, icon }: { title: string; icon?: ReactNode }) {
   )
 }
 
+function getSectionStatusIcon(status: ChannelEditorSectionStatus): ReactNode {
+  if (status === 'error') {
+    return <AlertCircle className='h-3.5 w-3.5' aria-hidden='true' />
+  }
+  if (status === 'complete' || status === 'configured') {
+    return <CheckCircle2 className='h-3.5 w-3.5' aria-hidden='true' />
+  }
+  return <Circle className='h-3.5 w-3.5' aria-hidden='true' />
+}
+
+function getSectionStatusLabel(
+  status: ChannelEditorSectionStatus,
+  t: (key: string) => string
+): string {
+  if (status === 'error') return t('Error')
+  if (status === 'complete' || status === 'configured') return t('Ready')
+  return t('Incomplete')
+}
+
+function ChannelTypeLogo({ type, size = 18 }: { type: number; size?: number }) {
+  const known = CHANNEL_TYPE_OPTIONS.some((option) => option.value === type)
+  if (!known) {
+    return (
+      <Server
+        className='text-muted-foreground shrink-0'
+        style={{ width: size, height: size }}
+        aria-hidden='true'
+      />
+    )
+  }
+  return <>{getLobeIcon(`${getChannelTypeIcon(type)}.Color`, size)}</>
+}
+
+function ChannelEditorNav({
+  providerLogo,
+  providerLabel,
+  statusLabel,
+  progressLabel,
+  navigationLabel,
+  items,
+  activeItemId,
+  expandedItemId,
+  onNavigate,
+}: {
+  providerLogo: ReactNode
+  providerLabel: string
+  statusLabel: string
+  progressLabel: string
+  navigationLabel: string
+  items: ChannelEditorNavItem[]
+  activeItemId: string
+  expandedItemId?: string
+  onNavigate: (targetId: string) => void
+}) {
+  return (
+    <aside className='hidden self-start lg:sticky lg:top-4 lg:block'>
+      <div className='flex max-h-[calc(100dvh-12rem)] flex-col gap-3 overflow-y-auto overscroll-contain pr-1'>
+        <div className='border-border/60 bg-muted/20 rounded-lg border p-3'>
+          <div className='flex min-w-0 items-center gap-2'>
+            <span className='bg-background flex size-8 shrink-0 items-center justify-center rounded-md border'>
+              {providerLogo}
+            </span>
+            <div className='min-w-0'>
+              <p className='truncate text-sm font-medium'>{providerLabel}</p>
+              <p className='text-muted-foreground truncate text-xs'>
+                {statusLabel} · {progressLabel}
+              </p>
+            </div>
+          </div>
+        </div>
+        <nav
+          className='border-border/60 bg-background rounded-lg border p-1'
+          aria-label={navigationLabel}
+        >
+          {items.map((item) => {
+            const active = activeItemId === item.id
+            const expanded = expandedItemId === item.id
+            const error = item.status === 'error'
+            const done =
+              item.status === 'complete' || item.status === 'configured'
+            return (
+              <div key={item.id}>
+                <button
+                  type='button'
+                  className={cn(
+                    'hover:bg-muted/60 flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors',
+                    active && 'bg-muted/70',
+                    item.configured && !error && 'text-primary',
+                    error && 'text-destructive hover:bg-destructive/10'
+                  )}
+                  onClick={() => onNavigate(item.id)}
+                  aria-current={active ? 'true' : undefined}
+                >
+                  <span
+                    className={cn(
+                      'bg-muted text-muted-foreground mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md',
+                      item.configured && !error && 'bg-primary/10 text-primary',
+                      error && 'bg-destructive/10 text-destructive'
+                    )}
+                  >
+                    {item.icon}
+                  </span>
+                  <span className='min-w-0 flex-1'>
+                    <span className='block truncate text-sm font-medium'>
+                      {item.title}
+                    </span>
+                    <span className='text-muted-foreground block truncate text-xs'>
+                      {item.statusLabel}
+                    </span>
+                  </span>
+                  <span
+                    className={cn(
+                      'text-muted-foreground mt-1 shrink-0',
+                      error && 'text-destructive',
+                      done && !error && 'text-primary'
+                    )}
+                    aria-label={item.statusLabel}
+                  >
+                    {getSectionStatusIcon(item.status)}
+                  </span>
+                </button>
+                {item.children && expanded ? (
+                  <div className='border-border/60 ml-5 flex flex-col gap-0.5 border-l py-1 pl-3'>
+                    {item.children.map((child) => (
+                      <button
+                        key={child.id}
+                        type='button'
+                        className={cn(
+                          'text-muted-foreground hover:bg-muted/50 hover:text-foreground flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors',
+                          activeItemId === child.id &&
+                            'bg-muted/60 text-foreground',
+                          child.configured && 'text-primary'
+                        )}
+                        onClick={() => onNavigate(child.id)}
+                      >
+                        <span className='min-w-0 flex-1 truncate'>
+                          {child.title}
+                        </span>
+                        {child.configured && (
+                          <span
+                            className='bg-success size-1.5 shrink-0 rounded-full'
+                            aria-hidden='true'
+                          />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </nav>
+      </div>
+    </aside>
+  )
+}
+
 export function ChannelMutateDrawer({
   open,
   onOpenChange,
@@ -302,10 +540,20 @@ export function ChannelMutateDrawer({
   const missingModelsResolveRef = useRef<
     ((action: MissingModelsAction) => void) | null
   >(null)
+  const channelFormRef = useRef<HTMLFormElement>(null)
+  const advancedNavScrollPendingRef = useRef(false)
+  const [activeEditorSectionId, setActiveEditorSectionId] = useState<string>(
+    CHANNEL_EDITOR_SECTION_IDS.identity
+  )
+  const [expandedEditorNavItemId, setExpandedEditorNavItemId] = useState<
+    string | undefined
+  >()
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
   const [advancedCustomEditorOpen, setAdvancedCustomEditorOpen] =
     useState(false)
+  const [clipboardConnectionInfo, setClipboardConnectionInfo] =
+    useState<ChannelConnectionInfo | null>(null)
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
@@ -366,6 +614,20 @@ export function ChannelMutateDrawer({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
+  const clipboardController = useMemo(
+    () =>
+      createChannelConnectionClipboardController({
+        onDetectedChange: setClipboardConnectionInfo,
+        setValue: (field, value, options) =>
+          form.setValue(field, value, options),
+      }),
+    [form]
+  )
+
+  useLayoutEffect(() => {
+    void clipboardController.setMode(open, isEditing)
+    return () => clipboardController.deactivate()
+  }, [clipboardController, isEditing, open])
 
   // Watch form values for conditional rendering
   const multiKeyMode = form.watch('multi_key_mode')
@@ -384,6 +646,7 @@ export function ChannelMutateDrawer({
   )
   const currentSettings = form.watch('settings')
   const currentAdvancedCustom = form.watch('advanced_custom')
+  const watchedValues = form.watch()
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -401,6 +664,21 @@ export function ChannelMutateDrawer({
       resetDoubaoApiUnlock()
     }
   }, [open, resetDoubaoApiUnlock])
+
+  const pasteConnectionInfoFromClipboard = useCallback(async () => {
+    await clipboardController.paste({
+      onFilled: () => toast.success(t('Connection info filled in')),
+      onUnableToRead: () => toast.error(t('Unable to read clipboard')),
+      onConnectionInfoNotFound: () =>
+        toast.info(t('No connection info found in clipboard')),
+    })
+  }, [clipboardController, t])
+
+  const fillDetectedConnectionInfo = useCallback(() => {
+    clipboardController.fill(() =>
+      toast.success(t('Connection info filled in'))
+    )
+  }, [clipboardController, t])
 
   // Helper computed values
   const isBatchMode =
@@ -597,13 +875,167 @@ export function ChannelMutateDrawer({
   const upstreamDetectedModelsOmittedCount =
     upstreamUpdateMeta.detectedModels.length -
     upstreamDetectedModelsPreview.length
+
+  const formErrors = form.formState.errors
+  const identityHasErrors = Boolean(formErrors.name || formErrors.type)
+  const credentialsHasErrors = Boolean(
+    formErrors.base_url || formErrors.key || formErrors.openai_organization
+  )
+  const modelsHasErrors = Boolean(
+    formErrors.models || formErrors.group || formErrors.model_mapping
+  )
+  const identityStatus: ChannelEditorSectionStatus = identityHasErrors
+    ? 'error'
+    : watchedValues.name?.trim() && watchedValues.type
+      ? 'complete'
+      : 'idle'
+  const credentialsStatus: ChannelEditorSectionStatus = credentialsHasErrors
+    ? 'error'
+    : watchedValues.base_url?.trim() || watchedValues.key?.trim()
+      ? 'complete'
+      : 'idle'
+  const modelsStatus: ChannelEditorSectionStatus = modelsHasErrors
+    ? 'error'
+    : currentModelsArray.length > 0 || (currentGroups?.length ?? 0) > 0
+      ? 'complete'
+      : 'idle'
+  const routingStrategyConfigured = Boolean(
+    watchedValues.priority ||
+    watchedValues.weight ||
+    watchedValues.test_model?.trim() ||
+    (watchedValues.auto_ban ?? 1) !== 1
+  )
+  const internalNotesConfigured = Boolean(watchedValues.remark?.trim())
+  const overrideRulesConfigured = Boolean(
+    hasConfiguredOverrideValue(watchedValues.status_code_mapping) ||
+    hasConfiguredOverrideValue(watchedValues.param_override) ||
+    hasConfiguredOverrideValue(watchedValues.header_override)
+  )
+  const extraSettingsConfigured = Boolean(
+    watchedValues.force_format ||
+    watchedValues.thinking_to_content ||
+    watchedValues.pass_through_body_enabled ||
+    watchedValues.disable_task_polling_sleep ||
+    watchedValues.proxy?.trim() ||
+    watchedValues.system_prompt?.trim() ||
+    watchedValues.system_prompt_override ||
+    watchedValues.claude_beta_query
+  )
+  const fieldPassthroughConfigured = Boolean(
+    watchedValues.allow_service_tier ||
+    watchedValues.disable_store ||
+    watchedValues.allow_safety_identifier ||
+    watchedValues.allow_include_obfuscation ||
+    watchedValues.allow_inference_geo ||
+    watchedValues.allow_speed ||
+    watchedValues.claude_beta_query
+  )
+  const upstreamModelDetectionConfigured = Boolean(
+    watchedValues.upstream_model_update_check_enabled ||
+    watchedValues.upstream_model_update_auto_sync_enabled ||
+    watchedValues.upstream_model_update_ignored_models?.trim()
+  )
+  const advancedHasErrors = Boolean(
+    formErrors.param_override ||
+    formErrors.header_override ||
+    formErrors.advanced_custom ||
+    formErrors.status_code_mapping ||
+    formErrors.settings
+  )
+  const advancedStatus: ChannelEditorSectionStatus = advancedHasErrors
+    ? 'error'
+    : 'idle'
+  const advancedNavChildren: ChannelEditorNavChildItem[] = [
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.routingStrategy,
+      title: t('Routing Strategy'),
+      configured: routingStrategyConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.internalNotes,
+      title: t('Internal Notes'),
+      configured: internalNotesConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.overrideRules,
+      title: t('Override Rules'),
+      configured: overrideRulesConfigured,
+    },
+    {
+      id: ADVANCED_SETTINGS_SECTION_IDS.extraSettings,
+      title: t('Channel Extra Settings'),
+      configured: extraSettingsConfigured,
+    },
+  ]
+  if (currentType === 1 || currentType === 14) {
+    advancedNavChildren.push({
+      id: ADVANCED_SETTINGS_SECTION_IDS.fieldPassthrough,
+      title: t('Field passthrough controls'),
+      configured: fieldPassthroughConfigured,
+    })
+  }
+  if (MODEL_FETCHABLE_TYPES.has(currentType)) {
+    advancedNavChildren.push({
+      id: ADVANCED_SETTINGS_SECTION_IDS.upstreamModelDetection,
+      title: t('Upstream Model Detection Settings'),
+      configured: upstreamModelDetectionConfigured,
+    })
+  }
+  const editorNavItems: ChannelEditorNavItem[] = [
+    {
+      id: CHANNEL_EDITOR_SECTION_IDS.identity,
+      title: t('Basic Information'),
+      status: identityStatus,
+      statusLabel: getSectionStatusLabel(identityStatus, t),
+      icon: <Server className='h-4 w-4' aria-hidden='true' />,
+    },
+    {
+      id: CHANNEL_EDITOR_SECTION_IDS.credentials,
+      title: t('Credentials'),
+      status: credentialsStatus,
+      statusLabel: getSectionStatusLabel(credentialsStatus, t),
+      icon: <KeyRound className='h-4 w-4' aria-hidden='true' />,
+    },
+    {
+      id: CHANNEL_EDITOR_SECTION_IDS.models,
+      title: t('Models & Groups'),
+      status: modelsStatus,
+      statusLabel: getSectionStatusLabel(modelsStatus, t),
+      icon: <Boxes className='h-4 w-4' aria-hidden='true' />,
+    },
+    {
+      id: CHANNEL_EDITOR_SECTION_IDS.advanced,
+      title: t('Advanced Settings'),
+      status: advancedStatus,
+      statusLabel: getSectionStatusLabel(advancedStatus, t),
+      icon: <Settings className='h-4 w-4' aria-hidden='true' />,
+      children: advancedNavChildren,
+    },
+  ]
+  const sectionStatuses: ChannelEditorSectionStatus[] = [
+    identityStatus,
+    credentialsStatus,
+    modelsStatus,
+    advancedStatus,
+  ]
+  const completedSectionCount = sectionStatuses.filter(
+    (status) => status === 'complete' || status === 'configured'
+  ).length
+  const progressLabel = t('{{completed}} of {{total}} sections ready', {
+    completed: completedSectionCount,
+    total: editorNavItems.length,
+  })
   // Load channel data into form when editing
   useEffect(() => {
     if (isEditing && channelData?.data) {
       const defaults = transformChannelToFormDefaults(channelData.data)
       form.reset(defaults)
-      setAdvancedSettingsOpen(
+      const shouldOpenAdvanced =
         readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
+      setAdvancedSettingsOpen(shouldOpenAdvanced)
+      setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
+      setExpandedEditorNavItemId(
+        shouldOpenAdvanced ? CHANNEL_EDITOR_SECTION_IDS.advanced : undefined
       )
       // Store initial values for comparison
       initialModelsRef.current = parseModelsString(
@@ -615,6 +1047,8 @@ export function ChannelMutateDrawer({
     } else if (!isEditing) {
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
       setAdvancedSettingsOpen(false)
+      setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
+      setExpandedEditorNavItemId(undefined)
       initialModelsRef.current = []
       initialModelMappingRef.current = ''
       initialStatusCodeMappingRef.current = ''
@@ -1057,6 +1491,90 @@ export function ChannelMutateDrawer({
     }
   }, [])
 
+  const handleEditorNavNavigate = useCallback(
+    (targetId: string) => {
+      const isAdvancedChild =
+        isAdvancedNavigationTarget(targetId) &&
+        targetId !== CHANNEL_EDITOR_SECTION_IDS.advanced
+      if (isAdvancedNavigationTarget(targetId)) {
+        setExpandedEditorNavItemId(CHANNEL_EDITOR_SECTION_IDS.advanced)
+        if (!advancedSettingsOpen) {
+          advancedNavScrollPendingRef.current = isAdvancedChild
+          handleAdvancedSettingsOpenChange(true)
+        }
+      } else {
+        setExpandedEditorNavItemId(undefined)
+      }
+      setActiveEditorSectionId(targetId)
+      requestAnimationFrame(() => {
+        document.getElementById(targetId)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+        advancedNavScrollPendingRef.current = false
+      })
+    },
+    [advancedSettingsOpen, handleAdvancedSettingsOpenChange]
+  )
+
+  const updateActiveEditorSection = useCallback(() => {
+    const formElement = channelFormRef.current
+    if (!formElement) return
+    const formTop = formElement.getBoundingClientRect().top
+    const allIds = advancedSettingsOpen
+      ? [
+          ...CHANNEL_EDITOR_MAIN_SECTION_IDS,
+          ...ADVANCED_SETTINGS_CHILD_SECTION_IDS,
+        ]
+      : CHANNEL_EDITOR_MAIN_SECTION_IDS
+    let nextId: string = CHANNEL_EDITOR_SECTION_IDS.identity
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (const id of allIds) {
+      const element = document.getElementById(id)
+      if (!element) continue
+      const distance = Math.abs(
+        element.getBoundingClientRect().top - formTop - 24
+      )
+      if (distance < bestDistance) {
+        bestDistance = distance
+        nextId = id
+      }
+    }
+    setActiveEditorSectionId((current) =>
+      current === nextId ? current : nextId
+    )
+    if (nextId.startsWith('channel-section-advanced')) {
+      setExpandedEditorNavItemId(CHANNEL_EDITOR_SECTION_IDS.advanced)
+    }
+  }, [advancedSettingsOpen])
+
+  useEffect(() => {
+    if (!open || isChannelDetailLoading) return
+    const formElement = channelFormRef.current
+    if (!formElement) return
+    updateActiveEditorSection()
+    formElement.addEventListener('scroll', updateActiveEditorSection, {
+      passive: true,
+    })
+    window.addEventListener('resize', updateActiveEditorSection)
+    return () => {
+      formElement.removeEventListener('scroll', updateActiveEditorSection)
+      window.removeEventListener('resize', updateActiveEditorSection)
+    }
+  }, [isChannelDetailLoading, open, updateActiveEditorSection])
+
+  useEffect(() => {
+    if (!advancedSettingsOpen || !advancedNavScrollPendingRef.current) return
+    const targetId = activeEditorSectionId
+    requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+      advancedNavScrollPendingRef.current = false
+    })
+  }, [activeEditorSectionId, advancedSettingsOpen])
+
   const onInvalid: SubmitErrorHandler<ChannelFormValues> = useCallback(
     (errors) => {
       if (hasAdvancedSettingsErrors(errors)) {
@@ -1073,10 +1591,14 @@ export function ChannelMutateDrawer({
       onOpenChange(v)
       if (!v) {
         form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+        advancedNavScrollPendingRef.current = false
+        setActiveEditorSectionId(CHANNEL_EDITOR_SECTION_IDS.identity)
+        setExpandedEditorNavItemId(undefined)
         setAdvancedSettingsOpen(false)
+        clipboardController.close()
       }
     },
-    [onOpenChange, form]
+    [clipboardController, onOpenChange, form]
   )
 
   return (
@@ -1084,9 +1606,14 @@ export function ChannelMutateDrawer({
       <Sheet open={open} onOpenChange={handleOpenChange}>
         <SheetContent className={sideDrawerContentClassName('sm:max-w-3xl')}>
           <SheetHeader className={sideDrawerHeaderClassName()}>
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+              <div className='min-w-0'>
             <SheetTitle className='flex items-center gap-3'>
               <span className='bg-muted flex size-9 shrink-0 items-center justify-center rounded-md'>
-                {getLobeIcon(`${getChannelTypeIcon(currentType)}.Color`, 22)}
+                    {getLobeIcon(
+                      `${getChannelTypeIcon(currentType)}.Color`,
+                      22
+                    )}
               </span>
               <span>
                 {isEditing ? t('Edit Channel') : t('Create Channel')}
@@ -1095,7 +1622,7 @@ export function ChannelMutateDrawer({
                 </span>
               </span>
             </SheetTitle>
-            <SheetDescription>
+                <SheetDescription className='mt-1'>
               {isEditing
                 ? t(
                     "Update channel configuration and click save when you're done."
@@ -1104,19 +1631,74 @@ export function ChannelMutateDrawer({
                     'Add a new channel by providing the necessary information.'
                   )}
             </SheetDescription>
+              </div>
+              {!isEditing && (
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  className='shrink-0'
+                  onClick={pasteConnectionInfoFromClipboard}
+                >
+                  {t('Paste Connection Info')}
+                </Button>
+              )}
+            </div>
           </SheetHeader>
+
+          {!isEditing && clipboardConnectionInfo && (
+            <Alert>
+              <AlertDescription className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                <span>{t('Connection info detected in clipboard')}</span>
+                <span className='flex shrink-0 gap-2'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    onClick={fillDetectedConnectionInfo}
+                  >
+                    {t('Fill in')}
+                  </Button>
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    onClick={() => clipboardController.ignore()}
+                  >
+                    {t('Ignore')}
+                  </Button>
+                </span>
+              </AlertDescription>
+            </Alert>
+          )}
 
           <Form {...form}>
             <form
               id='channel-form'
+              ref={channelFormRef}
               onSubmit={form.handleSubmit(onSubmit, onInvalid)}
               className={sideDrawerFormClassName('gap-5')}
             >
               {isChannelDetailLoading ? (
                 <ChannelEditorLoadingState />
               ) : (
-                <>
+                <div className='grid gap-5 lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start'>
+                  <ChannelEditorNav
+                    providerLogo={<ChannelTypeLogo type={currentType} />}
+                    providerLabel={t(currentTypeLabel)}
+                    statusLabel={isEditing ? t('Editing') : t('New channel')}
+                    progressLabel={progressLabel}
+                    navigationLabel={t('Channels')}
+                    items={editorNavItems}
+                    activeItemId={activeEditorSectionId}
+                    expandedItemId={expandedEditorNavItemId}
+                    onNavigate={handleEditorNavNavigate}
+                  />
+                  <div className='flex min-w-0 flex-col gap-5'>
                   {/* ── Basic Information ── */}
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.identity}
+                      className='scroll-mt-4'
+                    >
                   <ChannelBasicSection>
                     <div className='grid gap-4 sm:grid-cols-2'>
                       <FormField
@@ -1156,9 +1738,12 @@ export function ChannelMutateDrawer({
                                   }
                                 }}
                                 placeholder={t('Select channel type')}
-                                searchPlaceholder={t('Search channel type...')}
+                                    searchPlaceholder={t(
+                                      'Search channel type...'
+                                    )}
                                 emptyText={t('No channel type found.')}
                                 allowCustomValue
+                                    openOnFocus={false}
                               />
                             </FormControl>
                             <FormMessage />
@@ -1171,7 +1756,9 @@ export function ChannelMutateDrawer({
                       control={form.control}
                       name='status'
                       render={({ field }) => (
-                        <FormItem className={sideDrawerSwitchItemClassName()}>
+                            <FormItem
+                              className={sideDrawerSwitchItemClassName()}
+                            >
                           <div className='flex flex-col gap-0.5'>
                             <FormLabel>{t('Enabled')}</FormLabel>
                             <FormDescription className='text-xs'>
@@ -1196,9 +1783,14 @@ export function ChannelMutateDrawer({
                         name='openai_organization'
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>{t('OpenAI Organization')}</FormLabel>
+                                <FormLabel>
+                                  {t('OpenAI Organization')}
+                                </FormLabel>
                             <FormControl>
-                              <Input placeholder={t('org-...')} {...field} />
+                                  <Input
+                                    placeholder={t('org-...')}
+                                    {...field}
+                                  />
                             </FormControl>
                             <FormDescription>
                               {t(FIELD_DESCRIPTIONS.OPENAI_ORG)}
@@ -1209,8 +1801,13 @@ export function ChannelMutateDrawer({
                       />
                     )}
                   </ChannelBasicSection>
+                    </div>
 
                   {/* ── API Access ── */}
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.credentials}
+                      className='scroll-mt-4'
+                    >
                   <ChannelApiAccessSection>
                     {CHANNEL_TYPE_WARNINGS[currentType] && (
                       <Alert>
@@ -1256,7 +1853,9 @@ export function ChannelMutateDrawer({
                               </FormLabel>
                               <FormControl>
                                 <Input
-                                  placeholder={t('e.g., 2025-04-01-preview')}
+                                      placeholder={t(
+                                        'e.g., 2025-04-01-preview'
+                                      )}
                                   {...field}
                                 />
                               </FormControl>
@@ -1333,7 +1932,10 @@ export function ChannelMutateDrawer({
                           <FormItem>
                             <FormLabel>{t('Model Version *')}</FormLabel>
                             <FormControl>
-                              <Input placeholder={t('e.g., v2.1')} {...field} />
+                                  <Input
+                                    placeholder={t('e.g., v2.1')}
+                                    {...field}
+                                  />
                             </FormControl>
                             <FormDescription>
                               {t(
@@ -1354,7 +1956,9 @@ export function ChannelMutateDrawer({
                         render={({ field }) => (
                           <FormItem className='flex items-center justify-between'>
                             <div className='space-y-0.5'>
-                              <FormLabel>{t('Enterprise Account')}</FormLabel>
+                                  <FormLabel>
+                                    {t('Enterprise Account')}
+                                  </FormLabel>
                               <FormDescription>
                                 {t(
                                   'Enable if this is an OpenRouter enterprise account with special response format'
@@ -1429,7 +2033,9 @@ export function ChannelMutateDrawer({
                         name='other'
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>{t('Knowledge Base ID *')}</FormLabel>
+                                <FormLabel>
+                                  {t('Knowledge Base ID *')}
+                                </FormLabel>
                             <FormControl>
                               <Input
                                 placeholder={t('e.g., 123456')}
@@ -1452,7 +2058,9 @@ export function ChannelMutateDrawer({
                         name='base_url'
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>{t('Private Deployment URL')}</FormLabel>
+                                <FormLabel>
+                                  {t('Private Deployment URL')}
+                                </FormLabel>
                             <FormControl>
                               <Input
                                 placeholder={t(
@@ -1480,7 +2088,9 @@ export function ChannelMutateDrawer({
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>
-                              {t('API Base URL (Important: Not Chat API) *')}
+                                  {t(
+                                    'API Base URL (Important: Not Chat API) *'
+                                  )}
                             </FormLabel>
                             <FormControl>
                               <Input
@@ -1551,7 +2161,9 @@ export function ChannelMutateDrawer({
                           name='vertex_key_type'
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel>{t('Vertex AI Key Format')}</FormLabel>
+                                  <FormLabel>
+                                    {t('Vertex AI Key Format')}
+                                  </FormLabel>
                               <Select
                                 items={[
                                   { value: 'json', label: t('JSON') },
@@ -1608,7 +2220,9 @@ export function ChannelMutateDrawer({
                                   e.target.value = ''
 
                                   if (files.length === 0) {
-                                    toast.info(t('Please upload key file(s)'))
+                                        toast.info(
+                                          t('Please upload key file(s)')
+                                        )
                                     return
                                   }
 
@@ -1631,7 +2245,9 @@ export function ChannelMutateDrawer({
                                   }
 
                                   if (keys.length === 0) {
-                                    toast.info(t('Please upload key file(s)'))
+                                        toast.info(
+                                          t('Please upload key file(s)')
+                                        )
                                     return
                                   }
 
@@ -1657,7 +2273,9 @@ export function ChannelMutateDrawer({
                             </FormControl>
                             <FormDescription>
                               {isBatchMode
-                                ? t('Upload multiple JSON files in batch modes')
+                                    ? t(
+                                        'Upload multiple JSON files in batch modes'
+                                      )
                                 : t(
                                     'Upload a single service account JSON file'
                                   )}
@@ -1670,7 +2288,9 @@ export function ChannelMutateDrawer({
                           name='other'
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel>{t('Deployment Region *')}</FormLabel>
+                                  <FormLabel>
+                                    {t('Deployment Region *')}
+                                  </FormLabel>
                               <FormControl>
                                 <Textarea
                                   placeholder={t(
@@ -1681,7 +2301,9 @@ export function ChannelMutateDrawer({
                                 />
                               </FormControl>
                               <FormDescription>
-                                {t('Enter deployment region or JSON mapping:')}{' '}
+                                    {t(
+                                      'Enter deployment region or JSON mapping:'
+                                    )}{' '}
                                 {'{'}
                                 {t(
                                   '"default": "us-central1", "claude-3-5-sonnet-20240620": "europe-west1"'
@@ -1711,8 +2333,11 @@ export function ChannelMutateDrawer({
                             <Select
                               items={[
                                 {
-                                  value: 'https://ark.cn-beijing.volces.com',
-                                  label: t('https://ark.cn-beijing.volces.com'),
+                                      value:
+                                        'https://ark.cn-beijing.volces.com',
+                                      label: t(
+                                        'https://ark.cn-beijing.volces.com'
+                                      ),
                                 },
                                 {
                                   value:
@@ -1852,6 +2477,14 @@ export function ChannelMutateDrawer({
                                     </Badge>
                                   )}
                                 </div>
+                                    {advancedCustomStats.routeTypeLabels
+                                      .length > 0 ? (
+                                      <AdvancedCustomRouteTypeBadges
+                                        labels={
+                                          advancedCustomStats.routeTypeLabels
+                                        }
+                                      />
+                                    ) : null}
                               </div>
                               <Button
                                 type='button'
@@ -1937,7 +2570,9 @@ export function ChannelMutateDrawer({
                                   ? t(
                                       'Enter API Key, one per line, format: APIKey|Region'
                                     )
-                                  : t('Enter API Key, format: APIKey|Region')
+                                      : t(
+                                          'Enter API Key, format: APIKey|Region'
+                                        )
                               }
                               return isBatchMode
                                 ? t(
@@ -2043,7 +2678,9 @@ export function ChannelMutateDrawer({
                                         size='sm'
                                         onClick={async () => {
                                           if (channelKey) {
-                                            await copyToClipboard(channelKey)
+                                                await copyToClipboard(
+                                                  channelKey
+                                                )
                                           }
                                         }}
                                         disabled={!channelKey}
@@ -2056,7 +2693,9 @@ export function ChannelMutateDrawer({
                                   <Input
                                     readOnly
                                     value={channelKey ?? ''}
-                                    placeholder={t('Hidden — verify to reveal')}
+                                        placeholder={t(
+                                          'Hidden — verify to reveal'
+                                        )}
                                     className='font-mono'
                                   />
                                 </div>
@@ -2228,7 +2867,9 @@ export function ChannelMutateDrawer({
                           name='multi_key_type'
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel>{t('Multi-Key Strategy')}</FormLabel>
+                                  <FormLabel>
+                                    {t('Multi-Key Strategy')}
+                                  </FormLabel>
                               <Select
                                 items={[
                                   { value: 'random', label: t('Random') },
@@ -2273,8 +2914,13 @@ export function ChannelMutateDrawer({
                       )}
                     </ChannelAuthSection>
                   </ChannelApiAccessSection>
+                    </div>
 
                   {/* ── Models & Groups ── */}
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.models}
+                      className='scroll-mt-4'
+                    >
                   <ChannelModelsSection>
                     <div className='space-y-5'>
                       <div className='border-border/60 bg-muted/10 rounded-lg border p-4'>
@@ -2333,7 +2979,8 @@ export function ChannelMutateDrawer({
                                         )
                                         updateModels(
                                           currentModelsArray.filter(
-                                            (model) => !hiddenTargets.has(model)
+                                                (model) =>
+                                                  !hiddenTargets.has(model)
                                           )
                                         )
                                       }}
@@ -2440,7 +3087,9 @@ export function ChannelMutateDrawer({
                                   type='button'
                                   variant='secondary'
                                   size='sm'
-                                  onClick={() => handleAddPrefillGroup(group)}
+                                      onClick={() =>
+                                        handleAddPrefillGroup(group)
+                                      }
                                 >
                                   {group.name}
                                 </Button>
@@ -2490,7 +3139,8 @@ export function ChannelMutateDrawer({
                                           {t('Request flow')}
                                         </p>
                                         <div className='space-y-1 font-mono text-xs'>
-                                          {mappingPreviewPairs.map((pair) => (
+                                              {mappingPreviewPairs.map(
+                                                (pair) => (
                                             <div
                                               key={`${pair.source}-${pair.target}`}
                                               className='flex items-center gap-1'
@@ -2502,7 +3152,8 @@ export function ChannelMutateDrawer({
                                               />
                                               <span>{pair.target}</span>
                                             </div>
-                                          ))}
+                                                )
+                                              )}
                                           {remainingMappingCount > 0 && (
                                             <div className='text-[11px] opacity-70'>
                                               +{remainingMappingCount}{' '}
@@ -2546,7 +3197,9 @@ export function ChannelMutateDrawer({
                                     <code className='font-mono'>
                                       {'{"gpt-4":"Azure-GPT4"}'}
                                     </code>
-                                    {t('. Please fix the JSON before saving.')}
+                                        {t(
+                                          '. Please fix the JSON before saving.'
+                                        )}
                                   </AlertDescription>
                                 </Alert>
                               )}
@@ -2605,7 +3258,9 @@ export function ChannelMutateDrawer({
                                     options={groupOptions}
                                     selected={field.value}
                                     onChange={field.onChange}
-                                    placeholder={t(FIELD_PLACEHOLDERS.GROUP)}
+                                        placeholder={t(
+                                          FIELD_PLACEHOLDERS.GROUP
+                                        )}
                                   />
                                 )}
                               </FormControl>
@@ -2616,7 +3271,12 @@ export function ChannelMutateDrawer({
                       </div>
                     </div>
                   </ChannelModelsSection>
+                    </div>
 
+                    <div
+                      id={CHANNEL_EDITOR_SECTION_IDS.advanced}
+                      className='scroll-mt-4'
+                    >
                   <ChannelAdvancedSection
                     open={advancedSettingsOpen}
                     onOpenChange={handleAdvancedSettingsOpenChange}
@@ -2627,7 +3287,10 @@ export function ChannelMutateDrawer({
                         title={t('Routing & Overrides')}
                         icon={<Route className='h-4 w-4' />}
                       />
-                      <div className='flex flex-col gap-4'>
+                          <div
+                            id={ADVANCED_SETTINGS_SECTION_IDS.routingStrategy}
+                            className='flex scroll-mt-4 flex-col gap-4'
+                          >
                         <SubHeading
                           title={t('Routing Strategy')}
                           icon={<Route className='h-3.5 w-3.5' />}
@@ -2686,7 +3349,9 @@ export function ChannelMutateDrawer({
                             name='auto_retry_times'
                             render={({ field }) => (
                               <FormItem>
-                                <FormLabel>{t('Auto Retry Times')}</FormLabel>
+                                    <FormLabel>
+                                      {t('Auto Retry Times')}
+                                    </FormLabel>
                                 <FormControl>
                                   <Input
                                     type='number'
@@ -2724,7 +3389,9 @@ export function ChannelMutateDrawer({
                               <FormLabel>{t('Test Model')}</FormLabel>
                               <FormControl>
                                 <Input
-                                  placeholder={t(FIELD_PLACEHOLDERS.TEST_MODEL)}
+                                      placeholder={t(
+                                        FIELD_PLACEHOLDERS.TEST_MODEL
+                                      )}
                                   {...field}
                                 />
                               </FormControl>
@@ -2760,7 +3427,10 @@ export function ChannelMutateDrawer({
                         />
                       </div>
 
-                      <div className='flex flex-col gap-4 border-t pt-4'>
+                          <div
+                            id={ADVANCED_SETTINGS_SECTION_IDS.internalNotes}
+                            className='flex scroll-mt-4 flex-col gap-4 border-t pt-4'
+                          >
                         <SubHeading
                           title={t('Internal Notes')}
                           icon={<FileText className='h-3.5 w-3.5' />}
@@ -2794,7 +3464,9 @@ export function ChannelMutateDrawer({
                                 <FormLabel>{t('Remark')}</FormLabel>
                                 <FormControl>
                                   <Textarea
-                                    placeholder={t(FIELD_PLACEHOLDERS.REMARK)}
+                                        placeholder={t(
+                                          FIELD_PLACEHOLDERS.REMARK
+                                        )}
                                     rows={2}
                                     {...field}
                                   />
@@ -2809,7 +3481,10 @@ export function ChannelMutateDrawer({
                         </div>
                       </div>
 
-                      <div className='flex flex-col gap-4 border-t pt-4'>
+                          <div
+                            id={ADVANCED_SETTINGS_SECTION_IDS.overrideRules}
+                            className='flex scroll-mt-4 flex-col gap-4 border-t pt-4'
+                          >
                         <SubHeading
                           title={t('Override Rules')}
                           icon={<Code className='h-3.5 w-3.5' />}
@@ -2964,8 +3639,10 @@ export function ChannelMutateDrawer({
                                           {
                                             '*': true,
                                             're:^X-Trace-.*$': true,
-                                            'X-Foo': '{client_header:X-Foo}',
-                                            Authorization: 'Bearer {api_key}',
+                                                'X-Foo':
+                                                  '{client_header:X-Foo}',
+                                                Authorization:
+                                                  'Bearer {api_key}',
                                           },
                                           null,
                                           2
@@ -2981,7 +3658,11 @@ export function ChannelMutateDrawer({
                                     size='sm'
                                     onClick={() =>
                                       field.onChange(
-                                        JSON.stringify({ '*': true }, null, 2)
+                                            JSON.stringify(
+                                              { '*': true },
+                                              null,
+                                              2
+                                            )
                                       )
                                     }
                                   >
@@ -3047,16 +3728,23 @@ export function ChannelMutateDrawer({
                     </div>
 
                     {/* ── Extra Settings ── */}
-                    <div className={sideDrawerSectionClassName()}>
+                        <div
+                          id={ADVANCED_SETTINGS_SECTION_IDS.extraSettings}
+                          className={`${sideDrawerSectionClassName()} scroll-mt-4`}
+                        >
                       <CardHeading
                         title={t('Channel Extra Settings')}
                         icon={<Settings className='h-4 w-4' />}
                       />
-                      {(currentType === 1 || currentType === 14) && (
+                      {(currentType === 1 ||
+                        currentType === 14 ||
+                        currentType === 57) && (
                         <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
                           <SubHeading
                             title={t('Field passthrough controls')}
-                            icon={<SlidersHorizontal className='h-3.5 w-3.5' />}
+                                icon={
+                                  <SlidersHorizontal className='h-3.5 w-3.5' />
+                                }
                           />
 
                           <div className='divide-border space-y-0 divide-y border-y'>
@@ -3070,7 +3758,9 @@ export function ChannelMutateDrawer({
                                       {t('Allow service_tier passthrough')}
                                     </FormLabel>
                                     <FormDescription>
-                                      {t('Pass through the service_tier field')}
+                                          {t(
+                                            'Pass through the service_tier field'
+                                          )}
                                     </FormDescription>
                                   </div>
                                   <FormControl>
@@ -3083,7 +3773,7 @@ export function ChannelMutateDrawer({
                               )}
                             />
 
-                            {currentType === 1 && (
+                            {(currentType === 1 || currentType === 57) && (
                               <>
                                 <FormField
                                   control={form.control}
@@ -3202,7 +3892,9 @@ export function ChannelMutateDrawer({
                                     <FormItem className='flex items-center justify-between gap-3 px-4 py-3'>
                                       <div className='space-y-0.5'>
                                         <FormLabel className='text-sm'>
-                                          {t('Allow inference_geo passthrough')}
+                                              {t(
+                                                'Allow inference_geo passthrough'
+                                              )}
                                         </FormLabel>
                                         <FormDescription>
                                           {t(
@@ -3334,9 +4026,38 @@ export function ChannelMutateDrawer({
                           render={({ field }) => (
                             <FormItem className='flex items-center justify-between px-4 py-3'>
                               <div className='space-y-0.5'>
-                                <FormLabel>{t('Pass Through Body')}</FormLabel>
+                                    <FormLabel>
+                                      {t('Pass Through Body')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Pass request body directly to upstream'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Switch
+                                      checked={field.value}
+                                      onCheckedChange={field.onChange}
+                                    />
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
+                            <FormField
+                              control={form.control}
+                              name='disable_task_polling_sleep'
+                              render={({ field }) => (
+                                <FormItem className='flex items-center justify-between px-4 py-3'>
+                                  <div className='space-y-0.5'>
+                                    <FormLabel>
+                                      {t('Skip async task polling delay')}
+                                    </FormLabel>
                                 <FormDescription>
-                                  {t('Pass request body directly to upstream')}
+                                      {t(
+                                        'Do not wait one second between polling async tasks for this channel'
+                                      )}
                                 </FormDescription>
                               </div>
                               <FormControl>
@@ -3358,7 +4079,9 @@ export function ChannelMutateDrawer({
                             <FormLabel>{t('Proxy Address')}</FormLabel>
                             <FormControl>
                               <Input
-                                placeholder={t('socks5://user:pass@host:port')}
+                                    placeholder={t(
+                                      'socks5://user:pass@host:port'
+                                    )}
                                 {...field}
                               />
                             </FormControl>
@@ -3421,7 +4144,12 @@ export function ChannelMutateDrawer({
                       />
 
                       {MODEL_FETCHABLE_TYPES.has(currentType) && (
-                        <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
+                            <div
+                              id={
+                                ADVANCED_SETTINGS_SECTION_IDS.upstreamModelDetection
+                              }
+                              className='border-border/60 flex scroll-mt-4 flex-col gap-3 border-y py-4'
+                            >
                           <SubHeading
                             title={t('Upstream Model Detection Settings')}
                             icon={<RefreshCw className='h-3.5 w-3.5' />}
@@ -3509,7 +4237,9 @@ export function ChannelMutateDrawer({
                               <span className='text-foreground font-medium'>
                                 {t('Last check time')}:
                               </span>{' '}
-                              {formatUnixTime(upstreamUpdateMeta.lastCheckTime)}
+                                  {formatUnixTime(
+                                    upstreamUpdateMeta.lastCheckTime
+                                  )}
                             </div>
                             <div>
                               <span className='text-foreground font-medium'>
@@ -3521,16 +4251,19 @@ export function ChannelMutateDrawer({
                               ) : (
                                 <>
                                   <span className='break-all'>
-                                    {upstreamDetectedModelsPreview.join(', ')}
+                                        {upstreamDetectedModelsPreview.join(
+                                          ', '
+                                        )}
                                   </span>
-                                  {upstreamDetectedModelsOmittedCount > 0 && (
+                                      {upstreamDetectedModelsOmittedCount >
+                                        0 && (
                                     <span className='ml-1'>
                                       {t(
                                         '({{total}} total, {{omit}} omitted)',
                                         {
                                           total:
-                                            upstreamUpdateMeta.detectedModels
-                                              .length,
+                                                upstreamUpdateMeta
+                                                  .detectedModels.length,
                                           omit: upstreamDetectedModelsOmittedCount,
                                         }
                                       )}
@@ -3544,7 +4277,9 @@ export function ChannelMutateDrawer({
                       )}
                     </div>
                   </ChannelAdvancedSection>
-                </>
+                    </div>
+                  </div>
+                </div>
               )}
             </form>
           </Form>

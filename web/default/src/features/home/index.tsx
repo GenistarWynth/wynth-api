@@ -16,18 +16,43 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useCallback, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useAuthStore } from '@/stores/auth-store'
-import { Markdown } from '@/components/ui/markdown'
+
 import { PublicLayout } from '@/components/layout'
+import { RichContent } from '@/components/rich-content'
+import { useTheme } from '@/context/theme-provider'
+import { isLikelyHtml } from '@/lib/content-format'
+import { useAuthStore } from '@/stores/auth-store'
+
 import { Hero } from './components'
 import { useHomePageContent } from './hooks'
+import {
+  HOME_IFRAME_SANDBOX,
+  postHomeIframePreferences,
+} from './lib/home-iframe'
 
 export function Home() {
-  const { t } = useTranslation()
+  const { i18n, t } = useTranslation()
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const { resolvedTheme } = useTheme()
   const { auth } = useAuthStore()
   const isAuthenticated = !!auth.user
   const { content, isLoaded, isUrl } = useHomePageContent()
+
+  const syncIframePreferences = useCallback(() => {
+    postHomeIframePreferences(
+      iframeRef.current?.contentWindow,
+      resolvedTheme,
+      i18n.language
+    )
+  }, [i18n.language, resolvedTheme])
+
+  useEffect(() => {
+    if (isUrl) {
+      syncIframePreferences()
+    }
+  }, [isUrl, syncIframePreferences])
 
   if (!isLoaded) {
     return (
@@ -40,20 +65,48 @@ export function Home() {
   }
 
   if (content) {
-    return (
-      <PublicLayout showMainContainer={false}>
-        <main className='overflow-x-hidden'>
-          {isUrl ? (
+    if (isUrl) {
+      return (
+        <PublicLayout showMainContainer={false}>
+          <main className='overflow-x-hidden'>
             <iframe
+              ref={iframeRef}
               src={content}
               className='h-screen w-full border-none'
               title={t('Custom Home Page')}
+              sandbox={HOME_IFRAME_SANDBOX}
+              onLoad={syncIframePreferences}
             />
-          ) : (
-            <div className='container mx-auto py-8'>
-              <Markdown className='custom-home-content'>{content}</Markdown>
-            </div>
-          )}
+          </main>
+        </PublicLayout>
+      )
+    }
+
+    if (isLikelyHtml(content)) {
+      return (
+        <PublicLayout showMainContainer={false}>
+          <main className='overflow-x-hidden'>
+            <RichContent
+              mode='html'
+              htmlVariant='isolated'
+              content={content}
+              className='custom-home-content'
+            />
+          </main>
+        </PublicLayout>
+      )
+    }
+
+    return (
+      <PublicLayout showMainContainer={false}>
+        <main className='overflow-x-hidden'>
+          <div className='container mx-auto py-8'>
+            <RichContent
+              mode='markdown'
+              content={content}
+              className='custom-home-content'
+            />
+          </div>
         </main>
       </PublicLayout>
     )

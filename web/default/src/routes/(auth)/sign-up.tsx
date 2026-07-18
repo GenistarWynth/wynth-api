@@ -17,8 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute } from '@tanstack/react-router'
+
+import { redirectAuthenticatedUserFromSignUp } from '@/features/auth/lib/sign-up-guard'
 import { SignUp } from '@/features/auth/sign-up'
 
 export const Route = createFileRoute('/(auth)/sign-up')({
+  beforeLoad: redirectAuthenticatedUserFromSignUp,
   component: SignUp,
 })

@@ -30,6 +30,7 @@ import {
   getSyncStatusOptions,
 } from '../constants'
 import { modelsQueryKeys, vendorsQueryKeys } from '../lib'
+import { resolveModelListRequest } from '../lib/list-request'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useModelsColumns } from './models-columns'
 import { useModels } from './models-provider'
@@ -92,9 +93,6 @@ export function ModelsTable() {
     }))
   }, [vendors])
 
-  // Determine whether to use search or regular list API
-  const shouldSearch = Boolean(globalFilter?.trim())
-
   // Apply selected vendor from context or filter
   const activeVendorFilter =
     selectedVendor ||
@@ -102,55 +100,23 @@ export function ModelsTable() {
       ? vendorFilter[0]
       : undefined)
 
+  const listRequest = resolveModelListRequest({
+    keyword: globalFilter,
+    vendor: activeVendorFilter,
+    status: statusFilter[0],
+    syncOfficial: syncFilter[0],
+    page: pagination.pageIndex + 1,
+    pageSize: pagination.pageSize,
+  })
+
   // Fetch models data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
   const { data, isLoading, isFetching } = useQuery({
-    queryKey: modelsQueryKeys.list({
-      keyword: globalFilter,
-      vendor: activeVendorFilter,
-      status:
-        statusFilter.length > 0 && !statusFilter.includes('all')
-          ? statusFilter[0]
-          : undefined,
-      sync_official:
-        syncFilter.length > 0 && !syncFilter.includes('all')
-          ? syncFilter[0]
-          : undefined,
-      p: pagination.pageIndex + 1,
-      page_size: pagination.pageSize,
-    }),
-    queryFn: async () => {
-      if (shouldSearch || activeVendorFilter) {
-        return searchModels({
-          keyword: globalFilter,
-          vendor: activeVendorFilter,
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          sync_official:
-            syncFilter.length > 0 && !syncFilter.includes('all')
-              ? syncFilter[0]
-              : undefined,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
-      } else {
-        return getModels({
-          status:
-            statusFilter.length > 0 && !statusFilter.includes('all')
-              ? statusFilter[0]
-              : undefined,
-          sync_official:
-            syncFilter.length > 0 && !syncFilter.includes('all')
-              ? syncFilter[0]
-              : undefined,
-          p: pagination.pageIndex + 1,
-          page_size: pagination.pageSize,
-        })
-      }
-    },
-    placeholderData: (previousData) => previousData,
+    queryKey: modelsQueryKeys.list(listRequest.params),
+    queryFn: () =>
+      listRequest.mode === 'search'
+        ? searchModels(listRequest.params)
+        : getModels(listRequest.params),
   })
 
   const models = data?.data?.items || []

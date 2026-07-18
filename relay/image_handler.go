@@ -151,7 +151,7 @@ func imageHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo,
 	// Adaptors may have already set a more accurate count from the
 	// upstream response; only set the default when they haven't.
 	if info.PriceData.UsePrice { // only price model use N ratio
-		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
+		if !info.PriceData.HasOtherRatio("n") {
 			info.PriceData.AddOtherRatio("n", float64(imageN))
 		}
 	}

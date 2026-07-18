@@ -1,3 +1,4 @@
+import { Check, ChevronsUpDown } from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,10 +18,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import * as React from 'react'
-import { Check, ChevronsUpDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 
 export type ComboboxInputOption = {
   value: string
@@ -37,6 +38,19 @@ interface ComboboxInputProps {
   className?: string
   id?: string
   allowCustomValue?: boolean
+  openOnFocus?: boolean
+}
+
+export function shouldOpenCombobox(
+  trigger: string,
+  openOnFocus = true
+): boolean {
+  return (
+    trigger === 'pointer' ||
+    trigger === 'ArrowDown' ||
+    trigger === 'ArrowUp' ||
+    (trigger === 'focus' && openOnFocus)
+  )
 }
 
 export function ComboboxInput({
@@ -48,6 +62,7 @@ export function ComboboxInput({
   className,
   id,
   allowCustomValue = false,
+  openOnFocus = true,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -103,7 +118,7 @@ export function ComboboxInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    if (!open && shouldOpenCombobox(e.key, openOnFocus)) {
       setOpen(true)
       return
     }
@@ -175,9 +190,16 @@ export function ComboboxInput({
           }
           if (!open) setOpen(true)
         }}
+        onPointerDown={(e) => {
+          if (e.button === 0 && shouldOpenCombobox('pointer', openOnFocus)) {
+            setOpen(true)
+          }
+        }}
         onFocus={() => {
           setSearchValue(allowCustomValue && !selectedOption ? value : '')
-          setOpen(true)
+          if (shouldOpenCombobox('focus', openOnFocus)) {
+            setOpen(true)
+          }
         }}
         onKeyDown={handleKeyDown}
         className={cn('pr-9', className)}

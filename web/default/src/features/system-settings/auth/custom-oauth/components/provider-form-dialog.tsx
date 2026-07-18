@@ -16,10 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
-import { type Resolver, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useEffect } from 'react'
+import { type Resolver, useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+
+import { CopyButton } from '@/components/copy-button'
+import { Dialog } from '@/components/dialog'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -42,12 +46,13 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { Dialog } from '@/components/dialog'
+
 import {
   SettingsForm,
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../../../components/settings-form-layout'
+import { buildOAuthCallbackUrl } from '../../oauth-callback-url'
 import {
   useCreateProvider,
   useUpdateProvider,
@@ -65,6 +70,7 @@ type ProviderFormDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   provider?: CustomOAuthProvider | null
+  serverAddress: string
 }
 
 const PROVIDER_FORM_ID = 'custom-oauth-provider-form'
@@ -100,6 +106,12 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
       access_denied_message: '',
     },
   })
+  const slug = useWatch({ control: form.control, name: 'slug' })
+  const callbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    (slug ?? '').trim() || '{slug}',
+    t('Site URL')
+  )
 
   useEffect(() => {
     if (props.open && props.provider) {
@@ -167,6 +179,12 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
   }
 
   const isPending = createProvider.isPending || updateProvider.isPending
+  let submitLabel = t('Create Provider')
+  if (isPending) {
+    submitLabel = t('Saving...')
+  } else if (isEditing) {
+    submitLabel = t('Update Provider')
+  }
 
   return (
     <Dialog
@@ -192,11 +210,7 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
             {t('Cancel')}
           </Button>
           <Button type='submit' form={PROVIDER_FORM_ID} disabled={isPending}>
-            {isPending
-              ? t('Saving...')
-              : isEditing
-                ? t('Update Provider')
-                : t('Create Provider')}
+            {submitLabel}
           </Button>
         </>
       }
@@ -266,6 +280,27 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
                 )}
               />
             </div>
+
+            <Alert>
+              <AlertTitle>{t('OAuth callback URL')}</AlertTitle>
+              <AlertDescription className='flex flex-col gap-2 text-left'>
+                <p>
+                  {t(
+                    'This callback URL updates from the slug field and is the value to register with your provider.'
+                  )}
+                </p>
+                <div className='bg-muted flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5'>
+                  <code className='min-w-0 flex-1 text-xs break-all'>
+                    {callbackUrl}
+                  </code>
+                  <CopyButton
+                    value={callbackUrl}
+                    tooltip={t('Copy callback URL')}
+                    aria-label={t('Copy callback URL')}
+                  />
+                </div>
+              </AlertDescription>
+            </Alert>
 
             <FormField
               control={form.control}
@@ -339,12 +374,10 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
                 <FormItem>
                   <FormLabel>{t('Auth Style')}</FormLabel>
                   <Select
-                    items={[
-                      ...AUTH_STYLE_OPTIONS.map((option) => ({
-                        value: String(option.value),
-                        label: t(option.labelKey),
-                      })),
-                    ]}
+                    items={AUTH_STYLE_OPTIONS.map((option) => ({
+                      value: String(option.value),
+                      label: t(option.labelKey),
+                    }))}
                     value={String(field.value)}
                     onValueChange={(val) => field.onChange(Number(val))}
                   >

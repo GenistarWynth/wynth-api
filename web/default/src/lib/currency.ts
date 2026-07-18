@@ -99,6 +99,8 @@ export interface CurrencyFormatOptions {
    * "$280K" in en). The currency symbol is preserved.
    */
   compact?: boolean
+  /** Whether to include the currency/custom symbol. Token displays are unchanged. */
+  showSymbol?: boolean
   /** Locale used for number formatting (defaults to the runtime locale) */
   locale?: Intl.LocalesArgument | undefined
 }
@@ -110,7 +112,7 @@ type ResolvedCurrencyFormatOptions = Omit<
   locale: Intl.LocalesArgument | undefined
 }
 
-type DisplayMeta =
+export type DisplayMeta =
   | {
       kind: 'currency'
       symbol: string
@@ -134,6 +136,7 @@ const DEFAULT_FORMAT_OPTIONS: ResolvedCurrencyFormatOptions = {
   abbreviate: true,
   minimumNonZero: 0,
   compact: false,
+  showSymbol: true,
   locale: undefined,
 }
 
@@ -156,14 +159,16 @@ export function parseCurrencyDisplayType(
   return isCurrencyDisplayType(value) ? value : fallback
 }
 
-function getConfig(): CurrencyConfig {
-  const { config } = useSystemConfigStore.getState()
-  const currency = config?.currency ?? DEFAULT_CURRENCY_CONFIG
+function getConfig(currencyConfig?: CurrencyConfig): CurrencyConfig {
+  const currency =
+    currencyConfig ??
+    useSystemConfigStore.getState().config?.currency ??
+    DEFAULT_CURRENCY_CONFIG
   return {
     ...DEFAULT_CURRENCY_CONFIG,
     ...currency,
     quotaPerUnit:
-      currency?.quotaPerUnit && currency.quotaPerUnit > 0
+      Number.isFinite(currency?.quotaPerUnit) && currency.quotaPerUnit > 0
         ? currency.quotaPerUnit
         : DEFAULT_CURRENCY_CONFIG.quotaPerUnit,
     usdExchangeRate:
@@ -236,6 +241,7 @@ function mergeOptions(
     minimumNonZero:
       options.minimumNonZero ?? DEFAULT_FORMAT_OPTIONS.minimumNonZero,
     compact: options.compact ?? DEFAULT_FORMAT_OPTIONS.compact,
+    showSymbol: options.showSymbol ?? DEFAULT_FORMAT_OPTIONS.showSymbol,
     locale: options.locale ?? DEFAULT_FORMAT_OPTIONS.locale,
   }
 }
@@ -254,7 +260,7 @@ function formatNumberWithSuffix(
   const abs = Math.abs(value)
   if (abbreviate && abs >= 1000) {
     const result = value / 1000
-    return removeTrailingZeros(result.toFixed(1)) + 'k'
+    return `${removeTrailingZeros(result.toFixed(1))}k`
   }
 
   const digits = abs >= 1 ? digitsLarge : digitsSmall
@@ -301,6 +307,14 @@ function formatCurrencyValue(
   const adjustedValue = adjustForMinimum(value, digits, options.minimumNonZero)
 
   if (meta.kind === 'currency') {
+    if (!options.showSymbol) {
+      return new Intl.NumberFormat(options.locale, {
+        notation: options.compact ? 'compact' : 'standard',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: options.compact ? 1 : digits,
+      }).format(adjustedValue)
+    }
+
     const formatted = new Intl.NumberFormat(options.locale, {
       style: 'currency',
       currency: meta.currencyCode,
@@ -318,20 +332,28 @@ function formatCurrencyValue(
     maximumFractionDigits: options.compact ? 1 : digits,
   }).format(adjustedValue)
 
-  return `${meta.symbol} ${decimal}`
+  return options.showSymbol ? `${meta.symbol} ${decimal}` : decimal
 }
 
 /**
- * Get the current currency configuration and display metadata.
+ * Resolve a complete currency configuration and its display metadata.
  *
- * @returns Object containing config and display metadata
+ * @param currencyConfig Optional explicit config; omitted calls read the store.
+ * @returns An immutable snapshot containing resolved config and display metadata.
  *
  * @internal
  * This is primarily for internal use. Most consumers should use the
  * higher-level formatting functions instead.
  */
-export function getCurrencyDisplay() {
-  const config = getConfig()
+export type CurrencyDisplaySnapshot = Readonly<{
+  config: Readonly<CurrencyConfig>
+  meta: Readonly<DisplayMeta>
+}>
+
+export function getCurrencyDisplay(
+  currencyConfig?: CurrencyConfig
+): CurrencyDisplaySnapshot {
+  const config = getConfig(currencyConfig)
   const meta = getDisplayMeta(config)
   return { config, meta }
 }
