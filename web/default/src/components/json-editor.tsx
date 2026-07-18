@@ -1,3 +1,4 @@
+import { Code, Table, Plus, Trash2 } from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -17,12 +18,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect } from 'react'
-import { Code, Table, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
+
+import {
+  parseJsonEditorRows,
+  serializeJsonEditorRows,
+  type JsonEditorRow,
+} from './json-editor-model'
 
 type JsonEditorProps = {
   value: string
@@ -35,12 +42,6 @@ type JsonEditorProps = {
   emptyMessage?: string
   template?: Record<string, unknown>
   valueType?: 'string' | 'number' | 'any'
-}
-
-type EditorRow = {
-  id: string
-  key: string
-  value: string
 }
 
 export function JsonEditor({
@@ -63,27 +64,13 @@ export function JsonEditor({
   const resolvedKeyLabel = keyLabel ?? t('Key')
   const resolvedValueLabel = valueLabel ?? t('Value')
   const [mode, setMode] = useState<'visual' | 'json'>('visual')
-  const [rows, setRows] = useState<EditorRow[]>([])
+  const [rows, setRows] = useState<JsonEditorRow[]>(() =>
+    parseJsonEditorRows(value)
+  )
   const [jsonValue, setJsonValue] = useState(value)
 
   const parseJsonToRows = (json: string) => {
-    try {
-      if (!json.trim()) {
-        setRows([])
-        return
-      }
-      const parsed = JSON.parse(json)
-      const newRows: EditorRow[] = Object.entries(parsed).map(
-        ([key, val], index) => ({
-          id: `${Date.now()}-${index}`,
-          key,
-          value: typeof val === 'object' ? JSON.stringify(val) : String(val),
-        })
-      )
-      setRows(newRows)
-    } catch (_error) {
-      // Invalid JSON, keep current rows
-    }
+    setRows(parseJsonEditorRows(json))
   }
 
   // Parse JSON to rows when value changes externally
@@ -95,36 +82,8 @@ export function JsonEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
-  const convertRowsToJson = (updatedRows: EditorRow[]): string => {
-    if (updatedRows.length === 0) {
-      return ''
-    }
-    const obj: Record<string, unknown> = {}
-    updatedRows.forEach((row) => {
-      if (row.key.trim()) {
-        let parsedValue: unknown = row.value.trim()
-
-        // Try to parse value based on type
-        if (valueType === 'number') {
-          parsedValue = Number(parsedValue) || 0
-        } else if (valueType === 'any') {
-          // Try to parse as JSON first
-          try {
-            parsedValue = JSON.parse(row.value)
-          } catch {
-            // If not valid JSON, keep as string
-            parsedValue = row.value.trim()
-          }
-        }
-
-        obj[row.key.trim()] = parsedValue
-      }
-    })
-    return JSON.stringify(obj, null, 2)
-  }
-
   const handleAddRow = () => {
-    const newRow: EditorRow = {
+    const newRow: JsonEditorRow = {
       id: `${Date.now()}`,
       key: '',
       value: '',
@@ -136,7 +95,7 @@ export function JsonEditor({
   const handleDeleteRow = (id: string) => {
     const updatedRows = rows.filter((row) => row.id !== id)
     setRows(updatedRows)
-    const json = convertRowsToJson(updatedRows)
+    const json = serializeJsonEditorRows(updatedRows, valueType)
     setJsonValue(json)
     onChange(json)
   }
@@ -150,7 +109,7 @@ export function JsonEditor({
       row.id === id ? { ...row, [field]: newValue } : row
     )
     setRows(updatedRows)
-    const json = convertRowsToJson(updatedRows)
+    const json = serializeJsonEditorRows(updatedRows, valueType)
     setJsonValue(json)
     onChange(json)
   }
@@ -172,7 +131,7 @@ export function JsonEditor({
   const toggleMode = () => {
     if (mode === 'visual') {
       // Switching to JSON mode: sync rows to JSON
-      const json = convertRowsToJson(rows)
+      const json = serializeJsonEditorRows(rows, valueType)
       setJsonValue(json)
       onChange(json)
       setMode('json')
@@ -228,7 +187,7 @@ export function JsonEditor({
               <div className='grid grid-cols-[1fr_1fr_auto] gap-2 text-sm font-medium'>
                 <div>{resolvedKeyLabel}</div>
                 <div>{resolvedValueLabel}</div>
-                <div className='w-10'></div>
+                <div className='w-10' />
               </div>
               {rows.map((row) => (
                 <div

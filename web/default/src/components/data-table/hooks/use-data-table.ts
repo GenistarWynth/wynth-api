@@ -20,6 +20,7 @@ import * as React from 'react'
 import {
   type ColumnDef,
   type ColumnFiltersState,
+  type ColumnSizingState,
   type ExpandedState,
   type OnChangeFn,
   type PaginationState,
@@ -38,6 +39,12 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 
+import {
+  createColumnSizingPersistenceController,
+  readColumnSizing,
+  resolveColumnSizingHydration,
+} from './column-sizing'
+
 type DataTableFeatureOptions<TData> = Pick<
   TableOptions<TData>,
   | 'enableRowSelection'
@@ -48,6 +55,7 @@ type DataTableFeatureOptions<TData> = Pick<
   | 'manualFiltering'
   | 'manualPagination'
   | 'manualSorting'
+  | 'enableColumnResizing'
 >
 
 type DataTableStateOptions = {
@@ -58,6 +66,10 @@ type DataTableStateOptions = {
   columnVisibilityStorageKey?: string | false
   columnVisibility?: VisibilityState
   onColumnVisibilityChange?: OnChangeFn<VisibilityState>
+  initialColumnSizing?: ColumnSizingState
+  columnSizingStorageKey?: string | false
+  columnSizing?: ColumnSizingState
+  onColumnSizingChange?: OnChangeFn<ColumnSizingState>
   initialRowSelection?: RowSelectionState
   rowSelection?: RowSelectionState
   onRowSelectionChange?: OnChangeFn<RowSelectionState>
@@ -161,6 +173,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     manualSorting,
     initialSorting = [],
     initialColumnVisibility = {},
+    initialColumnSizing = {},
     initialRowSelection = {},
     initialExpanded = {},
     initialPagination = { pageIndex: 0, pageSize: 20 },
@@ -175,12 +188,23 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     typeof options.columnVisibilityStorageKey === 'string'
       ? options.columnVisibilityStorageKey
       : undefined
+  const columnSizingStorageKey =
+    typeof options.columnSizingStorageKey === 'string'
+      ? options.columnSizingStorageKey
+      : undefined
   const resolvedInitialColumnVisibility = React.useMemo(
     () => ({
       ...initialColumnVisibility,
       ...readColumnVisibility(columnVisibilityStorageKey),
     }),
     [columnVisibilityStorageKey, initialColumnVisibility]
+  )
+  const resolvedInitialColumnSizing = React.useMemo(
+    () => ({
+      ...initialColumnSizing,
+      ...readColumnSizing(columnSizingStorageKey, columns),
+    }),
+    [columnSizingStorageKey, columns, initialColumnSizing]
   )
 
   const [sorting, onSortingChange] = useControllableTableState(
@@ -194,10 +218,37 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
       resolvedInitialColumnVisibility,
       options.onColumnVisibilityChange
     )
+  const [columnSizing, onColumnSizingChange] = useControllableTableState(
+    options.columnSizing,
+    resolvedInitialColumnSizing,
+    options.onColumnSizingChange
+  )
   const hydratedColumnVisibilityStorageKeyRef = React.useRef(
     columnVisibilityStorageKey
   )
+  const hydratedColumnSizingStorageKeyRef = React.useRef(columnSizingStorageKey)
   const skipNextColumnVisibilityPersistRef = React.useRef(false)
+  const skipNextColumnSizingPersistRef = React.useRef(false)
+  const columnSizingPersistenceRef = React.useRef<ReturnType<
+    typeof createColumnSizingPersistenceController
+  > | null>(null)
+  if (
+    columnSizingPersistenceRef.current === null &&
+    typeof window !== 'undefined'
+  ) {
+    columnSizingPersistenceRef.current =
+      createColumnSizingPersistenceController({
+        schedule: (callback, delay) => window.setTimeout(callback, delay),
+        cancel: (handle) => window.clearTimeout(handle as number),
+        write: (storageKey, value) => {
+          try {
+            window.localStorage.setItem(storageKey, JSON.stringify(value))
+          } catch {
+            // Storage can be unavailable in private mode; resizing still works.
+          }
+        },
+      })
+  }
   const [rowSelection, onRowSelectionChange] = useControllableTableState(
     options.rowSelection,
     initialRowSelection,
@@ -228,6 +279,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     state: {
       sorting,
       columnVisibility,
+      columnSizing,
       rowSelection,
       expanded,
       columnFilters: options.columnFilters,
@@ -242,8 +294,11 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     manualFiltering,
     manualPagination,
     manualSorting,
+    enableColumnResizing: options.enableColumnResizing,
+    columnResizeMode: 'onChange',
     onSortingChange,
     onColumnVisibilityChange,
+    onColumnSizingChange,
     onRowSelectionChange,
     onExpandedChange,
     onColumnFiltersChange: options.onColumnFiltersChange,
@@ -291,6 +346,25 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
   ])
 
   React.useEffect(() => {
+    const hydration = resolveColumnSizingHydration(
+      options.columnSizing,
+      hydratedColumnSizingStorageKeyRef.current,
+      columnSizingStorageKey,
+      resolvedInitialColumnSizing
+    )
+    if (!hydration) return
+
+    hydratedColumnSizingStorageKeyRef.current = hydration.storageKey
+    skipNextColumnSizingPersistRef.current = true
+    onColumnSizingChange(() => hydration.value)
+  }, [
+    columnSizingStorageKey,
+    onColumnSizingChange,
+    options.columnSizing,
+    resolvedInitialColumnSizing,
+  ])
+
+  React.useEffect(() => {
     if (!columnVisibilityStorageKey || typeof window === 'undefined') return
 
     if (skipNextColumnVisibilityPersistRef.current) {
@@ -307,6 +381,20 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
       // Storage can be unavailable in private mode; table controls still work.
     }
   }, [columnVisibility, columnVisibilityStorageKey])
+
+  React.useEffect(() => {
+    if (!columnSizingStorageKey) return
+
+    if (skipNextColumnSizingPersistRef.current) {
+      skipNextColumnSizingPersistRef.current = false
+      return
+    }
+
+    const persistence = columnSizingPersistenceRef.current
+    if (!persistence) return
+    persistence.schedule(columnSizingStorageKey, columnSizing)
+    return () => persistence.cancel()
+  }, [columnSizing, columnSizingStorageKey])
 
   return {
     table,

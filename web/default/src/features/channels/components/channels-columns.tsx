@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useState } from 'react'
+import { useContext, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import {
@@ -30,11 +30,12 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getCurrencyLabel } from '@/lib/currency'
 import {
-  formatTimestampToDate,
-  formatQuota as formatQuotaValue,
-} from '@/lib/format'
+  formatCurrencyFromUSD,
+  formatQuotaWithCurrency,
+  getCurrencyLabel,
+} from '@/lib/currency'
+import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -54,7 +55,6 @@ import { TruncatedText } from '@/components/truncated-text'
 import { getCodexUsage } from '../api'
 import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
-  formatBalance,
   formatRelativeTime,
   formatResponseTime,
   getBalanceVariant,
@@ -74,6 +74,7 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel, ChannelAutoPriorityScore } from '../types'
+import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -363,9 +364,10 @@ function WeightCell({ channel }: { channel: Channel }) {
 /**
  * Balance cell component with click to update
  */
-function BalanceCell({ channel }: { channel: Channel }) {
+export function BalanceCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const layout = useContext(ChannelRowActionsLayoutContext)
   const isTagRow = isTagAggregateRow(channel)
   const balance = channel.balance || 0
   const usedQuota = channel.used_quota || 0
@@ -378,8 +380,23 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const withSuffix = (value: string) =>
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
-  const usedDisplay = withSuffix(formatQuotaValue(usedQuota))
-  const remainingDisplay = withSuffix(formatBalance(balance))
+  const showSymbol = layout !== 'card'
+  const usedDisplay = withSuffix(
+    formatQuotaWithCurrency(usedQuota, {
+      digitsLarge: 2,
+      digitsSmall: 4,
+      abbreviate: true,
+      showSymbol,
+    })
+  )
+  const remainingDisplay = withSuffix(
+    formatCurrencyFromUSD(balance, {
+      digitsLarge: 2,
+      digitsSmall: 4,
+      abbreviate: false,
+      showSymbol,
+    })
+  )
   const usedLabel = `${t('Used:')} ${usedDisplay}`
   const remainingLabel = `${t('Remaining:')} ${remainingDisplay}`
 
@@ -543,11 +560,14 @@ function TimestampCell({ value }: { value: number }) {
 /**
  * Generate channels columns configuration
  */
-export function useChannelsColumns(): ColumnDef<Channel>[] {
+export function useChannelsColumns(
+  options: { enableSelection?: boolean } = {}
+): ColumnDef<Channel>[] {
   const { t } = useTranslation()
-  return [
-    // Checkbox column
-    {
+  const enableSelection = options.enableSelection ?? true
+  return useMemo(
+    () => [
+    ...(enableSelection ? [{
       id: 'select',
       header: ({ table }) => (
         <Checkbox
@@ -575,8 +595,9 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
       },
       enableSorting: false,
       enableHiding: false,
+      enableResizing: false,
       size: 40,
-    },
+    } satisfies ColumnDef<Channel>] : []),
 
     // ID column
     {
@@ -638,13 +659,13 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         const hasParamOverride = Boolean(channel.param_override?.trim())
 
         return (
-          <div className='flex items-center gap-2'>
-            <div className='flex flex-col gap-1'>
-              <div className='flex items-center gap-1.5'>
+          <div className='flex max-w-full min-w-0 items-center gap-2'>
+            <div className='flex max-w-full min-w-0 flex-col gap-1'>
+              <div className='flex max-w-full min-w-0 items-center gap-1.5'>
                 <TruncatedText
                   text={name}
                   className='font-medium'
-                  maxWidth='max-w-[180px]'
+                  maxWidth='max-w-full'
                 />
                 {isPassThrough && (
                   <TooltipProvider delay={100}>
@@ -698,6 +719,7 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
           </div>
         )
       },
+      size: 260,
       minSize: 200,
     },
 
@@ -1133,6 +1155,8 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
       enableSorting: false,
       enableHiding: false,
       meta: { pinned: 'right' as const },
-    },
-  ]
+      },
+    ],
+    [enableSelection, t]
+  )
 }

@@ -16,31 +16,45 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type ChangeEvent, useCallback, useMemo, useRef, useState } from 'react'
+import { DashboardSpeed01Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQueryClient } from '@tanstack/react-query'
-import {
-  type ColumnDef,
-  type RowSelectionState,
-  type Table as TanStackTable,
+import type {
+  ColumnDef,
+  RowSelectionState,
+  Table as TanStackTable,
 } from '@tanstack/react-table'
+import { Check, CheckCircle2, Copy, Info, Settings, Trash2 } from 'lucide-react'
 import {
-  Check,
-  CheckCircle2,
-  Copy,
-  Info,
-  Loader2,
-  Settings,
-  Trash2,
-} from 'lucide-react'
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { useIsMobile } from '@/hooks/use-mobile'
+
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  DataTableBulkActions as BulkActionsToolbar,
+  DataTablePagination,
+  DataTableView,
+  useDataTable,
+} from '@/components/data-table'
+import { Dialog } from '@/components/dialog'
+import {
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+} from '@/components/drawer-layout'
+import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -57,27 +71,16 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import {
-  DataTableBulkActions as BulkActionsToolbar,
-  DataTablePagination,
-  DataTableView,
-  useDataTable,
-} from '@/components/data-table'
-import { ConfirmDialog } from '@/components/confirm-dialog'
-import { Dialog } from '@/components/dialog'
-import {
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-} from '@/components/drawer-layout'
-import { StatusBadge } from '@/components/status-badge'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { useIsMobile } from '@/hooks/use-mobile'
+
 import { updateChannel } from '../../api'
 import {
   channelsQueryKeys,
@@ -90,6 +93,12 @@ import type {
   SearchChannelsResponse,
 } from '../../types'
 import { useChannels } from '../channels-provider'
+import {
+  createBatchRunManager,
+  getModelTestActionLabels,
+  type BatchRunSession,
+  type TestResult,
+} from './channel-test-dialog-logic'
 
 type ChannelTestDialogProps = {
   open: boolean
@@ -102,23 +111,6 @@ type ChannelTestDialogContentProps = ChannelTestDialogProps & {
 
 type ModelRow = {
   model: string
-}
-
-type TestStatus = 'idle' | 'testing' | 'success' | 'error'
-
-type TestResult = {
-  status: TestStatus
-  responseTime?: number
-  completedAt?: number
-  error?: string
-  errorCode?: string
-}
-
-type BatchProgress = {
-  total: number
-  completed: number
-  success: number
-  failed: number
 }
 
 type ChannelTestCachePatch = {
@@ -203,8 +195,6 @@ const STREAM_INCOMPATIBLE_ENDPOINTS = new Set([
 
 const MODEL_PRICE_ERROR_CODE = 'model_price_error'
 const FAILURE_SUMMARY_MAX_LENGTH = 96
-const BATCH_TEST_CONCURRENCY = 5
-const BATCH_TEST_DELAY_MS = 100
 
 type FailureStatusDisplay = {
   summary: string
@@ -217,12 +207,8 @@ type FailureDetailsState = {
   details: string
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
-}
-
 function normalizeInlineError(errorText: string) {
-  return errorText.replace(/\s+/g, ' ').trim()
+  return errorText.replaceAll(/\s+/g, ' ').trim()
 }
 
 function getFirstErrorLine(errorText: string) {
@@ -279,14 +265,58 @@ function getTestTableColumnClass(columnId: string) {
     case 'select':
       return 'w-10 min-w-10'
     case 'model':
-      return 'w-auto whitespace-nowrap'
+      return 'w-auto min-w-48 whitespace-nowrap'
     case 'status':
-      return 'w-70 min-w-70 max-w-70 whitespace-normal'
+      return 'w-28 min-w-28 whitespace-nowrap'
+    case 'result':
+      return 'w-80 min-w-80 max-w-80 whitespace-normal'
     case 'actions':
-      return 'bg-popover w-24 min-w-24 whitespace-nowrap sm:w-28 sm:min-w-28'
+      return 'bg-popover w-px whitespace-nowrap'
     default:
       return undefined
   }
+}
+
+export function ModelTestAction({
+  model,
+  isTesting,
+  isBatchTesting,
+  onTest,
+}: {
+  model: string
+  isTesting: boolean
+  isBatchTesting: boolean
+  onTest: (model: string) => void
+}) {
+  const { t } = useTranslation()
+  const labels = getModelTestActionLabels(t)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant='ghost'
+            size='icon-sm'
+            onClick={() => onTest(model)}
+            disabled={isTesting || isBatchTesting}
+            aria-label={labels.accessibleName}
+          />
+        }
+      >
+        {isTesting ? (
+          <Spinner aria-hidden='true' />
+        ) : (
+          <HugeiconsIcon
+            icon={DashboardSpeed01Icon}
+            data-icon='dashboard-speed'
+            aria-hidden='true'
+          />
+        )}
+      </TooltipTrigger>
+      <TooltipContent>{labels.tooltip}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 export function ChannelTestDialog({
@@ -317,7 +347,8 @@ function ChannelTestDialogContent({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const currentChannelId = currentRow.id
-  const batchStopRequestedRef = useRef(false)
+  const [batchRunManager] = useState(createBatchRunManager)
+  const activeBatchSessionRef = useRef<BatchRunSession | null>(null)
   const [endpointType, setEndpointType] = useState('auto')
   const [isStreamTest, setIsStreamTest] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -328,7 +359,6 @@ function ChannelTestDialogContent({
   )
   const [isBatchTesting, setIsBatchTesting] = useState(false)
   const [isBatchStopRequested, setIsBatchStopRequested] = useState(false)
-  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
   const [removedModels, setRemovedModels] = useState<Set<string>>(
     () => new Set()
   )
@@ -350,8 +380,17 @@ function ChannelTestDialogContent({
     [t]
   )
 
+  useEffect(
+    () => () => {
+      batchRunManager.cancelCurrent()
+      activeBatchSessionRef.current = null
+    },
+    [batchRunManager]
+  )
+
   const resetState = useCallback(() => {
-    batchStopRequestedRef.current = true
+    batchRunManager.cancelCurrent()
+    activeBatchSessionRef.current = null
     setEndpointType('auto')
     setIsStreamTest(false)
     setSearchTerm('')
@@ -360,13 +399,12 @@ function ChannelTestDialogContent({
     setTestingModels(() => new Set())
     setIsBatchTesting(false)
     setIsBatchStopRequested(false)
-    setBatchProgress(null)
     setRemovedModels(() => new Set())
     setIsDeleteFailedDialogOpen(false)
     setIsDeletingFailed(false)
     setFailureDetails(null)
     setPagination({ pageIndex: 0, pageSize: 30 })
-  }, [])
+  }, [batchRunManager])
 
   const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
   const effectiveStreamTest = !streamDisabled && isStreamTest
@@ -499,12 +537,22 @@ function ChannelTestDialogContent({
     async (
       model: string,
       silent = false,
-      refreshList = true
+      refreshList = true,
+      batchSession?: BatchRunSession
     ): Promise<TestResult | undefined> => {
       if (!currentRow) return
 
-      markModelTesting(model, true)
-      updateTestResult(model, { status: 'testing' })
+      if (batchSession) {
+        const started = batchSession.runIfCurrent(() => {
+          markModelTesting(model, true)
+          updateTestResult(model, { status: 'testing' })
+          return true
+        })
+        if (!started) return
+      } else {
+        markModelTesting(model, true)
+        updateTestResult(model, { status: 'testing' })
+      }
       let finalResult: TestResult | undefined
 
       try {
@@ -519,34 +567,66 @@ function ChannelTestDialogContent({
           },
           (success, responseTime, error, errorCode) => {
             const completedAt = Date.now()
-            finalResult = {
+            const result: TestResult = {
               status: success ? 'success' : 'error',
               responseTime,
               completedAt,
               error,
               errorCode,
             }
-            updateTestResult(model, finalResult)
+            if (batchSession) {
+              batchSession.runIfCurrent(() => {
+                finalResult = result
+                updateTestResult(model, result)
+              })
+            } else {
+              finalResult = result
+              updateTestResult(model, result)
+            }
           }
         )
       } catch (error: unknown) {
-        finalResult = {
+        const result: TestResult = {
           status: 'error',
           completedAt: Date.now(),
           error: error instanceof Error ? error.message : t('Test failed'),
         }
-        updateTestResult(model, finalResult)
+        if (batchSession) {
+          batchSession.runIfCurrent(() => {
+            finalResult = result
+            updateTestResult(model, result)
+          })
+        } else {
+          finalResult = result
+          updateTestResult(model, result)
+        }
       } finally {
-        markModelTesting(model, false)
-        if (refreshList) {
-          refreshChannelLists(
-            createChannelTestCachePatch(
-              finalResult?.responseTime,
-              finalResult?.completedAt
+        if (batchSession) {
+          batchSession.runIfCurrent(() => {
+            markModelTesting(model, false)
+            if (refreshList) {
+              refreshChannelLists(
+                createChannelTestCachePatch(
+                  finalResult?.responseTime,
+                  finalResult?.completedAt
+                )
+              )
+            }
+          })
+        } else {
+          markModelTesting(model, false)
+          if (refreshList) {
+            refreshChannelLists(
+              createChannelTestCachePatch(
+                finalResult?.responseTime,
+                finalResult?.completedAt
+              )
             )
-          )
+          }
         }
       }
+
+      if (batchSession && !batchSession.isCurrent()) return undefined
       return finalResult
     },
     [
@@ -563,141 +643,93 @@ function ChannelTestDialogContent({
   const handleStopBatchTest = useCallback(() => {
     if (!isBatchTesting || isBatchStopRequested) return
 
-    batchStopRequestedRef.current = true
+    activeBatchSessionRef.current?.requestStop()
     setIsBatchStopRequested(true)
   }, [isBatchStopRequested, isBatchTesting])
 
   const handleBatchTest = useCallback(
     async (modelsToTest: string[]) => {
-      const uniqueModels = Array.from(
-        new Set(modelsToTest.map((model) => model.trim()).filter(Boolean))
-      )
+      const uniqueModels = [
+        ...new Set(modelsToTest.map((model) => model.trim()).filter(Boolean)),
+      ]
       if (!uniqueModels.length) return
 
-      batchStopRequestedRef.current = false
+      const session = batchRunManager.start({
+        toast: {
+          loading: (message, options) => toast.loading(message, options),
+          dismiss: (toastId) => toast.dismiss(toastId),
+        },
+        runningMessage: t('Batch testing models...'),
+        stoppingMessage: t('Stopping batch test...'),
+        formatProgressDescription: (progress) =>
+          `${t('{{completed}}/{{total}} completed', {
+            completed: progress.completed,
+            total: progress.total,
+          })} · ${t('{{success}} succeeded, {{failed}} failed', {
+            success: progress.success,
+            failed: progress.failed,
+          })}`,
+      })
+      activeBatchSessionRef.current = session
       setIsBatchTesting(true)
       setIsBatchStopRequested(false)
-      setBatchProgress({
-        total: uniqueModels.length,
-        completed: 0,
-        success: 0,
-        failed: 0,
-      })
 
       let resultPatch: ChannelTestCachePatch | undefined
-      const results: TestResult[] = []
-      let completedCount = 0
-      let successCount = 0
-      let failedCount = 0
 
-      try {
-        const createFallbackResult = (error?: unknown): TestResult => ({
+      await session.run({
+        models: uniqueModels,
+        testModel: (model) => testSingleModel(model, true, false, session),
+        createFallbackResult: (error) => ({
           status: 'error',
           completedAt: Date.now(),
           error: error instanceof Error ? error.message : t('Test failed'),
-        })
-
-        const recordBatchResult = (result: TestResult) => {
-          results.push(result)
-          completedCount += 1
-          if (result.status === 'success') {
-            successCount += 1
-          }
-          failedCount = completedCount - successCount
-
-          setBatchProgress({
-            total: uniqueModels.length,
-            completed: completedCount,
-            success: successCount,
-            failed: failedCount,
-          })
-        }
-
-        for (
-          let startIndex = 0;
-          startIndex < uniqueModels.length;
-          startIndex += BATCH_TEST_CONCURRENCY
-        ) {
-          if (batchStopRequestedRef.current) {
-            break
-          }
-
-          const batch = uniqueModels.slice(
-            startIndex,
-            startIndex + BATCH_TEST_CONCURRENCY
-          )
-          const batchPromises = batch.map(async (modelName) => {
-            try {
-              const result = await testSingleModel(modelName, true, false)
-              const finalResult = result ?? createFallbackResult()
-              if (!result) {
-                updateTestResult(modelName, finalResult)
-              }
-              recordBatchResult(finalResult)
-              return finalResult
-            } catch (error: unknown) {
-              const fallbackResult = createFallbackResult(error)
-              updateTestResult(modelName, fallbackResult)
-              recordBatchResult(fallbackResult)
-              return fallbackResult
-            }
-          })
-
-          await Promise.allSettled(batchPromises)
-
-          if (
-            batchStopRequestedRef.current ||
-            startIndex + BATCH_TEST_CONCURRENCY >= uniqueModels.length
-          ) {
-            break
-          }
-
-          await sleep(BATCH_TEST_DELAY_MS)
-        }
-
-        resultPatch = getLatestChannelTestCachePatch(results)
-        const stopped =
-          batchStopRequestedRef.current && completedCount < uniqueModels.length
-
-        if (stopped) {
-          toast.info(
-            t(
-              'Batch test stopped: {{completed}}/{{total}} completed, {{success}} succeeded, {{failed}} failed',
-              {
-                completed: completedCount,
-                total: uniqueModels.length,
-                success: successCount,
-                failed: failedCount,
-              }
+        }),
+        onResult: updateTestResult,
+        onOutcome: (summary) => {
+          resultPatch = getLatestChannelTestCachePatch(summary.results)
+          if (summary.stopped) {
+            toast.info(
+              t(
+                'Batch test stopped: {{completed}}/{{total}} completed, {{success}} succeeded, {{failed}} failed',
+                {
+                  completed: summary.completed,
+                  total: summary.total,
+                  success: summary.success,
+                  failed: summary.failed,
+                }
+              )
             )
-          )
-        } else if (failedCount > 0) {
-          toast.error(
-            t(
-              'Batch test completed: {{success}} succeeded, {{failed}} failed',
-              {
-                success: successCount,
-                failed: failedCount,
-              }
+          } else if (summary.failed > 0) {
+            toast.error(
+              t(
+                'Batch test completed: {{success}} succeeded, {{failed}} failed',
+                {
+                  success: summary.success,
+                  failed: summary.failed,
+                }
+              )
             )
-          )
-        } else {
-          toast.success(
-            t('Batch test completed: {{count}} succeeded', {
-              count: successCount,
-            })
-          )
-        }
-      } finally {
-        batchStopRequestedRef.current = false
-        setIsBatchTesting(false)
-        setIsBatchStopRequested(false)
-        setBatchProgress(null)
-        setRowSelection({})
-        refreshChannelLists(resultPatch)
-      }
+          } else {
+            toast.success(
+              t('Batch test completed: {{count}} succeeded', {
+                count: summary.success,
+              })
+            )
+          }
+        },
+        onError: (error) => {
+          toast.error(error instanceof Error ? error.message : t('Test failed'))
+        },
+        onFinally: () => {
+          activeBatchSessionRef.current = null
+          setIsBatchTesting(false)
+          setIsBatchStopRequested(false)
+          setRowSelection({})
+          refreshChannelLists(resultPatch)
+        },
+      })
     },
-    [refreshChannelLists, t, testSingleModel, updateTestResult]
+    [batchRunManager, refreshChannelLists, t, testSingleModel, updateTestResult]
   )
 
   const handleSelectSuccessfulModels = useCallback(() => {
@@ -837,10 +869,20 @@ function ChannelTestDialogContent({
         id: 'status',
         header: t('Status'),
         cell: ({ row }) => {
+          const result = testResults[row.original.model]
+          return <TestStatusCell result={result} />
+        },
+        enableSorting: false,
+        size: 112,
+      },
+      {
+        id: 'result',
+        header: t('Result'),
+        cell: ({ row }) => {
           const model = row.original.model
           const result = testResults[model]
           return (
-            <TestStatusCell
+            <TestResultCell
               result={result}
               model={model}
               onOpenDetails={setFailureDetails}
@@ -848,7 +890,7 @@ function ChannelTestDialogContent({
           )
         },
         enableSorting: false,
-        size: 220,
+        size: 320,
       },
       {
         id: 'actions',
@@ -858,17 +900,12 @@ function ChannelTestDialogContent({
           const isTestingModel = testingModels.has(model)
 
           return (
-            <Button
-              variant='outline'
-              size='sm'
-              onClick={() => testSingleModel(model)}
-              disabled={isTestingModel || isBatchTesting}
-            >
-              {isTestingModel && (
-                <Loader2 className='animate-spin' data-icon='inline-start' />
-              )}
-              {t('Test')}
-            </Button>
+            <ModelTestAction
+              model={model}
+              isTesting={isTestingModel}
+              isBatchTesting={isBatchTesting}
+              onTest={testSingleModel}
+            />
           )
         },
         enableSorting: false,
@@ -903,22 +940,19 @@ function ChannelTestDialogContent({
       <Dialog
         open={open}
         onOpenChange={handleDialogOpenChange}
-        title={t('Test Channel Connection')}
-        description={
-          <>
-            {t('Test connectivity for:')}
-            <strong>{currentRow.name}</strong>
-          </>
+        title={
+          <span className='inline-flex max-w-full min-w-0 items-center gap-1.5'>
+            <span className='shrink-0'>{t('Test Channel Connection')}:</span>
+            <span className='min-w-0 truncate'>{currentRow.name}</span>
+          </span>
         }
-        contentClassName='max-h-[90vh] overflow-hidden sm:max-w-3xl'
+        contentClassName='max-h-[90vh] overflow-hidden sm:max-w-4xl'
         contentHeight='auto'
         bodyClassName='space-y-4'
         footer={
-          <>
-            <Button variant='outline' onClick={handleClose}>
-              {t('Close')}
-            </Button>
-          </>
+          <Button variant='outline' onClick={handleClose}>
+            {t('Close')}
+          </Button>
         }
       >
         <div className='max-h-[78vh] space-y-4 overflow-y-auto py-4 pr-1'>
@@ -947,7 +981,7 @@ function ChannelTestDialogContent({
                         value={option.value}
                         className={endpointSelectItemClass}
                       >
-                        <span className='min-w-0 whitespace-normal break-words leading-snug'>
+                        <span className='min-w-0 leading-snug break-words whitespace-normal'>
                           {option.label}
                         </span>
                       </SelectItem>
@@ -981,12 +1015,60 @@ function ChannelTestDialogContent({
           </div>
 
           <div className='space-y-3 max-sm:has-[div[role="toolbar"]]:pb-16'>
-            <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-              <div>
+            <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+              <div className='min-w-0 space-y-2'>
                 <p className='text-sm font-medium'>{t('Channel models')}</p>
                 <p className='text-muted-foreground text-xs'>
                   {t('Select models to run batch tests.')}
                 </p>
+                <div className='flex flex-wrap items-center gap-2'>
+                  {isBatchTesting ? (
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      onClick={handleStopBatchTest}
+                      disabled={isBatchStopRequested}
+                    >
+                      {isBatchStopRequested
+                        ? t('Stopping...')
+                        : t('Stop testing')}
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        size='sm'
+                        onClick={() => handleBatchTest(filteredModels)}
+                        disabled={isAnyTesting || filteredModels.length === 0}
+                      >
+                        {testAllButtonLabel}
+                      </Button>
+                      {!isAnyTesting && successModels.length > 0 ? (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          onClick={handleSelectSuccessfulModels}
+                        >
+                          <CheckCircle2 data-icon='inline-start' />
+                          {t('Select successful models ({{count}})', {
+                            count: successModels.length,
+                          })}
+                        </Button>
+                      ) : null}
+                      {!isAnyTesting && failedModels.length > 0 ? (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          onClick={() => setIsDeleteFailedDialogOpen(true)}
+                        >
+                          <Trash2 data-icon='inline-start' />
+                          {t('Delete failed models ({{count}})', {
+                            count: failedModels.length,
+                          })}
+                        </Button>
+                      ) : null}
+                    </>
+                  )}
+                </div>
               </div>
               <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
                 <Input
@@ -995,63 +1077,8 @@ function ChannelTestDialogContent({
                   onChange={handleSearchTermChange}
                   className='sm:w-64'
                 />
-                {isBatchTesting ? (
-                  <Button
-                    variant='outline'
-                    onClick={handleStopBatchTest}
-                    disabled={isBatchStopRequested}
-                  >
-                    {isBatchStopRequested
-                      ? t('Stopping...')
-                      : t('Stop testing')}
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() => handleBatchTest(filteredModels)}
-                    disabled={isAnyTesting || filteredModels.length === 0}
-                  >
-                    {testAllButtonLabel}
-                  </Button>
-                )}
               </div>
             </div>
-
-            {batchProgress && (
-              <BatchProgressSummary
-                progress={batchProgress}
-                isStopping={isBatchStopRequested}
-              />
-            )}
-
-            {!isAnyTesting &&
-              (successModels.length > 0 || failedModels.length > 0) && (
-                <div className='flex flex-wrap items-center gap-2'>
-                  {successModels.length > 0 && (
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={handleSelectSuccessfulModels}
-                    >
-                      <CheckCircle2 data-icon='inline-start' />
-                      {t('Select successful models ({{count}})', {
-                        count: successModels.length,
-                      })}
-                    </Button>
-                  )}
-                  {failedModels.length > 0 && (
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={() => setIsDeleteFailedDialogOpen(true)}
-                    >
-                      <Trash2 data-icon='inline-start' />
-                      {t('Delete failed models ({{count}})', {
-                        count: failedModels.length,
-                      })}
-                    </Button>
-                  )}
-                </div>
-              )}
 
             <div className='space-y-3'>
               <DataTableView
@@ -1074,8 +1101,9 @@ function ChannelTestDialogContent({
                   <colgroup>
                     <col className='w-10 min-w-10' />
                     <col className='w-auto' />
-                    <col className='w-70' />
-                    <col className='w-auto' />
+                    <col className='w-28' />
+                    <col className='w-80' />
+                    <col className='w-px' />
                   </colgroup>
                 }
                 getColumnClassName={(columnId) =>
@@ -1121,46 +1149,36 @@ function ChannelTestDialogContent({
   )
 }
 
-function BatchProgressSummary({
-  progress,
-  isStopping,
-}: {
-  progress: BatchProgress
-  isStopping: boolean
-}) {
+export function TestStatusCell({ result }: { result?: TestResult }) {
   const { t } = useTranslation()
-  const progressValue =
-    progress.total > 0
-      ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
-      : 0
 
-  return (
-    <div className='bg-muted/30 flex flex-col gap-2 rounded-md border p-3'>
-      <div className='flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between'>
-        <p className='text-sm font-medium'>
-          {isStopping
-            ? t('Stopping batch test...')
-            : t('Batch testing models...')}
-        </p>
-        <p className='text-muted-foreground text-xs tabular-nums'>
-          {t('{{completed}}/{{total}} completed', {
-            completed: progress.completed,
-            total: progress.total,
-          })}
-        </p>
-      </div>
-      <Progress value={progressValue} />
-      <p className='text-muted-foreground text-xs'>
-        {t('{{success}} succeeded, {{failed}} failed', {
-          success: progress.success,
-          failed: progress.failed,
-        })}
-      </p>
-    </div>
-  )
+  if (!result || result.status === 'idle') {
+    return (
+      <StatusBadge label={t('Not tested')} variant='neutral' copyable={false} />
+    )
+  }
+
+  if (result.status === 'testing') {
+    return (
+      <StatusBadge variant='info' copyable={false}>
+        <Spinner aria-hidden='true' />
+        <span className='min-w-0 truncate leading-normal'>
+          {t('Testing...')}
+        </span>
+      </StatusBadge>
+    )
+  }
+
+  if (result.status === 'success') {
+    return (
+      <StatusBadge label={t('Success')} variant='success' copyable={false} />
+    )
+  }
+
+  return <StatusBadge label={t('Failed')} variant='danger' copyable={false} />
 }
 
-function TestStatusCell({
+export function TestResultCell({
   result,
   model,
   onOpenDetails,
@@ -1172,35 +1190,30 @@ function TestStatusCell({
   const { t } = useTranslation()
 
   if (!result || result.status === 'idle') {
-    return (
-      <StatusBadge label={t('Not tested')} variant='neutral' copyable={false} />
-    )
+    return <span className='text-muted-foreground text-sm'>-</span>
   }
 
   if (result.status === 'testing') {
     return (
       <div className='text-muted-foreground flex min-w-0 items-center gap-2 text-sm'>
-        <Loader2 className='size-4 shrink-0 animate-spin' />
+        <Spinner aria-hidden='true' />
         <span className='truncate'>{t('Testing...')}</span>
       </div>
     )
   }
 
   if (result.status === 'success') {
-    return (
-      <div className='flex min-w-0 flex-col gap-1 text-xs'>
-        <StatusBadge label={t('Success')} variant='success' copyable={false} />
-        {typeof result.responseTime === 'number' && (
-          <span className='text-muted-foreground truncate'>
-            {formatResponseTime(result.responseTime, t)}
-          </span>
-        )}
-      </div>
+    return typeof result.responseTime === 'number' ? (
+      <span className='text-muted-foreground text-sm'>
+        {formatResponseTime(result.responseTime, t)}
+      </span>
+    ) : (
+      <span className='text-muted-foreground text-sm'>-</span>
     )
   }
 
   return (
-    <FailureStatusContent
+    <FailureResultContent
       result={result}
       model={model}
       onOpenDetails={onOpenDetails}
@@ -1208,7 +1221,7 @@ function TestStatusCell({
   )
 }
 
-function FailureStatusContent({
+function FailureResultContent({
   result,
   model,
   onOpenDetails,
@@ -1231,12 +1244,11 @@ function FailureStatusContent({
   })
 
   return (
-    <div className='flex min-w-0 flex-col gap-1.5 text-xs whitespace-normal'>
-      <StatusBadge label={t('Failed')} variant='danger' copyable={false} />
-      <p className='text-muted-foreground line-clamp-2 min-w-0 leading-snug wrap-break-word'>
+    <div className='flex min-w-0 items-center gap-2 text-xs whitespace-normal'>
+      <p className='text-muted-foreground line-clamp-2 min-w-0 flex-1 leading-snug wrap-break-word'>
         {summary}
       </p>
-      <div className='flex min-w-0 flex-wrap items-center gap-1.5'>
+      <div className='flex shrink-0 flex-wrap items-center justify-end gap-1.5'>
         {isModelPriceError && (
           <Button
             variant='outline'
@@ -1341,11 +1353,7 @@ function FailureDetailsSheet({
   )
 }
 
-function TestModelsBulkActions({
-  table,
-}: {
-  table: TanStackTable<ModelRow>
-}) {
+function TestModelsBulkActions({ table }: { table: TanStackTable<ModelRow> }) {
   const { t } = useTranslation()
   const { copyToClipboard } = useCopyToClipboard()
   const selectedRows = table.getFilteredSelectedRowModel().rows

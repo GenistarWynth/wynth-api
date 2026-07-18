@@ -21,7 +21,15 @@ import {
   type Header,
   type Table as TanstackTable,
 } from '@tanstack/react-table'
+import { useTranslation } from 'react-i18next'
+
 import { TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { cn } from '@/lib/utils'
+
+import {
+  createColumnResizeHandleProps,
+  shouldRenderColumnResizer,
+} from './column-resizing'
 import { DataTableColumnHeader } from './column-header'
 import { isContentSizedColumn } from './content-sized-columns'
 import type { DataTableColumnClassName } from './types'
@@ -41,6 +49,8 @@ export function DataTableHeader<TData>({
   rowClassName,
   getColumnClassName,
 }: DataTableHeaderProps<TData>) {
+  const { t } = useTranslation()
+
   return (
     <TableHeader className={className}>
       {table.getHeaderGroups().map((headerGroup) => (
@@ -49,10 +59,29 @@ export function DataTableHeader<TData>({
             <TableHead
               key={header.id}
               colSpan={header.colSpan}
-              className={getColumnClassName?.(header.column.id, 'header')}
+              data-column-id={header.column.id}
+              className={cn(
+                'relative',
+                getColumnClassName?.(header.column.id, 'header')
+              )}
               style={getHeaderSizeStyle(header, applyHeaderSize)}
             >
               {renderHeaderContent(header)}
+              {shouldRenderColumnResizer(table, header) && (
+                <div
+                  {...createColumnResizeHandleProps(
+                    t('Resize column'),
+                    table,
+                    header
+                  )}
+                  data-column-resizer
+                  className={cn(
+                    'absolute top-0 right-0 h-full w-2 cursor-col-resize touch-none select-none',
+                    'after:bg-border hover:after:bg-primary after:absolute after:top-2 after:right-0 after:h-[calc(100%-1rem)] after:w-px after:transition-colors',
+                    header.column.getIsResizing() && 'after:bg-primary'
+                  )}
+                />
+              )}
             </TableHead>
           ))}
         </TableRow>

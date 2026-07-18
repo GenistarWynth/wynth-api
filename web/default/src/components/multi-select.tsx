@@ -16,13 +16,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import * as React from 'react'
 import { Add01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { copyToClipboard } from '@/lib/copy-to-clipboard'
-import { cn } from '@/lib/utils'
+
 import {
   Combobox,
   ComboboxChip,
@@ -36,6 +35,13 @@ import {
   ComboboxValue,
   useComboboxAnchor,
 } from '@/components/ui/combobox'
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import { cn } from '@/lib/utils'
+
+import {
+  isMultiSelectValueCreatable,
+  transitionMultiSelectCreationInput,
+} from './multi-select-creation'
 
 export type Option = {
   label: string
@@ -78,22 +84,6 @@ interface MultiSelectProps {
   copyChipOnClick?: boolean
 }
 
-const COMMA_REGEX = /[,，\n]/
-
-function splitDraft(value: string): { completed: string[]; draft: string } {
-  if (!COMMA_REGEX.test(value)) {
-    return { completed: [], draft: value }
-  }
-  const normalized = value.replaceAll('，', ',').replaceAll('\n', ',')
-  const parts = normalized.split(',')
-  const draft = parts.at(-1) ?? ''
-  const completed = parts
-    .slice(0, -1)
-    .map((part) => part.trim())
-    .filter(Boolean)
-  return { completed, draft }
-}
-
 /**
  * MultiSelect — tags/chips style multi-select built on Base UI Combobox.
  *
@@ -123,11 +113,6 @@ export function MultiSelect(props: MultiSelectProps) {
   const [open, setOpen] = React.useState(false)
   const [expanded, setExpanded] = React.useState(false)
 
-  const selectedSet = React.useMemo(
-    () => new Set(props.selected),
-    [props.selected]
-  )
-
   // Lookup of value -> display label so chips and items can show friendly names
   // even when the underlying option list changes (e.g. custom-added values).
   const labelMap = React.useMemo(() => {
@@ -139,19 +124,9 @@ export function MultiSelect(props: MultiSelectProps) {
   }, [props.options])
 
   const trimmedInput = inputValue.trim()
-  const inputMatchesExisting =
-    trimmedInput.length > 0 &&
-    (selectedSet.has(trimmedInput) ||
-      props.options.some(
-        (option) =>
-          option.value.toLowerCase() === trimmedInput.toLowerCase() ||
-          option.label.toLowerCase() === trimmedInput.toLowerCase()
-      ))
-
   const canCreate =
     props.allowCreate === true &&
-    trimmedInput.length > 0 &&
-    !inputMatchesExisting
+    isMultiSelectValueCreatable(inputValue, props.options, props.selected)
 
   // We expose all known option values + every currently selected value to Base
   // UI's items list. This way Base UI filters them by the search query and the
@@ -167,35 +142,20 @@ export function MultiSelect(props: MultiSelectProps) {
     return Array.from(set)
   }, [props.options, props.selected, canCreate, trimmedInput])
 
-  const addValues = React.useCallback(
-    (values: string[]) => {
-      const next: string[] = []
-      const seen = new Set<string>(props.selected)
-      for (const raw of values) {
-        const value = raw.trim()
-        if (!value) continue
-        if (seen.has(value)) continue
-        seen.add(value)
-        next.push(value)
-      }
-      if (next.length === 0) return
-      props.onChange([...props.selected, ...next])
-    },
-    [props]
-  )
-
   const handleInputValueChange = (value: string) => {
     if (!props.allowCreate) {
       setInputValue(value)
       return
     }
-    const parsed = splitDraft(value)
-    if (parsed.completed.length > 0) {
-      addValues(parsed.completed)
-      setInputValue(parsed.draft)
-      return
+    const transition = transitionMultiSelectCreationInput({
+      input: value,
+      options: props.options,
+      selected: props.selected,
+    })
+    if (transition.selectionChanged) {
+      props.onChange(transition.nextSelected)
     }
-    setInputValue(value)
+    setInputValue(transition.draft)
   }
 
   const handleValueChange = (next: string[]) => {
@@ -239,8 +199,16 @@ export function MultiSelect(props: MultiSelectProps) {
       const hasHighlight = popup?.querySelector('[data-highlighted]') != null
       if (!hasHighlight) {
         event.preventDefault()
-        addValues([trimmedInput])
-        setInputValue('')
+        const transition = transitionMultiSelectCreationInput({
+          input: trimmedInput,
+          options: props.options,
+          selected: props.selected,
+          commitDraft: true,
+        })
+        if (transition.selectionChanged) {
+          props.onChange(transition.nextSelected)
+        }
+        setInputValue(transition.draft)
       }
     }
   }
