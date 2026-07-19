@@ -421,7 +421,7 @@ func (s AccountPoolService) CreateAccountWithContext(ctx context.Context, params
 	if name == "" {
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
 	}
-	if err := validateAccountPoolProxyReferenceWithDB(db, params.ProxyID); err != nil {
+	if err := validateAccountPoolAccountProxyReferenceWithDB(db, params.ProxyID); err != nil {
 		return AccountPoolAccountView{}, err
 	}
 	params.Credential, err = normalizeAccountPoolOutboundOverrides(ctx, pool.Platform, params.Credential, nil)
@@ -494,7 +494,7 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 	if name == "" {
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
 	}
-	if err := validateAccountPoolProxyReference(params.ProxyID); err != nil {
+	if err := validateAccountPoolAccountProxyReference(params.ProxyID); err != nil {
 		return AccountPoolAccountView{}, err
 	}
 	supportedModels, err := marshalAccountPoolOptionalJSON(params.SupportedModels)
@@ -1334,7 +1334,10 @@ func validateAccountPoolProxyReference(proxyID int) error {
 }
 
 func validateAccountPoolProxyReferenceWithDB(db *gorm.DB, proxyID int) error {
-	if proxyID <= 0 {
+	if proxyID < 0 {
+		return errors.New("account pool proxy id is invalid")
+	}
+	if proxyID == 0 {
 		return nil
 	}
 	var proxy model.AccountPoolProxy
@@ -1345,6 +1348,17 @@ func validateAccountPoolProxyReferenceWithDB(db *gorm.DB, proxyID int) error {
 		return err
 	}
 	return nil
+}
+
+func validateAccountPoolAccountProxyReference(proxyID int) error {
+	return validateAccountPoolAccountProxyReferenceWithDB(model.DB, proxyID)
+}
+
+func validateAccountPoolAccountProxyReferenceWithDB(db *gorm.DB, proxyID int) error {
+	if proxyID == model.AccountPoolProxyIDDirect {
+		return nil
+	}
+	return validateAccountPoolProxyReferenceWithDB(db, proxyID)
 }
 
 func getAccountPoolBindingForPool(poolID int, bindingID int) (model.AccountPoolChannelBinding, error) {

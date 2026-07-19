@@ -1159,6 +1159,47 @@ func TestAccountPoolServiceRejectsMissingProxyReferences(t *testing.T) {
 	require.ErrorContains(t, err, "account pool proxy not found")
 }
 
+func TestAccountPoolServiceAllowsOnlyDirectNegativeAccountProxyID(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.CreatePool(AccountPoolCreateParams{
+		Name:           "invalid-negative-default-proxy",
+		DefaultProxyID: model.AccountPoolProxyIDDirect,
+	})
+	require.ErrorContains(t, err, "proxy id is invalid")
+
+	_, err = service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:  pool.Id,
+		Name:    "invalid-negative-account-proxy",
+		ProxyID: -2,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-invalid-negative-proxy",
+		},
+	})
+	require.ErrorContains(t, err, "proxy id is invalid")
+
+	account, err := service.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:  pool.Id,
+		Name:    "direct-account-proxy",
+		ProxyID: model.AccountPoolProxyIDDirect,
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "sk-direct-proxy",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, model.AccountPoolProxyIDDirect, account.ProxyID)
+
+	_, err = service.UpdateAccount(pool.Id, account.Id, AccountPoolAccountCreateParams{
+		Name:    account.Name,
+		ProxyID: -2,
+	})
+	require.ErrorContains(t, err, "proxy id is invalid")
+}
+
 func TestAccountPoolServiceRejectsDeletedProxyReferences(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

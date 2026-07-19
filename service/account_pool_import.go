@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -162,7 +161,7 @@ func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams
 	if err != nil {
 		return result, err
 	}
-	if err := validateAccountPoolProxyReference(params.Defaults.ProxyID); err != nil {
+	if err := validateAccountPoolAccountProxyReference(params.Defaults.ProxyID); err != nil {
 		return result, err
 	}
 
@@ -624,11 +623,12 @@ func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImpo
 		// actionable error rather than a raw JSON parse message.
 		var yamlProbe accountPoolCPAConfigPayload
 		if yamlErr := yaml.Unmarshal([]byte(params.Content), &yamlProbe); yamlErr == nil {
-			return nil, accountPoolImportProxyStats{}, nil, fmt.Errorf(
-				"CPA import content is not valid auth JSON and contains no usable 'codex-api-key' entries; "+
-					"if this is a CPA config file, ensure it has a top-level 'codex-api-key:' list (singular): %w", err)
+			return nil, accountPoolImportProxyStats{}, nil, errors.New(
+				"CPA import content is not valid auth JSON and contains no usable 'codex-api-key' entries; " +
+					"if this is a CPA config file, ensure it has a top-level 'codex-api-key:' list (singular)")
 		}
-		return nil, accountPoolImportProxyStats{}, nil, err
+		return nil, accountPoolImportProxyStats{}, nil, errors.New(
+			"CPA auth import content must be valid JSON containing an auth object, array, or auths/accounts/items/data wrapper")
 	}
 	objects := accountPoolImportFlattenObjects(raw)
 	candidates := make([]accountPoolImportCandidate, 0, len(objects))
@@ -706,14 +706,8 @@ func accountPoolCPAAuthCandidate(poolID int, index int, poolPlatform string, obj
 	}
 
 	provider := accountPoolImportDefaultString(
-		accountPoolImportStringFromMap(object, "provider"),
-		accountPoolImportDefaultString(
-			accountPoolImportStringFromMap(metadata, "provider"),
-			accountPoolImportDefaultString(
-				accountPoolImportStringFromMap(object, "type"),
-				accountPoolImportStringFromMap(metadata, "type"),
-			),
-		),
+		accountPoolImportStringFromMap(metadata, "provider", "type"),
+		accountPoolImportStringFromMap(object, "provider", "type"),
 	)
 	profile, ok := accountPoolCPAAuthProvider(provider)
 	if !ok {
@@ -1258,12 +1252,7 @@ func accountPoolCPAModelPolicy(key accountPoolCPACodexKey) ([]string, map[string
 		for _, candidate := range []string{public, upstream} {
 			candidate = strings.ToLower(candidate)
 			for _, pattern := range excluded {
-				matches := candidate == pattern
-				if !matches {
-					matched, err := path.Match(pattern, candidate)
-					matches = err == nil && matched
-				}
-				if matches {
+				if accountPoolCPAModelMatchesPattern(pattern, candidate) {
 					excludedModel = true
 					break
 				}
@@ -1280,6 +1269,41 @@ func accountPoolCPAModelPolicy(key accountPoolCPACodexKey) ([]string, map[string
 		mapping[clientModel] = upstream
 	}
 	return accountPoolUniqueStrings(supported), mapping
+}
+
+// accountPoolCPAModelMatchesPattern mirrors CPA's excluded-model semantics:
+// only '*' is a wildcard, and it may match path separators in model IDs.
+func accountPoolCPAModelMatchesPattern(pattern string, modelName string) bool {
+	pattern = strings.TrimSpace(pattern)
+	modelName = strings.TrimSpace(modelName)
+	if pattern == "" {
+		return false
+	}
+	patternIndex, modelIndex := 0, 0
+	starIndex, starMatchIndex := -1, 0
+	for modelIndex < len(modelName) {
+		if patternIndex < len(pattern) && pattern[patternIndex] == modelName[modelIndex] {
+			patternIndex++
+			modelIndex++
+			continue
+		}
+		if patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+			starIndex = patternIndex
+			starMatchIndex = modelIndex
+			patternIndex++
+			continue
+		}
+		if starIndex < 0 {
+			return false
+		}
+		patternIndex = starIndex + 1
+		starMatchIndex++
+		modelIndex = starMatchIndex
+	}
+	for patternIndex < len(pattern) && pattern[patternIndex] == '*' {
+		patternIndex++
+	}
+	return patternIndex == len(pattern)
 }
 
 func accountPoolCPAClientModelName(prefix string, modelName string) string {

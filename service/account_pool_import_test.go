@@ -496,6 +496,23 @@ func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T
 	require.ErrorContains(t, err, "account pool proxy not found")
 }
 
+func TestAccountPoolServiceImportRejectsUnknownNegativeDefaultProxy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: `{"type":"codex","access_token":"access-token"}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			ProxyID: -2,
+		},
+	})
+
+	require.ErrorContains(t, err, "proxy id is invalid")
+}
+
 func TestAccountPoolServiceImportSub2APIPreservesExplicitZeroConcurrency(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -620,6 +637,19 @@ func TestAccountPoolServiceImportCPAConfigPreservesOutboundAndDirectProxyPolicy(
 		"team/codex-latest": "gpt-5-codex",
 		"team/gpt-5.1":      "gpt-5.1",
 	}, view.ModelMapping)
+}
+
+func TestAccountPoolCPAModelPolicyUsesCPAStarOnlyWildcardSemantics(t *testing.T) {
+	supportedModels, modelMapping := accountPoolCPAModelPolicy(accountPoolCPACodexKey{
+		Models: []accountPoolCPACodexModel{
+			{Name: "team/gpt-4", Alias: "team/public"},
+			{Name: "gpt-a"},
+		},
+		ExcludedModels: []string{"team*", "gpt-?"},
+	})
+
+	assert.Equal(t, []string{"gpt-a"}, supportedModels)
+	assert.Equal(t, map[string]string{"gpt-a": "gpt-a"}, modelMapping)
 }
 
 func TestAccountPoolProxyCreateParamsFromURLRedactsInvalidInput(t *testing.T) {
@@ -954,6 +984,48 @@ func TestAccountPoolServiceImportCPAAuthJSONMapsProviderAliases(t *testing.T) {
 			assert.Equal(t, test.oauthType, account.OAuthType)
 		})
 	}
+}
+
+func TestAccountPoolServiceImportCPAAuthMetadataProviderOverridesWrapperType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `{
+			"type": "oauth",
+			"metadata": {
+				"type": "codex",
+				"email": "metadata-codex@example.com",
+				"access_token": "metadata-access-token"
+			}
+		}`,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Imported)
+	assert.Zero(t, result.Skipped)
+	account := requireAccountPoolAccountByName(t, "metadata-codex@example.com")
+	assert.Equal(t, "metadata-codex@example.com", account.Name)
+}
+
+func TestAccountPoolServiceImportCPAInvalidAuthJSONDoesNotEchoSecret(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: `{"type":"codex","access_token":"do-not-echo"`,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "valid JSON")
+	assert.Contains(t, err.Error(), "auth object")
+	assert.NotContains(t, err.Error(), "do-not-echo")
 }
 
 func requireAccountPoolAccountByName(t *testing.T, name string) model.AccountPoolAccount {
