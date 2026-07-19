@@ -221,6 +221,11 @@ type AccountPoolXAIOAuthExchangeRequest struct {
 	State     string `json:"state"`
 }
 
+type AccountPoolXAIOAuthReconcileRequest struct {
+	DryRun                  *bool `json:"dry_run"`
+	NearExpiryWindowSeconds int64 `json:"near_expiry_window_seconds"`
+}
+
 type AccountPoolXAIOAuthTokenResponse struct {
 	Email             string                             `json:"email,omitempty"`
 	Subject           string                             `json:"sub,omitempty"`

@@ -181,7 +181,13 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	}
 	if err != nil {
 		if !skipFailureRecord {
-			_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+			if platform == model.AccountPoolPlatformXAI && IsXAIOAuthPermanentCredentialError(err) {
+				_, _ = expireAccountPoolXAIOAuthCredentialFailure(account.Id, account.CredentialConfig, rawTokenState, err, now)
+			} else if platform == model.AccountPoolPlatformXAI {
+				_, _ = markAccountPoolXAIOAuthTransientFailure(account, err, now)
+			} else {
+				_ = markAccountPoolRuntimeTokenRefreshFailure(account.Id, err, now)
+			}
 		}
 		return "", err
 	}
@@ -363,6 +369,58 @@ func expireAccountPoolRuntimeMissingRefreshToken(accountID int, credentialConfig
 			"failure_count":        gorm.Expr("failure_count + ?", 1),
 			"updated_time":         now,
 		}).Error
+}
+
+func expireAccountPoolXAIOAuthCredentialFailure(accountID int, credentialConfig string, tokenState string, refreshErr error, now int64) (int64, error) {
+	if accountID <= 0 || refreshErr == nil {
+		return 0, nil
+	}
+	message := "xai oauth credential rejected"
+	if code := xaiOAuthErrorCode(refreshErr); code != "" {
+		message += ": " + code
+	}
+	update := model.DB.Model(&model.AccountPoolAccount{}).
+		Where(
+			"id = ? AND status = ? AND credential_config = ? AND token_state = ?",
+			accountID,
+			model.AccountPoolAccountStatusEnabled,
+			credentialConfig,
+			tokenState,
+		).
+		Updates(map[string]any{
+			"status":               model.AccountPoolAccountStatusExpired,
+			"rate_limited_until":   int64(0),
+			"temp_disabled_until":  int64(0),
+			"overload_until":       int64(0),
+			"temp_disabled_reason": "",
+			"last_error":           message,
+			"last_failure_at":      now,
+			"failure_count":        gorm.Expr("failure_count + ?", 1),
+			"updated_time":         now,
+		})
+	return update.RowsAffected, update.Error
+}
+
+func markAccountPoolXAIOAuthTransientFailure(account model.AccountPoolAccount, refreshErr error, now int64) (int64, error) {
+	if account.Id <= 0 || refreshErr == nil {
+		return 0, nil
+	}
+	message := sanitizeAccountPoolRuntimeErrorMessage(refreshErr.Error(), accountPoolLastErrorMaxLength)
+	reason := sanitizeAccountPoolRuntimeErrorMessage(refreshErr.Error(), accountPoolTempDisabledReasonMaxLength)
+	update := model.DB.Model(&model.AccountPoolAccount{}).
+		Where(
+			"id = ? AND status = ? AND credential_config = ? AND token_state = ?",
+			account.Id,
+			model.AccountPoolAccountStatusEnabled,
+			account.CredentialConfig,
+			account.TokenState,
+		).
+		Updates(map[string]any{
+			"temp_disabled_until":  now + accountPoolTemporaryDisableSeconds,
+			"temp_disabled_reason": reason,
+			"last_error":           message,
+		})
+	return update.RowsAffected, update.Error
 }
 
 func sanitizeAccountPoolRuntimeErrorMessage(message string, maxLen int) string {

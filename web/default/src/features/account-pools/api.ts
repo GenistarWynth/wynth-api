@@ -28,6 +28,8 @@ import type {
   AccountPoolXAIOAuthAuthorization,
   AccountPoolXAIOAuthAuthorizationRequest,
   AccountPoolXAIOAuthExchangeRequest,
+  AccountPoolXAIOAuthReconcileRequest,
+  AccountPoolXAIOAuthReconcileResult,
   AccountPoolXAIOAuthTokenResult,
   AccountPoolXAIQuotaSnapshot,
   AccountPoolAccountImportRequest,
@@ -161,6 +163,18 @@ export async function refreshAccountPoolXAIOAuthAccount(
   const res = await api.post(
     `/api/account_pools/${poolID}/accounts/${accountID}/xai/oauth/refresh`,
     null,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function reconcileAccountPoolXAIOAuthAccounts(
+  poolID: number,
+  data: AccountPoolXAIOAuthReconcileRequest = {}
+): Promise<ApiResponse<AccountPoolXAIOAuthReconcileResult>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/xai/oauth/reconcile`,
+    data,
     accountPoolActionConfig()
   )
   return res.data

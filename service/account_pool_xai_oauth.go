@@ -57,28 +57,38 @@ func (s AccountPoolService) RefreshXAIOAuthAccount(ctx context.Context, poolID i
 	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
+	view, _, err := refreshXAIOAuthAccountSnapshot(ctx, pool, account, common.GetTimestamp())
+	return view, err
+}
+
+func refreshXAIOAuthAccountSnapshot(ctx context.Context, pool model.AccountPool, account model.AccountPoolAccount, now int64) (AccountPoolAccountView, bool, error) {
 	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
 	if err != nil {
-		return AccountPoolAccountView{}, err
+		return AccountPoolAccountView{}, false, err
 	}
 	if !strings.EqualFold(strings.TrimSpace(credential.Type), AccountPoolCredentialTypeOAuth) {
-		return AccountPoolAccountView{}, errors.New("account is not an xai oauth account")
+		return AccountPoolAccountView{}, false, errors.New("account is not an xai oauth account")
 	}
 	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
 	if err != nil {
-		return AccountPoolAccountView{}, err
+		return AccountPoolAccountView{}, false, err
 	}
 	refreshToken := accountPoolRuntimeRefreshToken(credential, tokenState)
 	if refreshToken == "" {
-		return AccountPoolAccountView{}, errors.New("xai oauth refresh_token is required")
+		return AccountPoolAccountView{}, false, errors.New("xai oauth refresh_token is required")
 	}
 	proxyURL, err := ResolveAccountPoolRuntimeProxyURL(account.ProxyID, pool.DefaultProxyID)
 	if err != nil {
-		return AccountPoolAccountView{}, err
+		return AccountPoolAccountView{}, false, err
 	}
 	info, err := accountPoolXAIOAuthInfoRefresh(ctx, refreshToken, proxyURL, credential.ClientID)
 	if err != nil {
-		return AccountPoolAccountView{}, err
+		if IsXAIOAuthPermanentCredentialError(err) {
+			rows, _ := expireAccountPoolXAIOAuthCredentialFailure(account.Id, account.CredentialConfig, account.TokenState, err, now)
+			return AccountPoolAccountView{}, rows > 0, err
+		}
+		_, _ = markAccountPoolXAIOAuthTransientFailure(account, err, now)
+		return AccountPoolAccountView{}, false, err
 	}
 	updatedCredential := mergeAccountPoolCredentialUpdate(credential, info.AccountPoolCredential())
 	updatedTokenState := info.AccountPoolTokenState()
@@ -88,17 +98,17 @@ func (s AccountPoolService) RefreshXAIOAuthAccount(ctx context.Context, poolID i
 	}
 	encryptedCredential, err := EncryptAccountPoolCredentialConfig(updatedCredential)
 	if err != nil {
-		return AccountPoolAccountView{}, err
+		return AccountPoolAccountView{}, false, err
 	}
 	encryptedTokenState, err := EncryptAccountPoolTokenState(updatedTokenState)
 	if err != nil {
-		return AccountPoolAccountView{}, err
+		return AccountPoolAccountView{}, false, err
 	}
 	update := model.DB.Model(&model.AccountPoolAccount{}).
 		Where(
 			"id = ? AND pool_id = ? AND credential_config = ? AND token_state = ?",
 			account.Id,
-			poolID,
+			pool.Id,
 			account.CredentialConfig,
 			account.TokenState,
 		).
@@ -108,12 +118,13 @@ func (s AccountPoolService) RefreshXAIOAuthAccount(ctx context.Context, poolID i
 			"updated_time":      common.GetTimestamp(),
 		})
 	if update.Error != nil {
-		return AccountPoolAccountView{}, update.Error
+		return AccountPoolAccountView{}, false, update.Error
 	}
-	if err := model.DB.Where("id = ? AND pool_id = ?", accountID, poolID).First(&account).Error; err != nil {
-		return AccountPoolAccountView{}, err
+	if err := model.DB.Where("id = ? AND pool_id = ?", account.Id, pool.Id).First(&account).Error; err != nil {
+		return AccountPoolAccountView{}, false, err
 	}
-	return buildAccountPoolAccountView(account)
+	view, err := buildAccountPoolAccountView(account)
+	return view, update.RowsAffected > 0, err
 }
 
 func (s AccountPoolService) ImportXAISSOAccounts(ctx context.Context, params AccountPoolXAISSOImportParams) (AccountPoolXAISSOImportResult, error) {

@@ -136,6 +136,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/xai/oauth/exchange", ExchangeAccountPoolXAIOAuthCode)
 		group.POST("/:id/accounts/xai/sso_import", ImportAccountPoolXAISSOAccounts)
 		group.POST("/:id/accounts/:account_id/xai/oauth/refresh", RefreshAccountPoolXAIOAuthAccount)
+		group.POST("/:id/xai/oauth/reconcile", ReconcileAccountPoolXAIOAuthAccounts)
 		group.POST("/:id/accounts/:account_id/xai/quota/probe", ProbeAccountPoolXAIQuota)
 		group.GET("/:id/accounts/:account_id/xai/quota", GetAccountPoolXAIQuota)
 		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
@@ -420,6 +421,38 @@ func TestAccountPoolXAIOAuthRefreshAndSSOImportRoutes(t *testing.T) {
 	require.Len(t, importResult.Response.Data.Created, 1)
 	assert.Equal(t, 77, importResult.Response.Data.Created[0].Id)
 	assert.NotContains(t, string(importResult.Raw), "sso-secret")
+}
+
+func TestAccountPoolXAIOAuthReconcileRouteDefaultsToDryRunAndAllowsApply(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	accountPoolService := service.AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(service.AccountPoolCreateParams{Name: "xai-reconcile", Platform: model.AccountPoolPlatformXAI})
+	require.NoError(t, err)
+
+	var requests []service.AccountPoolXAIOAuthReconcileParams
+	oldReconcile := accountPoolXAIOAuthReconcile
+	accountPoolXAIOAuthReconcile = func(ctx context.Context, params service.AccountPoolXAIOAuthReconcileParams) (service.AccountPoolXAIOAuthReconcileResult, error) {
+		requests = append(requests, params)
+		return service.AccountPoolXAIOAuthReconcileResult{
+			PoolID:     params.PoolID,
+			DryRun:     params.DryRun,
+			Candidates: 2,
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAIOAuthReconcile = oldReconcile })
+
+	preview := accountPoolAPIRequest[service.AccountPoolXAIOAuthReconcileResult](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/xai/oauth/reconcile", dto.AccountPoolXAIOAuthReconcileRequest{})
+	require.True(t, preview.Response.Success, preview.Response.Message)
+	assert.True(t, preview.Response.Data.DryRun)
+
+	apply := false
+	applyResult := accountPoolAPIRequest[service.AccountPoolXAIOAuthReconcileResult](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/xai/oauth/reconcile", dto.AccountPoolXAIOAuthReconcileRequest{DryRun: &apply})
+	require.True(t, applyResult.Response.Success, applyResult.Response.Message)
+	assert.False(t, applyResult.Response.Data.DryRun)
+	require.Len(t, requests, 2)
+	assert.True(t, requests[0].DryRun)
+	assert.False(t, requests[1].DryRun)
 }
 
 func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {

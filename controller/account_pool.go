@@ -30,6 +30,9 @@ var (
 	accountPoolXAIQuotaProbe = func(ctx context.Context, poolID int, accountID int) (service.AccountPoolXAIQuotaSnapshot, error) {
 		return (&service.AccountPoolService{}).ProbeXAIQuota(ctx, poolID, accountID)
 	}
+	accountPoolXAIOAuthReconcile = func(ctx context.Context, params service.AccountPoolXAIOAuthReconcileParams) (service.AccountPoolXAIOAuthReconcileResult, error) {
+		return (&service.AccountPoolService{}).ReconcileXAIOAuthAccounts(ctx, params)
+	}
 )
 
 func ListAccountPools(c *gin.Context) {
@@ -639,6 +642,44 @@ func RefreshAccountPoolXAIOAuthAccount(c *gin.Context) {
 		"account_id": accountID,
 	})
 	common.ApiSuccess(c, accountPoolAccountResponse(account))
+}
+
+func ReconcileAccountPoolXAIOAuthAccounts(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	if _, err := accountPoolXAIPool(poolID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var req dto.AccountPoolXAIOAuthReconcileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	dryRun := true
+	if req.DryRun != nil {
+		dryRun = *req.DryRun
+	}
+	result, err := accountPoolXAIOAuthReconcile(c.Request.Context(), service.AccountPoolXAIOAuthReconcileParams{
+		PoolID:                  poolID,
+		DryRun:                  dryRun,
+		NearExpiryWindowSeconds: req.NearExpiryWindowSeconds,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !dryRun {
+		recordManageAudit(c, "account_pool.xai_oauth_reconcile", map[string]interface{}{
+			"pool_id":    poolID,
+			"candidates": result.Candidates,
+			"applied":    result.Applied,
+			"skipped":    result.Skipped,
+		})
+	}
+	common.ApiSuccess(c, result)
 }
 
 func ProbeAccountPoolXAIQuota(c *gin.Context) {

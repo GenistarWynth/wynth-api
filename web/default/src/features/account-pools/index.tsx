@@ -39,6 +39,7 @@ import {
   Upload,
   Download,
   Gauge,
+  RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -151,6 +152,7 @@ import {
   listAccountPoolProxies,
   listAccountPools,
   probeAccountPoolXAIQuota,
+  reconcileAccountPoolXAIOAuthAccounts,
   updateAccountPool,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
@@ -194,6 +196,7 @@ import type {
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
   AccountPoolSchedulePolicy,
+  AccountPoolXAIOAuthReconcileResult,
   ApiResponse,
 } from './types'
 
@@ -459,6 +462,40 @@ function accountOAuthTypeLabel(
       return t('AI Studio')
     default:
       return oauthType
+  }
+}
+
+function xaiOAuthReconcileReasonLabel(
+  reason: string,
+  t: (key: string) => string
+) {
+  switch (reason) {
+    case 'missing_refresh_token':
+      return t('Missing refresh token')
+    case 'access_token_missing':
+      return t('Access token missing')
+    case 'access_token_expired':
+      return t('Access token expired')
+    case 'access_token_near_expiry':
+      return t('Access token near expiry')
+    case 'credential_rejected':
+      return t('Credential rejected')
+    default:
+      return t('Unknown')
+  }
+}
+
+function xaiOAuthReconcileActionLabel(
+  action: string,
+  t: (key: string) => string
+) {
+  switch (action) {
+    case 'refresh_credentials':
+      return t('Refresh credentials')
+    case 'expire_account':
+      return t('Expire account')
+    default:
+      return t('Unknown')
   }
 }
 
@@ -795,6 +832,8 @@ export function AccountPools() {
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [exportSecretsConfirmOpen, setExportSecretsConfirmOpen] =
     useState(false)
+  const [xaiOAuthReconcilePreview, setXAIOAuthReconcilePreview] =
+    useState<AccountPoolXAIOAuthReconcileResult>()
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
   const [editingProxy, setEditingProxy] = useState<AccountPoolProxy>()
   const [deletingProxy, setDeletingProxy] = useState<AccountPoolProxy>()
@@ -1053,6 +1092,40 @@ export function AccountPools() {
         return
       }
       toast.success(t('xAI quota probe completed'))
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const reconcileXAIOAuthMutation = useMutation({
+    mutationFn: async (params: { poolID: number; dryRun: boolean }) =>
+      reconcileAccountPoolXAIOAuthAccounts(params.poolID, {
+        dry_run: params.dryRun,
+      }),
+    onSuccess: (result, variables) => {
+      if (!result.success || !result.data) {
+        toast.error(
+          apiErrorMessage(result, t('Failed to reconcile xAI OAuth accounts'))
+        )
+        return
+      }
+      if (variables.dryRun) {
+        if (result.data.candidates === 0) {
+          toast.success(t('No xAI OAuth accounts need reconciliation'))
+          return
+        }
+        setXAIOAuthReconcilePreview(result.data)
+        return
+      }
+      toast.success(
+        t('Reconciled {{applied}} account(s); skipped {{skipped}}', {
+          applied: result.data.applied,
+          skipped: result.data.skipped,
+        })
+      )
+      setXAIOAuthReconcilePreview(undefined)
       invalidatePools()
     },
     onError: (error) => {
@@ -1441,6 +1514,7 @@ export function AccountPools() {
             setBoundChannelDialogOpen(false)
             setCapabilityDialogOpen(false)
             setDetectingAccount(undefined)
+            setXAIOAuthReconcilePreview(undefined)
           }
         }}
         onCreateAccount={() => {
@@ -1473,6 +1547,15 @@ export function AccountPools() {
             ? probeXAIQuotaMutation.variables?.id
             : undefined
         }
+        onReconcileXAIOAuth={() => {
+          if (selectedPoolID) {
+            reconcileXAIOAuthMutation.mutate({
+              poolID: selectedPoolID,
+              dryRun: true,
+            })
+          }
+        }}
+        reconcilingXAIOAuth={reconcileXAIOAuthMutation.isPending}
         onCreateProxy={() => {
           setEditingProxy(undefined)
           setProxySheetOpen(true)
@@ -1492,6 +1575,50 @@ export function AccountPools() {
           setBindingStatusMutation.mutate({ binding, status })
         }
       />
+      <ConfirmDialog
+        open={Boolean(xaiOAuthReconcilePreview)}
+        onOpenChange={(open) => {
+          if (!open && !reconcileXAIOAuthMutation.isPending) {
+            setXAIOAuthReconcilePreview(undefined)
+          }
+        }}
+        title={t('Apply xAI OAuth reconciliation?')}
+        desc={
+          xaiOAuthReconcilePreview
+            ? t(
+                'Dry run found {{count}} account(s) requiring credential refresh or expiration.',
+                { count: xaiOAuthReconcilePreview.candidates }
+              )
+            : ''
+        }
+        confirmText={t('Apply Reconciliation')}
+        isLoading={reconcileXAIOAuthMutation.isPending}
+        handleConfirm={() => {
+          if (xaiOAuthReconcilePreview) {
+            reconcileXAIOAuthMutation.mutate({
+              poolID: xaiOAuthReconcilePreview.pool_id,
+              dryRun: false,
+            })
+          }
+        }}
+      >
+        {xaiOAuthReconcilePreview ? (
+          <div className='max-h-56 space-y-2 overflow-y-auto text-sm'>
+            {xaiOAuthReconcilePreview.items.map((item) => (
+              <div
+                key={item.account_id}
+                className='border-border bg-muted/40 rounded-md border p-2'
+              >
+                <div className='font-medium'>{item.name}</div>
+                <div className='text-muted-foreground text-xs'>
+                  {xaiOAuthReconcileReasonLabel(item.reason, t)} ·{' '}
+                  {xaiOAuthReconcileActionLabel(item.action, t)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </ConfirmDialog>
       <ConfirmDialog
         open={Boolean(deletingBinding)}
         onOpenChange={(open) => !open && setDeletingBinding(undefined)}
@@ -2620,6 +2747,8 @@ function PoolDetailsSheet(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
   probingXAIQuotaAccountID?: number
+  onReconcileXAIOAuth: () => void
+  reconcilingXAIOAuth: boolean
   onCreateProxy: () => void
   onEditProxy: (proxy: AccountPoolProxy) => void
   onDeleteProxy: (proxy: AccountPoolProxy) => void
@@ -2692,6 +2821,8 @@ function PoolDetailsSheet(props: {
                 onSetAccountStatus={props.onSetAccountStatus}
                 onProbeXAIQuota={props.onProbeXAIQuota}
                 probingXAIQuotaAccountID={props.probingXAIQuotaAccountID}
+                onReconcileXAIOAuth={props.onReconcileXAIOAuth}
+                reconcilingXAIOAuth={props.reconcilingXAIOAuth}
               />
             </TabsContent>
             <TabsContent value='bindings' className='min-h-0'>
@@ -2759,6 +2890,8 @@ function AccountListSection(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
   probingXAIQuotaAccountID?: number
+  onReconcileXAIOAuth: () => void
+  reconcilingXAIOAuth: boolean
 }) {
   const { t } = useTranslation()
 
@@ -2767,6 +2900,24 @@ function AccountListSection(props: {
       <div className='flex items-center justify-between gap-3'>
         <SideDrawerSectionHeader title={t('Accounts')} />
         <div className='flex items-center gap-2'>
+          {props.poolPlatform === 'xai' ? (
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={props.onReconcileXAIOAuth}
+              disabled={props.reconcilingXAIOAuth}
+            >
+              {props.reconcilingXAIOAuth ? (
+                <Loader2 data-icon='inline-start' className='animate-spin' />
+              ) : (
+                <RefreshCw data-icon='inline-start' />
+              )}
+              {props.reconcilingXAIOAuth
+                ? t('Reconciling xAI OAuth...')
+                : t('Reconcile xAI OAuth')}
+            </Button>
+          ) : null}
           <Button
             type='button'
             size='sm'

@@ -162,6 +162,32 @@ export type AccountPoolXAIOAuthTokenResult = {
   token_state: AccountPoolTokenStateRequest
 }
 
+export type AccountPoolXAIOAuthReconcileRequest = {
+  dry_run?: boolean
+  near_expiry_window_seconds?: number
+}
+
+export type AccountPoolXAIOAuthReconcileItem = {
+  account_id: number
+  name: string
+  status: string
+  reason: string
+  action: string
+  applied: boolean
+  outcome: string
+}
+
+export type AccountPoolXAIOAuthReconcileResult = {
+  pool_id: number
+  dry_run: boolean
+  near_expiry_window_seconds: number
+  scanned: number
+  candidates: number
+  applied: number
+  skipped: number
+  items: AccountPoolXAIOAuthReconcileItem[]
+}
+
 export type AccountPoolXAIQuotaWindow = {
   limit?: number
   remaining?: number
