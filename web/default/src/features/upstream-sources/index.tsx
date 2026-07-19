@@ -23,14 +23,18 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  type ColumnDef,
-  type ColumnFiltersState,
-  type PaginationState,
-  type Row,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import type {
+  ColumnDef,
+  ColumnFiltersState,
+  PaginationState,
+  Row,
 } from '@tanstack/react-table'
-import { useMediaQuery } from '@/hooks'
 import {
   ChevronDown,
   Cookie,
@@ -48,9 +52,28 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getUserGroups, getUserModels } from '@/lib/api'
-import { formatTimestamp } from '@/lib/format'
-import { cn } from '@/lib/utils'
+
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  DISABLED_ROW_DESKTOP,
+  DISABLED_ROW_MOBILE,
+  DataTablePage,
+  useDataTable,
+} from '@/components/data-table'
+import {
+  SideDrawerSection,
+  SideDrawerSectionHeader,
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+  sideDrawerSwitchItemClassName,
+} from '@/components/drawer-layout'
+import { SectionPageLayout } from '@/components/layout'
+import { LongText } from '@/components/long-text'
+import { MultiSelect } from '@/components/multi-select'
+import { StatusBadge, type StatusVariant } from '@/components/status-badge'
+import { TableId } from '@/components/table-id'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -97,33 +120,18 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
-import { ConfirmDialog } from '@/components/confirm-dialog'
-import {
-  DISABLED_ROW_DESKTOP,
-  DISABLED_ROW_MOBILE,
-  DataTablePage,
-  useDataTable,
-} from '@/components/data-table'
-import {
-  SideDrawerSection,
-  SideDrawerSectionHeader,
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-  sideDrawerSwitchItemClassName,
-} from '@/components/drawer-layout'
-import { SectionPageLayout } from '@/components/layout'
-import { LongText } from '@/components/long-text'
-import { MultiSelect } from '@/components/multi-select'
-import { StatusBadge, type StatusVariant } from '@/components/status-badge'
-import { TableId } from '@/components/table-id'
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 import { channelsQueryKeys } from '@/features/channels/lib/channel-actions'
+import { useDebounce, useMediaQuery } from '@/hooks'
+import { getUserGroups } from '@/lib/api'
+import { formatTimestamp } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
 import {
   createUpstreamSource,
   deleteUpstreamSource,
   discoverUpstreamSource,
+  getUpstreamSourceRuleModelOptions,
   importUpstreamSourceSession,
   listUpstreamSourceMappings,
   listUpstreamSources,
@@ -136,6 +144,7 @@ import {
 } from './api'
 import {
   buildLocalGroupRuleTemplate,
+  buildRuleModelDiscoverySignature,
   createLocalGroupRuleUserTemplate,
   DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS,
   formatKeywordList,
@@ -143,6 +152,7 @@ import {
   parseLocalGroupRuleUserTemplates,
   serializeLocalGroupRuleUserTemplates,
   type LocalGroupRuleTemplateKey,
+  type LocalGroupRuleStrategyDefaults,
   type LocalGroupRuleUserTemplate,
   normalizeKeywordList,
   normalizeCodexImageGenerationBridgePolicy,
@@ -182,6 +192,7 @@ import {
 
 const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
 const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
+const DEFAULT_AUTO_PRIORITY_AVAILABILITY_WINDOW_HOURS = 24
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
 const UPSTREAM_SOURCE_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
@@ -258,6 +269,23 @@ function emptyLocalGroupRule(): UpstreamSourceLocalGroupRule {
     monitor: { model: '' },
     model_strategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
     fixed_models: [],
+  }
+}
+
+function autoPriorityFormValue(
+  rule: UpstreamSourceLocalGroupRule,
+  defaults: LocalGroupRuleStrategyDefaults['autoPriority']
+): NonNullable<UpstreamSourceLocalGroupRule['auto_priority']> {
+  return {
+    enabled: rule.auto_priority?.enabled ?? defaults.enabled,
+    interval_minutes: intervalDisplayValue(
+      rule.auto_priority?.interval_minutes,
+      defaults.interval_minutes
+    ),
+    window_hours: rule.auto_priority?.window_hours ?? defaults.window_hours,
+    availability_window_hours:
+      rule.auto_priority?.availability_window_hours ??
+      defaults.availability_window_hours,
   }
 }
 
@@ -994,6 +1022,9 @@ function CheckboxList(props: {
 function FixedModelSelect(props: {
   values: string[]
   options: { value: string; label: string }[]
+  disabled?: boolean
+  placeholder?: string
+  emptyText?: string
   onChange: (values: string[]) => void
 }) {
   const { t } = useTranslation()
@@ -1003,12 +1034,13 @@ function FixedModelSelect(props: {
         options={props.options}
         selected={props.values}
         onChange={props.onChange}
-        placeholder={t('Select models or add custom ones')}
+        placeholder={props.placeholder ?? t('Select models or add custom ones')}
         allowCreate
         createLabel='Add custom model "{{value}}"'
-        emptyText={t('No models found')}
+        emptyText={props.emptyText ?? t('No models found')}
         maxVisibleChips={8}
         copyChipOnClick
+        disabled={props.disabled}
       />
     </div>
   )
@@ -1069,14 +1101,10 @@ function SourceFormSheet(props: {
     LocalGroupRuleUserTemplate[]
   >([])
   const isUpdate = props.mode === 'update'
+  const sourceID = props.source?.id ?? 0
   const groupsQuery = useQuery({
     queryKey: ['user-groups'],
     queryFn: getUserGroups,
-    enabled: props.open,
-  })
-  const modelsQuery = useQuery({
-    queryKey: ['user-models'],
-    queryFn: getUserModels,
     enabled: props.open,
   })
   const groupOptions = useMemo(
@@ -1088,14 +1116,6 @@ function SourceFormSheet(props: {
       })),
     [groupsQuery.data]
   )
-  const modelOptions = useMemo(
-    () => modelsQuery.data?.data ?? [],
-    [modelsQuery.data]
-  )
-  const modelSelectOptions = useMemo(
-    () => modelOptions.map((model) => ({ value: model, label: model })),
-    [modelOptions]
-  )
   const channelTypeSelectOptions = useMemo(
     () =>
       CHANNEL_TYPE_OPTIONS.map((option) => ({
@@ -1105,6 +1125,39 @@ function SourceFormSheet(props: {
     [t]
   )
   const ruleStrategyDefaults = DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS
+  const normalizedRuleModelOptionsInput = useMemo(
+    () => normalizeSyncRules(form.local_group_rules),
+    [form.local_group_rules]
+  )
+  const debouncedRuleModelOptionsInput = useDebounce(
+    normalizedRuleModelOptionsInput,
+    400
+  )
+  const ruleModelDiscoverySignature = useMemo(
+    () => buildRuleModelDiscoverySignature(debouncedRuleModelOptionsInput),
+    [debouncedRuleModelOptionsInput]
+  )
+  const ruleModelOptionsQueries = useQueries({
+    queries: form.local_group_rules.map((_, ruleIndex) => ({
+      queryKey: [
+        'upstream-source-rule-model-options',
+        sourceID,
+        ruleIndex,
+        ruleModelDiscoverySignature,
+      ],
+      queryFn: () =>
+        getUpstreamSourceRuleModelOptions(sourceID, {
+          local_group_rules: debouncedRuleModelOptionsInput,
+          rule_index: ruleIndex,
+        }),
+      enabled:
+        props.open &&
+        isUpdate &&
+        sourceID > 0 &&
+        debouncedRuleModelOptionsInput.length > ruleIndex,
+      retry: false,
+    })),
+  })
 
   useEffect(() => {
     if (!props.open || typeof window === 'undefined') {
@@ -1116,6 +1169,97 @@ function SourceFormSheet(props: {
       )
     )
   }, [props.open])
+
+  const ruleModelOptionStates = useMemo(
+    () =>
+      form.local_group_rules.map((_, ruleIndex) => {
+        const query = ruleModelOptionsQueries[ruleIndex]
+        const matchedMappings = query?.data?.data?.matched_mappings ?? []
+        const models = query?.data?.data?.models ?? []
+        const options = models.map((model) => ({ value: model, label: model }))
+        const matchedGroupsLabel = matchedMappings
+          .map(
+            (mapping) =>
+              mapping.upstream_group_name || mapping.upstream_group_id
+          )
+          .join(', ')
+
+        if (!isUpdate || sourceID === 0) {
+          const helperText = t(
+            'Save this source first, then load model options from matched groups.'
+          )
+          return {
+            options,
+            disabled: true,
+            placeholder: helperText,
+            emptyText: helperText,
+            helperText,
+          }
+        }
+
+        if (query?.isPending) {
+          return {
+            options,
+            disabled: true,
+            placeholder: t('Loading models...'),
+            emptyText: t('Loading models...'),
+            helperText: t('Loading models from matched groups...'),
+          }
+        }
+
+        if (query?.isError) {
+          return {
+            options,
+            disabled: false,
+            placeholder: t('Select models from matched groups'),
+            emptyText: t('Failed to load models'),
+            helperText:
+              query.error instanceof Error
+                ? query.error.message
+                : t('Failed to load models'),
+          }
+        }
+
+        if (matchedMappings.length === 0) {
+          return {
+            options,
+            disabled: false,
+            placeholder: t('Select models from matched groups'),
+            emptyText: t('No matched groups found'),
+            helperText: t('No upstream groups currently match this rule.'),
+          }
+        }
+
+        if (models.length === 0) {
+          return {
+            options,
+            disabled: false,
+            placeholder: t('Select models from matched groups'),
+            emptyText: t('No shared models found'),
+            helperText: t(
+              'Matched groups do not share any upstream models right now.'
+            ),
+          }
+        }
+
+        return {
+          options,
+          disabled: false,
+          placeholder: t('Select models from matched groups'),
+          emptyText: t('No shared models found'),
+          helperText: t('Matched groups: {{groups}}', {
+            groups: matchedGroupsLabel,
+          }),
+        }
+      }),
+    [
+      form.local_group_rules,
+      isUpdate,
+      sourceID,
+      ruleModelOptionsQueries,
+      t,
+    ]
+  )
 
   const persistUserRuleTemplates = (
     templates: LocalGroupRuleUserTemplate[]
@@ -1393,7 +1537,9 @@ function SourceFormSheet(props: {
                 id='source-local-group'
                 options={groupOptions}
                 value={form.local_group}
-                onValueChange={(value) => value && setField('local_group', value)}
+                onValueChange={(value) =>
+                  value && setField('local_group', value)
+                }
                 placeholder={t('Select local group')}
                 emptyText={t('No local group found')}
               />
@@ -1788,32 +1934,48 @@ function SourceFormSheet(props: {
                             label={t('Monitor Model')}
                             htmlFor={`source-rule-monitor-model-${index}`}
                           >
-                            <Combobox
-                              id={`source-rule-monitor-model-${index}`}
-                              options={modelSelectOptions}
-                              value={rule.monitor?.model ?? ''}
-                              onValueChange={(value) => {
-                                const model = value ?? ''
-                                setLocalGroupRule(index, {
-                                  ...rule,
-                                  monitor: {
-                                    ...rule.monitor,
-                                    // Choosing a monitor model implies the admin
-                                    // wants this rule monitored; auto-enable so it
-                                    // does not silently stay off. Clearing the model
-                                    // leaves the existing enabled state untouched.
-                                    enabled: model
-                                      ? true
-                                      : (rule.monitor?.enabled ??
-                                        ruleStrategyDefaults.monitor.enabled),
-                                    model,
-                                  },
-                                })
-                              }}
-                              placeholder={t('Select monitor model')}
-                              emptyText={t('No models found')}
-                              allowCustomValue
-                            />
+                            <div className='grid gap-2'>
+                              <Combobox
+                                id={`source-rule-monitor-model-${index}`}
+                                options={
+                                  ruleModelOptionStates[index]?.options ?? []
+                                }
+                                value={rule.monitor?.model ?? ''}
+                                onValueChange={(value) => {
+                                  const model = value ?? ''
+                                  setLocalGroupRule(index, {
+                                    ...rule,
+                                    monitor: {
+                                      ...rule.monitor,
+                                      // Choosing a monitor model implies the admin
+                                      // wants this rule monitored; auto-enable so it
+                                      // does not silently stay off. Clearing the model
+                                      // leaves the existing enabled state untouched.
+                                      enabled: model
+                                        ? true
+                                        : (rule.monitor?.enabled ??
+                                          ruleStrategyDefaults.monitor.enabled),
+                                      model,
+                                    },
+                                  })
+                                }}
+                                placeholder={
+                                  ruleModelOptionStates[index]?.placeholder ??
+                                  t('Select monitor model')
+                                }
+                                emptyText={
+                                  ruleModelOptionStates[index]?.emptyText ??
+                                  t('No models found')
+                                }
+                                disabled={
+                                  ruleModelOptionStates[index]?.disabled
+                                }
+                                allowCustomValue
+                              />
+                              <p className='text-muted-foreground text-xs'>
+                                {ruleModelOptionStates[index]?.helperText}
+                              </p>
+                            </div>
                           </FieldBlock>
                         </div>
                         <div className='grid gap-3'>
@@ -1877,16 +2039,11 @@ function SourceFormSheet(props: {
                               setLocalGroupRule(index, {
                                 ...rule,
                                 auto_priority: {
-                                  enabled: checked,
-                                  interval_minutes: intervalDisplayValue(
-                                    rule.auto_priority?.interval_minutes,
+                                  ...autoPriorityFormValue(
+                                    rule,
                                     ruleStrategyDefaults.autoPriority
-                                      .interval_minutes
                                   ),
-                                  window_hours:
-                                    rule.auto_priority?.window_hours ??
-                                    ruleStrategyDefaults.autoPriority
-                                      .window_hours,
+                                  enabled: checked,
                                 },
                               })
                             }
@@ -1909,19 +2066,15 @@ function SourceFormSheet(props: {
                                   setLocalGroupRule(index, {
                                     ...rule,
                                     auto_priority: {
-                                      enabled:
-                                        rule.auto_priority?.enabled ??
+                                      ...autoPriorityFormValue(
+                                        rule,
                                         ruleStrategyDefaults.autoPriority
-                                          .enabled,
+                                      ),
                                       interval_minutes: parseIntegerInput(
                                         event.target.value,
                                         ruleStrategyDefaults.autoPriority
                                           .interval_minutes
                                       ),
-                                      window_hours:
-                                        rule.auto_priority?.window_hours ??
-                                        ruleStrategyDefaults.autoPriority
-                                          .window_hours,
                                     },
                                   })
                                 }
@@ -1938,27 +2091,55 @@ function SourceFormSheet(props: {
                                 max={168}
                                 value={
                                   rule.auto_priority?.window_hours ??
-                                  ruleStrategyDefaults.autoPriority
-                                    .window_hours
+                                  ruleStrategyDefaults.autoPriority.window_hours
                                 }
                                 onChange={(event) =>
                                   setLocalGroupRule(index, {
                                     ...rule,
                                     auto_priority: {
-                                      enabled:
-                                        rule.auto_priority?.enabled ??
+                                      ...autoPriorityFormValue(
+                                        rule,
                                         ruleStrategyDefaults.autoPriority
-                                          .enabled,
-                                      interval_minutes: intervalDisplayValue(
-                                        rule.auto_priority?.interval_minutes,
-                                        ruleStrategyDefaults.autoPriority
-                                          .interval_minutes
                                       ),
                                       window_hours: parseIntegerInput(
                                         event.target.value,
                                         ruleStrategyDefaults.autoPriority
                                           .window_hours
                                       ),
+                                    },
+                                  })
+                                }
+                              />
+                            </FieldBlock>
+                            <FieldBlock
+                              label={t('Availability Window Hours')}
+                              htmlFor={`source-rule-auto-priority-availability-window-${index}`}
+                            >
+                              <Input
+                                id={`source-rule-auto-priority-availability-window-${index}`}
+                                type='number'
+                                min={1}
+                                max={168}
+                                value={
+                                  rule.auto_priority
+                                    ?.availability_window_hours ??
+                                  ruleStrategyDefaults.autoPriority
+                                    .availability_window_hours
+                                }
+                                onChange={(event) =>
+                                  setLocalGroupRule(index, {
+                                    ...rule,
+                                    auto_priority: {
+                                      ...autoPriorityFormValue(
+                                        rule,
+                                        ruleStrategyDefaults.autoPriority
+                                      ),
+                                      availability_window_hours:
+                                        parseIntegerInput(
+                                          event.target.value,
+                                          ruleStrategyDefaults.autoPriority
+                                            .availability_window_hours
+                                        ),
                                     },
                                   })
                                 }
@@ -2031,16 +2212,32 @@ function SourceFormSheet(props: {
                       {rule.model_strategy ===
                         UPSTREAM_SOURCE_MODEL_STRATEGY_FIXED && (
                         <FieldBlock label={t('Fixed Models')}>
-                          <FixedModelSelect
-                            values={rule.fixed_models}
-                            options={modelSelectOptions}
-                            onChange={(values) =>
-                              setLocalGroupRule(index, {
-                                ...rule,
-                                fixed_models: values,
-                              })
-                            }
-                          />
+                          <div className='grid gap-2'>
+                            <FixedModelSelect
+                              values={rule.fixed_models}
+                              options={
+                                ruleModelOptionStates[index]?.options ?? []
+                              }
+                              disabled={ruleModelOptionStates[index]?.disabled}
+                              placeholder={
+                                ruleModelOptionStates[index]?.placeholder ??
+                                t('Select models or add custom ones')
+                              }
+                              emptyText={
+                                ruleModelOptionStates[index]?.emptyText ??
+                                t('No models found')
+                              }
+                              onChange={(values) =>
+                                setLocalGroupRule(index, {
+                                  ...rule,
+                                  fixed_models: values,
+                                })
+                              }
+                            />
+                            <p className='text-muted-foreground text-xs'>
+                              {ruleModelOptionStates[index]?.helperText}
+                            </p>
+                          </div>
                         </FieldBlock>
                       )}
                     </CollapsibleContent>
@@ -2213,7 +2410,10 @@ function ImportSessionSheet(props: {
                     onChange={(event) => setSessionCookie(event.target.value)}
                   />
                 </FieldBlock>
-                <FieldBlock label={t('Access token')} htmlFor='session-access-token'>
+                <FieldBlock
+                  label={t('Access token')}
+                  htmlFor='session-access-token'
+                >
                   <Input
                     id='session-access-token'
                     value={accessToken}
@@ -2541,7 +2741,9 @@ function MappingRow(props: {
     ? `${t('Auto priority')}: ${intervalDisplayValue(
         mapping.resolved_auto_priority_interval_minutes,
         DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
-      )}m / ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h`
+      )}m / ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h / ${t(
+        'Availability'
+      )} ${mapping.resolved_auto_priority_availability_window_hours || DEFAULT_AUTO_PRIORITY_AVAILABILITY_WINDOW_HOURS}h`
     : `${t('Auto priority')}: ${t('Disabled')}`
   const codexImageBridgePolicy = normalizeCodexImageGenerationBridgePolicy(
     mapping.resolved_codex_image_generation_bridge_policy

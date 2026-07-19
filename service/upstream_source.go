@@ -911,12 +911,16 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 		Remark:   upstreamSourceGeneratedChannelRemark(mapping),
 	}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		ChannelMonitorEnabled:            resolution.MonitorEnabled,
-		ChannelMonitorIntervalMinutes:    resolution.MonitorIntervalMinutes,
-		ChannelMonitorModel:              resolution.MonitorModel,
-		CodexImageGenerationBridgePolicy: upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution),
-		GeneratedByUpstreamSourceID:      source.Id,
-		GeneratedByUpstreamMappingID:     mapping.Id,
+		ChannelMonitorEnabled:                      resolution.MonitorEnabled,
+		ChannelMonitorIntervalMinutes:              resolution.MonitorIntervalMinutes,
+		ChannelMonitorModel:                        resolution.MonitorModel,
+		ChannelAutoPriorityEnabled:                 resolution.AutoPriorityEnabled,
+		ChannelAutoPriorityIntervalMinutes:         resolution.AutoPriorityIntervalMinutes,
+		ChannelAutoPriorityWindowHours:             resolution.AutoPriorityWindowHours,
+		ChannelAutoPriorityAvailabilityWindowHours: resolution.AutoPriorityAvailabilityWindowHours,
+		CodexImageGenerationBridgePolicy:           upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution),
+		GeneratedByUpstreamSourceID:                source.Id,
+		GeneratedByUpstreamMappingID:               mapping.Id,
 	})
 	return channel
 }
@@ -941,6 +945,13 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 	settings.ChannelMonitorEnabled = resolution.MonitorEnabled
 	settings.ChannelMonitorIntervalMinutes = resolution.MonitorIntervalMinutes
 	settings.ChannelMonitorModel = resolution.MonitorModel
+	settings.ChannelAutoPriorityEnabled = resolution.AutoPriorityEnabled
+	settings.ChannelAutoPriorityIntervalMinutes = resolution.AutoPriorityIntervalMinutes
+	settings.ChannelAutoPriorityWindowHours = resolution.AutoPriorityWindowHours
+	localGroupChanged := strings.TrimSpace(existingChannel.Group) != strings.TrimSpace(channel.Group)
+	if localGroupChanged || settings.ChannelAutoPriorityAvailabilityWindowHours == 0 {
+		settings.ChannelAutoPriorityAvailabilityWindowHours = resolution.AutoPriorityAvailabilityWindowHours
+	}
 	settings.CodexImageGenerationBridgePolicy = upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution)
 	if source != nil {
 		settings.GeneratedByUpstreamSourceID = source.Id
@@ -1315,41 +1326,42 @@ func buildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMappi
 	eligibilityMapping.SyncEnabled = true
 	resolution := resolveUpstreamSourceRule(config, &eligibilityMapping)
 	return dto.UpstreamSourceMappingResponse{
-		Id:                                       mapping.Id,
-		SourceID:                                 mapping.SourceID,
-		SyncEnabled:                              mapping.SyncEnabled,
-		UpstreamGroupID:                          mapping.UpstreamGroupID,
-		UpstreamGroupName:                        mapping.UpstreamGroupName,
-		UpstreamGroupDescription:                 mapping.UpstreamGroupDescription,
-		UpstreamPlatform:                         mapping.UpstreamPlatform,
-		DiscoveryStatus:                          mapping.DiscoveryStatus,
-		UpstreamStatus:                           mapping.UpstreamStatus,
-		UpstreamRateMultiplier:                   mapping.UpstreamRateMultiplier,
-		EffectiveRateMultiplier:                  mapping.EffectiveRateMultiplier,
-		HasUpstreamKey:                           mapping.UpstreamKeyID != "",
-		LocalChannelID:                           mapping.LocalChannelID,
-		SyncStatus:                               mapping.SyncStatus,
-		LastError:                                sanitizeUpstreamSourceStoredError(mapping.LastError),
-		LastDiscoveredAt:                         mapping.LastDiscoveredAt,
-		LastSyncedAt:                             mapping.LastSyncedAt,
-		SyncEligible:                             resolution.SyncEligible,
-		MatchedRuleName:                          resolution.RuleName,
-		MatchReason:                              resolution.Reason,
-		ResolvedLocalGroup:                       resolution.LocalGroup,
-		ResolvedMonitorEnabled:                   resolution.MonitorEnabled,
-		ResolvedMonitorIntervalMinutes:           resolution.MonitorIntervalMinutes,
-		ResolvedAutoSyncEnabled:                  resolution.AutoSyncEnabled,
-		ResolvedAutoSyncIntervalMinutes:          resolution.AutoSyncIntervalMinutes,
-		ResolvedAutoPriorityEnabled:              resolution.AutoPriorityEnabled,
-		ResolvedAutoPriorityIntervalMinutes:      resolution.AutoPriorityIntervalMinutes,
-		ResolvedAutoPriorityWindowHours:          resolution.AutoPriorityWindowHours,
-		ResolvedCodexImageGenerationBridgePolicy: resolution.CodexImageGenerationBridgePolicy,
-		ResolvedModelStrategy:                    resolution.ModelStrategy,
-		ResolvedFixedModels:                      resolution.FixedModels,
-		ResolvedChannelType:                      resolution.ChannelType,
-		ResolvedPriority:                         resolution.Priority,
-		ResolvedWeight:                           resolution.Weight,
-		ResolvedMonitorModel:                     resolution.MonitorModel,
+		Id:                                  mapping.Id,
+		SourceID:                            mapping.SourceID,
+		SyncEnabled:                         mapping.SyncEnabled,
+		UpstreamGroupID:                     mapping.UpstreamGroupID,
+		UpstreamGroupName:                   mapping.UpstreamGroupName,
+		UpstreamGroupDescription:            mapping.UpstreamGroupDescription,
+		UpstreamPlatform:                    mapping.UpstreamPlatform,
+		DiscoveryStatus:                     mapping.DiscoveryStatus,
+		UpstreamStatus:                      mapping.UpstreamStatus,
+		UpstreamRateMultiplier:              mapping.UpstreamRateMultiplier,
+		EffectiveRateMultiplier:             mapping.EffectiveRateMultiplier,
+		HasUpstreamKey:                      mapping.UpstreamKeyID != "",
+		LocalChannelID:                      mapping.LocalChannelID,
+		SyncStatus:                          mapping.SyncStatus,
+		LastError:                           sanitizeUpstreamSourceStoredError(mapping.LastError),
+		LastDiscoveredAt:                    mapping.LastDiscoveredAt,
+		LastSyncedAt:                        mapping.LastSyncedAt,
+		SyncEligible:                        resolution.SyncEligible,
+		MatchedRuleName:                     resolution.RuleName,
+		MatchReason:                         resolution.Reason,
+		ResolvedLocalGroup:                  resolution.LocalGroup,
+		ResolvedMonitorEnabled:              resolution.MonitorEnabled,
+		ResolvedMonitorIntervalMinutes:      resolution.MonitorIntervalMinutes,
+		ResolvedAutoSyncEnabled:             resolution.AutoSyncEnabled,
+		ResolvedAutoSyncIntervalMinutes:     resolution.AutoSyncIntervalMinutes,
+		ResolvedAutoPriorityEnabled:         resolution.AutoPriorityEnabled,
+		ResolvedAutoPriorityIntervalMinutes: resolution.AutoPriorityIntervalMinutes,
+		ResolvedAutoPriorityWindowHours:     resolution.AutoPriorityWindowHours,
+		ResolvedAutoPriorityAvailabilityWindowHours: resolution.AutoPriorityAvailabilityWindowHours,
+		ResolvedCodexImageGenerationBridgePolicy:    resolution.CodexImageGenerationBridgePolicy,
+		ResolvedModelStrategy:                       resolution.ModelStrategy,
+		ResolvedFixedModels:                         resolution.FixedModels,
+		ResolvedChannelType:                         resolution.ChannelType,
+		ResolvedPriority:                            resolution.Priority,
+		ResolvedWeight:                              resolution.Weight,
+		ResolvedMonitorModel:                        resolution.MonitorModel,
 	}
 }
 

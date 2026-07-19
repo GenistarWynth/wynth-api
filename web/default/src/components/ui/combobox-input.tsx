@@ -39,12 +39,15 @@ interface ComboboxInputProps {
   id?: string
   allowCustomValue?: boolean
   openOnFocus?: boolean
+  disabled?: boolean
 }
 
 export function shouldOpenCombobox(
   trigger: string,
-  openOnFocus = true
+  openOnFocus = true,
+  disabled = false
 ): boolean {
+  if (disabled) return false
   return (
     trigger === 'pointer' ||
     trigger === 'ArrowDown' ||
@@ -63,6 +66,7 @@ export function ComboboxInput({
   id,
   allowCustomValue = false,
   openOnFocus = true,
+  disabled = false,
 }: ComboboxInputProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -94,6 +98,12 @@ export function ComboboxInput({
 
   // Handle click outside to close
   React.useEffect(() => {
+    if (!disabled) return
+    setOpen(false)
+    setSearchValue('')
+  }, [disabled])
+
+  React.useEffect(() => {
     if (!open) return
 
     const handleClickOutside = (e: MouseEvent) => {
@@ -118,7 +128,7 @@ export function ComboboxInput({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!open && shouldOpenCombobox(e.key, openOnFocus)) {
+    if (!open && shouldOpenCombobox(e.key, openOnFocus, disabled)) {
       setOpen(true)
       return
     }
@@ -166,6 +176,7 @@ export function ComboboxInput({
   }, [highlightedIndex])
 
   const showDropdown =
+    !disabled &&
     open &&
     (filteredOptions.length > 0 || (allowCustomValue && searchValue.trim()))
 
@@ -180,6 +191,7 @@ export function ComboboxInput({
         aria-haspopup='listbox'
         aria-autocomplete='list'
         autoComplete='off'
+        disabled={disabled}
         placeholder={placeholder}
         value={displayValue}
         onChange={(e) => {
@@ -191,13 +203,16 @@ export function ComboboxInput({
           if (!open) setOpen(true)
         }}
         onPointerDown={(e) => {
-          if (e.button === 0 && shouldOpenCombobox('pointer', openOnFocus)) {
+          if (
+            e.button === 0 &&
+            shouldOpenCombobox('pointer', openOnFocus, disabled)
+          ) {
             setOpen(true)
           }
         }}
         onFocus={() => {
           setSearchValue(allowCustomValue && !selectedOption ? value : '')
-          if (shouldOpenCombobox('focus', openOnFocus)) {
+          if (shouldOpenCombobox('focus', openOnFocus, disabled)) {
             setOpen(true)
           }
         }}

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+
 import {
   buildLocalGroupRuleTemplate,
+  buildRuleModelDiscoverySignature,
   createLocalGroupRuleUserTemplate,
   DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS,
   hasLocalGroupRuleMatcher,
@@ -14,6 +16,50 @@ import {
 } from './rules'
 
 describe('upstream source rule normalization', () => {
+  test('model discovery signature changes only for matching or channel type', () => {
+    const baseRules = normalizeSyncRules([
+      {
+        name: 'OpenAI paid',
+        local_group: 'paid',
+        channel_type: 1,
+        priority: 100,
+        platforms: ['OpenAI'],
+        name_contains: ['pro'],
+        description_contains: ['paid'],
+        exclude_keywords: ['trial'],
+        monitor: { enabled: true, interval_minutes: 10, model: 'gpt-4o' },
+        model_strategy: 'fixed',
+        fixed_models: ['gpt-4o'],
+      },
+    ])
+    const selectionOnlyChange = normalizeSyncRules([
+      {
+        ...baseRules[0],
+        name: 'Renamed rule',
+        local_group: 'vip',
+        priority: 900,
+        monitor: { enabled: true, interval_minutes: 60, model: 'gpt-5' },
+        fixed_models: ['gpt-5'],
+      },
+    ])
+    const matcherChange = normalizeSyncRules([
+      {
+        ...baseRules[0],
+        channel_type: 24,
+        name_contains: ['enterprise'],
+      },
+    ])
+
+    assert.deepEqual(
+      buildRuleModelDiscoverySignature(baseRules),
+      buildRuleModelDiscoverySignature(selectionOnlyChange)
+    )
+    assert.notDeepEqual(
+      buildRuleModelDiscoverySignature(baseRules),
+      buildRuleModelDiscoverySignature(matcherChange)
+    )
+  })
+
   test('normalizes comma newline and chinese-comma separated keywords', () => {
     assert.deepEqual(normalizeKeywordList(' GPT,pro， Claude\nGPT '), [
       'gpt',
@@ -146,6 +192,7 @@ describe('upstream source rule normalization', () => {
           enabled: true,
           interval_minutes: 0,
           window_hours: 48,
+          availability_window_hours: 1,
         },
         codexImageGenerationBridgePolicy: 'disabled',
         modelStrategy: 'fixed',
@@ -164,6 +211,7 @@ describe('upstream source rule normalization', () => {
           enabled: true,
           interval_minutes: 0,
           window_hours: 48,
+          availability_window_hours: 1,
         },
         codex_image_generation_bridge_policy: 'disabled',
         model_strategy: 'fixed',
@@ -188,6 +236,7 @@ describe('upstream source rule normalization', () => {
           enabled: false,
           interval_minutes: 15,
           window_hours: 24,
+          availability_window_hours: 1,
         },
         codex_image_generation_bridge_policy: 'enabled',
         model_strategy: 'fixed',
@@ -213,6 +262,7 @@ describe('upstream source rule normalization', () => {
           enabled: false,
           interval_minutes: 15,
           window_hours: 24,
+          availability_window_hours: 1,
         },
         codex_image_generation_bridge_policy: 'enabled',
         model_strategy: 'fixed',
@@ -311,6 +361,7 @@ describe('upstream source rule normalization', () => {
           enabled: true,
           interval_minutes: 15,
           window_hours: 48,
+          availability_window_hours: 1,
         },
         codex_image_generation_bridge_policy: 'disabled',
         model_strategy: 'fixed',
@@ -329,6 +380,7 @@ describe('upstream source rule normalization', () => {
     assert.equal(customized.auto_sync.origin, 'override')
     assert.equal(customized.auto_sync.enabled, false)
     assert.equal(customized.auto_priority.window_hours, 48)
+    assert.equal(customized.auto_priority.availability_window_hours, 1)
     assert.equal(
       customized.codex_image_generation_bridge_policy.value,
       'disabled'

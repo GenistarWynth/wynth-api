@@ -49,6 +49,7 @@ export type LocalGroupRuleStrategyDefaults = {
     enabled: boolean
     interval_minutes: number
     window_hours: number
+    availability_window_hours: number
   }
   codexImageGenerationBridgePolicy: CodexImageGenerationBridgePolicy
   modelStrategy: UpstreamSourceModelStrategy
@@ -72,6 +73,7 @@ export const DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS: LocalGroupRuleStrategyD
       enabled: false,
       interval_minutes: 30,
       window_hours: 24,
+      availability_window_hours: 24,
     },
     codexImageGenerationBridgePolicy: 'follow',
     modelStrategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
@@ -95,6 +97,7 @@ type ResolvedAutoPriorityStrategy = {
   enabled: boolean
   interval_minutes: number
   window_hours: number
+  availability_window_hours: number
 }
 
 type ResolvedCodexImageGenerationBridgeStrategy = {
@@ -269,6 +272,10 @@ export function resolveLocalGroupRuleStrategy(
     typeof rule.auto_priority?.window_hours === 'number'
       ? rule.auto_priority.window_hours
       : defaults.autoPriority.window_hours
+  const autoPriorityAvailabilityWindow =
+    typeof rule.auto_priority?.availability_window_hours === 'number'
+      ? rule.auto_priority.availability_window_hours
+      : defaults.autoPriority.availability_window_hours
   const defaultBridgePolicy = normalizeCodexImageGenerationBridgePolicy(
     defaults.codexImageGenerationBridgePolicy
   )
@@ -299,7 +306,9 @@ export function resolveLocalGroupRuleStrategy(
   const autoPriorityOverride =
     autoPriorityEnabled !== defaults.autoPriority.enabled ||
     autoPriorityInterval !== defaults.autoPriority.interval_minutes ||
-    autoPriorityWindow !== defaults.autoPriority.window_hours
+    autoPriorityWindow !== defaults.autoPriority.window_hours ||
+    autoPriorityAvailabilityWindow !==
+      defaults.autoPriority.availability_window_hours
   const bridgeOverride = hasBridgePolicy && bridgePolicy !== defaultBridgePolicy
   const modelOverride =
     modelStrategy !== defaultModelStrategy ||
@@ -340,6 +349,7 @@ export function resolveLocalGroupRuleStrategy(
       enabled: autoPriorityEnabled,
       interval_minutes: autoPriorityInterval,
       window_hours: autoPriorityWindow,
+      availability_window_hours: autoPriorityAvailabilityWindow,
     },
     codex_image_generation_bridge_policy: {
       origin: strategyOrigin(bridgeOverride),
@@ -497,6 +507,15 @@ function normalizeRuleAutoPriority(
   ) {
     normalized.window_hours = Math.max(1, Math.trunc(value.window_hours))
   }
+  if (
+    typeof value.availability_window_hours === 'number' &&
+    Number.isFinite(value.availability_window_hours)
+  ) {
+    normalized.availability_window_hours = Math.max(
+      1,
+      Math.trunc(value.availability_window_hours)
+    )
+  }
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
@@ -623,4 +642,16 @@ export function normalizeSyncRules(
       fixed_models: fixedModels,
     }
   })
+}
+
+export function buildRuleModelDiscoverySignature(
+  rules: UpstreamSourceLocalGroupRule[]
+) {
+  return normalizeSyncRules(rules).map((rule) => ({
+    channel_type: rule.channel_type ?? 0,
+    platforms: rule.platforms,
+    name_contains: rule.name_contains,
+    description_contains: rule.description_contains,
+    exclude_keywords: rule.exclude_keywords,
+  }))
 }

@@ -18,9 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { Channel, ChannelMonitorRecord } from '../types'
 
-export type MonitorVisualStatus =
-  | ChannelMonitorRecord['status']
-  | 'empty'
+export type MonitorVisualStatus = ChannelMonitorRecord['status'] | 'empty'
 
 export type MonitorHistoryTone = 'success' | 'warning' | 'danger' | 'empty'
 
@@ -50,7 +48,9 @@ export function monitorStatusText(
   return t('No data')
 }
 
-export function monitorHistoryTone(status: MonitorVisualStatus): MonitorHistoryTone {
+export function monitorHistoryTone(
+  status: MonitorVisualStatus
+): MonitorHistoryTone {
   if (status === 'success') return 'success'
   if (status === 'degraded') return 'warning'
   if (status === 'failed' || status === 'error') return 'danger'
@@ -58,13 +58,19 @@ export function monitorHistoryTone(status: MonitorVisualStatus): MonitorHistoryT
 }
 
 function metricValue(record: Partial<ChannelMonitorRecord>) {
-  if (typeof record.first_token_latency_ms === 'number' && record.first_token_latency_ms > 0) {
+  if (
+    typeof record.first_token_latency_ms === 'number' &&
+    record.first_token_latency_ms > 0
+  ) {
     return record.first_token_latency_ms
   }
   if (typeof record.latency_ms === 'number' && record.latency_ms > 0) {
     return record.latency_ms
   }
-  if (typeof record.endpoint_latency_ms === 'number' && record.endpoint_latency_ms > 0) {
+  if (
+    typeof record.endpoint_latency_ms === 'number' &&
+    record.endpoint_latency_ms > 0
+  ) {
     return record.endpoint_latency_ms
   }
   return 0
@@ -79,7 +85,8 @@ export function buildMonitorHistoryBars(
   const maxMetric = Math.max(1, ...recentRecords.map(metricValue))
   const bars = recentRecords.map((record, index): MonitorHistoryBar => {
     const value = metricValue(record)
-    const heightPercent = value > 0 ? Math.max(25, Math.round((value / maxMetric) * 100)) : 25
+    const heightPercent =
+      value > 0 ? Math.max(25, Math.round((value / maxMetric) * 100)) : 25
     const status = record.status ?? 'error'
     return {
       id: String(record.id ?? `${record.checked_at ?? 'record'}-${index}`),
@@ -101,20 +108,23 @@ export function buildMonitorHistoryBars(
   if (emptyCount <= 0) return bars
 
   return [
-    ...Array.from({ length: emptyCount }, (_, index): MonitorHistoryBar => ({
-      id: `empty-${index}`,
-      status: 'empty',
-      tone: 'empty',
-      heightPercent: 25,
-      model: '',
-      latencyMS: 0,
-      endpointLatencyMS: 0,
-      firstTokenLatencyMS: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      checkedAt: 0,
-      message: '',
-    })),
+    ...Array.from(
+      { length: emptyCount },
+      (_, index): MonitorHistoryBar => ({
+        id: `empty-${index}`,
+        status: 'empty',
+        tone: 'empty',
+        heightPercent: 25,
+        model: '',
+        latencyMS: 0,
+        endpointLatencyMS: 0,
+        firstTokenLatencyMS: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        checkedAt: 0,
+        message: '',
+      })
+    ),
     ...bars,
   ]
 }
@@ -125,7 +135,18 @@ export interface ChannelMonitorSettingsDraft {
   monitorModel: string
 }
 
+export interface ChannelAutoPrioritySettingsDraft {
+  autoPriorityEnabled: boolean
+  autoPriorityIntervalMinutes: number
+  autoPriorityWindowHours: number
+  autoPriorityAvailabilityWindowHours: number
+  autoPriorityRateMultiplier: number | null
+}
+
 export const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
+export const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
+export const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
+export const MAX_AUTO_PRIORITY_WINDOW_HOURS = 168
 
 function parseChannelSettings(settings: string | null | undefined) {
   if (!settings?.trim()) return {}
@@ -140,10 +161,50 @@ function parseChannelSettings(settings: string | null | undefined) {
   return {}
 }
 
+export function isChannelAutoPriorityManagedByUpstream(
+  channel: Channel | null
+) {
+  const settings = parseChannelSettings(channel?.settings)
+  return (
+    Number(settings.generated_by_upstream_source_id) > 0 ||
+    Number(settings.generated_by_upstream_mapping_id) > 0
+  )
+}
+
 export function normalizeMonitorInterval(value: unknown, fallback: number) {
   const interval = Number(value)
   if (Number.isInteger(interval) && interval >= 1) return interval
   return fallback
+}
+
+export function normalizeAutoPriorityInterval(
+  value: unknown,
+  fallback: number
+) {
+  const interval = Number(value)
+  if (Number.isInteger(interval) && interval >= 0) return interval
+  return fallback
+}
+
+export function normalizeAutoPriorityWindowHours(
+  value: unknown,
+  fallback: number
+) {
+  const windowHours = Number(value)
+  if (
+    Number.isInteger(windowHours) &&
+    windowHours >= 1 &&
+    windowHours <= MAX_AUTO_PRIORITY_WINDOW_HOURS
+  ) {
+    return windowHours
+  }
+  return fallback
+}
+
+export function normalizeAutoPriorityRateMultiplier(value: unknown) {
+  const multiplier = Number(value)
+  if (Number.isFinite(multiplier) && multiplier > 0) return multiplier
+  return null
 }
 
 // readChannelMonitorSettings maps a channel's persisted OtherSettings onto the
@@ -178,6 +239,30 @@ export function readChannelMonitorSettings(
   }
 }
 
+export function readChannelAutoPrioritySettings(
+  channel: Channel | null
+): ChannelAutoPrioritySettingsDraft {
+  const settings = parseChannelSettings(channel?.settings)
+  return {
+    autoPriorityEnabled: settings.channel_auto_priority_enabled === true,
+    autoPriorityIntervalMinutes: normalizeAutoPriorityInterval(
+      settings.channel_auto_priority_interval_minutes,
+      DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
+    ),
+    autoPriorityWindowHours: normalizeAutoPriorityWindowHours(
+      settings.channel_auto_priority_window_hours,
+      DEFAULT_AUTO_PRIORITY_WINDOW_HOURS
+    ),
+    autoPriorityAvailabilityWindowHours: normalizeAutoPriorityWindowHours(
+      settings.channel_auto_priority_availability_window_hours,
+      DEFAULT_AUTO_PRIORITY_WINDOW_HOURS
+    ),
+    autoPriorityRateMultiplier: normalizeAutoPriorityRateMultiplier(
+      settings.channel_auto_priority_rate_multiplier
+    ),
+  }
+}
+
 // buildChannelMonitorSettingsPayload serializes the draft back into a partial
 // channel update. Only `settings` is returned; channel.Update() persists via
 // GORM Updates (field-aware), so omitted fields (e.g. test_model) are untouched.
@@ -200,6 +285,46 @@ export function buildChannelMonitorSettingsPayload(
     settings.channel_monitor_model = monitorModel
   } else {
     delete settings.channel_monitor_model
+  }
+  return {
+    settings: JSON.stringify(settings),
+  }
+}
+
+export function buildChannelAutoPrioritySettingsPayload(
+  channel: Channel,
+  draft: ChannelAutoPrioritySettingsDraft
+): Pick<Channel, 'settings'> {
+  const settings = parseChannelSettings(channel.settings)
+  settings.channel_auto_priority_enabled = draft.autoPriorityEnabled
+  settings.channel_auto_priority_availability_window_hours =
+    normalizeAutoPriorityWindowHours(
+      draft.autoPriorityAvailabilityWindowHours,
+      DEFAULT_AUTO_PRIORITY_WINDOW_HOURS
+    )
+  if (draft.autoPriorityEnabled) {
+    settings.channel_auto_priority_interval_minutes =
+      normalizeAutoPriorityInterval(
+        draft.autoPriorityIntervalMinutes,
+        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
+      )
+    settings.channel_auto_priority_window_hours =
+      normalizeAutoPriorityWindowHours(
+        draft.autoPriorityWindowHours,
+        DEFAULT_AUTO_PRIORITY_WINDOW_HOURS
+      )
+    const rateMultiplier = normalizeAutoPriorityRateMultiplier(
+      draft.autoPriorityRateMultiplier
+    )
+    if (rateMultiplier === null) {
+      delete settings.channel_auto_priority_rate_multiplier
+    } else {
+      settings.channel_auto_priority_rate_multiplier = rateMultiplier
+    }
+  } else {
+    delete settings.channel_auto_priority_interval_minutes
+    delete settings.channel_auto_priority_window_hours
+    delete settings.channel_auto_priority_rate_multiplier
   }
   return {
     settings: JSON.stringify(settings),

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useChannels } from './channels-provider'
 import { BalanceQueryDialog } from './dialogs/balance-query-dialog'
+import { ChannelAutoPriorityDialog } from './dialogs/channel-auto-priority-dialog'
 import { ChannelMonitorDialog } from './dialogs/channel-monitor-dialog'
 import { ChannelTestDialog } from './dialogs/channel-test-dialog'
 import { CopyChannelDialog } from './dialogs/copy-channel-dialog'
@@ -56,6 +57,13 @@ export function ChannelsDialogs() {
       {/* Channel Monitor Dialog */}
       <ChannelMonitorDialog
         open={open === 'channel-monitor'}
+        onOpenChange={(v) => !v && setOpen(null)}
+        channel={currentRow}
+      />
+
+      {/* Channel Auto Priority Dialog */}
+      <ChannelAutoPriorityDialog
+        open={open === 'channel-auto-priority'}
         onOpenChange={(v) => !v && setOpen(null)}
         channel={currentRow}
       />

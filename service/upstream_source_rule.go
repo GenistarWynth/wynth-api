@@ -28,24 +28,25 @@ const (
 // AutoSyncModels stays pointer-based here so absent keys can preserve the
 // historical default while explicit false remains distinguishable.
 type upstreamSourceSyncConfig struct {
-	LocalGroup                       string                             `json:"local_group"`
-	ChannelType                      int                                `json:"channel_type"`
-	DefaultPriority                  int64                              `json:"default_priority"`
-	DefaultWeight                    uint                               `json:"default_weight"`
-	EnableMonitor                    bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes           int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels                   *bool                              `json:"auto_sync_models"`
-	ModelStrategy                    string                             `json:"model_strategy"`
-	FixedModels                      []string                           `json:"fixed_models"`
-	AllowPrivateIP                   common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled                  bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes          int                                `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled              bool                               `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes      int                                `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours          int                                `json:"auto_priority_window_hours"`
-	CodexImageGenerationBridgePolicy string                             `json:"codex_image_generation_bridge_policy"`
-	DefaultLocalGroup                string                             `json:"default_local_group"`
-	LocalGroupRules                  []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	LocalGroup                          string                             `json:"local_group"`
+	ChannelType                         int                                `json:"channel_type"`
+	DefaultPriority                     int64                              `json:"default_priority"`
+	DefaultWeight                       uint                               `json:"default_weight"`
+	EnableMonitor                       bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes              int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels                      *bool                              `json:"auto_sync_models"`
+	ModelStrategy                       string                             `json:"model_strategy"`
+	FixedModels                         []string                           `json:"fixed_models"`
+	AllowPrivateIP                      common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled                     bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes             int                                `json:"auto_sync_interval_minutes"`
+	AutoPriorityEnabled                 bool                               `json:"auto_priority_enabled"`
+	AutoPriorityIntervalMinutes         int                                `json:"auto_priority_interval_minutes"`
+	AutoPriorityWindowHours             int                                `json:"auto_priority_window_hours"`
+	AutoPriorityAvailabilityWindowHours int                                `json:"auto_priority_availability_window_hours"`
+	CodexImageGenerationBridgePolicy    string                             `json:"codex_image_generation_bridge_policy"`
+	DefaultLocalGroup                   string                             `json:"default_local_group"`
+	LocalGroupRules                     []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 	// SyncConfigVersion marks whether this blob has already gone through
 	// migrateLegacyUpstreamSourceConfig. 0 (absent/legacy) blobs get their
 	// source-level defaults folded into local_group_rules on read; version 1
@@ -54,37 +55,39 @@ type upstreamSourceSyncConfig struct {
 }
 
 type upstreamSourceRuleResolution struct {
-	Matched                          bool
-	SyncEligible                     bool
-	RuleName                         string
-	Reason                           string
-	LocalGroup                       string
-	ChannelType                      int
-	Priority                         int64
-	Weight                           uint
-	MonitorEnabled                   bool
-	MonitorIntervalMinutes           int
-	MonitorModel                     string
-	AutoSyncEnabled                  bool
-	AutoSyncIntervalMinutes          int
-	AutoPriorityEnabled              bool
-	AutoPriorityIntervalMinutes      int
-	AutoPriorityWindowHours          int
-	CodexImageGenerationBridgePolicy string
-	ModelStrategy                    string
-	FixedModels                      []string
+	Matched                             bool
+	SyncEligible                        bool
+	RuleName                            string
+	Reason                              string
+	LocalGroup                          string
+	ChannelType                         int
+	Priority                            int64
+	Weight                              uint
+	MonitorEnabled                      bool
+	MonitorIntervalMinutes              int
+	MonitorModel                        string
+	AutoSyncEnabled                     bool
+	AutoSyncIntervalMinutes             int
+	AutoPriorityEnabled                 bool
+	AutoPriorityIntervalMinutes         int
+	AutoPriorityWindowHours             int
+	AutoPriorityAvailabilityWindowHours int
+	CodexImageGenerationBridgePolicy    string
+	ModelStrategy                       string
+	FixedModels                         []string
 }
 
 func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error) {
 	config := upstreamSourceSyncConfig{
-		LocalGroup:                  "default",
-		ChannelType:                 constant.ChannelTypeOpenAI,
-		AutoSyncModels:              common.GetPointer(true),
-		DefaultPriority:             0,
-		DefaultWeight:               0,
-		ModelStrategy:               upstreamSourceModelStrategyAllUpstream,
-		AutoPriorityIntervalMinutes: upstreamSourceAutoPriorityDefaultIntervalMinutes,
-		AutoPriorityWindowHours:     upstreamSourceAutoPriorityDefaultWindowHours,
+		LocalGroup:                          "default",
+		ChannelType:                         constant.ChannelTypeOpenAI,
+		AutoSyncModels:                      common.GetPointer(true),
+		DefaultPriority:                     0,
+		DefaultWeight:                       0,
+		ModelStrategy:                       upstreamSourceModelStrategyAllUpstream,
+		AutoPriorityIntervalMinutes:         upstreamSourceAutoPriorityDefaultIntervalMinutes,
+		AutoPriorityWindowHours:             upstreamSourceAutoPriorityDefaultWindowHours,
+		AutoPriorityAvailabilityWindowHours: upstreamSourceAutoPriorityDefaultWindowHours,
 	}
 	if strings.TrimSpace(raw) != "" {
 		if err := common.Unmarshal([]byte(raw), &config); err != nil {
@@ -129,6 +132,7 @@ func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSou
 	autoPriorityEnabled := config.AutoPriorityEnabled
 	autoPriorityInterval := config.AutoPriorityIntervalMinutes
 	autoPriorityWindow := config.AutoPriorityWindowHours
+	autoPriorityAvailabilityWindow := config.AutoPriorityAvailabilityWindowHours
 	localGroup := strings.TrimSpace(config.DefaultLocalGroup)
 	if localGroup == "" {
 		localGroup = strings.TrimSpace(config.LocalGroup)
@@ -142,7 +146,7 @@ func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSou
 		Weight:                           &weight,
 		Monitor:                          &dto.UpstreamSourceRuleMonitor{Enabled: &monitorEnabled, IntervalMinutes: config.MonitorIntervalMinutes},
 		AutoSync:                         &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: config.AutoSyncIntervalMinutes},
-		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, IntervalMinutes: &autoPriorityInterval, WindowHours: &autoPriorityWindow},
+		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, IntervalMinutes: &autoPriorityInterval, WindowHours: &autoPriorityWindow, AvailabilityWindowHours: &autoPriorityAvailabilityWindow},
 		CodexImageGenerationBridgePolicy: config.CodexImageGenerationBridgePolicy,
 		ModelStrategy:                    modelStrategy,
 		FixedModels:                      config.FixedModels,
@@ -227,6 +231,7 @@ func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstream
 	}
 	config.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes)
 	config.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours)
+	config.AutoPriorityAvailabilityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityAvailabilityWindowHours)
 	config.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
 	config.ModelStrategy = normalizeUpstreamSourceFallbackModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
@@ -355,6 +360,10 @@ func normalizeUpstreamSourceRuleAutoPriority(autoPriority *dto.UpstreamSourceRul
 		value := normalizeUpstreamSourceAutoPriorityWindow(*autoPriority.WindowHours)
 		normalized.WindowHours = &value
 	}
+	if autoPriority.AvailabilityWindowHours != nil {
+		value := normalizeUpstreamSourceAutoPriorityWindow(*autoPriority.AvailabilityWindowHours)
+		normalized.AvailabilityWindowHours = &value
+	}
 	return normalized
 }
 
@@ -391,39 +400,44 @@ func normalizeUpstreamSourceRuleKeywords(values []string) []string {
 }
 
 func resolveUpstreamSourceRule(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) upstreamSourceRuleResolution {
+	resolution, _ := resolveUpstreamSourceRuleWithIndex(config, mapping)
+	return resolution
+}
+
+func resolveUpstreamSourceRuleWithIndex(config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping) (upstreamSourceRuleResolution, int) {
 	fallback := upstreamSourceRuleFallbackResolution(config)
 	if mapping == nil {
-		return fallback
+		return fallback, -1
 	}
 	discoveryStatus := strings.TrimSpace(mapping.DiscoveryStatus)
 	if discoveryStatus != "" && discoveryStatus != model.UpstreamMappingDiscoveryStatusActive {
 		fallback.Reason = upstreamSourceMatchReasonInactiveDiscovery
-		return fallback
+		return fallback, -1
 	}
 	if !mapping.SyncEnabled {
 		fallback.Reason = upstreamSourceMatchReasonManualDisabled
-		return fallback
+		return fallback, -1
 	}
 
 	name := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupName))
 	description := strings.ToLower(strings.TrimSpace(mapping.UpstreamGroupDescription))
 	platform := strings.ToLower(strings.TrimSpace(mapping.UpstreamPlatform))
 	excluded := false
-	for _, rule := range config.LocalGroupRules {
+	for index, rule := range config.LocalGroupRules {
 		matched, ruleExcluded := upstreamSourceRuleMatches(rule, platform, name, description)
 		if ruleExcluded {
 			excluded = true
 			continue
 		}
 		if matched {
-			return resolveUpstreamSourceMatchedRule(config, rule)
+			return resolveUpstreamSourceMatchedRule(config, rule), index
 		}
 	}
 	if excluded {
 		fallback.Reason = upstreamSourceMatchReasonExcludedByKeyword
-		return fallback
+		return fallback, -1
 	}
-	return fallback
+	return fallback, -1
 }
 
 // upstreamSourceRuleFallbackResolution is the resolution used when no rule
@@ -436,21 +450,22 @@ func resolveUpstreamSourceRule(config upstreamSourceSyncConfig, mapping *model.U
 // defaults for configs that are supposed to have none.
 func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstreamSourceRuleResolution {
 	return upstreamSourceRuleResolution{
-		Reason:                           upstreamSourceMatchReasonNoMatchingRule,
-		LocalGroup:                       upstreamSourceDefaultLocalGroup(config),
-		ChannelType:                      constant.ChannelTypeOpenAI,
-		Priority:                         0,
-		Weight:                           1,
-		MonitorEnabled:                   false,
-		MonitorIntervalMinutes:           0,
-		AutoSyncEnabled:                  false,
-		AutoSyncIntervalMinutes:          0,
-		AutoPriorityEnabled:              false,
-		AutoPriorityIntervalMinutes:      upstreamSourceAutoPriorityDefaultIntervalMinutes,
-		AutoPriorityWindowHours:          upstreamSourceAutoPriorityDefaultWindowHours,
-		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyFollow,
-		ModelStrategy:                    upstreamSourceModelStrategyAllUpstream,
-		FixedModels:                      nil,
+		Reason:                              upstreamSourceMatchReasonNoMatchingRule,
+		LocalGroup:                          upstreamSourceDefaultLocalGroup(config),
+		ChannelType:                         constant.ChannelTypeOpenAI,
+		Priority:                            0,
+		Weight:                              1,
+		MonitorEnabled:                      false,
+		MonitorIntervalMinutes:              0,
+		AutoSyncEnabled:                     false,
+		AutoSyncIntervalMinutes:             0,
+		AutoPriorityEnabled:                 false,
+		AutoPriorityIntervalMinutes:         upstreamSourceAutoPriorityDefaultIntervalMinutes,
+		AutoPriorityWindowHours:             upstreamSourceAutoPriorityDefaultWindowHours,
+		AutoPriorityAvailabilityWindowHours: upstreamSourceAutoPriorityDefaultWindowHours,
+		CodexImageGenerationBridgePolicy:    dto.CodexImageGenerationBridgePolicyFollow,
+		ModelStrategy:                       upstreamSourceModelStrategyAllUpstream,
+		FixedModels:                         nil,
 	}
 }
 
@@ -568,6 +583,9 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		}
 		if rule.AutoPriority.WindowHours != nil {
 			resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.WindowHours)
+		}
+		if rule.AutoPriority.AvailabilityWindowHours != nil {
+			resolution.AutoPriorityAvailabilityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.AvailabilityWindowHours)
 		}
 	}
 	if strings.TrimSpace(rule.CodexImageGenerationBridgePolicy) != "" {

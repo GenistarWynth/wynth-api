@@ -50,10 +50,7 @@ export type UpstreamMappingSyncStatus =
 
 export type UpstreamSourceModelStrategy = 'all_upstream' | 'fixed'
 
-export type CodexImageGenerationBridgePolicy =
-  | 'follow'
-  | 'enabled'
-  | 'disabled'
+export type CodexImageGenerationBridgePolicy = 'follow' | 'enabled' | 'disabled'
 
 export type UpstreamSourceRuleMonitor = {
   enabled?: boolean
@@ -70,6 +67,7 @@ export type UpstreamSourceRuleAutoPriority = {
   enabled?: boolean
   interval_minutes?: number
   window_hours?: number
+  availability_window_hours?: number
 }
 
 export type UpstreamSource = {
@@ -146,6 +144,7 @@ export type UpstreamSourceMapping = {
   resolved_auto_priority_enabled: boolean
   resolved_auto_priority_interval_minutes: number
   resolved_auto_priority_window_hours: number
+  resolved_auto_priority_availability_window_hours: number
   resolved_codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy
   resolved_model_strategy: UpstreamSourceModelStrategy
   resolved_fixed_models: string[]
@@ -246,4 +245,22 @@ export type UpstreamSourceAutoPriorityResult = {
   failed: number
   results: UpstreamSourceAutoPriorityChannelResult[]
   error?: string
+}
+
+export type UpstreamSourceRuleModelOptionsMatchedMapping = {
+  mapping_id: number
+  upstream_group_id: string
+  upstream_group_name: string
+  upstream_platform: string
+  local_channel_id: number
+}
+
+export type UpstreamSourceRuleModelOptionsRequest = {
+  local_group_rules: UpstreamSourceLocalGroupRule[]
+  rule_index: number
+}
+
+export type UpstreamSourceRuleModelOptionsResponse = {
+  models: string[]
+  matched_mappings: UpstreamSourceRuleModelOptionsMatchedMapping[]
 }

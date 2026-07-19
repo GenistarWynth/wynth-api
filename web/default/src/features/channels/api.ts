@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api, type ApiRequestConfig } from '@/lib/api'
 import { getGroups as getUserGroups } from '@/features/users/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 
 import type {
   AddChannelRequest,
@@ -110,6 +110,19 @@ export async function getChannelMonitorDetail(
   id: number
 ): Promise<GetChannelMonitorDetailResponse> {
   const res = await api.get(`/api/channel/${id}/monitor`)
+  return res.data
+}
+
+export async function updateChannelMonitorSettings(
+  id: number,
+  data: Pick<Channel, 'settings'>,
+  scope: 'monitor' | 'auto-priority'
+): Promise<{ success: boolean; message?: string; data?: Channel }> {
+  const res = await api.put(
+    `/api/channel/${id}/monitor`,
+    { ...data, scope },
+    channelActionConfig()
+  )
   return res.data
 }
 

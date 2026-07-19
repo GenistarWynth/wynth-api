@@ -43,6 +43,7 @@ type DialogType =
   | 'ollama-models'
   | 'multi-key-manage'
   | 'channel-monitor'
+  | 'channel-auto-priority'
   | 'tag-batch-edit'
   | 'edit-tag'
   | 'copy-channel'

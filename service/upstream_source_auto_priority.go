@@ -22,14 +22,20 @@ type autoPriorityMonitorStatsCollector func(ctx context.Context, channelIDs []in
 type autoPriorityUsageStatsCollector func(ctx context.Context, channelIDs []int, windowStart int64) (map[int]AutoPriorityUsageStats, error)
 
 type upstreamSourceAutoPriorityCandidate struct {
-	mapping     model.UpstreamSourceChannelMapping
-	channel     model.Channel
-	settings    dto.ChannelOtherSettings
-	resolution  upstreamSourceRuleResolution
-	scoreInput  AutoPriorityScoreInput
-	windowStart int64
-	windowEnd   int64
-	resultIndex int
+	mapping                 model.UpstreamSourceChannelMapping
+	channel                 model.Channel
+	settings                dto.ChannelOtherSettings
+	resolution              upstreamSourceRuleResolution
+	scoreInput              AutoPriorityScoreInput
+	windowStart             int64
+	availabilityWindowStart int64
+	windowEnd               int64
+	resultIndex             int
+}
+
+type autoPriorityWindowKey struct {
+	usageWindowStart        int64
+	availabilityWindowStart int64
 }
 
 func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID int, now int64) (*dto.UpstreamSourceAutoPriorityResult, error) {
@@ -81,7 +87,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 	}
 
 	pending := make([]upstreamSourceAutoPriorityCandidate, 0, len(mappings))
-	groupedPending := make(map[int64][]int, len(mappings))
+	groupedPending := make(map[autoPriorityWindowKey][]int, len(mappings))
 	resultSlots := make([]*dto.UpstreamSourceAutoPriorityChannelResult, len(mappings))
 
 	for i := range mappings {
@@ -194,10 +200,10 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 				FirstTokenSampleCount:           0,
 				HasPreviousSnapshot:             settings.ChannelAutoPriorityLastScore != nil,
 			},
-			windowStart: windowStart,
-			windowEnd:   now,
+			windowStart:             windowStart,
+			availabilityWindowStart: 0,
+			windowEnd:               now,
 		})
-		groupedPending[windowStart] = append(groupedPending[windowStart], len(pending)-1)
 	}
 
 	// Widen each candidate's price-cohort normalization range with cost bounds
@@ -221,6 +227,27 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 			types = append(types, t)
 		}
 	}
+	groupAvailabilityWindowHours, err := autoPriorityLocalGroupAvailabilityWindowHours(ctx, groups)
+	if err != nil {
+		result.Failed += len(pending)
+		result.Error = SanitizeUpstreamSourceError(err)
+		return result, err
+	}
+	for i := range pending {
+		availabilityWindowHours := groupAvailabilityWindowHours[pending[i].scoreInput.LocalGroup]
+		if availabilityWindowHours == 0 {
+			availabilityWindowHours = dto.NormalizeChannelAutoPriorityWindowHours(
+				pending[i].resolution.AutoPriorityAvailabilityWindowHours,
+			)
+		}
+		pending[i].resolution.AutoPriorityAvailabilityWindowHours = availabilityWindowHours
+		pending[i].availabilityWindowStart = now - int64(availabilityWindowHours)*3600
+		windowKey := autoPriorityWindowKey{
+			usageWindowStart:        pending[i].windowStart,
+			availabilityWindowStart: pending[i].availabilityWindowStart,
+		}
+		groupedPending[windowKey] = append(groupedPending[windowKey], i)
+	}
 	if bounds, err := autoPriorityLocalGroupCostBounds(ctx, groups, types); err != nil {
 		common.SysError(fmt.Sprintf("upstream source auto-priority: failed to compute cross-source cost bounds: %v", err))
 	} else {
@@ -234,8 +261,8 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 	}
 
 	scoreInputs := make([]AutoPriorityScoreInput, len(pending))
-	for windowStart, indexes := range groupedPending {
-		if err := fillAutoPriorityScoreInputsForWindow(ctx, pending, indexes, windowStart, scoreInputs, result, resultSlots, model.GetChannelMonitorStatsWithContext, CollectAutoPriorityUsageStatsWithContext); err != nil {
+	for windowKey, indexes := range groupedPending {
+		if err := fillAutoPriorityScoreInputsForWindows(ctx, pending, indexes, windowKey.availabilityWindowStart, windowKey.usageWindowStart, scoreInputs, result, resultSlots, model.GetChannelMonitorStatsWithContext, CollectAutoPriorityUsageStatsWithContext); err != nil {
 			appendAutoPriorityResultSlots(result, resultSlots)
 			return result, err
 		}
@@ -268,6 +295,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 		candidate.settings.ChannelAutoPriorityEnabled = candidate.resolution.AutoPriorityEnabled
 		candidate.settings.ChannelAutoPriorityIntervalMinutes = candidate.resolution.AutoPriorityIntervalMinutes
 		candidate.settings.ChannelAutoPriorityWindowHours = candidate.resolution.AutoPriorityWindowHours
+		candidate.settings.ChannelAutoPriorityAvailabilityWindowHours = candidate.resolution.AutoPriorityAvailabilityWindowHours
 		candidate.settings.ChannelAutoPriorityLastRunAt = now
 		candidate.settings.ChannelAutoPriorityLastScore = buildChannelAutoPriorityScoreSnapshot(score, candidate.windowStart, candidate.windowEnd)
 
@@ -319,20 +347,115 @@ type autoPriorityMappingCostRow struct {
 	EffectiveRateMultiplier float64
 }
 
+type autoPriorityChannelSettingsRow struct {
+	ID            int
+	OtherSettings string `gorm:"column:settings"`
+}
+
+// autoPriorityLocalGroupAvailabilityWindowHours resolves one availability
+// window per exact local group across every enabled channel participating in
+// auto-priority scoring. Channel origin is intentionally irrelevant: manual and
+// upstream-generated members contribute equally. Taking the maximum preserves
+// the existing deterministic conflict policy until the next monitor save makes
+// every member's persisted value identical.
+func autoPriorityLocalGroupAvailabilityWindowHours(ctx context.Context, groups []string) (map[string]int, error) {
+	groupSet := make(map[string]struct{}, len(groups))
+	dedupedGroups := make([]string, 0, len(groups))
+	for _, group := range groups {
+		trimmed := strings.TrimSpace(group)
+		if _, exists := groupSet[trimmed]; exists {
+			continue
+		}
+		groupSet[trimmed] = struct{}{}
+		dedupedGroups = append(dedupedGroups, trimmed)
+	}
+	if len(dedupedGroups) == 0 {
+		return map[string]int{}, nil
+	}
+
+	channelRows, err := model.GetEnabledChannelGroupTypesInGroups(ctx, dedupedGroups)
+	if err != nil {
+		return nil, err
+	}
+	channelGroups := make(map[int]string, len(channelRows))
+	channelIDs := make([]int, 0, len(channelRows))
+	for _, row := range channelRows {
+		localGroup := strings.TrimSpace(row.LocalGroup)
+		if _, exists := groupSet[localGroup]; !exists {
+			continue
+		}
+		channelGroups[row.Id] = localGroup
+		channelIDs = append(channelIDs, row.Id)
+	}
+	if len(channelIDs) == 0 {
+		return map[string]int{}, nil
+	}
+
+	var settingsRows []autoPriorityChannelSettingsRow
+	if err := model.DB.WithContext(ctx).Model(&model.Channel{}).
+		Select("id", "settings").
+		Where("id IN ?", channelIDs).
+		Find(&settingsRows).Error; err != nil {
+		return nil, err
+	}
+
+	windowHoursByGroup := make(map[string]int, len(dedupedGroups))
+	for _, row := range settingsRows {
+		settings := dto.ChannelOtherSettings{}
+		if strings.TrimSpace(row.OtherSettings) != "" {
+			if err := common.UnmarshalJsonStr(row.OtherSettings, &settings); err != nil {
+				continue
+			}
+		}
+		if !settings.ChannelAutoPriorityEnabled {
+			continue
+		}
+		localGroup, exists := channelGroups[row.ID]
+		if !exists {
+			continue
+		}
+		windowHours := dto.NormalizeChannelAutoPriorityWindowHours(
+			settings.ChannelAutoPriorityAvailabilityWindowHours,
+		)
+		if windowHours > windowHoursByGroup[localGroup] {
+			windowHoursByGroup[localGroup] = windowHours
+		}
+	}
+	return windowHoursByGroup, nil
+}
+
+func updateAutoPriorityCostBounds(bounds map[string][2]float64, cohort string, multiplier float64) {
+	if !isValidAutoPriorityMultiplier(multiplier) {
+		return
+	}
+	current, exists := bounds[cohort]
+	if !exists {
+		bounds[cohort] = [2]float64{multiplier, multiplier}
+		return
+	}
+	if multiplier < current[0] {
+		current[0] = multiplier
+	}
+	if multiplier > current[1] {
+		current[1] = multiplier
+	}
+	bounds[cohort] = current
+}
+
 // autoPriorityLocalGroupCostBounds returns, keyed by autoPriorityCohortKey
 // (localGroup + "#" + channelType), the [min, max] effective rate multiplier
-// across all ENABLED channels in that exact local group and channel type, taken
-// from their upstream-source mappings across ALL sources. A single auto-priority
-// run only ever sees the channels generated by one source, so without this,
-// every price cohort has exactly one member and cost cannot differentiate
-// priority; this widens the normalization range to the whole local group.
+// across all ENABLED auto-priority channels in that exact local group and
+// channel type. Normal channels use their channel-level rate multiplier (1x
+// when unset), while upstream-generated channels retain the effective rate from
+// their mapping. A single worker run may see only part of a cohort, so this
+// widens price normalization to the whole local group.
 //
 // Bounds are recomputed each run from the current enabled channels, so newly
 // added/removed channels only shift a peer's normalization at its next run
 // (self-healing; still strictly better than the pre-fix "cost ignored" state).
-// It assumes one generating mapping per enabled channel; a stale/duplicate
-// mapping pointing at an enabled channel would only widen the range and compress
-// scores toward 100, never invert cheaper-vs-dearer ordering.
+// It assumes one generating mapping per enabled generated channel; a stale or
+// duplicate mapping would only widen the range and compress scores toward 100,
+// never invert cheaper-vs-dearer ordering.
 func autoPriorityLocalGroupCostBounds(ctx context.Context, groups []string, types []int) (map[string][2]float64, error) {
 	groupSet := make(map[string]struct{}, len(groups))
 	dedupedGroups := make([]string, 0, len(groups))
@@ -379,33 +502,58 @@ func autoPriorityLocalGroupCostBounds(ctx context.Context, groups []string, type
 		return map[string][2]float64{}, nil
 	}
 
+	var settingsRows []autoPriorityChannelSettingsRow
+	if err := model.DB.WithContext(ctx).Model(&model.Channel{}).
+		Select("id", "settings").
+		Where("id IN ?", channelIDs).
+		Find(&settingsRows).Error; err != nil {
+		return nil, err
+	}
+
+	generatedChannelIDs := make([]int, 0, len(settingsRows))
+	bounds := make(map[string][2]float64, len(channelCohort))
+	for _, row := range settingsRows {
+		cohort, ok := channelCohort[row.ID]
+		if !ok {
+			continue
+		}
+		settings := dto.ChannelOtherSettings{}
+		if strings.TrimSpace(row.OtherSettings) != "" {
+			if err := common.UnmarshalJsonStr(row.OtherSettings, &settings); err != nil {
+				continue
+			}
+		}
+		if settings.GeneratedByUpstreamSourceID != 0 || settings.GeneratedByUpstreamMappingID != 0 {
+			generatedChannelIDs = append(generatedChannelIDs, row.ID)
+			continue
+		}
+		if !settings.ChannelAutoPriorityEnabled {
+			continue
+		}
+		multiplier := settings.ChannelAutoPriorityRateMultiplier
+		if !isValidAutoPriorityMultiplier(multiplier) {
+			multiplier = 1
+		}
+		updateAutoPriorityCostBounds(bounds, cohort, multiplier)
+	}
+	if len(generatedChannelIDs) == 0 {
+		return bounds, nil
+	}
+
 	var mappingRows []autoPriorityMappingCostRow
 	if err := model.DB.WithContext(ctx).Model(&model.UpstreamSourceChannelMapping{}).
-		Where("local_channel_id IN ?", channelIDs).
+		Where("local_channel_id IN ?", generatedChannelIDs).
 		Where("effective_rate_multiplier > ?", 0).
 		Select("local_channel_id", "effective_rate_multiplier").
 		Find(&mappingRows).Error; err != nil {
 		return nil, err
 	}
-
-	bounds := make(map[string][2]float64, len(channelCohort))
 	for _, row := range mappingRows {
 		cohort, ok := channelCohort[row.LocalChannelID]
 		if !ok {
 			continue
 		}
-		current, exists := bounds[cohort]
-		if !exists {
-			bounds[cohort] = [2]float64{row.EffectiveRateMultiplier, row.EffectiveRateMultiplier}
-			continue
-		}
-		if row.EffectiveRateMultiplier < current[0] {
-			current[0] = row.EffectiveRateMultiplier
-		}
-		if row.EffectiveRateMultiplier > current[1] {
-			current[1] = row.EffectiveRateMultiplier
-		}
-		bounds[cohort] = current
+		updateAutoPriorityCostBounds(bounds, cohort, row.EffectiveRateMultiplier)
 	}
 	return bounds, nil
 }
@@ -427,17 +575,21 @@ func initChannelCacheAfterAutoPriority(ctx context.Context) {
 }
 
 func fillAutoPriorityScoreInputsForWindow(ctx context.Context, pending []upstreamSourceAutoPriorityCandidate, indexes []int, windowStart int64, scoreInputs []AutoPriorityScoreInput, result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult, monitorCollector autoPriorityMonitorStatsCollector, usageCollector autoPriorityUsageStatsCollector) error {
+	return fillAutoPriorityScoreInputsForWindows(ctx, pending, indexes, windowStart, windowStart, scoreInputs, result, resultSlots, monitorCollector, usageCollector)
+}
+
+func fillAutoPriorityScoreInputsForWindows(ctx context.Context, pending []upstreamSourceAutoPriorityCandidate, indexes []int, availabilityWindowStart int64, usageWindowStart int64, scoreInputs []AutoPriorityScoreInput, result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult, monitorCollector autoPriorityMonitorStatsCollector, usageCollector autoPriorityUsageStatsCollector) error {
 	channelIDList := make([]int, 0, len(indexes))
 	for _, idx := range indexes {
 		channelIDList = append(channelIDList, pending[idx].channel.Id)
 	}
 
-	monitorStats, err := monitorCollector(ctx, channelIDList, windowStart)
+	monitorStats, err := monitorCollector(ctx, channelIDList, availabilityWindowStart)
 	if err != nil {
 		markAutoPriorityGroupFailure(result, resultSlots, pending, indexes, "monitor_stats_failed", err)
 		return err
 	}
-	usageStats, err := usageCollector(ctx, channelIDList, windowStart)
+	usageStats, err := usageCollector(ctx, channelIDList, usageWindowStart)
 	if err != nil {
 		markAutoPriorityGroupFailure(result, resultSlots, pending, indexes, "usage_stats_failed", err)
 		return err
@@ -472,18 +624,51 @@ func persistAutoPriorityCandidate(ctx context.Context, candidate upstreamSourceA
 	settings.ChannelAutoPriorityEnabled = candidate.resolution.AutoPriorityEnabled
 	settings.ChannelAutoPriorityIntervalMinutes = candidate.resolution.AutoPriorityIntervalMinutes
 	settings.ChannelAutoPriorityWindowHours = candidate.resolution.AutoPriorityWindowHours
+	settings.ChannelAutoPriorityAvailabilityWindowHours = candidate.resolution.AutoPriorityAvailabilityWindowHours
 	settings.ChannelAutoPriorityLastRunAt = now
 	settings.ChannelAutoPriorityLastScore = buildChannelAutoPriorityScoreSnapshot(score, candidate.windowStart, candidate.windowEnd)
 	if score.Applied {
 		settings.ChannelAutoPriorityLastAppliedAt = now
 	}
 
-	channelSettings := candidate.channel
-	channelSettings.SetOtherSettings(settings)
+	settingsObject := make(map[string]any)
+	if strings.TrimSpace(candidate.channel.OtherSettings) != "" {
+		if err := common.UnmarshalJsonStr(candidate.channel.OtherSettings, &settingsObject); err != nil {
+			return "", err
+		}
+	}
+	encodedSettings, err := common.Marshal(settings)
+	if err != nil {
+		return "", err
+	}
+	workerSettings := make(map[string]any)
+	if err := common.Unmarshal(encodedSettings, &workerSettings); err != nil {
+		return "", err
+	}
+	workerSettingKeys := []string{
+		"channel_auto_priority_enabled",
+		"channel_auto_priority_interval_minutes",
+		"channel_auto_priority_window_hours",
+		"channel_auto_priority_availability_window_hours",
+		"channel_auto_priority_last_run_at",
+		"channel_auto_priority_last_applied_at",
+		"channel_auto_priority_last_score",
+	}
+	for _, key := range workerSettingKeys {
+		if value, exists := workerSettings[key]; exists {
+			settingsObject[key] = value
+		} else {
+			delete(settingsObject, key)
+		}
+	}
+	mergedSettings, err := common.Marshal(settingsObject)
+	if err != nil {
+		return "", err
+	}
 
-	err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{
-			"settings": channelSettings.OtherSettings,
+			"settings": string(mergedSettings),
 		}
 		if score.Applied {
 			updates["priority"] = score.NewPriority

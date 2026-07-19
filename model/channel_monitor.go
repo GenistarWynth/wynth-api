@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"gorm.io/gorm"
 )
 
 const (
@@ -16,9 +17,13 @@ const (
 	ChannelMonitorStatusDegraded = "degraded"
 	ChannelMonitorStatusError    = "error"
 
-	DefaultChannelMonitorIntervalMinutes = 10
-	MinimumChannelMonitorIntervalMinutes = 1
-	ChannelMonitorRetentionSeconds       = int64(7 * 24 * 60 * 60)
+	DefaultChannelMonitorIntervalMinutes   = 10
+	MinimumChannelMonitorIntervalMinutes   = 1
+	ChannelMonitorRetentionSeconds         = int64(7 * 24 * 60 * 60)
+	ChannelSettingsUpdateScopeMonitor      = "monitor"
+	ChannelSettingsUpdateScopeAutoPriority = "auto-priority"
+
+	channelAutoPriorityAvailabilityWindowKey = "channel_auto_priority_availability_window_hours"
 )
 
 type ChannelMonitorLog struct {
@@ -74,6 +79,20 @@ type ChannelMonitorDetail struct {
 	RecentRecords []ChannelMonitorLog `json:"recent_records"`
 }
 
+var channelMonitorEditableSettingKeys = []string{
+	"channel_monitor_enabled",
+	"channel_monitor_interval_minutes",
+	"channel_monitor_model",
+}
+
+var channelAutoPriorityEditableSettingKeys = []string{
+	"channel_auto_priority_enabled",
+	"channel_auto_priority_interval_minutes",
+	"channel_auto_priority_window_hours",
+	"channel_auto_priority_availability_window_hours",
+	"channel_auto_priority_rate_multiplier",
+}
+
 func NormalizeChannelMonitorSettings(settings dto.ChannelOtherSettings) dto.ChannelOtherSettings {
 	if !settings.ChannelMonitorEnabled {
 		return settings
@@ -84,6 +103,175 @@ func NormalizeChannelMonitorSettings(settings dto.ChannelOtherSettings) dto.Chan
 		settings.ChannelMonitorIntervalMinutes = MinimumChannelMonitorIntervalMinutes
 	}
 	return settings
+}
+
+func parseChannelSettingsObject(raw string) (map[string]any, dto.ChannelOtherSettings, error) {
+	settingsObject := make(map[string]any)
+	settings := dto.ChannelOtherSettings{}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return settingsObject, settings, nil
+	}
+	if trimmed == "null" {
+		return nil, settings, fmt.Errorf("settings must be a JSON object")
+	}
+	if err := common.UnmarshalJsonStr(raw, &settingsObject); err != nil {
+		return nil, settings, err
+	}
+	if err := common.UnmarshalJsonStr(raw, &settings); err != nil {
+		return nil, settings, err
+	}
+	return settingsObject, settings, nil
+}
+
+// UpdateChannelMonitorSettings persists monitor or auto-priority settings
+// without overwriting the other settings domain, worker-owned snapshots, or
+// unrelated JSON keys. An empty scope retains the legacy combined-update
+// behavior. Generated channels retain rule ownership of their per-channel
+// auto-priority settings, but the availability window is group-scoped and
+// remains editable from any channel in the group.
+func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedRaw, scope string) (*Channel, error) {
+	requestedObject, requestedSettings, err := parseChannelSettingsObject(requestedRaw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid channel monitor settings: %w", err)
+	}
+	updateMonitorSettings := scope == "" || scope == ChannelSettingsUpdateScopeMonitor
+	updateAutoPrioritySettings := scope == "" || scope == ChannelSettingsUpdateScopeAutoPriority
+	if !updateMonitorSettings && !updateAutoPrioritySettings {
+		return nil, fmt.Errorf("invalid channel settings update scope %q", scope)
+	}
+	_, availabilityWindowRequested := requestedObject[channelAutoPriorityAvailabilityWindowKey]
+	availabilityWindowRequested = updateAutoPrioritySettings && availabilityWindowRequested
+
+	var updatedChannel Channel
+	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var located Channel
+		if err := tx.Select("group").First(&located, channelID).Error; err != nil {
+			return err
+		}
+
+		// Lock the entire group in channel ID order so concurrent monitor saves
+		// cannot deadlock by first locking different selected channels.
+		var groupChannels []Channel
+		if err := lockForUpdate(tx).
+			Where(map[string]any{"group": located.Group}).
+			Order("id ASC").
+			Find(&groupChannels).Error; err != nil {
+			return err
+		}
+		currentIndex := -1
+		for i := range groupChannels {
+			if groupChannels[i].Id == channelID {
+				currentIndex = i
+				break
+			}
+		}
+		if currentIndex == -1 {
+			return gorm.ErrRecordNotFound
+		}
+		current := groupChannels[currentIndex]
+
+		currentObject, currentSettings, err := parseChannelSettingsObject(current.OtherSettings)
+		if err != nil {
+			return fmt.Errorf("invalid stored settings for channel %d: %w", current.Id, err)
+		}
+		if updateMonitorSettings {
+			for _, key := range channelMonitorEditableSettingKeys {
+				if value, exists := requestedObject[key]; exists {
+					currentObject[key] = value
+				} else {
+					delete(currentObject, key)
+				}
+			}
+		}
+
+		if updateAutoPrioritySettings {
+			generated := currentSettings.GeneratedByUpstreamSourceID != 0 ||
+				currentSettings.GeneratedByUpstreamMappingID != 0
+			if !generated {
+				for _, key := range channelAutoPriorityEditableSettingKeys {
+					if value, exists := requestedObject[key]; exists {
+						currentObject[key] = value
+					} else {
+						delete(currentObject, key)
+					}
+				}
+			} else if value, exists := requestedObject[channelAutoPriorityAvailabilityWindowKey]; exists {
+				currentObject[channelAutoPriorityAvailabilityWindowKey] = value
+			} else {
+				delete(currentObject, channelAutoPriorityAvailabilityWindowKey)
+			}
+		}
+
+		mergedBytes, err := common.Marshal(currentObject)
+		if err != nil {
+			return err
+		}
+		current.OtherSettings = string(mergedBytes)
+		mergedSettings := current.GetOtherSettings()
+		if mergedSettings.ChannelMonitorEnabled &&
+			mergedSettings.ChannelMonitorIntervalMinutes < MinimumChannelMonitorIntervalMinutes {
+			return fmt.Errorf("settings.channel_monitor_interval_minutes must be >= %d", MinimumChannelMonitorIntervalMinutes)
+		}
+		if availabilityWindowRequested &&
+			requestedSettings.ChannelAutoPriorityAvailabilityWindowHours !=
+				dto.NormalizeChannelAutoPriorityWindowHours(requestedSettings.ChannelAutoPriorityAvailabilityWindowHours) {
+			return fmt.Errorf(
+				"settings.channel_auto_priority_availability_window_hours must be between 1 and %d",
+				dto.ChannelAutoPriorityMaxWindowHours,
+			)
+		}
+		if err := current.ValidateSettings(); err != nil {
+			return err
+		}
+
+		now := common.GetTimestamp()
+		if err := tx.Model(&Channel{}).
+			Where("id = ?", current.Id).
+			Updates(map[string]any{
+				"settings":     current.OtherSettings,
+				"updated_time": now,
+			}).Error; err != nil {
+			return err
+		}
+		current.UpdatedTime = now
+		updatedChannel = current
+
+		if !availabilityWindowRequested {
+			return nil
+		}
+		availabilityWindowHours := requestedSettings.ChannelAutoPriorityAvailabilityWindowHours
+		for i := range groupChannels {
+			if groupChannels[i].Id == current.Id {
+				continue
+			}
+			memberObject, memberSettings, err := parseChannelSettingsObject(groupChannels[i].OtherSettings)
+			if err != nil {
+				return fmt.Errorf("invalid stored settings for channel %d: %w", groupChannels[i].Id, err)
+			}
+			if !memberSettings.ChannelAutoPriorityEnabled {
+				continue
+			}
+			memberObject[channelAutoPriorityAvailabilityWindowKey] = availabilityWindowHours
+			memberBytes, err := common.Marshal(memberObject)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&Channel{}).
+				Where("id = ?", groupChannels[i].Id).
+				Updates(map[string]any{
+					"settings":     string(memberBytes),
+					"updated_time": now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updatedChannel, nil
 }
 
 func NormalizeChannelMonitorStatus(status string) string {

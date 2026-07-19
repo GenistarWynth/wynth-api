@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -29,10 +28,11 @@ import {
   RefreshCw,
   type LucideIcon,
 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getLobeIcon } from '@/lib/lobe-icon'
-import { cn } from '@/lib/utils'
+
+import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Combobox } from '@/components/ui/combobox'
 import {
@@ -66,8 +66,13 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { StatusBadge } from '@/components/status-badge'
-import { getChannelMonitorDetail, updateChannel } from '../../api'
+import { getLobeIcon } from '@/lib/lobe-icon'
+import { cn } from '@/lib/utils'
+
+import {
+  getChannelMonitorDetail,
+  updateChannelMonitorSettings,
+} from '../../api'
 import {
   formatRelativeTime,
   formatResponseTime,
@@ -86,7 +91,11 @@ import {
   type MonitorHistoryBar,
   type MonitorVisualStatus,
 } from '../../lib/channel-monitor'
-import type { Channel, ChannelMonitorInfo } from '../../types'
+import type {
+  Channel,
+  ChannelMonitorInfo,
+  ChannelMonitorRecord,
+} from '../../types'
 
 interface ChannelMonitorDialogProps {
   open: boolean
@@ -104,11 +113,15 @@ interface CompactMetricValue {
 
 type MonitorHistoryViewMode = 'availability' | 'first-token'
 
+const EMPTY_MONITOR_RECORDS: ChannelMonitorRecord[] = []
+
 function monitorStatusPillClass(status: MonitorVisualStatus | undefined) {
-  if (status === 'success')
+  if (status === 'success') {
     return 'border-success/35 bg-success/10 text-success'
-  if (status === 'degraded')
+  }
+  if (status === 'degraded') {
     return 'border-warning/35 bg-warning/10 text-warning'
+  }
   if (status === 'failed' || status === 'error') {
     return 'border-destructive/35 bg-destructive/10 text-destructive'
   }
@@ -123,8 +136,9 @@ function monitorHistoryToneClass(tone: MonitorHistoryBar['tone']) {
 }
 
 function availabilityToneClass(value: number | null | undefined) {
-  if (typeof value !== 'number' || !Number.isFinite(value))
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
     return 'text-muted-foreground'
+  }
   if (value < 0.5) return 'text-destructive'
   if (value < 0.8) return 'text-warning'
   return 'text-success'
@@ -366,7 +380,7 @@ function MonitorHistory({
                 <span
                   key={`${bar.id}-anomaly`}
                   aria-hidden='true'
-                  className='ring-background pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-destructive ring-1'
+                  className='ring-background bg-destructive pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-1'
                   style={{
                     left: `${x}%`,
                     top: `${(markerY / 40) * 100}%`,
@@ -440,15 +454,13 @@ export function ChannelMonitorDialog({
   const channelId = channel?.id ?? 0
   const monitorDefaults = useMemo(
     () => readChannelMonitorSettings(channel),
-    [channel?.id, channel?.settings, channel?.test_model]
+    [channel]
   )
   const [monitorEnabled, setMonitorEnabled] = useState(monitorDefaults.enabled)
   const [monitorIntervalInput, setMonitorIntervalInput] = useState(
     String(monitorDefaults.intervalMinutes)
   )
-  const [monitorModel, setMonitorModel] = useState(
-    monitorDefaults.monitorModel
-  )
+  const [monitorModel, setMonitorModel] = useState(monitorDefaults.monitorModel)
   const [savedMonitorSettings, setSavedMonitorSettings] =
     useState<ChannelMonitorSettingsDraft>(monitorDefaults)
   const [isSavingMonitorSettings, setIsSavingMonitorSettings] = useState(false)
@@ -466,18 +478,13 @@ export function ChannelMonitorDialog({
     setMonitorIntervalInput(String(monitorDefaults.intervalMinutes))
     setMonitorModel(monitorDefaults.monitorModel)
     setSavedMonitorSettings(monitorDefaults)
-  }, [
-    monitorDefaults.enabled,
-    monitorDefaults.intervalMinutes,
-    monitorDefaults.monitorModel,
-    open,
-  ])
+  }, [monitorDefaults, open])
 
   const detail = query.data?.data
   const detailLoadError = query.isError ? query.error.message : null
   const info = detail?.info ?? channel?.monitor_info ?? undefined
-  const records = detail?.recent_records ?? []
-  const latestRecord = records.length > 0 ? records[records.length - 1] : null
+  const records = detail?.recent_records ?? EMPTY_MONITOR_RECORDS
+  const latestRecord = records.at(-1) ?? null
   const latestStatus = info?.latest_status
   const availabilityValue = info?.seven_day_availability
   const availability = formatAvailability(
@@ -495,7 +502,7 @@ export function ChannelMonitorDialog({
       ...models,
       ...(selectedModel ? [selectedModel] : []),
     ])
-    return Array.from(allModels).map((model) => ({
+    return [...allModels].map((model) => ({
       value: model,
       label: model,
     }))
@@ -516,7 +523,7 @@ export function ChannelMonitorDialog({
   const isMonitorIntervalValid =
     !monitorEnabled ||
     (Number.isInteger(monitorIntervalValue) && monitorIntervalValue >= 1)
-  const currentMonitorDraft = {
+  const currentMonitorDraft: ChannelMonitorSettingsDraft = {
     enabled: monitorEnabled,
     intervalMinutes: normalizeMonitorInterval(
       monitorIntervalInput,
@@ -536,12 +543,12 @@ export function ChannelMonitorDialog({
       toast.error(t('Monitoring interval must be at least 1 minute'))
       return
     }
-
     setIsSavingMonitorSettings(true)
     try {
-      const response = await updateChannel(
+      const response = await updateChannelMonitorSettings(
         channel.id,
-        buildChannelMonitorSettingsPayload(channel, currentMonitorDraft)
+        buildChannelMonitorSettingsPayload(channel, currentMonitorDraft),
+        'monitor'
       )
       if (response.success) {
         setSavedMonitorSettings(currentMonitorDraft)

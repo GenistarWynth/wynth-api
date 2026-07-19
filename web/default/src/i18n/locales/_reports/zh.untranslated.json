@@ -1,17 +1,25 @@
 {
   "AI Studio": "AI Studio",
-  "Gemini Code Assist": "Gemini Code Assist",
   "Anthropic (Claude)": "Anthropic (Claude)",
   "Auto Pause On Expired": "Auto Pause On Expired",
+  "Batch Operations": "Batch Operations",
+  "Channel consistency repaired: {{success}} succeeded, {{fails}} failed": "Channel consistency repaired: {{success}} succeeded, {{fails}} failed",
   "Expires At (unix seconds, 0 = never)": "Expires At (unix seconds, 0 = never)",
+  "Failed to repair channel consistency": "Failed to repair channel consistency",
   "footer.columns.related.links.midjourney": "Midjourney-Proxy",
+  "Gemini Code Assist": "Gemini Code Assist",
   "Google Gemini": "Google Gemini",
   "Grok (X.AI)": "Grok (X.AI)",
   "Max Per-User Concurrency": "Max Per-User Concurrency",
   "Midjourney": "Midjourney",
   "MidjourneyPlus": "MidjourneyPlus",
   "OpenAI / Codex": "OpenAI / Codex",
+  "Repair": "Repair",
+  "Repair Channel Consistency": "Repair Channel Consistency",
+  "Repair channel consistency?": "Repair channel consistency?",
   "Request Quota (0 = unlimited)": "Request Quota (0 = unlimited)",
   "Request Quota Window (seconds, 0 = lifetime)": "Request Quota Window (seconds, 0 = lifetime)",
-  "Stop scheduling this account once it has expired": "Stop scheduling this account once it has expired"
+  "Resize column": "Resize column",
+  "Stop scheduling this account once it has expired": "Stop scheduling this account once it has expired",
+  "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?"
 }

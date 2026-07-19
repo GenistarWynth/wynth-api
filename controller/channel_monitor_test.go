@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -340,6 +341,185 @@ func TestGetChannelMonitorDetail(t *testing.T) {
 	assert.Equal(t, "gpt-4o-mini", detailEnvelope.Data.Info.LatestModel)
 	assert.Equal(t, 4, detailEnvelope.Data.Info.LatestPromptTokens)
 	assert.Equal(t, 14, detailEnvelope.Data.Info.LatestCompletionTokens)
+}
+
+func TestUpdateChannelMonitorSettingsWritesProbeAndAutoPriorityFields(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+
+	channel := model.Channel{
+		Name:  "monitor settings update",
+		Group: "default",
+		OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+			ChannelAutoPriorityAvailabilityWindowHours: 1,
+		}),
+	}
+	require.NoError(t, db.Create(&channel).Error)
+
+	requestedSettings := monitorSettingsJSON(t, dto.ChannelOtherSettings{
+		ChannelMonitorEnabled:                      true,
+		ChannelMonitorIntervalMinutes:              5,
+		ChannelMonitorModel:                        "gpt-4o-mini",
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityIntervalMinutes:         0,
+		ChannelAutoPriorityWindowHours:             12,
+		ChannelAutoPriorityAvailabilityWindowHours: 48,
+		ChannelAutoPriorityRateMultiplier:          0.8,
+	})
+	payload, err := common.Marshal(map[string]any{"settings": requestedSettings})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channel.Id)}}
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/channel/"+strconv.Itoa(channel.Id)+"/monitor",
+		bytes.NewReader(payload),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannelMonitorSettings(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool          `json:"success"`
+		Data    model.Channel `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	settings := response.Data.GetOtherSettings()
+	assert.True(t, settings.ChannelMonitorEnabled)
+	assert.Equal(t, 5, settings.ChannelMonitorIntervalMinutes)
+	assert.Equal(t, "gpt-4o-mini", settings.ChannelMonitorModel)
+	assert.True(t, settings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 0, settings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 12, settings.ChannelAutoPriorityWindowHours)
+	assert.Equal(t, 48, settings.ChannelAutoPriorityAvailabilityWindowHours)
+	assert.Equal(t, 0.8, settings.ChannelAutoPriorityRateMultiplier)
+}
+
+func TestUpdateChannelMonitorSettingsMonitorScopeDoesNotPropagateExistingAvailabilityWindow(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+
+	channels := []model.Channel{
+		{
+			Name:  "selected",
+			Group: "alpha",
+			OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+				ChannelMonitorEnabled:                      true,
+				ChannelMonitorIntervalMinutes:              15,
+				ChannelMonitorModel:                        "old-monitor-model",
+				ChannelAutoPriorityEnabled:                 true,
+				ChannelAutoPriorityIntervalMinutes:         30,
+				ChannelAutoPriorityWindowHours:             12,
+				ChannelAutoPriorityAvailabilityWindowHours: 24,
+				ChannelAutoPriorityRateMultiplier:          0.8,
+			}),
+		},
+		{
+			Name:  "peer",
+			Group: "alpha",
+			OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+				ChannelAutoPriorityEnabled:                 true,
+				ChannelAutoPriorityAvailabilityWindowHours: 72,
+			}),
+		},
+	}
+	require.NoError(t, db.Create(&channels).Error)
+
+	requestedSettings := monitorSettingsJSON(t, dto.ChannelOtherSettings{
+		ChannelMonitorEnabled:                      true,
+		ChannelMonitorIntervalMinutes:              5,
+		ChannelMonitorModel:                        "new-monitor-model",
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityIntervalMinutes:         30,
+		ChannelAutoPriorityWindowHours:             12,
+		ChannelAutoPriorityAvailabilityWindowHours: 24,
+		ChannelAutoPriorityRateMultiplier:          0.8,
+	})
+	payload, err := common.Marshal(map[string]any{
+		"settings": requestedSettings,
+		"scope":    "monitor",
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channels[0].Id)}}
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/channel/"+strconv.Itoa(channels[0].Id)+"/monitor",
+		bytes.NewReader(payload),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannelMonitorSettings(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	var reloaded []model.Channel
+	require.NoError(t, db.Order("id ASC").Find(&reloaded).Error)
+	selectedSettings := reloaded[0].GetOtherSettings()
+	peerSettings := reloaded[1].GetOtherSettings()
+	assert.Equal(t, 5, selectedSettings.ChannelMonitorIntervalMinutes)
+	assert.Equal(t, "new-monitor-model", selectedSettings.ChannelMonitorModel)
+	assert.Equal(t, 24, selectedSettings.ChannelAutoPriorityAvailabilityWindowHours)
+	assert.Equal(t, 72, peerSettings.ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestUpdateChannelMonitorSettingsAutoPriorityScopePreservesMonitorFields(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+
+	channel := model.Channel{
+		Name:  "selected",
+		Group: "alpha",
+		OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+			ChannelMonitorEnabled:                      true,
+			ChannelMonitorIntervalMinutes:              9,
+			ChannelMonitorModel:                        "existing-monitor-model",
+			ChannelAutoPriorityEnabled:                 true,
+			ChannelAutoPriorityAvailabilityWindowHours: 24,
+		}),
+	}
+	require.NoError(t, db.Create(&channel).Error)
+
+	requestedSettings := monitorSettingsJSON(t, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityIntervalMinutes:         30,
+		ChannelAutoPriorityWindowHours:             12,
+		ChannelAutoPriorityAvailabilityWindowHours: 48,
+		ChannelAutoPriorityRateMultiplier:          0.8,
+	})
+	payload, err := common.Marshal(map[string]any{
+		"settings": requestedSettings,
+		"scope":    "auto-priority",
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channel.Id)}}
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/channel/"+strconv.Itoa(channel.Id)+"/monitor",
+		bytes.NewReader(payload),
+	)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	UpdateChannelMonitorSettings(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var reloaded model.Channel
+	require.NoError(t, db.First(&reloaded, channel.Id).Error)
+	settings := reloaded.GetOtherSettings()
+	assert.True(t, settings.ChannelMonitorEnabled)
+	assert.Equal(t, 9, settings.ChannelMonitorIntervalMinutes)
+	assert.Equal(t, "existing-monitor-model", settings.ChannelMonitorModel)
+	assert.Equal(t, 48, settings.ChannelAutoPriorityAvailabilityWindowHours)
 }
 
 func TestFilterDueChannelMonitorCandidates(t *testing.T) {

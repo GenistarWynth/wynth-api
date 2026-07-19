@@ -37,6 +37,12 @@ describe('ComboboxInput open policy', () => {
     assert.equal(shouldOpenCombobox('Enter', false), false)
   })
 
+  test('stays closed while disabled', () => {
+    assert.equal(shouldOpenCombobox('pointer', true, true), false)
+    assert.equal(shouldOpenCombobox('ArrowDown', true, true), false)
+    assert.equal(shouldOpenCombobox('focus', true, true), false)
+  })
+
   test('passes openOnFocus through the legacy Combobox adapter', () => {
     const element = Combobox({
       options: [{ value: '1', label: 'OpenAI' }],
@@ -46,5 +52,16 @@ describe('ComboboxInput open policy', () => {
     }) as ReactElement<{ openOnFocus?: boolean }>
 
     assert.equal(element.props.openOnFocus, false)
+  })
+
+  test('passes disabled through the legacy Combobox adapter', () => {
+    const element = Combobox({
+      options: [{ value: '1', label: 'OpenAI' }],
+      value: '1',
+      onValueChange: () => undefined,
+      disabled: true,
+    }) as ReactElement<{ disabled?: boolean }>
+
+    assert.equal(element.props.disabled, true)
   })
 })

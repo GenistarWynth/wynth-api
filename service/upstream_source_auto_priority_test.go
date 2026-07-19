@@ -453,9 +453,72 @@ func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
 	assert.Equal(t, int64(1), longSettings.ChannelAutoPriorityLastScore.UsageLogCount)
 	assert.Equal(t, int64(0), shortSettings.ChannelAutoPriorityLastScore.UsageLogCount)
 	assert.Equal(t, int64(1), longSettings.ChannelAutoPriorityLastScore.MonitorCheckCount)
-	assert.Equal(t, int64(0), shortSettings.ChannelAutoPriorityLastScore.MonitorCheckCount)
+	// Availability defaults to its own 24-hour window, independently of the
+	// rule's one-hour usage/cost window.
+	assert.Equal(t, int64(1), shortSettings.ChannelAutoPriorityLastScore.MonitorCheckCount)
 	assert.Equal(t, int64(1), longSettings.ChannelAutoPriorityLastScore.FirstTokenSampleCount)
 	assert.Equal(t, int64(0), shortSettings.ChannelAutoPriorityLastScore.FirstTokenSampleCount)
+}
+
+func TestRunUpstreamSourceAutoPriorityUsesGroupAvailabilityWindowIncludingManualPeer(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(5_100_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+		"local_group_rules": []map[string]any{
+			{
+				"name":          "Split window",
+				"local_group":   "default",
+				"name_contains": []string{"split"},
+				"auto_priority": map[string]any{
+					"enabled":                   true,
+					"window_hours":              24,
+					"availability_window_hours": 1,
+				},
+			},
+		},
+	})
+	rate := 0.5
+	mapping := createSyncTestMapping(t, source.Id, "15", "split upstream", &rate)
+	channel := createAutoPriorityTestChannel(t, "source-a / split", 100, dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:                source.Id,
+		GeneratedByUpstreamMappingID:               mapping.Id,
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityIntervalMinutes:         15,
+		ChannelAutoPriorityWindowHours:             24,
+		ChannelAutoPriorityAvailabilityWindowHours: 1,
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+	createAutoPriorityTestChannel(t, "manual group peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityIntervalMinutes:         0,
+		ChannelAutoPriorityWindowHours:             24,
+		ChannelAutoPriorityAvailabilityWindowHours: 24,
+		ChannelAutoPriorityRateMultiplier:          1,
+	})
+
+	createAutoPriorityTestUsageLog(t, channel.Id, now-2*3600)
+	createAutoPriorityTestMonitorLog(t, channel.Id, now-2*3600)
+
+	service := UpstreamSourceService{Now: func() int64 { return now }}
+
+	result, err := service.RunAutoPriority(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Results, 1)
+
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	settings := reloaded.GetOtherSettings()
+	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, now-24*3600, settings.ChannelAutoPriorityLastScore.WindowStart)
+	assert.Equal(t, int64(1), settings.ChannelAutoPriorityLastScore.UsageLogCount)
+	assert.Equal(t, int64(1), settings.ChannelAutoPriorityLastScore.MonitorCheckCount)
+	assert.Equal(t, int64(1), settings.ChannelAutoPriorityLastScore.FirstTokenSampleCount)
+	assert.Equal(t, 24, settings.ChannelAutoPriorityAvailabilityWindowHours)
 }
 
 func resultSnapshotWindowStart(t *testing.T, sourceID int, channelID int) int64 {

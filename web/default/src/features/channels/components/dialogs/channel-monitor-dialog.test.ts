@@ -35,7 +35,10 @@ describe('channel monitor dialog theme contract', () => {
     assert.match(dialogSource, /linePoints/)
     assert.match(dialogSource, /anomalyPoints/)
     assert.match(dialogSource, /polyline/)
-    assert.match(dialogSource, /rounded-full bg-destructive/)
+    assert.match(
+      dialogSource,
+      /className='(?=[^']*\brounded-full\b)(?=[^']*\bbg-destructive\b)[^']*'/
+    )
     assert.doesNotMatch(dialogSource, /<circle/)
     assert.doesNotMatch(dialogSource, /segments/)
     assert.match(dialogSource, /First token waveform/)
@@ -52,15 +55,30 @@ describe('channel monitor dialog theme contract', () => {
   test('owns editable monitor settings instead of the channel edit drawer', () => {
     assert.match(dialogSource, /Monitor Settings/)
     // Monitor-settings (de)serialization now lives in lib/channel-monitor.ts;
-    // the dialog owns editing by using those helpers together with updateChannel.
+    // the dialog owns editing through the dedicated monitor settings endpoint.
     assert.match(dialogSource, /readChannelMonitorSettings/)
     assert.match(dialogSource, /buildChannelMonitorSettingsPayload/)
-    assert.match(dialogSource, /updateChannel/)
+    assert.match(dialogSource, /updateChannelMonitorSettings/)
+    assert.match(
+      dialogSource,
+      /updateChannelMonitorSettings\([\s\S]*buildChannelMonitorSettingsPayload\([\s\S]*\),\s*'monitor'\s*\)/
+    )
+    assert.doesNotMatch(dialogSource, /Auto Priority/)
+    assert.doesNotMatch(dialogSource, /autoPriority/)
+    assert.doesNotMatch(dialogSource, /channel-auto-priority/)
 
     assert.doesNotMatch(mutateDrawerSource, /name='channel_monitor_enabled'/)
     assert.doesNotMatch(
       mutateDrawerSource,
       /name='channel_monitor_interval_minutes'/
+    )
+    assert.doesNotMatch(
+      mutateDrawerSource,
+      /name='channel_auto_priority_enabled'/
+    )
+    assert.doesNotMatch(
+      mutateDrawerSource,
+      /name='channel_auto_priority_availability_window_hours'/
     )
   })
 

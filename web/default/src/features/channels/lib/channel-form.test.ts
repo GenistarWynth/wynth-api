@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+
+import type { Channel } from '../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   transformChannelToFormDefaults,
   transformFormDataToUpdatePayload,
 } from './channel-form'
-import type { Channel } from '../types'
 
 function baseChannel(overrides: Partial<Channel> = {}): Channel {
   return {
@@ -91,6 +92,34 @@ describe('channel form auto retry settings', () => {
     const settings = JSON.parse(String(payload.settings))
     assert.equal(settings.auto_retry_times, undefined)
     assert.equal(settings.custom_existing, true)
+  })
+})
+
+describe('channel form auto priority isolation', () => {
+  test('preserves auto priority settings owned by the monitor dialog', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Auto priority channel',
+        models: 'gpt-test',
+        group: ['default'],
+        settings: JSON.stringify({
+          channel_auto_priority_enabled: true,
+          channel_auto_priority_interval_minutes: 15,
+          channel_auto_priority_window_hours: 12,
+          channel_auto_priority_availability_window_hours: 48,
+          channel_auto_priority_rate_multiplier: 0.75,
+        }),
+      },
+      1
+    )
+
+    const settings = JSON.parse(String(payload.settings))
+    assert.equal(settings.channel_auto_priority_enabled, true)
+    assert.equal(settings.channel_auto_priority_interval_minutes, 15)
+    assert.equal(settings.channel_auto_priority_window_hours, 12)
+    assert.equal(settings.channel_auto_priority_availability_window_hours, 48)
+    assert.equal(settings.channel_auto_priority_rate_multiplier, 0.75)
   })
 })
 
