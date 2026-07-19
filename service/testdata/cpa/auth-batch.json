@@ -1,0 +1,44 @@
+[
+  {
+    "type": "codex",
+    "email": "codex@example.com",
+    "account_id": "acct-codex",
+    "access_token": "access-codex-fixture",
+    "refresh_token": "refresh-codex-fixture",
+    "id_token": "id-codex-fixture",
+    "expired": "2030-01-01T00:00:00Z",
+    "priority": 98,
+    "proxy_url": "direct"
+  },
+  {
+    "type": "claude",
+    "email": "claude@example.com",
+    "access_token": "access-claude-fixture",
+    "refresh_token": "refresh-claude-fixture",
+    "expired": "2030-01-02T00:00:00Z",
+    "disabled": true,
+    "base_url": "https://api.anthropic.com",
+    "headers": {
+      "X-CPA-Trace": "claude"
+    }
+  },
+  {
+    "type": "antigravity",
+    "email": "gemini@example.com",
+    "project_id": "gemini-project",
+    "access_token": "access-gemini-fixture",
+    "refresh_token": "refresh-gemini-fixture",
+    "expired": "2030-01-03T00:00:00Z"
+  },
+  {
+    "type": "xai",
+    "email": "xai@example.com",
+    "sub": "xai-subject",
+    "client_id": "xai-client",
+    "token_type": "Bearer",
+    "access_token": "access-xai-fixture",
+    "refresh_token": "refresh-xai-fixture",
+    "expired": "2030-01-04T00:00:00Z",
+    "base_url": "https://api.x.ai/v1"
+  }
+]

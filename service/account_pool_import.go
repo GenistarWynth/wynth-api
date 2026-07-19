@@ -134,6 +134,12 @@ type accountPoolCPACodexModel struct {
 	Alias string `yaml:"alias" json:"alias"`
 }
 
+type accountPoolCPAAuthProviderProfile struct {
+	Platform       string
+	OAuthType      string
+	ServiceAccount bool
+}
+
 func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams) (AccountPoolAccountImportResult, error) {
 	result := AccountPoolAccountImportResult{}
 	pool, err := getAccountPoolExistingPool(params.PoolID)
@@ -505,17 +511,14 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	return candidate, true, ""
 }
 func (s AccountPoolService) parseCPAImport(params AccountPoolAccountImportParams, poolPlatform string) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
-	// The CPA (cliproxyapi) formats only carry Codex/OpenAI credentials, so they
-	// can only populate an OpenAI pool. Reject other pools up front rather than
-	// importing OpenAI credentials that inherit a mismatched platform at runtime.
-	if poolPlatform != model.AccountPoolPlatformOpenAI {
-		return nil, accountPoolImportProxyStats{}, nil, fmt.Errorf("cpa import is only supported for openai pools, not %q", poolPlatform)
-	}
 	var payload accountPoolCPAConfigPayload
 	if err := yaml.Unmarshal([]byte(params.Content), &payload); err == nil && len(payload.CodexAPIKeys) > 0 {
+		if poolPlatform != model.AccountPoolPlatformOpenAI {
+			return nil, accountPoolImportProxyStats{}, nil, errors.New("CPA codex-api-key config requires an openai destination pool")
+		}
 		return s.parseCPAConfigImport(params, payload)
 	}
-	return s.parseCPAAuthJSONImport(params)
+	return s.parseCPAAuthJSONImport(params, poolPlatform)
 }
 
 func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImportParams, payload accountPoolCPAConfigPayload) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
@@ -613,7 +616,7 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 	return candidates, stats, importErrors, nil
 }
 
-func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImportParams) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
+func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImportParams, poolPlatform string) ([]accountPoolImportCandidate, accountPoolImportProxyStats, []AccountPoolAccountImportError, error) {
 	var raw any
 	if err := common.UnmarshalJsonStr(params.Content, &raw); err != nil {
 		// If the content looks like YAML (parses without error) but produced no usable
@@ -632,7 +635,7 @@ func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImpo
 	importErrors := make([]AccountPoolAccountImportError, 0)
 	stats := accountPoolImportProxyStats{}
 	for index, object := range objects {
-		candidate, proxyURL, ok, message := accountPoolCPAAuthCandidate(params.PoolID, index, object)
+		candidate, proxyURL, ok, message := accountPoolCPAAuthCandidate(params.PoolID, index, poolPlatform, object)
 		if !ok {
 			importErrors = append(importErrors, AccountPoolAccountImportError{
 				Index:   index,
@@ -692,35 +695,119 @@ func (s AccountPoolService) parseCPAAuthJSONImport(params AccountPoolAccountImpo
 	return candidates, stats, importErrors, nil
 }
 
-func accountPoolCPAAuthCandidate(poolID int, index int, object map[string]any) (accountPoolImportCandidate, string, bool, string) {
+func accountPoolCPAAuthCandidate(poolID int, index int, poolPlatform string, object map[string]any) (accountPoolImportCandidate, string, bool, string) {
 	metadata := accountPoolImportMapValue(object["metadata"])
-	if len(metadata) == 0 {
-		metadata = object
+	values := make(map[string]any, len(object)+len(metadata))
+	for key, value := range object {
+		values[key] = value
 	}
-	provider := strings.ToLower(accountPoolImportDefaultString(
-		accountPoolImportStringFromMap(object, "provider", "type"),
-		accountPoolImportStringFromMap(metadata, "provider", "type"),
-	))
-	if provider != "" && provider != "codex" && provider != "openai" {
+	for key, value := range metadata {
+		values[key] = value
+	}
+
+	provider := accountPoolImportDefaultString(
+		accountPoolImportStringFromMap(object, "provider"),
+		accountPoolImportDefaultString(
+			accountPoolImportStringFromMap(metadata, "provider"),
+			accountPoolImportDefaultString(
+				accountPoolImportStringFromMap(object, "type"),
+				accountPoolImportStringFromMap(metadata, "type"),
+			),
+		),
+	)
+	profile, ok := accountPoolCPAAuthProvider(provider)
+	if !ok {
 		return accountPoolImportCandidate{}, "", false, "unsupported CPA auth provider"
 	}
+	if profile.Platform != poolPlatform {
+		return accountPoolImportCandidate{}, "", false, "CPA auth provider does not match destination pool"
+	}
 
-	email := accountPoolImportStringFromMap(metadata, "email")
-	accountIdentifier := accountPoolImportStringFromMap(metadata, "account_id", "chatgpt_account_id", "id")
-	accessToken := accountPoolImportStringFromMap(metadata, "access_token")
-	refreshToken := accountPoolImportStringFromMap(metadata, "refresh_token")
-	if accessToken == "" && refreshToken == "" {
-		return accountPoolImportCandidate{}, "", false, "CPA auth entry has no access_token or refresh_token"
+	email := accountPoolImportStringFromMap(values, "email", "email_address")
+	projectID := accountPoolImportStringFromMap(values, "project_id", "project")
+	subject := accountPoolImportStringFromMap(values, "sub", "subject")
+	accountIdentifier := accountPoolImportStringFromMap(values, "account_id", "chatgpt_account_id", "id")
+	if accountIdentifier == "" && profile.Platform == model.AccountPoolPlatformGemini {
+		accountIdentifier = projectID
+	}
+	if accountIdentifier == "" && profile.Platform == model.AccountPoolPlatformXAI {
+		accountIdentifier = subject
 	}
 	name := accountPoolImportDefaultString(
-		accountPoolImportStringFromMap(object, "label", "name"),
+		accountPoolImportStringFromMap(object, "label", "name", "note"),
 		accountPoolImportDefaultString(email, accountPoolImportDefaultString(accountIdentifier, fmt.Sprintf("CPA auth %d", index+1))),
 	)
-	proxyURL := accountPoolImportDefaultString(
-		accountPoolImportStringFromMap(object, "proxy_url", "proxy-url"),
-		accountPoolImportStringFromMap(metadata, "proxy_url", "proxy-url"),
-	)
 
+	status := ""
+	switch disabled := values["disabled"].(type) {
+	case bool:
+		if disabled {
+			status = model.AccountPoolAccountStatusDisabled
+		}
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(disabled))
+		if err == nil && parsed {
+			status = model.AccountPoolAccountStatusDisabled
+		}
+	}
+
+	credential := AccountPoolCredentialConfig{}
+	tokenState := AccountPoolTokenState{}
+	if profile.ServiceAccount {
+		serviceAccountJSON := accountPoolImportServiceAccountJSON(values, "service_account_json", "service_account")
+		if serviceAccountJSON == "" {
+			return accountPoolImportCandidate{}, "", false, "CPA vertex auth entry is missing service_account"
+		}
+		credential = AccountPoolCredentialConfig{
+			Type:               AccountPoolCredentialTypeServiceAccount,
+			Email:              email,
+			ServiceAccountJSON: serviceAccountJSON,
+			Location:           accountPoolImportStringFromMap(values, "location"),
+		}
+	} else {
+		accessToken := accountPoolImportStringFromMap(values, "access_token")
+		refreshToken := accountPoolImportStringFromMap(values, "refresh_token")
+		if accessToken == "" && refreshToken == "" {
+			return accountPoolImportCandidate{}, "", false, "CPA auth entry has no access_token or refresh_token"
+		}
+		credential = AccountPoolCredentialConfig{
+			Type:              AccountPoolCredentialTypeOAuth,
+			Email:             email,
+			RefreshToken:      refreshToken,
+			IDToken:           accountPoolImportStringFromMap(values, "id_token"),
+			ClientID:          accountPoolImportStringFromMap(values, "client_id"),
+			Scope:             accountPoolImportStringFromMap(values, "scope"),
+			TokenType:         accountPoolImportStringFromMap(values, "token_type"),
+			Subject:           subject,
+			TeamID:            accountPoolImportStringFromMap(values, "team_id"),
+			SubscriptionTier:  accountPoolImportStringFromMap(values, "subscription_tier"),
+			EntitlementStatus: accountPoolImportStringFromMap(values, "entitlement_status"),
+		}
+		tokenState = AccountPoolTokenState{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			ExpiresAt: accountPoolImportFirstInt64(
+				accountPoolImportInt64FromMap(values, "expires_at"),
+				accountPoolImportInt64FromMap(values, "expired"),
+			),
+			ProjectID: projectID,
+		}
+	}
+	if baseURL := accountPoolImportStringFromMap(values, "base_url", "base-url"); baseURL != "" {
+		credential.BaseURL = &baseURL
+	}
+	if headers := accountPoolImportStringMapFromMap(values, "headers", "header_overrides"); len(headers) > 0 {
+		enabled := true
+		credential.HeaderOverrideEnabled = &enabled
+		credential.HeaderOverrides = headers
+	}
+
+	proxyURL := accountPoolImportStringFromMap(values, "proxy_url", "proxy-url", "proxy")
+	proxyID := 0
+	if strings.EqualFold(proxyURL, "direct") || strings.EqualFold(proxyURL, "none") {
+		proxyID = model.AccountPoolProxyIDDirect
+		proxyURL = ""
+	}
 	candidate := accountPoolImportCandidate{
 		Index: index,
 		Name:  name,
@@ -728,22 +815,40 @@ func accountPoolCPAAuthCandidate(poolID int, index int, object map[string]any) (
 			PoolID:            poolID,
 			Name:              name,
 			AccountIdentifier: accountIdentifier,
-			Credential: AccountPoolCredentialConfig{
-				Type:         AccountPoolCredentialTypeOAuth,
-				Email:        email,
-				RefreshToken: refreshToken,
-			},
-			TokenState: AccountPoolTokenState{
-				AccessToken:  accessToken,
-				RefreshToken: refreshToken,
-				ExpiresAt: accountPoolImportFirstInt64(
-					accountPoolImportInt64FromMap(metadata, "expires_at"),
-					accountPoolImportInt64FromMap(metadata, "expired"),
-				),
-			},
+			OAuthType:         profile.OAuthType,
+			Credential:        credential,
+			TokenState:        tokenState,
+			Status:            status,
+			Priority:          accountPoolImportInt64FromMap(values, "priority"),
+			ProxyID:           proxyID,
+			SupportedModels:   accountPoolImportStringSliceFromMap(values, "supported_models"),
+			ModelMapping:      accountPoolImportStringMapFromMap(values, "model_mapping"),
 		},
 	}
 	return candidate, proxyURL, true, ""
+}
+
+func accountPoolCPAAuthProvider(provider string) (accountPoolCPAAuthProviderProfile, bool) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "", "codex", "openai", "openai-codex":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformOpenAI}, true
+	case "claude", "anthropic", "claude-code":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformAnthropic}, true
+	case "gemini":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformGemini, OAuthType: AccountPoolGeminiOAuthTypeAIStudio}, true
+	case "gemini-cli", "geminicli":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformGemini, OAuthType: AccountPoolGeminiOAuthTypeCodeAssist}, true
+	case "antigravity":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformGemini, OAuthType: AccountPoolGeminiOAuthTypeAntigravity}, true
+	case "google-one", "google_one":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformGemini, OAuthType: AccountPoolGeminiOAuthTypeGoogleOne}, true
+	case "vertex", "vertex-ai", "vertex_ai":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformGemini, ServiceAccount: true}, true
+	case "xai":
+		return accountPoolCPAAuthProviderProfile{Platform: model.AccountPoolPlatformXAI}, true
+	default:
+		return accountPoolCPAAuthProviderProfile{}, false
+	}
 }
 
 // findExistingImportProxy performs a read-only existence check using the same
