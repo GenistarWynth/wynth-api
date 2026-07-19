@@ -50,6 +50,16 @@ describe('xAI quota presentation', () => {
         headers_observed: true,
         media_eligible: false,
         media_eligibility_reason: 'billing_free_tier',
+        free_usage_24h_estimate: {
+          source: 'logs_24h',
+          window_seconds: 86_400,
+          observation_seconds: 86_400,
+          requests: 3,
+          prompt_tokens: 120,
+          completion_tokens: 30,
+          tokens: 150,
+          estimated: false,
+        },
         fetched_at: 1_721_347_200,
       })
     ).toEqual({
@@ -57,6 +67,12 @@ describe('xAI quota presentation', () => {
       remaining: '42 / 100',
       media: 'ineligible',
       fetchedAt: 1_721_347_200,
+      usage24h: {
+        source: 'logs_24h',
+        requests: 3,
+        tokens: 150,
+        estimated: false,
+      },
     })
   })
 

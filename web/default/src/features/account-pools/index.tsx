@@ -3342,6 +3342,16 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
             {' / '}
             {formatOptionalTimestamp(quota.fetchedAt)}
           </div>
+          {quota.usage24h ? (
+            <div>
+              {t('Free usage (24h)')}: {formatOptionalCount(quota.usage24h.requests)}{' '}
+              {t('requests')} / {formatOptionalCount(quota.usage24h.tokens)}{' '}
+              {t('tokens')} ·{' '}
+              {quota.usage24h.source === 'logs_24h'
+                ? t('Logs (last 24 hours)')
+                : t('Counter estimate')}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

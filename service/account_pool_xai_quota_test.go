@@ -79,7 +79,7 @@ func TestAccountPoolXAIQuotaProbeFallsBackToActiveProbeForFreeTierAndPersistsSna
 	assert.Equal(t, AccountPoolXAIMediaReasonFreeTier, result.MediaEligibilityReason)
 	assert.Equal(t, now.Unix(), result.FetchedAt)
 	require.NotNil(t, result.FreeUsage24hEstimate)
-	assert.Equal(t, AccountPoolXAIFreeUsageSourceCountersSinceCreation, result.FreeUsage24hEstimate.Source)
+	assert.Equal(t, AccountPoolXAIFreeUsageSourceCounterEstimate, result.FreeUsage24hEstimate.Source)
 	assert.False(t, result.FreeUsage24hEstimate.Estimated)
 	assert.Equal(t, int64(12), result.FreeUsage24hEstimate.Requests)
 	assert.Equal(t, int64(150), result.FreeUsage24hEstimate.Tokens)
@@ -131,7 +131,7 @@ func TestAccountPoolXAIFreeUsage24hEstimateUsesAvailableCounters(t *testing.T) {
 				TotalCompletionTokens: 30,
 			},
 			want: &AccountPoolXAIFreeUsageEstimate{
-				Source:             AccountPoolXAIFreeUsageSourceCountersSinceCreation,
+				Source:             AccountPoolXAIFreeUsageSourceCounterEstimate,
 				WindowSeconds:      int64(24 * time.Hour / time.Second),
 				ObservationSeconds: int64(6 * time.Hour / time.Second),
 				Requests:           12,
@@ -151,7 +151,7 @@ func TestAccountPoolXAIFreeUsage24hEstimateUsesAvailableCounters(t *testing.T) {
 				TotalCompletionTokens: 500,
 			},
 			want: &AccountPoolXAIFreeUsageEstimate{
-				Source:             AccountPoolXAIFreeUsageSourceLifetimeProrated,
+				Source:             AccountPoolXAIFreeUsageSourceCounterEstimate,
 				WindowSeconds:      int64(24 * time.Hour / time.Second),
 				ObservationSeconds: int64(48 * time.Hour / time.Second),
 				Requests:           100,
@@ -171,7 +171,7 @@ func TestAccountPoolXAIFreeUsage24hEstimateUsesAvailableCounters(t *testing.T) {
 				TotalCompletionTokens: 500,
 			},
 			want: &AccountPoolXAIFreeUsageEstimate{
-				Source:             AccountPoolXAIFreeUsageSourceNoRecentSuccess,
+				Source:             AccountPoolXAIFreeUsageSourceCounterEstimate,
 				WindowSeconds:      int64(24 * time.Hour / time.Second),
 				ObservationSeconds: int64(48 * time.Hour / time.Second),
 			},
@@ -187,6 +187,42 @@ func TestAccountPoolXAIFreeUsage24hEstimateUsesAvailableCounters(t *testing.T) {
 	paidSnapshot := AccountPoolXAIQuotaSnapshot{MediaEligibilityReason: AccountPoolXAIMediaReasonEligible}
 	assert.Nil(t, buildAccountPoolXAIFreeUsage24hEstimate(tests[0].account, paidSnapshot, now))
 	assert.Nil(t, buildAccountPoolXAIFreeUsage24hEstimate(model.AccountPoolAccount{}, freeSnapshot, now))
+}
+
+func TestAccountPoolXAIFreeUsage24hEstimatePrefersAttachedLogs(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0).UTC()
+	previousLoader := accountPoolXAIUsage24hLoader
+	accountPoolXAIUsage24hLoader = func(poolID int, accountID int, nowUnix int64) (model.AccountPoolUsage24h, error) {
+		assert.Equal(t, 17, poolID)
+		assert.Equal(t, 29, accountID)
+		assert.Equal(t, now.Unix(), nowUnix)
+		return model.AccountPoolUsage24h{
+			HasLogs:          true,
+			Requests:         3,
+			PromptTokens:     120,
+			CompletionTokens: 30,
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAIUsage24hLoader = previousLoader })
+
+	account := model.AccountPoolAccount{
+		Id:                    29,
+		PoolID:                17,
+		CreatedTime:           now.Add(-48 * time.Hour).Unix(),
+		LastSuccessAt:         now.Add(-time.Hour).Unix(),
+		SuccessCount:          999,
+		TotalPromptTokens:     999,
+		TotalCompletionTokens: 999,
+	}
+	snapshot := enrichAccountPoolXAIFreeUsage24hEstimate(AccountPoolXAIQuotaSnapshot{
+		MediaEligibilityReason: AccountPoolXAIMediaReasonFreeTier,
+	}, account, now)
+
+	require.NotNil(t, snapshot.FreeUsage24hEstimate)
+	assert.Equal(t, AccountPoolXAIFreeUsageSourceLogs24h, snapshot.FreeUsage24hEstimate.Source)
+	assert.Equal(t, int64(3), snapshot.FreeUsage24hEstimate.Requests)
+	assert.Equal(t, int64(150), snapshot.FreeUsage24hEstimate.Tokens)
+	assert.False(t, snapshot.FreeUsage24hEstimate.Estimated)
 }
 
 func TestAccountPoolXAIQuotaProbePersistsExhaustionInExistingRateLimitCooldown(t *testing.T) {

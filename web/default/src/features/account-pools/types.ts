@@ -206,6 +206,17 @@ export type AccountPoolXAIBillingSnapshot = {
   partial?: boolean
 }
 
+export type AccountPoolXAIFreeUsageEstimate = {
+  source: 'logs_24h' | 'counter_estimate' | string
+  window_seconds: number
+  observation_seconds: number
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  tokens: number
+  estimated: boolean
+}
+
 export type AccountPoolXAIQuotaSnapshot = {
   source: string
   model?: string
@@ -219,6 +230,7 @@ export type AccountPoolXAIQuotaSnapshot = {
   media_eligibility_reason?: string
   fetched_at: number
   probe_error?: string
+  free_usage_24h_estimate?: AccountPoolXAIFreeUsageEstimate
 }
 
 export type AccountPoolLocalQuotaResetRequest = {

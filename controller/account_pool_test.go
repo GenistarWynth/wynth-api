@@ -33,6 +33,26 @@ type accountPoolAPIResponse[T any] struct {
 	Data    T      `json:"data"`
 }
 
+func TestAccountPoolXAIQuotaResponseIncludesFreeUsageSource(t *testing.T) {
+	response := accountPoolXAIQuotaResponse(&service.AccountPoolXAIQuotaSnapshot{
+		Source: "hybrid_probe",
+		FreeUsage24hEstimate: &service.AccountPoolXAIFreeUsageEstimate{
+			Source:           service.AccountPoolXAIFreeUsageSourceLogs24h,
+			WindowSeconds:    86400,
+			Requests:         3,
+			PromptTokens:     120,
+			CompletionTokens: 30,
+			Tokens:           150,
+		},
+	})
+
+	require.NotNil(t, response)
+	require.NotNil(t, response.FreeUsage24hEstimate)
+	assert.Equal(t, "logs_24h", response.FreeUsage24hEstimate.Source)
+	assert.Equal(t, int64(3), response.FreeUsage24hEstimate.Requests)
+	assert.Equal(t, int64(150), response.FreeUsage24hEstimate.Tokens)
+}
+
 type accountPoolAPIResult[T any] struct {
 	Response accountPoolAPIResponse[T]
 	Raw      []byte

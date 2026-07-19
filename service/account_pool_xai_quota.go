@@ -31,9 +31,8 @@ const (
 	AccountPoolXAIMediaReasonInconclusive = "billing_inconclusive"
 	AccountPoolXAIMediaReasonUnobserved   = "billing_unobserved"
 
-	AccountPoolXAIFreeUsageSourceCountersSinceCreation = "account_counters_since_creation"
-	AccountPoolXAIFreeUsageSourceLifetimeProrated      = "account_counters_lifetime_prorated"
-	AccountPoolXAIFreeUsageSourceNoRecentSuccess       = "account_counters_no_recent_success"
+	AccountPoolXAIFreeUsageSourceLogs24h         = "logs_24h"
+	AccountPoolXAIFreeUsageSourceCounterEstimate = "counter_estimate"
 )
 
 const accountPoolXAIFreeUsageWindowSeconds = int64(24 * time.Hour / time.Second)
@@ -95,6 +94,7 @@ type accountPoolXAIQuotaProber struct {
 var (
 	defaultAccountPoolXAIQuotaProber = newDefaultAccountPoolXAIQuotaProber()
 	accountPoolXAIFreeUsageNow       = time.Now
+	accountPoolXAIUsage24hLoader     = model.GetAccountPoolUsage24h
 )
 
 type accountPoolXAIBillingProbePart struct {
@@ -242,6 +242,21 @@ func (p *accountPoolXAIQuotaProber) probe(ctx context.Context, poolID int, accou
 }
 
 func enrichAccountPoolXAIFreeUsage24hEstimate(snapshot AccountPoolXAIQuotaSnapshot, account model.AccountPoolAccount, now time.Time) AccountPoolXAIQuotaSnapshot {
+	if snapshot.MediaEligibilityReason == AccountPoolXAIMediaReasonFreeTier && account.Id > 0 && account.PoolID > 0 {
+		usage, err := accountPoolXAIUsage24hLoader(account.PoolID, account.Id, now.Unix())
+		if err == nil && usage.HasLogs {
+			snapshot.FreeUsage24hEstimate = &AccountPoolXAIFreeUsageEstimate{
+				Source:             AccountPoolXAIFreeUsageSourceLogs24h,
+				WindowSeconds:      accountPoolXAIFreeUsageWindowSeconds,
+				ObservationSeconds: accountPoolXAIFreeUsageWindowSeconds,
+				Requests:           usage.Requests,
+				PromptTokens:       usage.PromptTokens,
+				CompletionTokens:   usage.CompletionTokens,
+				Tokens:             accountPoolXAISaturatingCounterSum(usage.PromptTokens, usage.CompletionTokens),
+			}
+			return snapshot
+		}
+	}
 	snapshot.FreeUsage24hEstimate = buildAccountPoolXAIFreeUsage24hEstimate(account, snapshot, now)
 	return snapshot
 }
@@ -261,7 +276,7 @@ func buildAccountPoolXAIFreeUsage24hEstimate(account model.AccountPoolAccount, s
 	}
 	if observationSeconds > accountPoolXAIFreeUsageWindowSeconds &&
 		account.LastSuccessAt > 0 && account.LastSuccessAt < nowUnix-accountPoolXAIFreeUsageWindowSeconds {
-		estimate.Source = AccountPoolXAIFreeUsageSourceNoRecentSuccess
+		estimate.Source = AccountPoolXAIFreeUsageSourceCounterEstimate
 		return estimate
 	}
 
@@ -269,12 +284,12 @@ func buildAccountPoolXAIFreeUsage24hEstimate(account model.AccountPoolAccount, s
 	promptTokens := max(account.TotalPromptTokens, int64(0))
 	completionTokens := max(account.TotalCompletionTokens, int64(0))
 	if observationSeconds <= accountPoolXAIFreeUsageWindowSeconds {
-		estimate.Source = AccountPoolXAIFreeUsageSourceCountersSinceCreation
+		estimate.Source = AccountPoolXAIFreeUsageSourceCounterEstimate
 		estimate.Requests = requests
 		estimate.PromptTokens = promptTokens
 		estimate.CompletionTokens = completionTokens
 	} else {
-		estimate.Source = AccountPoolXAIFreeUsageSourceLifetimeProrated
+		estimate.Source = AccountPoolXAIFreeUsageSourceCounterEstimate
 		estimate.Estimated = true
 		estimate.Requests = accountPoolXAIProrateCounter(requests, accountPoolXAIFreeUsageWindowSeconds, observationSeconds)
 		estimate.PromptTokens = accountPoolXAIProrateCounter(promptTokens, accountPoolXAIFreeUsageWindowSeconds, observationSeconds)

@@ -1190,6 +1190,18 @@ func accountPoolXAIQuotaResponse(snapshot *service.AccountPoolXAIQuotaSnapshot) 
 			ResetUnix: snapshot.Tokens.ResetUnix, ResetAt: snapshot.Tokens.ResetAt,
 		}
 	}
+	if snapshot.FreeUsage24hEstimate != nil {
+		result.FreeUsage24hEstimate = &dto.AccountPoolXAIFreeUsageEstimate{
+			Source:             snapshot.FreeUsage24hEstimate.Source,
+			WindowSeconds:      snapshot.FreeUsage24hEstimate.WindowSeconds,
+			ObservationSeconds: snapshot.FreeUsage24hEstimate.ObservationSeconds,
+			Requests:           snapshot.FreeUsage24hEstimate.Requests,
+			PromptTokens:       snapshot.FreeUsage24hEstimate.PromptTokens,
+			CompletionTokens:   snapshot.FreeUsage24hEstimate.CompletionTokens,
+			Tokens:             snapshot.FreeUsage24hEstimate.Tokens,
+			Estimated:          snapshot.FreeUsage24hEstimate.Estimated,
+		}
+	}
 	return result
 }
 

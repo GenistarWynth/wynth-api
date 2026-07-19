@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -19,9 +20,9 @@ import (
 // collisions with the shared constant.ContextKey* namespace.
 const (
 	accountPoolAttemptedAccountIDsContextKey    = "account_pool_attempted_account_ids"
-	accountPoolSelectedPoolIDContextKey         = "account_pool_selected_pool_id"
+	accountPoolSelectedPoolIDContextKey         = string(constant.ContextKeyAccountPoolID)
 	accountPoolSelectedBindingIDContextKey      = "account_pool_selected_binding_id"
-	accountPoolSelectedAccountIDContextKey      = "account_pool_selected_account_id"
+	accountPoolSelectedAccountIDContextKey      = string(constant.ContextKeyAccountPoolAccountID)
 	accountPoolSelectedRetryTimesContextKey     = "account_pool_selected_retry_times"
 	accountPoolSelectedAffinityKeyContextKey    = "account_pool_selected_affinity_key"
 	accountPoolSelectedRuntimeOptionsContextKey = "account_pool_selected_runtime_options"
