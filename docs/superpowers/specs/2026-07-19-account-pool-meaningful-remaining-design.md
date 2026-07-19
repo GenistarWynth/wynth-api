@@ -28,7 +28,7 @@ Replace the xAI-only validation entry point with a shared policy. Supported pool
 
 The base URL policy requires an absolute HTTPS URL without userinfo, query, or fragment. Official platform hosts are trusted defaults; custom public hosts remain supported after DNS resolution and private/link-local/loopback/multicast rejection. A development-only HTTP escape hatch remains available through a renamed generic environment option, with the existing xAI option retained as a compatibility alias.
 
-Header validation is shared across platforms, bounded by entry/name/value/total size, and blocks authentication, cookie, proxy, connection, content framing, compression, WebSocket handshake, and per-request session identity headers. Runtime merge order is channel headers first and account headers second, so account values win. Provider URL builders opt into `RuntimeBaseURL`; Vertex and Gemini Code Assist retain their provider defaults when no account override exists.
+Header validation is shared across platforms, bounded by entry/name/value/total size, and blocks authentication/provider-billing, cookie, proxy/forwarding, connection, content framing, compression, and WebSocket handshake headers. Runtime merge order is channel headers first and account headers second, so account values win. Provider URL builders opt into `RuntimeBaseURL`; Vertex and Gemini Code Assist retain their provider defaults when no account override exists.
 
 The React account form shows the same fields for every supported pool and keeps them hidden for `grok_web`.
 
@@ -51,9 +51,32 @@ TTL recovery guarantees that a crashed holder does not block future ticks indefi
 
 ## Bounded SSO import
 
-xAI SSO conversion uses three workers by default and accepts at most eight through `ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY`. The existing 25-item request bound remains. Each conversion receives a per-item timeout, the batch receives a bounded total deadline, and the selected account/pool proxy URL is reused for every item.
+xAI SSO conversion uses three workers by default and accepts at most eight through `ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY`. The existing 25-item request bound remains. Each conversion receives a 90-second per-item timeout, the batch receives a bounded total deadline (`ACCOUNT_POOL_XAI_SSO_IMPORT_TIMEOUT_SECONDS`, default 300 seconds), and the selected account/pool proxy URL is reused for every item.
 
 Conversions fill an indexed outcome array. Account creation and response aggregation then run in input order, preserving stable names, indexes, successes, and failures. Returned errors remain static and never contain SSO tokens, proxy credentials, or provider response bodies.
+
+## API and configuration reference
+
+`POST /api/account_pools/:id/accounts/:account_id/quota/reset` accepts:
+
+```json
+{
+  "clear_cooldown": true,
+  "reset_request_quota": false,
+  "force_probe": false
+}
+```
+
+The response includes the refreshed account, the actions applied, an optional probe snapshot/error, and `upstream_reset: false` so clients cannot mistake a local reset for a provider-side reset.
+
+| Setting | Default | Accepted behavior |
+| --- | ---: | --- |
+| `ACCOUNT_POOL_OUTBOUND_ALLOW_UNSAFE_BASE_URL` | `false` | Development-only opt-out of HTTPS/public-host enforcement. The legacy `ACCOUNT_POOL_XAI_ALLOW_UNSAFE_BASE_URL` remains an xAI-only alias. |
+| `ACCOUNT_POOL_WORKER_LEASE_TTL_SECONDS` | `120` | 15–3600 seconds; invalid values use the default and heartbeats run at one third of the TTL. |
+| `ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY` | `3` | Positive values, capped at 8. |
+| `ACCOUNT_POOL_XAI_SSO_IMPORT_TIMEOUT_SECONDS` | `300` | 30–1800 seconds for the whole conversion batch; each item also retains the 90-second provider-flow timeout. |
+
+The quota and reconcile interval/staleness/max-per-tick settings remain unchanged. Distributed lease keys are fixed internal identities rather than configuration: `account_pool:xai_quota_probe` and `account_pool:xai_oauth_reconcile`.
 
 ## Verification and limitations
 

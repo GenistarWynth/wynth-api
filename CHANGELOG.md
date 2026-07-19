@@ -28,17 +28,18 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ### Added — Account Pool (号池)
 - Added a complete pool-scoped Grok/X.AI OAuth login flow: PKCE authorization, single-use state sessions, callback/code exchange, encrypted account creation or update, saved-account refresh, and a guided React admin workflow.
-- Added bounded Grok Web SSO-to-Build OAuth account import through trusted `x.ai` device endpoints, with proxy support and per-item results that never echo submitted SSO secrets.
+- Added bounded Grok Web SSO-to-Build OAuth account import through trusted `x.ai` device endpoints, with proxy support and per-item results that never echo submitted SSO secrets. Conversion now runs with three workers by default (configurable up to eight), stable input-ordered aggregation, per-item timeouts, and a bounded batch deadline.
 - Added current sub2api Grok OAuth import/export compatibility for the outbound `grok` platform and inbound `grok`/`xai` aliases, `rt`, rotated access/refresh tokens, RFC3339 expiry, OAuth client/team identity, subscription tier, and entitlement metadata.
 - Account views now expose the non-secret credential type, so legacy refresh-token-only xAI OAuth accounts reopen in the correct admin workflow without exposing stored credentials.
 - Added complete English, Chinese, French, Japanese, Russian, and Vietnamese translations for the Grok OAuth administrator workflow.
-- Added pool-scoped xAI quota probe/read APIs with durable `runtime_options` snapshots, Free/paid billing observations, quota cooldown recovery, and account-table status/probe controls.
+- Added pool-scoped xAI quota probe/read APIs with durable `runtime_options` snapshots, Free/paid billing observations, quota cooldown recovery, and account-table status/probe controls. Administrators can now explicitly clear local quota cooldown/exhaustion state, optionally reset the local request-quota window, and optionally force a post-reset xAI OAuth re-probe; the API/UI state clearly that this does not reset upstream quota.
 - Added billing-backed xAI media eligibility so image generation/edit selection skips known-ineligible accounts while unknown eligibility and chat traffic remain unaffected.
-- Added encrypted, xAI-only per-account base URL and header overrides with account-over-channel precedence, SSRF validation, dangerous-header denial, bounded input, and an explicit unsafe environment escape hatch.
+- Added encrypted per-account base URL and header overrides for OpenAI, Anthropic, Gemini API/OAuth, Vertex service accounts, and xAI, with account-over-channel precedence, shared HTTPS/SSRF validation, platform-specific trusted hosts, dangerous-header denial, bounded input, and an explicit unsafe environment escape hatch. `grok_web` remains excluded because arbitrary overrides can invalidate its Cookie/Cloudflare session coupling.
 - Added an administrator xAI OAuth reconciler that defaults to dry-run, previews missing/expired/near-expiry/rejected credential actions in the React UI, and applies refresh/expire operations with encrypted snapshot CAS guards.
 - Added best-effort asynchronous xAI quota probes after OAuth account creation (including post-exchange create and successful SSO import items) plus a master-node periodic stale-snapshot sweep. Defaults are 15-minute ticks, 60-minute staleness, and 10 accounts per tick; `ACCOUNT_POOL_XAI_QUOTA_PROBE_INTERVAL_MINUTES`, `ACCOUNT_POOL_XAI_QUOTA_PROBE_STALE_MINUTES`, and `ACCOUNT_POOL_XAI_QUOTA_PROBE_MAX_PER_TICK` accept positive overrides.
 - Added an apply-mode master-node xAI OAuth reconciliation sweep with immediate startup execution and a five-minute default interval (`ACCOUNT_POOL_XAI_OAUTH_RECONCILE_INTERVAL_MINUTES`). It refreshes missing/near-expiry access when a refresh token exists and expires only permanently unusable/rejected credentials.
-- Added `free_usage_24h_estimate` to known-Free xAI quota snapshots returned by probe/read/account-list APIs. The source-labeled object uses Wynth account counters since creation or a lifetime-rate projection and is never persisted into upstream snapshots or used for billing/scheduling.
+- Added a portable `account_pool_worker_leases` table with TTL acquisition, heartbeat renewal, ownership-safe release, and expiry takeover. Both xAI quota-probe and OAuth-reconcile sweeps now require their distributed lease, preventing duplicate upstream maintenance across multiple master instances while retaining process-local overlap guards.
+- Consume logs now record the selected account-pool pool/account IDs. `free_usage_24h_estimate` prefers exact Wynth-observed rolling usage from linked consume logs (`logs_24h`) and falls back to cumulative account counters (`counter_estimate`) for legacy/unlinked history; it remains read-only metadata and is never used for billing or scheduling.
 
 ### Fixed — Account Pool (号池)
 - xAI runtime and administrator refresh now honor the OAuth client ID captured during authorization and prefer the newest rotated refresh token in token state, while preserving default-client and stored-credential fallbacks for existing accounts.
@@ -46,10 +47,15 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - OAuth accounts with an expired access token and no refresh token are marked expired and removed from scheduling; channel-test requests remain mutation-free.
 - xAI OAuth token failures now preserve typed status/code metadata without response-body leakage: permanent credential rejection expires the account, while network and 5xx failures use the existing temporary cooldown.
 
+### Configuration — Account Pool (号池)
+- `ACCOUNT_POOL_OUTBOUND_ALLOW_UNSAFE_BASE_URL=true` permits HTTP/private account base URLs for controlled development only; the legacy xAI-only option remains a compatibility alias for xAI pools.
+- `ACCOUNT_POOL_WORKER_LEASE_TTL_SECONDS` defaults to 120 seconds and accepts 15–3600 seconds.
+- `ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY` defaults to 3 and is capped at 8; `ACCOUNT_POOL_XAI_SSO_IMPORT_TIMEOUT_SECONDS` defaults to 300 seconds and accepts 30–1800 seconds.
+
 ### Notes — Account Pool (号池)
 - Existing temporary-disable, overload, request-quota, per-model cooldown, affinity, retry, and lease scheduling already cover the corresponding newer sub2api pool-mode fixes.
-- Periodic xAI workers use the existing master-node convention and process overlap guards; encrypted credential/token-state CAS prevents stale database writes across multiple masters, but one designated master is recommended to avoid duplicate upstream refresh calls.
-- Rolling Free usage is a best-effort estimate from cumulative Wynth account counters because consume logs do not carry account-pool account IDs. It cannot reconstruct external xAI usage or exact historical bursts; a full quota-reset editor, cross-platform account overrides, and sub2api's Grok video/content-proxy architecture remain deferred or out of scope.
+- Periodic xAI workers still use the master-node convention, but database leases now coordinate any number of masters; credential/token-state CAS remains the final stale-write guard.
+- Local quota reset does not and cannot hard-reset provider-side xAI quota. Log-backed rolling usage begins with newly linked consume logs (no backfill) and cannot observe traffic sent outside Wynth. DNS validation cannot fully eliminate post-validation rebinding by a malicious public hostname. `grok_web` outbound overrides and sub2api's Grok video/content-proxy architecture remain intentionally out of scope.
 
 ## [v1.0.0-rc.35] - 2026-07-18
 
