@@ -2,8 +2,11 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -446,21 +449,22 @@ func TestAccountPoolServiceImportSub2APIRejectsPlatformMismatch(t *testing.T) {
 	assert.Contains(t, result.Errors[0].Message, "does not match pool platform")
 }
 
-func TestAccountPoolServiceImportCPARejectsNonOpenAIPool(t *testing.T) {
+func TestAccountPoolServiceImportCPAReportsProviderPoolMismatch(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	svc := AccountPoolService{}
-	pool := createAccountPoolServiceTestPool(t, svc)
-	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
-		Update("platform", model.AccountPoolPlatformAnthropic).Error)
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformAnthropic)
 
-	_, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
 		PoolID:  pool.Id,
 		Format:  "cpa",
 		Content: `[{"provider": "codex", "metadata": {"email": "c@example.com", "refresh_token": "r", "access_token": "a"}}]`,
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "only supported for openai pools")
+	require.NoError(t, err)
+	assert.Zero(t, result.Imported)
+	assert.Equal(t, 1, result.Skipped)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Message, "does not match destination pool")
 }
 
 func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T) {
@@ -490,6 +494,23 @@ func TestAccountPoolServiceImportRejectsMissingDefaultProxyInDryRun(t *testing.T
 	})
 
 	require.ErrorContains(t, err, "account pool proxy not found")
+}
+
+func TestAccountPoolServiceImportRejectsUnknownNegativeDefaultProxy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: `{"type":"codex","access_token":"access-token"}`,
+		Defaults: AccountPoolAccountImportDefaults{
+			ProxyID: -2,
+		},
+	})
+
+	require.ErrorContains(t, err, "proxy id is invalid")
 }
 
 func TestAccountPoolServiceImportSub2APIPreservesExplicitZeroConcurrency(t *testing.T) {
@@ -572,6 +593,71 @@ codex-api-key:
 		"team/codex-latest": "gpt-5-codex",
 		"team/gpt-5.1":      "gpt-5.1",
 	}, view.ModelMapping)
+}
+
+func TestAccountPoolServiceImportCPAConfigPreservesOutboundAndDirectProxyPolicy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	defaultProxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "pool-default",
+		Protocol: "http",
+		Host:     "pool-proxy.example.com",
+		Port:     8080,
+	})
+	require.NoError(t, err)
+	fixture, err := os.ReadFile("testdata/cpa/codex-config.yaml")
+	require.NoError(t, err)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: string(fixture),
+		Defaults: AccountPoolAccountImportDefaults{
+			ProxyID: defaultProxy.Id,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Imported)
+	account := requireAccountPoolAccountByName(t, result.Accounts[0].Name)
+	assert.Equal(t, model.AccountPoolProxyIDDirect, account.ProxyID)
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	require.NotNil(t, credential.BaseURL)
+	assert.Equal(t, "https://api.openai.com/v1", *credential.BaseURL)
+	require.NotNil(t, credential.HeaderOverrideEnabled)
+	assert.True(t, *credential.HeaderOverrideEnabled)
+	assert.Equal(t, map[string]string{"X-Cpa-Trace": "fixture"}, credential.HeaderOverrides)
+
+	view, err := buildAccountPoolAccountView(account)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"team/codex-latest", "team/gpt-5.1"}, view.SupportedModels)
+	assert.Equal(t, map[string]string{
+		"team/codex-latest": "gpt-5-codex",
+		"team/gpt-5.1":      "gpt-5.1",
+	}, view.ModelMapping)
+}
+
+func TestAccountPoolCPAModelPolicyUsesCPAStarOnlyWildcardSemantics(t *testing.T) {
+	supportedModels, modelMapping := accountPoolCPAModelPolicy(accountPoolCPACodexKey{
+		Models: []accountPoolCPACodexModel{
+			{Name: "team/gpt-4", Alias: "team/public"},
+			{Name: "gpt-a"},
+		},
+		ExcludedModels: []string{"team*", "gpt-?"},
+	})
+
+	assert.Equal(t, []string{"gpt-a"}, supportedModels)
+	assert.Equal(t, map[string]string{"gpt-a": "gpt-a"}, modelMapping)
+}
+
+func TestAccountPoolProxyCreateParamsFromURLRedactsInvalidInput(t *testing.T) {
+	_, _, err := accountPoolProxyCreateParamsFromURL("http://user:super-secret@[", "CPA")
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "user")
+	assert.NotContains(t, err.Error(), "super-secret")
 }
 
 func TestAccountPoolServiceImportSub2APIRejectsMissingProxyReference(t *testing.T) {
@@ -708,6 +794,240 @@ func TestAccountPoolServiceImportCPAAuthJSONImportsAccessTokenOnlyEntry(t *testi
 	assert.Equal(t, int64(4102444800), tokenState.ExpiresAt)
 }
 
+func TestAccountPoolServiceImportCPAAuthJSONImportsMatchingProviderFromBatch(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/cpa/auth-batch.json")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name            string
+		platform        string
+		accountName     string
+		oauthType       string
+		identifier      string
+		accessToken     string
+		refreshToken    string
+		expiresAt       int64
+		idToken         string
+		clientID        string
+		tokenType       string
+		baseURL         string
+		headerOverrides map[string]string
+		priority        int64
+		status          string
+		proxyID         int
+		projectID       string
+	}{
+		{
+			name:         "codex",
+			platform:     model.AccountPoolPlatformOpenAI,
+			accountName:  "codex@example.com",
+			identifier:   "acct-codex",
+			accessToken:  "access-codex-fixture",
+			refreshToken: "refresh-codex-fixture",
+			expiresAt:    1893456000,
+			idToken:      "id-codex-fixture",
+			priority:     98,
+			status:       model.AccountPoolAccountStatusEnabled,
+			proxyID:      model.AccountPoolProxyIDDirect,
+		},
+		{
+			name:            "claude",
+			platform:        model.AccountPoolPlatformAnthropic,
+			accountName:     "claude@example.com",
+			accessToken:     "access-claude-fixture",
+			refreshToken:    "refresh-claude-fixture",
+			expiresAt:       1893542400,
+			baseURL:         "https://api.anthropic.com",
+			headerOverrides: map[string]string{"X-Cpa-Trace": "claude"},
+			status:          model.AccountPoolAccountStatusDisabled,
+		},
+		{
+			name:         "antigravity",
+			platform:     model.AccountPoolPlatformGemini,
+			accountName:  "gemini@example.com",
+			oauthType:    AccountPoolGeminiOAuthTypeAntigravity,
+			identifier:   "gemini-project",
+			accessToken:  "access-gemini-fixture",
+			refreshToken: "refresh-gemini-fixture",
+			expiresAt:    1893628800,
+			status:       model.AccountPoolAccountStatusEnabled,
+			projectID:    "gemini-project",
+		},
+		{
+			name:         "xai",
+			platform:     model.AccountPoolPlatformXAI,
+			accountName:  "xai@example.com",
+			identifier:   "xai-subject",
+			accessToken:  "access-xai-fixture",
+			refreshToken: "refresh-xai-fixture",
+			expiresAt:    1893715200,
+			clientID:     "xai-client",
+			tokenType:    "Bearer",
+			baseURL:      "https://api.x.ai/v1",
+			status:       model.AccountPoolAccountStatusEnabled,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupAccountPoolServiceTestDB(t)
+			service := AccountPoolService{}
+			pool := createAccountPoolServiceTestPoolWithPlatform(t, service, test.platform)
+
+			result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+				PoolID:  pool.Id,
+				Format:  "cpa",
+				Content: string(fixture),
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Imported)
+			assert.Equal(t, 3, result.Skipped)
+			account := requireAccountPoolAccountByName(t, test.accountName)
+			assert.Equal(t, test.oauthType, account.OAuthType)
+			assert.Equal(t, test.identifier, account.AccountIdentifier)
+			assert.Equal(t, test.priority, account.Priority)
+			assert.Equal(t, test.status, account.Status)
+			assert.Equal(t, test.proxyID, account.ProxyID)
+
+			credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+			require.NoError(t, err)
+			assert.Equal(t, AccountPoolCredentialTypeOAuth, credential.Type)
+			assert.Equal(t, test.accountName, credential.Email)
+			assert.Equal(t, test.refreshToken, credential.RefreshToken)
+			assert.Equal(t, test.idToken, credential.IDToken)
+			assert.Equal(t, test.clientID, credential.ClientID)
+			assert.Equal(t, test.tokenType, credential.TokenType)
+			if test.baseURL == "" {
+				assert.Nil(t, credential.BaseURL)
+			} else {
+				require.NotNil(t, credential.BaseURL)
+				assert.Equal(t, test.baseURL, *credential.BaseURL)
+			}
+			assert.Equal(t, test.headerOverrides, credential.HeaderOverrides)
+
+			tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
+			require.NoError(t, err)
+			assert.Equal(t, test.accessToken, tokenState.AccessToken)
+			assert.Equal(t, test.refreshToken, tokenState.RefreshToken)
+			assert.Equal(t, test.expiresAt, tokenState.ExpiresAt)
+			assert.Equal(t, test.projectID, tokenState.ProjectID)
+		})
+	}
+}
+
+func TestAccountPoolServiceImportCPAVertexAuthSingleObject(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, service, model.AccountPoolPlatformGemini)
+	fixture, err := os.ReadFile("testdata/cpa/vertex-auth.json")
+	require.NoError(t, err)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: string(fixture),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	account := requireAccountPoolAccountByName(t, "vertex@example.com")
+	assert.Equal(t, "vertex-project", account.AccountIdentifier)
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeServiceAccount, credential.Type)
+	assert.Equal(t, "us-east5", credential.Location)
+	var serviceAccount map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(credential.ServiceAccountJSON, &serviceAccount))
+	assert.Equal(t, "vertex-project", serviceAccount["project_id"])
+	assert.Equal(t, "vertex@example.com", serviceAccount["client_email"])
+	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
+	require.NoError(t, err)
+	assert.Empty(t, tokenState.AccessToken)
+	assert.Empty(t, tokenState.ProjectID)
+}
+
+func TestAccountPoolServiceImportCPAAuthJSONMapsProviderAliases(t *testing.T) {
+	tests := []struct {
+		provider  string
+		platform  string
+		oauthType string
+	}{
+		{provider: "openai", platform: model.AccountPoolPlatformOpenAI},
+		{provider: "anthropic", platform: model.AccountPoolPlatformAnthropic},
+		{provider: "gemini", platform: model.AccountPoolPlatformGemini, oauthType: AccountPoolGeminiOAuthTypeAIStudio},
+		{provider: "gemini-cli", platform: model.AccountPoolPlatformGemini, oauthType: AccountPoolGeminiOAuthTypeCodeAssist},
+		{provider: "google_one", platform: model.AccountPoolPlatformGemini, oauthType: AccountPoolGeminiOAuthTypeGoogleOne},
+	}
+
+	for _, test := range tests {
+		t.Run(test.provider, func(t *testing.T) {
+			setupAccountPoolServiceTestDB(t)
+			service := AccountPoolService{}
+			pool := createAccountPoolServiceTestPoolWithPlatform(t, service, test.platform)
+			content := fmt.Sprintf(`{
+				"type": %q,
+				"email": %q,
+				"project_id": "fixture-project",
+				"access_token": %q
+			}`, test.provider, test.provider+"@example.com", "access-"+test.provider)
+
+			result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+				PoolID:  pool.Id,
+				Format:  "cpa",
+				Content: content,
+			})
+
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Imported)
+			account := requireAccountPoolAccountByName(t, test.provider+"@example.com")
+			assert.Equal(t, test.oauthType, account.OAuthType)
+		})
+	}
+}
+
+func TestAccountPoolServiceImportCPAAuthMetadataProviderOverridesWrapperType(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "cpa",
+		Content: `{
+			"type": "oauth",
+			"metadata": {
+				"type": "codex",
+				"email": "metadata-codex@example.com",
+				"access_token": "metadata-access-token"
+			}
+		}`,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Imported)
+	assert.Zero(t, result.Skipped)
+	account := requireAccountPoolAccountByName(t, "metadata-codex@example.com")
+	assert.Equal(t, "metadata-codex@example.com", account.Name)
+}
+
+func TestAccountPoolServiceImportCPAInvalidAuthJSONDoesNotEchoSecret(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+
+	_, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: `{"type":"codex","access_token":"do-not-echo"`,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "valid JSON")
+	assert.Contains(t, err.Error(), "auth object")
+	assert.NotContains(t, err.Error(), "do-not-echo")
+}
+
 func requireAccountPoolAccountByName(t *testing.T, name string) model.AccountPoolAccount {
 	t.Helper()
 
@@ -752,12 +1072,13 @@ func TestAccountPoolServiceImportCPAYAMLSingularKeyImportsSuccessfully(t *testin
 		Content: `
 codex-api-key:
   - api-key: sk-singular-ok
-    base-url: https://api.example.com
+    base-url: https://api.openai.com
     proxy-url: ""
 `,
 	})
 
 	require.NoError(t, err)
+	require.Empty(t, result.Errors)
 	assert.Equal(t, 1, result.Imported)
 }
 

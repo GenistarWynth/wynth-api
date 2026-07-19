@@ -1,0 +1,12 @@
+{
+  "type": "vertex",
+  "email": "vertex@example.com",
+  "project_id": "vertex-project",
+  "location": "us-east5",
+  "service_account": {
+    "type": "service_account",
+    "project_id": "vertex-project",
+    "client_email": "vertex@example.com",
+    "private_key": "fixture-private-key"
+  }
+}

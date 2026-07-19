@@ -168,7 +168,10 @@ import {
   updateAccountPoolProxy,
 } from './api'
 import { XAIOAuthFlow } from './components/xai-oauth-flow'
-import { readAccountImportFile } from './lib/account-import-file'
+import {
+  ACCOUNT_IMPORT_FILE_ACCEPT,
+  readAccountImportFile,
+} from './lib/account-import-file'
 import {
   accountToFormValues,
   applyXAIOAuthResultToForm,
@@ -4071,12 +4074,20 @@ function AccountImportDialog(props: {
   const formatOptions = useMemo(
     () => [
       { value: 'sub2api', label: t('sub2api export') },
-      { value: 'cpa', label: t('CPA config or auth') },
+      {
+        value: 'cpa',
+        label: t('CLIProxyAPI / CPA config or auth file'),
+      },
     ],
     [t]
   )
   const proxyOptions = useMemo(
-    () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
+    () =>
+      buildAccountPoolProxyOptions(
+        props.proxies,
+        t('Use pool default proxy'),
+        t('Direct connection (bypass pool proxy)')
+      ),
     [props.proxies, t]
   )
   const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect(
@@ -4242,7 +4253,7 @@ function AccountImportDialog(props: {
             label={t('Import Content')}
             htmlFor='account-pool-import-content'
             description={t(
-              'Paste content or choose a file: sub2api JSON / CPA YAML/JSON.'
+              'Paste content or choose a file: sub2api JSON, or CLIProxyAPI / CPA config YAML/JSON and auth JSON files.'
             )}
           >
             <div className='flex min-w-0 flex-wrap items-center gap-2'>
@@ -4251,7 +4262,7 @@ function AccountImportDialog(props: {
                 id='account-pool-import-file'
                 type='file'
                 className='hidden'
-                accept='.json,.yaml,.yml,.txt,text/*,application/json,application/x-yaml'
+                accept={ACCOUNT_IMPORT_FILE_ACCEPT}
                 onChange={handleFileChange}
               />
               <Button
@@ -4349,7 +4360,12 @@ function AccountFormSheet(props: {
     [t]
   )
   const proxyOptions = useMemo(
-    () => buildAccountPoolProxyOptions(props.proxies, t('No Proxy')),
+    () =>
+      buildAccountPoolProxyOptions(
+        props.proxies,
+        t('Use pool default proxy'),
+        t('Direct connection (bypass pool proxy)')
+      ),
     [props.proxies, t]
   )
   const { modelSelectOptions, modelsLoading } = useAccountPoolModelSelect(

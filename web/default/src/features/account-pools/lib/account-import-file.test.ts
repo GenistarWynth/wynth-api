@@ -20,6 +20,22 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 describe('account import file reading', () => {
+  test('accepts CLIProxyAPI config and auth file extensions and MIME types', async () => {
+    const accountImportFile = await import('./account-import-file').catch(
+      () => undefined
+    )
+    assert.ok(accountImportFile, 'account import file reader should exist')
+
+    const acceptedTypes =
+      accountImportFile.ACCOUNT_IMPORT_FILE_ACCEPT.split(',')
+    assert.ok(acceptedTypes.includes('.json'))
+    assert.ok(acceptedTypes.includes('.yaml'))
+    assert.ok(acceptedTypes.includes('.yml'))
+    assert.ok(acceptedTypes.includes('application/json'))
+    assert.ok(acceptedTypes.includes('application/yaml'))
+    assert.ok(acceptedTypes.includes('text/yaml'))
+  })
+
   test('returns the selected file name and exact text content', async () => {
     const accountImportFile = await import('./account-import-file').catch(
       () => undefined

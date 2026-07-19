@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 type AccountImportFile = Pick<File, 'name' | 'text'>
 
+export const ACCOUNT_IMPORT_FILE_ACCEPT =
+  '.json,.yaml,.yml,.txt,text/*,application/json,application/yaml,application/x-yaml,text/yaml'
+
 export async function readAccountImportFile(file: AccountImportFile) {
   return {
     name: file.name,

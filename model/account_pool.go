@@ -30,6 +30,9 @@ const (
 	AccountPoolProxyStatusEnabled  = "enabled"
 	AccountPoolProxyStatusDisabled = "disabled"
 	AccountPoolProxyStatusDeleted  = "deleted"
+	// AccountPoolProxyIDDirect explicitly bypasses an account pool's default proxy.
+	// Zero retains its existing meaning: inherit the pool default proxy.
+	AccountPoolProxyIDDirect = -1
 
 	AccountPoolBindingStatusDraft    = "draft"
 	AccountPoolBindingStatusEnabled  = "enabled"

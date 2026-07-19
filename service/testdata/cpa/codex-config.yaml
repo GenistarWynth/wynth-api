@@ -1,0 +1,18 @@
+codex-api-key:
+  - api-key: sk-cpa-config-fixture
+    priority: 30
+    prefix: team
+    base-url: https://api.openai.com/v1
+    headers:
+      X-CPA-Trace: fixture
+    proxy-url: none
+    disable-cooling: true
+    models:
+      - name: gpt-5-codex
+        alias: codex-latest
+      - name: gpt-5.1
+        alias: gpt-5.1
+      - name: gpt-5-codex-mini
+        alias: codex-mini
+    excluded-models:
+      - "*-mini"

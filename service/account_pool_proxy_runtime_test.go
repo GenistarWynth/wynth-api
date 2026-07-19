@@ -33,6 +33,22 @@ func TestResolveAccountPoolRuntimeProxyURLUsesAccountProxyBeforePoolDefault(t *t
 	assert.Equal(t, "http://proxy-user:p%40ss%20word@account-proxy.local:8080", proxyURL)
 }
 
+func TestResolveAccountPoolRuntimeProxyURLDirectBypassesPoolDefault(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	poolProxy := createAccountPoolRuntimeTestProxy(t, service, AccountPoolProxyCreateParams{
+		Name:     "pool-proxy",
+		Protocol: "http",
+		Host:     "pool-proxy.local",
+		Port:     8080,
+	})
+
+	proxyURL, err := ResolveAccountPoolRuntimeProxyURL(model.AccountPoolProxyIDDirect, poolProxy.Id)
+
+	require.NoError(t, err)
+	assert.Empty(t, proxyURL)
+}
+
 func TestResolveAccountPoolRuntimeProxyURLUsesFallbackForDisabledProxy(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
