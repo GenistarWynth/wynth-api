@@ -569,6 +569,21 @@ describe('account pool form helpers', () => {
     )
   })
 
+  test('adds an explicit direct connection option for account imports', () => {
+    assert.deepEqual(
+      buildAccountPoolProxyOptions(
+        [{ id: 12, name: '香港代理' }],
+        'Use pool default proxy',
+        'Direct connection (bypass pool proxy)'
+      ),
+      [
+        { value: '0', label: 'Use pool default proxy' },
+        { value: '-1', label: 'Direct connection (bypass pool proxy)' },
+        { value: '12', label: '香港代理' },
+      ]
+    )
+  })
+
   test('preserves zero default max concurrency as unlimited for import payloads', () => {
     assert.equal(
       buildAccountImportPayload({

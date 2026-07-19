@@ -206,10 +206,12 @@ export type AccountPoolProxyOption = {
 
 export function buildAccountPoolProxyOptions(
   proxies: Pick<AccountPoolProxy, 'id' | 'name'>[],
-  noProxyLabel: string
+  noProxyLabel: string,
+  directProxyLabel?: string
 ): AccountPoolProxyOption[] {
   return [
     { value: '0', label: noProxyLabel },
+    ...(directProxyLabel ? [{ value: '-1', label: directProxyLabel }] : []),
     ...proxies.map((proxy) => ({
       value: String(proxy.id),
       label: proxy.name,
