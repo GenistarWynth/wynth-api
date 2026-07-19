@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -531,7 +532,10 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 			continue
 		}
 		proxyID := params.Defaults.ProxyID
-		if strings.TrimSpace(key.ProxyURL) != "" {
+		proxyURL := strings.TrimSpace(key.ProxyURL)
+		if strings.EqualFold(proxyURL, "direct") || strings.EqualFold(proxyURL, "none") {
+			proxyID = model.AccountPoolProxyIDDirect
+		} else if proxyURL != "" {
 			proxyParams, ok, err := accountPoolProxyCreateParamsFromURL(key.ProxyURL, accountPoolCPAProxyName(key, apiKey))
 			if err != nil {
 				importErrors = append(importErrors, AccountPoolAccountImportError{
@@ -579,13 +583,25 @@ func (s AccountPoolService) parseCPAConfigImport(params AccountPoolAccountImport
 		}
 
 		supportedModels, modelMapping := accountPoolCPAModelPolicy(key)
+		credential := AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: apiKey,
+		}
+		if baseURL := strings.TrimSpace(key.BaseURL); baseURL != "" {
+			credential.BaseURL = &baseURL
+		}
+		if len(key.Headers) > 0 {
+			enabled := true
+			credential.HeaderOverrideEnabled = &enabled
+			credential.HeaderOverrides = accountPoolCopyStringMap(key.Headers)
+		}
 		candidate := accountPoolImportCandidate{
 			Index: index,
 			Name:  accountPoolCPACodexAccountName(key, apiKey),
 			Params: AccountPoolAccountCreateParams{
 				PoolID:          params.PoolID,
 				Name:            accountPoolCPACodexAccountName(key, apiKey),
-				Credential:      AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeAPIKey, APIKey: apiKey},
+				Credential:      credential,
 				Priority:        key.Priority,
 				ProxyID:         proxyID,
 				SupportedModels: supportedModels,
@@ -1045,12 +1061,12 @@ func accountPoolSub2APIProxyDedupeKey(proxy accountPoolSub2APIProxy) string {
 
 func accountPoolProxyCreateParamsFromURL(rawURL string, name string) (AccountPoolProxyCreateParams, bool, error) {
 	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" || strings.EqualFold(rawURL, "direct") {
+	if rawURL == "" || strings.EqualFold(rawURL, "direct") || strings.EqualFold(rawURL, "none") {
 		return AccountPoolProxyCreateParams{}, false, nil
 	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return AccountPoolProxyCreateParams{}, false, err
+		return AccountPoolProxyCreateParams{}, false, errors.New("proxy-url is invalid")
 	}
 	protocol := strings.ToLower(strings.TrimSpace(parsed.Scheme))
 	host := strings.TrimSpace(parsed.Hostname())
@@ -1115,11 +1131,11 @@ func accountPoolCPAProxyName(key accountPoolCPACodexKey, apiKey string) string {
 }
 
 func accountPoolCPAModelPolicy(key accountPoolCPACodexKey) ([]string, map[string]string) {
-	excluded := make(map[string]struct{})
+	excluded := make([]string, 0, len(key.ExcludedModels))
 	for _, modelName := range key.ExcludedModels {
 		modelName = strings.ToLower(strings.TrimSpace(modelName))
 		if modelName != "" {
-			excluded[modelName] = struct{}{}
+			excluded = append(excluded, modelName)
 		}
 	}
 	supported := make([]string, 0, len(key.Models))
@@ -1133,10 +1149,25 @@ func accountPoolCPAModelPolicy(key accountPoolCPACodexKey) ([]string, map[string
 		if public == "" {
 			public = upstream
 		}
-		if _, ok := excluded[strings.ToLower(public)]; ok {
-			continue
+		excludedModel := false
+		for _, candidate := range []string{public, upstream} {
+			candidate = strings.ToLower(candidate)
+			for _, pattern := range excluded {
+				matches := candidate == pattern
+				if !matches {
+					matched, err := path.Match(pattern, candidate)
+					matches = err == nil && matched
+				}
+				if matches {
+					excludedModel = true
+					break
+				}
+			}
+			if excludedModel {
+				break
+			}
 		}
-		if _, ok := excluded[strings.ToLower(upstream)]; ok {
+		if excludedModel {
 			continue
 		}
 		clientModel := accountPoolCPAClientModelName(key.Prefix, public)

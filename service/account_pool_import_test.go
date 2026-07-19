@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/QuantumNous/new-api/model"
@@ -574,6 +575,58 @@ codex-api-key:
 	}, view.ModelMapping)
 }
 
+func TestAccountPoolServiceImportCPAConfigPreservesOutboundAndDirectProxyPolicy(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, service)
+	defaultProxy, err := service.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "pool-default",
+		Protocol: "http",
+		Host:     "pool-proxy.example.com",
+		Port:     8080,
+	})
+	require.NoError(t, err)
+	fixture, err := os.ReadFile("testdata/cpa/codex-config.yaml")
+	require.NoError(t, err)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: string(fixture),
+		Defaults: AccountPoolAccountImportDefaults{
+			ProxyID: defaultProxy.Id,
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Imported)
+	account := requireAccountPoolAccountByName(t, result.Accounts[0].Name)
+	assert.Equal(t, model.AccountPoolProxyIDDirect, account.ProxyID)
+	credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+	require.NoError(t, err)
+	require.NotNil(t, credential.BaseURL)
+	assert.Equal(t, "https://api.openai.com/v1", *credential.BaseURL)
+	require.NotNil(t, credential.HeaderOverrideEnabled)
+	assert.True(t, *credential.HeaderOverrideEnabled)
+	assert.Equal(t, map[string]string{"X-Cpa-Trace": "fixture"}, credential.HeaderOverrides)
+
+	view, err := buildAccountPoolAccountView(account)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"team/codex-latest", "team/gpt-5.1"}, view.SupportedModels)
+	assert.Equal(t, map[string]string{
+		"team/codex-latest": "gpt-5-codex",
+		"team/gpt-5.1":      "gpt-5.1",
+	}, view.ModelMapping)
+}
+
+func TestAccountPoolProxyCreateParamsFromURLRedactsInvalidInput(t *testing.T) {
+	_, _, err := accountPoolProxyCreateParamsFromURL("http://user:super-secret@[", "CPA")
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "user")
+	assert.NotContains(t, err.Error(), "super-secret")
+}
+
 func TestAccountPoolServiceImportSub2APIRejectsMissingProxyReference(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}
@@ -752,12 +805,13 @@ func TestAccountPoolServiceImportCPAYAMLSingularKeyImportsSuccessfully(t *testin
 		Content: `
 codex-api-key:
   - api-key: sk-singular-ok
-    base-url: https://api.example.com
+    base-url: https://api.openai.com
     proxy-url: ""
 `,
 	})
 
 	require.NoError(t, err)
+	require.Empty(t, result.Errors)
 	assert.Equal(t, 1, result.Imported)
 }
 

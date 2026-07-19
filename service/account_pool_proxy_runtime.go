@@ -14,6 +14,9 @@ import (
 )
 
 func ResolveAccountPoolRuntimeProxyURL(accountProxyID int, poolDefaultProxyID int) (string, error) {
+	if accountProxyID == model.AccountPoolProxyIDDirect {
+		return "", nil
+	}
 	proxyID := accountProxyID
 	if proxyID <= 0 {
 		proxyID = poolDefaultProxyID
