@@ -700,6 +700,82 @@ func TestAccountPoolSchedulerSelectsQuotaWindowElapsedAccount(t *testing.T) {
 	assert.Equal(t, elapsed.Id, result.AccountID, "account with elapsed window must be schedulable (quota resets)")
 }
 
+func TestAccountPoolSchedulerXAIMediaEligibilityFilter(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-media",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+
+	ineligible := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "known-ineligible",
+		Priority: 100,
+	})
+	unknown := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "unknown",
+		Priority: 50,
+	})
+	eligible := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "known-eligible",
+		Priority: 10,
+	})
+	falseValue := false
+	trueValue := true
+	setAccountPoolSchedulerXAIQuota(t, ineligible.Id, &falseValue)
+	setAccountPoolSchedulerXAIQuota(t, eligible.Id, &trueValue)
+
+	t.Run("known false is skipped for media", func(t *testing.T) {
+		result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+			ChannelID:            channel.Id,
+			RequestModel:         "grok-imagine-image",
+			ChannelUpstreamModel: "grok-imagine-image",
+			RequireXAIMedia:      true,
+			Now:                  100,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, unknown.Id, result.AccountID)
+	})
+
+	t.Run("unknown remains eligible for media failover", func(t *testing.T) {
+		result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+			ChannelID:            channel.Id,
+			RequestModel:         "grok-imagine-image",
+			ChannelUpstreamModel: "grok-imagine-image",
+			RequireXAIMedia:      true,
+			AttemptedAccountIDs:  map[int]struct{}{unknown.Id: {}},
+			Now:                  100,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, eligible.Id, result.AccountID)
+	})
+
+	t.Run("chat does not exclude known false", func(t *testing.T) {
+		result, err := SelectAccountPoolAccount(AccountPoolSelectionRequest{
+			ChannelID:            channel.Id,
+			RequestModel:         "grok-4",
+			ChannelUpstreamModel: "grok-4",
+			Now:                  100,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, ineligible.Id, result.AccountID)
+	})
+}
+
+func setAccountPoolSchedulerXAIQuota(t *testing.T, accountID int, eligible *bool) {
+	t.Helper()
+	runtimeOptions, err := common.Marshal(AccountPoolRuntimeOptions{
+		XAIQuota: &AccountPoolXAIQuotaSnapshot{MediaEligible: eligible},
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", accountID).
+		Update("runtime_options", string(runtimeOptions)).Error)
+}
+
 func createEnabledAccountPoolSchedulerBinding(
 	t *testing.T,
 	poolID int,

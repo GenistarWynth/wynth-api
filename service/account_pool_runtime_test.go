@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -106,6 +107,39 @@ func TestAccountPoolRuntimeAppliesSelectedAccountCredentialAndModel(t *testing.T
 	assert.Equal(t, account.Id, GetSelectedAccountPoolAccountID(ctx))
 	assert.Contains(t, GetAccountPoolAttemptedAccountIDs(ctx), account.Id)
 	assert.Equal(t, []string{"7"}, ctx.GetStringSlice("use_channel"))
+}
+
+func TestAccountPoolRuntimeRequiresXAIMediaEligibilityForImageRelay(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-media-runtime",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	ineligible := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "ineligible",
+		Priority: 100,
+	})
+	eligible := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "eligible",
+		Priority: 10,
+	})
+	falseValue := false
+	trueValue := true
+	setAccountPoolSchedulerXAIQuota(t, ineligible.Id, &falseValue)
+	setAccountPoolSchedulerXAIQuota(t, eligible.Id, &trueValue)
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "grok-imagine-image", "grok-imagine-image")
+	info.RelayMode = relayconstant.RelayModeImagesGenerations
+	request := &dto.GeneralOpenAIRequest{Model: "grok-imagine-image"}
+
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, info, request))
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+	assert.Equal(t, eligible.Id, GetSelectedAccountPoolAccountID(ctx))
 }
 
 func TestAccountPoolRuntimeAppliesSelectedProxy(t *testing.T) {

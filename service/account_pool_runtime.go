@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,8 +50,10 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		ChannelID:            info.ChannelId,
 		RequestModel:         info.OriginModelName,
 		ChannelUpstreamModel: info.UpstreamModelName,
-		AttemptedAccountIDs:  GetAccountPoolAttemptedAccountIDs(c),
-		AffinityKey:          affinityKey,
+		RequireXAIMedia: info.RelayMode == relayconstant.RelayModeImagesGenerations ||
+			info.RelayMode == relayconstant.RelayModeImagesEdits,
+		AttemptedAccountIDs: GetAccountPoolAttemptedAccountIDs(c),
+		AffinityKey:         affinityKey,
 	})
 	if err != nil {
 		if errors.Is(err, ErrAccountPoolBindingNotRuntimeEnabled) {
