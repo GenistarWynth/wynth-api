@@ -243,6 +243,69 @@ func TestAccountPoolServiceImportSub2APIXAIAccountMatchesPlatform(t *testing.T) 
 	assert.Equal(t, "xai-refresh", cred.RefreshToken)
 }
 
+func TestAccountPoolServiceImportSub2APIGrokOAuthCredentialShape(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
+		Update("platform", model.AccountPoolPlatformXAI).Error)
+
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID: pool.Id,
+		Format: "sub2api",
+		Content: `{
+			"type": "sub2api-data",
+			"accounts": [
+				{
+					"name": "grok-build-oauth",
+					"platform": "grok",
+					"type": "oauth",
+					"credentials": {
+						"email": "grok@example.com",
+						"rt": "grok-refresh",
+						"access_token": "grok-access",
+						"id_token": "grok-id-token",
+						"client_id": "grok-client",
+						"scope": "openid profile email offline_access",
+						"token_type": "Bearer",
+						"sub": "grok-subject",
+						"team_id": "team-42",
+						"subscription_tier": "SUPER_GROK",
+						"entitlement_status": "active",
+						"expires_at": "2026-07-20T12:00:00Z"
+					}
+				}
+			]
+		}`,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 0, result.Skipped)
+	acct := requireAccountPoolAccountByName(t, "grok-build-oauth")
+	assert.Equal(t, "grok-subject", acct.AccountIdentifier)
+	credential, err := DecryptAccountPoolCredentialConfig(acct.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialConfig{
+		Type:              AccountPoolCredentialTypeOAuth,
+		Email:             "grok@example.com",
+		RefreshToken:      "grok-refresh",
+		IDToken:           "grok-id-token",
+		ClientID:          "grok-client",
+		Scope:             "openid profile email offline_access",
+		TokenType:         "Bearer",
+		Subject:           "grok-subject",
+		TeamID:            "team-42",
+		SubscriptionTier:  "SUPER_GROK",
+		EntitlementStatus: "active",
+	}, credential)
+	tokenState, err := DecryptAccountPoolTokenState(acct.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "grok-access", tokenState.AccessToken)
+	assert.Equal(t, "grok-refresh", tokenState.RefreshToken)
+	assert.Equal(t, int64(1784548800), tokenState.ExpiresAt)
+}
+
 func TestAccountPoolServiceImportSub2APIGeminiCodeAssistOAuthType(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	svc := AccountPoolService{}

@@ -212,6 +212,19 @@ func exportAccountPoolAccount(account model.AccountPoolAccount, platform string,
 	if projectID := strings.TrimSpace(tokenState.ProjectID); projectID != "" {
 		exported.Credentials["project_id"] = projectID
 	}
+	for key, value := range map[string]string{
+		"client_id":          credential.ClientID,
+		"scope":              credential.Scope,
+		"token_type":         credential.TokenType,
+		"sub":                credential.Subject,
+		"team_id":            credential.TeamID,
+		"subscription_tier":  credential.SubscriptionTier,
+		"entitlement_status": credential.EntitlementStatus,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			exported.Credentials[key] = value
+		}
+	}
 
 	// supported_models / model_mapping go under "extra" because the importer reads them
 	// from Extra first (accountPoolSub2APIAccountCandidate prefers account.Extra).
@@ -234,6 +247,7 @@ func exportAccountPoolAccount(account model.AccountPoolAccount, platform string,
 	apiKey := strings.TrimSpace(credential.APIKey)
 	cfClearance := strings.TrimSpace(credential.CFClearance)
 	refreshToken := strings.TrimSpace(credential.RefreshToken)
+	idToken := strings.TrimSpace(credential.IDToken)
 	accessToken := strings.TrimSpace(tokenState.AccessToken)
 	if refreshToken == "" {
 		refreshToken = strings.TrimSpace(tokenState.RefreshToken)
@@ -264,6 +278,7 @@ func exportAccountPoolAccount(account model.AccountPoolAccount, platform string,
 	}
 	emitSecret("refresh_token", refreshToken)
 	emitSecret("access_token", accessToken)
+	emitSecret("id_token", idToken)
 	if includeSecrets && tokenState.ExpiresAt > 0 {
 		exported.Credentials["expires_at"] = tokenState.ExpiresAt
 	}

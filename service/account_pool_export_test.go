@@ -159,6 +159,66 @@ func TestAccountPoolServiceExportRoundTripsGrokWebCookie(t *testing.T) {
 	assert.NotEqual(t, "cf-clearance-12345678", redactedCreds["cf_clearance"], "cf_clearance value must be masked")
 }
 
+func TestAccountPoolServiceExportRoundTripsXAIOAuthMetadata(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	_, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID:            pool.Id,
+		Name:              "grok-oauth",
+		AccountIdentifier: "grok-subject",
+		Credential: AccountPoolCredentialConfig{
+			Type:              AccountPoolCredentialTypeOAuth,
+			Email:             "grok@example.com",
+			RefreshToken:      "grok-refresh-secret",
+			IDToken:           "grok-id-secret",
+			ClientID:          "grok-client",
+			Scope:             "openid offline_access",
+			TokenType:         "Bearer",
+			Subject:           "grok-subject",
+			TeamID:            "team-42",
+			SubscriptionTier:  "SUPER_GROK",
+			EntitlementStatus: "active",
+		},
+		TokenState: AccountPoolTokenState{
+			AccessToken:  "grok-access-secret",
+			RefreshToken: "grok-refresh-secret",
+			ExpiresAt:    1784548800,
+		},
+	})
+	require.NoError(t, err)
+
+	payload, _, err := svc.ExportAccounts(pool.Id, true)
+	require.NoError(t, err)
+	require.Len(t, payload.Accounts, 1)
+	assert.Equal(t, "grok-id-secret", payload.Accounts[0].Credentials["id_token"])
+	assert.Equal(t, "grok-client", payload.Accounts[0].Credentials["client_id"])
+	assert.Equal(t, "team-42", payload.Accounts[0].Credentials["team_id"])
+	assert.Equal(t, "SUPER_GROK", payload.Accounts[0].Credentials["subscription_tier"])
+
+	content, err := common.Marshal(payload)
+	require.NoError(t, err)
+	pool2 := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{PoolID: pool2.Id, Format: "sub2api", Content: string(content)})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	reimported := accountByNameInPool(t, pool2.Id, "grok-oauth")
+	credential, err := DecryptAccountPoolCredentialConfig(reimported.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, "grok-id-secret", credential.IDToken)
+	assert.Equal(t, "grok-client", credential.ClientID)
+	assert.Equal(t, "team-42", credential.TeamID)
+	assert.Equal(t, "SUPER_GROK", credential.SubscriptionTier)
+
+	redacted, _, err := svc.ExportAccounts(pool.Id, false)
+	require.NoError(t, err)
+	redactedBody, err := common.Marshal(redacted)
+	require.NoError(t, err)
+	assert.NotContains(t, string(redactedBody), "grok-id-secret")
+	assert.NotContains(t, string(redactedBody), "grok-refresh-secret")
+	assert.Contains(t, string(redactedBody), "grok-client")
+}
+
 // A single undecryptable credential blob must be skipped (logged + counted), not
 // fail the whole export — mirroring the importer's skip-and-continue.
 func TestAccountPoolServiceExportSkipsUndecryptableAccount(t *testing.T) {

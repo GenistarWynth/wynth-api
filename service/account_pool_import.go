@@ -363,6 +363,11 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	// This is what enables importing Anthropic/Gemini accounts (not just OpenAI),
 	// while preventing a cross-platform credential mismatch.
 	if declared := strings.ToLower(strings.TrimSpace(account.Platform)); declared != "" {
+		// sub2api calls the Build API platform "grok" while wynth names the same
+		// OAuth-backed platform "xai" ("grok_web" remains the cookie platform).
+		if declared == "grok" && poolPlatform == model.AccountPoolPlatformXAI {
+			declared = model.AccountPoolPlatformXAI
+		}
 		normalized, err := normalizeAccountPoolPlatform(declared)
 		if err != nil {
 			return accountPoolImportCandidate{}, false, "unsupported sub2api account platform"
@@ -383,9 +388,17 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	// optional Vertex region.
 	serviceAccountJSON := accountPoolImportServiceAccountJSON(account.Credentials, "service_account_json", "service_account")
 	location := accountPoolImportStringFromMap(account.Credentials, "location")
-	refreshToken := accountPoolImportStringFromMap(account.Credentials, "refresh_token")
+	refreshToken := accountPoolImportStringFromMap(account.Credentials, "refresh_token", "rt")
 	accessToken := accountPoolImportStringFromMap(account.Credentials, "access_token")
+	idToken := accountPoolImportStringFromMap(account.Credentials, "id_token")
+	clientID := accountPoolImportStringFromMap(account.Credentials, "client_id")
+	scope := accountPoolImportStringFromMap(account.Credentials, "scope")
+	tokenType := accountPoolImportStringFromMap(account.Credentials, "token_type")
 	email := accountPoolImportStringFromMap(account.Credentials, "email")
+	subject := accountPoolImportStringFromMap(account.Credentials, "sub", "subject")
+	teamID := accountPoolImportStringFromMap(account.Credentials, "team_id")
+	subscriptionTier := accountPoolImportStringFromMap(account.Credentials, "subscription_tier")
+	entitlementStatus := accountPoolImportStringFromMap(account.Credentials, "entitlement_status")
 	// oauthType distinguishes a Gemini OAuth sub-type (code_assist vs ai_studio).
 	// It is only meaningful for Gemini OAuth accounts; harmless otherwise.
 	oauthType := strings.ToLower(strings.TrimSpace(accountPoolImportStringFromMap(account.Credentials, "oauth_type")))
@@ -394,6 +407,9 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	// in when absent).
 	projectID := accountPoolImportStringFromMap(account.Credentials, "project_id", "project")
 	accountIdentifier := accountPoolImportStringFromMap(account.Credentials, "chatgpt_account_id", "account_id", "id")
+	if accountIdentifier == "" && poolPlatform == model.AccountPoolPlatformXAI {
+		accountIdentifier = accountPoolImportDefaultString(subject, teamID)
+	}
 	expiresAt := accountPoolImportInt64FromMap(account.Credentials, "expires_at", "expired")
 	if expiresAt == 0 && account.ExpiresAt != nil {
 		expiresAt = *account.ExpiresAt
@@ -463,9 +479,17 @@ func accountPoolSub2APIAccountCandidate(poolID int, poolPlatform string, account
 	case refreshToken != "" || accessToken != "" || email != "":
 		candidate.Params.OAuthType = oauthType
 		candidate.Params.Credential = AccountPoolCredentialConfig{
-			Type:         AccountPoolCredentialTypeOAuth,
-			Email:        email,
-			RefreshToken: refreshToken,
+			Type:              AccountPoolCredentialTypeOAuth,
+			Email:             email,
+			RefreshToken:      refreshToken,
+			IDToken:           idToken,
+			ClientID:          clientID,
+			Scope:             scope,
+			TokenType:         tokenType,
+			Subject:           subject,
+			TeamID:            teamID,
+			SubscriptionTier:  subscriptionTier,
+			EntitlementStatus: entitlementStatus,
 		}
 		candidate.Params.TokenState = AccountPoolTokenState{
 			AccessToken:  accessToken,
@@ -814,6 +838,14 @@ func accountPoolNormalizeImportAccountParams(params *AccountPoolAccountCreatePar
 	params.Credential.APIKey = strings.TrimSpace(params.Credential.APIKey)
 	params.Credential.Email = strings.TrimSpace(params.Credential.Email)
 	params.Credential.RefreshToken = strings.TrimSpace(params.Credential.RefreshToken)
+	params.Credential.IDToken = strings.TrimSpace(params.Credential.IDToken)
+	params.Credential.ClientID = strings.TrimSpace(params.Credential.ClientID)
+	params.Credential.Scope = strings.TrimSpace(params.Credential.Scope)
+	params.Credential.TokenType = strings.TrimSpace(params.Credential.TokenType)
+	params.Credential.Subject = strings.TrimSpace(params.Credential.Subject)
+	params.Credential.TeamID = strings.TrimSpace(params.Credential.TeamID)
+	params.Credential.SubscriptionTier = strings.TrimSpace(params.Credential.SubscriptionTier)
+	params.Credential.EntitlementStatus = strings.TrimSpace(params.Credential.EntitlementStatus)
 	params.Credential.ServiceAccountJSON = strings.TrimSpace(params.Credential.ServiceAccountJSON)
 	params.Credential.Location = strings.TrimSpace(params.Credential.Location)
 	params.Credential.CFClearance = strings.TrimSpace(params.Credential.CFClearance)
