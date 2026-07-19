@@ -303,6 +303,7 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.POST("/:id/xai/oauth/reconcile", controller.ReconcileAccountPoolXAIOAuthAccounts)
 			accountPoolRoute.POST("/:id/accounts/:account_id/xai/quota/probe", controller.ProbeAccountPoolXAIQuota)
 			accountPoolRoute.GET("/:id/accounts/:account_id/xai/quota", controller.GetAccountPoolXAIQuota)
+			accountPoolRoute.POST("/:id/accounts/:account_id/quota/reset", controller.ResetAccountPoolLocalQuota)
 			accountPoolRoute.POST("/:id/accounts/:account_id/capabilities/detect", controller.DetectAccountPoolAccountCapability)
 			accountPoolRoute.PUT("/:id/accounts/:account_id", controller.UpdateAccountPoolAccount)
 			accountPoolRoute.DELETE("/:id/accounts/:account_id", controller.DeleteAccountPoolAccount)

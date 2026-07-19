@@ -5,12 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
-const maxAccountPoolXAISSOImportAccounts = 25
+const (
+	maxAccountPoolXAISSOImportAccounts = 25
+
+	accountPoolXAISSOImportConcurrencyEnv     = "ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY"
+	accountPoolXAISSOImportTimeoutEnv         = "ACCOUNT_POOL_XAI_SSO_IMPORT_TIMEOUT_SECONDS"
+	accountPoolXAISSOImportDefaultConcurrency = 3
+	accountPoolXAISSOImportMaxConcurrency     = 8
+	accountPoolXAISSOImportDefaultTimeout     = 5 * time.Minute
+	accountPoolXAISSOImportMinTimeout         = 30 * time.Second
+	accountPoolXAISSOImportMaxTimeout         = 30 * time.Minute
+)
 
 type accountPoolXAIOAuthInfoRefreshFunc func(context.Context, string, string, string) (*XAIOAuthTokenInfo, error)
 type accountPoolXAISSOConvertFunc func(context.Context, string, string) (*XAIOAuthTokenInfo, error)
@@ -43,6 +55,12 @@ type AccountPoolXAISSOImportError struct {
 type AccountPoolXAISSOImportResult struct {
 	Created []AccountPoolAccountView       `json:"created"`
 	Errors  []AccountPoolXAISSOImportError `json:"errors"`
+}
+
+type accountPoolXAISSOConversionResult struct {
+	Info      *XAIOAuthTokenInfo
+	Err       error
+	Attempted bool
 }
 
 func (s AccountPoolService) RefreshXAIOAuthAccount(ctx context.Context, poolID int, accountID int) (AccountPoolAccountView, error) {
@@ -128,6 +146,9 @@ func refreshXAIOAuthAccountSnapshot(ctx context.Context, pool model.AccountPool,
 }
 
 func (s AccountPoolService) ImportXAISSOAccounts(ctx context.Context, params AccountPoolXAISSOImportParams) (AccountPoolXAISSOImportResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	pool, err := getAccountPoolExistingPool(params.PoolID)
 	if err != nil {
 		return AccountPoolXAISSOImportResult{}, err
@@ -162,21 +183,71 @@ func (s AccountPoolService) ImportXAISSOAccounts(ctx context.Context, params Acc
 		Created: make([]AccountPoolAccountView, 0, len(tokens)),
 		Errors:  make([]AccountPoolXAISSOImportError, 0),
 	}
-	for index, token := range tokens {
-		info, conversionErr := accountPoolXAISSOConvert(ctx, token, proxyURL)
-		if conversionErr != nil {
+	batchCtx, cancel := context.WithTimeout(ctx, loadAccountPoolXAISSOImportTimeout())
+	defer cancel()
+	conversionResults := make([]accountPoolXAISSOConversionResult, len(tokens))
+	jobs := make(chan int)
+	workerCount := min(loadAccountPoolXAISSOImportConcurrency(), len(tokens))
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				itemCtx, itemCancel := context.WithTimeout(batchCtx, xaiSSOTimeout)
+				info, conversionErr := accountPoolXAISSOConvert(itemCtx, tokens[index], proxyURL)
+				itemCancel()
+				conversionResults[index] = accountPoolXAISSOConversionResult{
+					Info:      info,
+					Err:       conversionErr,
+					Attempted: true,
+				}
+			}
+		}()
+	}
+	queueing := true
+	for index := range tokens {
+		if !queueing {
+			break
+		}
+		select {
+		case jobs <- index:
+		case <-batchCtx.Done():
+			queueing = false
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	if ctx.Err() != nil {
+		return result, ctx.Err()
+	}
+
+	for index, conversion := range conversionResults {
+		if !conversion.Attempted || conversion.Err != nil || conversion.Info == nil {
+			message := "xai sso conversion failed"
+			if !conversion.Attempted || errors.Is(conversion.Err, context.DeadlineExceeded) {
+				message = "xai sso conversion timed out"
+			}
 			result.Errors = append(result.Errors, AccountPoolXAISSOImportError{
 				Index:   index + 1,
-				Message: "xai sso conversion failed",
+				Message: message,
 			})
 			continue
 		}
+		if batchCtx.Err() != nil {
+			result.Errors = append(result.Errors, AccountPoolXAISSOImportError{
+				Index:   index + 1,
+				Message: "xai sso import timed out before account creation",
+			})
+			continue
+		}
+		info := conversion.Info
 		identifier := strings.TrimSpace(info.Email)
 		if identifier == "" {
 			identifier = strings.TrimSpace(info.Subject)
 		}
 		name := accountPoolXAISSOAccountName(params.Name, identifier, index, len(tokens))
-		created, createErr := s.CreateAccount(AccountPoolAccountCreateParams{
+		created, createErr := s.CreateAccountWithContext(batchCtx, AccountPoolAccountCreateParams{
 			PoolID:            params.PoolID,
 			Name:              name,
 			AccountIdentifier: identifier,
@@ -202,6 +273,22 @@ func (s AccountPoolService) ImportXAISSOAccounts(ctx context.Context, params Acc
 		result.Created = append(result.Created, created)
 	}
 	return result, nil
+}
+
+func loadAccountPoolXAISSOImportConcurrency() int {
+	concurrency := common.GetEnvOrDefault(accountPoolXAISSOImportConcurrencyEnv, accountPoolXAISSOImportDefaultConcurrency)
+	if concurrency <= 0 {
+		return accountPoolXAISSOImportDefaultConcurrency
+	}
+	return min(concurrency, accountPoolXAISSOImportMaxConcurrency)
+}
+
+func loadAccountPoolXAISSOImportTimeout() time.Duration {
+	seconds := common.GetEnvOrDefault(accountPoolXAISSOImportTimeoutEnv, int(accountPoolXAISSOImportDefaultTimeout/time.Second))
+	if seconds < int(accountPoolXAISSOImportMinTimeout/time.Second) || seconds > int(accountPoolXAISSOImportMaxTimeout/time.Second) {
+		return accountPoolXAISSOImportDefaultTimeout
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func accountPoolXAISSOAccountName(base string, identifier string, index int, total int) string {

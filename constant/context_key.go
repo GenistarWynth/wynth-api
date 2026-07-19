@@ -38,6 +38,10 @@ const (
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
 
+	/* account-pool runtime selection keys */
+	ContextKeyAccountPoolID        ContextKey = "account_pool_selected_pool_id"
+	ContextKeyAccountPoolAccountID ContextKey = "account_pool_selected_account_id"
+
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"

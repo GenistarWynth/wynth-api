@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   ColumnDef,
@@ -41,15 +40,33 @@ import {
   Gauge,
   RefreshCw,
 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useMediaQuery } from '@/hooks'
-import { getUserModels } from '@/lib/api'
-import { formatTimestamp } from '@/lib/format'
-import { cn } from '@/lib/utils'
+
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  DISABLED_ROW_DESKTOP,
+  DISABLED_ROW_MOBILE,
+  DataTablePage,
+  useDataTable,
+} from '@/components/data-table'
+import {
+  SideDrawerSection,
+  SideDrawerSectionHeader,
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+  sideDrawerSwitchItemClassName,
+} from '@/components/drawer-layout'
+import { SectionPageLayout } from '@/components/layout'
+import { LongText } from '@/components/long-text'
+import { MultiSelect } from '@/components/multi-select'
+import { StatusBadge, type StatusVariant } from '@/components/status-badge'
+import { TableId } from '@/components/table-id'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   Dialog,
   DialogClose,
@@ -102,26 +119,6 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  DISABLED_ROW_DESKTOP,
-  DISABLED_ROW_MOBILE,
-  DataTablePage,
-  useDataTable,
-} from '@/components/data-table'
-import {
-  SideDrawerSection,
-  SideDrawerSectionHeader,
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-  sideDrawerSwitchItemClassName,
-} from '@/components/drawer-layout'
-import { SectionPageLayout } from '@/components/layout'
-import { LongText } from '@/components/long-text'
-import { MultiSelect } from '@/components/multi-select'
-import { StatusBadge, type StatusVariant } from '@/components/status-badge'
-import { TableId } from '@/components/table-id'
 import { getChannels } from '@/features/channels/api'
 import {
   CHANNEL_TYPES,
@@ -129,7 +126,11 @@ import {
   CHANNEL_STATUS_LABELS,
 } from '@/features/channels/constants'
 import type { Channel } from '@/features/channels/types'
-import { XAIOAuthFlow } from './components/xai-oauth-flow'
+import { useMediaQuery } from '@/hooks'
+import { getUserModels } from '@/lib/api'
+import { formatTimestamp } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
 import {
   activateAccountPoolBinding,
   accountPoolsQueryKeys,
@@ -153,11 +154,13 @@ import {
   listAccountPools,
   probeAccountPoolXAIQuota,
   reconcileAccountPoolXAIOAuthAccounts,
+  resetAccountPoolLocalQuota,
   updateAccountPool,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
   updateAccountPoolProxy,
 } from './api'
+import { XAIOAuthFlow } from './components/xai-oauth-flow'
 import {
   accountToFormValues,
   applyXAIOAuthResultToForm,
@@ -175,6 +178,7 @@ import {
   emptyProxyForm,
   normalizeAccountPoolSchedulePolicy,
   platformIsGrokWebCookie,
+  platformSupportsAccountOutboundOverrides,
   platformSupportsOAuthCredential,
   poolToFormValues,
   proxyToFormValues,
@@ -184,7 +188,12 @@ import {
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
 } from './lib/account-pool-form'
-import { canProbeXAIQuota, xaiQuotaDisplayState } from './lib/xai-quota'
+import {
+  canForceProbeAfterLocalQuotaReset,
+  canProbeXAIQuota,
+  defaultLocalQuotaResetRequest,
+  xaiQuotaDisplayState,
+} from './lib/xai-quota'
 import type {
   AccountPool,
   AccountPoolAccount,
@@ -193,6 +202,7 @@ import type {
   AccountPoolCapabilityDetectResult,
   AccountPoolCapabilityMode,
   AccountPoolCapabilityPoolResult,
+  AccountPoolLocalQuotaResetRequest,
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
   AccountPoolSchedulePolicy,
@@ -217,6 +227,21 @@ type CapabilityDetectFormValues = {
   apply: boolean
   merge: boolean
   timeout_seconds: number
+}
+
+function accountOutboundBaseURLPlaceholder(platform?: string) {
+  switch (platform) {
+    case 'openai':
+      return 'https://api.openai.com'
+    case 'anthropic':
+      return 'https://api.anthropic.com'
+    case 'gemini':
+      return 'https://generativelanguage.googleapis.com'
+    case 'xai':
+      return 'https://api.x.ai'
+    default:
+      return 'https://api.example.com'
+  }
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -451,10 +476,7 @@ function capabilityStatusLabel(status?: string) {
   }
 }
 
-function accountOAuthTypeLabel(
-  oauthType: string,
-  t: (key: string) => string
-) {
+function accountOAuthTypeLabel(oauthType: string, t: (key: string) => string) {
   switch (oauthType) {
     case 'code_assist':
       return t('Gemini Code Assist')
@@ -600,7 +622,9 @@ function bindingToFormValues(binding: AccountPoolBinding): BindingFormValues {
     fixed_models_text: Array.isArray(policy.fixed_models)
       ? policy.fixed_models.join(', ')
       : '',
-    schedule_policy: normalizeAccountPoolSchedulePolicy(binding.schedule_policy),
+    schedule_policy: normalizeAccountPoolSchedulePolicy(
+      binding.schedule_policy
+    ),
     account_retry_times: binding.account_retry_times,
     max_user_concurrency: binding.max_user_concurrency,
   }
@@ -649,7 +673,11 @@ function FieldBlock(props: {
   )
 }
 
-function BooleanBadge(props: { active: boolean; falseLabel: string; trueLabel: string }) {
+function BooleanBadge(props: {
+  active: boolean
+  falseLabel: string
+  trueLabel: string
+}) {
   const { t } = useTranslation()
 
   return (
@@ -827,6 +855,8 @@ export function AccountPools() {
   const [accountSheetOpen, setAccountSheetOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<AccountPoolAccount>()
   const [deletingAccount, setDeletingAccount] = useState<AccountPoolAccount>()
+  const [resettingQuotaAccount, setResettingQuotaAccount] =
+    useState<AccountPoolAccount>()
   const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false)
   const [detectingAccount, setDetectingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
@@ -1099,6 +1129,37 @@ export function AccountPools() {
     },
   })
 
+  const resetLocalQuotaMutation = useMutation({
+    mutationFn: async (request: AccountPoolLocalQuotaResetRequest) => {
+      if (!selectedPoolID || !resettingQuotaAccount) {
+        throw new Error(t('Select an account first'))
+      }
+      return resetAccountPoolLocalQuota(
+        selectedPoolID,
+        resettingQuotaAccount.id,
+        request
+      )
+    },
+    onSuccess: (result) => {
+      if (!result.success || !result.data) {
+        toast.error(
+          apiErrorMessage(result, t('Failed to reset local quota state'))
+        )
+        return
+      }
+      if (result.data.probe_error) {
+        toast.warning(t('Local quota state reset; xAI re-probe failed'))
+      } else {
+        toast.success(t('Local quota state reset'))
+      }
+      setResettingQuotaAccount(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
   const reconcileXAIOAuthMutation = useMutation({
     mutationFn: async (params: { poolID: number; dryRun: boolean }) =>
       reconcileAccountPoolXAIOAuthAccounts(params.poolID, {
@@ -1260,7 +1321,10 @@ export function AccountPools() {
       if (!selectedPoolID) {
         throw new Error(t('Select an account pool first'))
       }
-      return createAccountPoolBinding(selectedPoolID, buildBindingPayload(values))
+      return createAccountPoolBinding(
+        selectedPoolID,
+        buildBindingPayload(values)
+      )
     },
     onSuccess: (result) => {
       if (!result.success) {
@@ -1401,10 +1465,11 @@ export function AccountPools() {
     globalFilterFn: (row, _columnId, filterValue) => {
       const searchValue = String(filterValue).toLowerCase()
       const pool = row.original
-      return [pool.name, pool.platform, pool.status, pool.remark].some((value) =>
-        String(value || '')
-          .toLowerCase()
-          .includes(searchValue)
+      return [pool.name, pool.platform, pool.status, pool.remark].some(
+        (value) =>
+          String(value || '')
+            .toLowerCase()
+            .includes(searchValue)
       )
     },
     columnVisibilityStorageKey: 'account-pools-table-columns',
@@ -1462,7 +1527,9 @@ export function AccountPools() {
         open={poolSheetOpen}
         pool={editingPool}
         proxies={proxiesQuery.data ?? EMPTY_PROXIES}
-        isSubmitting={createPoolMutation.isPending || updatePoolMutation.isPending}
+        isSubmitting={
+          createPoolMutation.isPending || updatePoolMutation.isPending
+        }
         onOpenChange={(open) => {
           setPoolSheetOpen(open)
           if (!open) setEditingPool(undefined)
@@ -1514,6 +1581,7 @@ export function AccountPools() {
             setBoundChannelDialogOpen(false)
             setCapabilityDialogOpen(false)
             setDetectingAccount(undefined)
+            setResettingQuotaAccount(undefined)
             setXAIOAuthReconcilePreview(undefined)
           }
         }}
@@ -1547,6 +1615,7 @@ export function AccountPools() {
             ? probeXAIQuotaMutation.variables?.id
             : undefined
         }
+        onResetLocalQuota={setResettingQuotaAccount}
         onReconcileXAIOAuth={() => {
           if (selectedPoolID) {
             reconcileXAIOAuthMutation.mutate({
@@ -1574,6 +1643,18 @@ export function AccountPools() {
         onSetBindingStatus={(binding, status) =>
           setBindingStatusMutation.mutate({ binding, status })
         }
+      />
+      <LocalQuotaResetDialog
+        open={Boolean(resettingQuotaAccount)}
+        account={resettingQuotaAccount}
+        poolPlatform={selectedPool?.platform}
+        submitting={resetLocalQuotaMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open && !resetLocalQuotaMutation.isPending) {
+            setResettingQuotaAccount(undefined)
+          }
+        }}
+        onSubmit={(request) => resetLocalQuotaMutation.mutate(request)}
       />
       <ConfirmDialog
         open={Boolean(xaiOAuthReconcilePreview)}
@@ -1625,9 +1706,14 @@ export function AccountPools() {
         title={t('Delete binding?')}
         desc={
           deletingBinding
-            ? t('Delete binding for channel {{name}}. The channel itself will be kept.', {
-                name: deletingBinding.channel_name || `#${deletingBinding.channel_id}`,
-              })
+            ? t(
+                'Delete binding for channel {{name}}. The channel itself will be kept.',
+                {
+                  name:
+                    deletingBinding.channel_name ||
+                    `#${deletingBinding.channel_id}`,
+                }
+              )
             : ''
         }
         destructive
@@ -1733,7 +1819,9 @@ export function AccountPools() {
         open={proxySheetOpen}
         proxy={editingProxy}
         proxies={proxiesQuery.data ?? EMPTY_PROXIES}
-        isSubmitting={createProxyMutation.isPending || updateProxyMutation.isPending}
+        isSubmitting={
+          createProxyMutation.isPending || updateProxyMutation.isPending
+        }
         onOpenChange={(open) => {
           setProxySheetOpen(open)
           if (!open) setEditingProxy(undefined)
@@ -1992,10 +2080,7 @@ function PoolFormSheet(props: {
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
                           {capabilityModeOptions.map((option) => (
-                            <SelectItem
-                              key={option.value}
-                              value={option.value}
-                            >
+                            <SelectItem key={option.value} value={option.value}>
                               {option.label}
                             </SelectItem>
                           ))}
@@ -2123,7 +2208,8 @@ function BoundChannelDialog(props: {
     () =>
       allowedChannelTypesForPlatform(platform).map((type) => ({
         value: String(type),
-        label: CHANNEL_TYPES[type as keyof typeof CHANNEL_TYPES] ?? String(type),
+        label:
+          CHANNEL_TYPES[type as keyof typeof CHANNEL_TYPES] ?? String(type),
       })),
     [platform]
   )
@@ -2270,7 +2356,8 @@ function CapabilityDetectDialog(props: {
   )
   const [singleResult, setSingleResult] =
     useState<AccountPoolCapabilityDetectResult>()
-  const [poolResult, setPoolResult] = useState<AccountPoolCapabilityPoolResult>()
+  const [poolResult, setPoolResult] =
+    useState<AccountPoolCapabilityPoolResult>()
   const [pendingContext, setPendingContext] =
     useState<CapabilityDetectRequestContext | null>(null)
   const activeContextRef = useRef<CapabilityDetectRequestContext | null>(null)
@@ -2285,15 +2372,17 @@ function CapabilityDetectDialog(props: {
     () =>
       props.bindings.map((binding) => ({
         value: String(binding.channel_id),
-        label:
-          binding.channel_name || `${t('Channel')} #${binding.channel_id}`,
+        label: binding.channel_name || `${t('Channel')} #${binding.channel_id}`,
       })),
     [props.bindings, t]
   )
   const accountNameByID = useMemo(
     () =>
       new Map(
-        props.accounts.map((account) => [account.id, account.name || `#${account.id}`])
+        props.accounts.map((account) => [
+          account.id,
+          account.name || `#${account.id}`,
+        ])
       ),
     [props.accounts]
   )
@@ -2330,10 +2419,7 @@ function CapabilityDetectDialog(props: {
     Error,
     CapabilityDetectMutationInput
   >({
-    mutationFn: async ({
-      values,
-      context,
-    }: CapabilityDetectMutationInput) => {
+    mutationFn: async ({ values, context }: CapabilityDetectMutationInput) => {
       if (!context.poolID) {
         throw new Error(t('Select an account pool first'))
       }
@@ -2355,12 +2441,19 @@ function CapabilityDetectDialog(props: {
           request
         )
         return {
-          context: { ...context, scope: 'account', accountID: context.accountID },
+          context: {
+            ...context,
+            scope: 'account',
+            accountID: context.accountID,
+          },
           response,
         }
       }
 
-      const response = await detectAccountPoolCapabilities(context.poolID, request)
+      const response = await detectAccountPoolCapabilities(
+        context.poolID,
+        request
+      )
       return {
         context: { ...context, scope: 'pool' },
         response,
@@ -2379,7 +2472,10 @@ function CapabilityDetectDialog(props: {
       })
 
       if (
-        !isActiveCapabilityDetectContext(activeContextRef.current, payload.context)
+        !isActiveCapabilityDetectContext(
+          activeContextRef.current,
+          payload.context
+        )
       ) {
         return
       }
@@ -2416,8 +2512,7 @@ function CapabilityDetectDialog(props: {
     },
     onSettled: (_payload, _error, variables) => {
       setPendingContext((previous) =>
-        previous &&
-        isActiveCapabilityDetectContext(previous, variables.context)
+        previous && isActiveCapabilityDetectContext(previous, variables.context)
           ? null
           : previous
       )
@@ -2426,7 +2521,7 @@ function CapabilityDetectDialog(props: {
 
   const isCurrentDetectionPending = Boolean(
     pendingContext &&
-      isActiveCapabilityDetectContext(activeContextRef.current, pendingContext)
+    isActiveCapabilityDetectContext(activeContextRef.current, pendingContext)
   )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -2461,7 +2556,8 @@ function CapabilityDetectDialog(props: {
       poolID: props.pool.id,
       accountID: props.account?.id,
       channelID: form.channel_id,
-      dialogNonce: activeContextRef.current?.dialogNonce ?? dialogNonceRef.current,
+      dialogNonce:
+        activeContextRef.current?.dialogNonce ?? dialogNonceRef.current,
       requestNonce: requestNonceRef.current + 1,
     }
 
@@ -2722,6 +2818,136 @@ function CapabilityDetectDialog(props: {
   )
 }
 
+function LocalQuotaResetDialog(props: {
+  open: boolean
+  account?: AccountPoolAccount
+  poolPlatform?: string
+  submitting: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (request: AccountPoolLocalQuotaResetRequest) => void
+}) {
+  const { t } = useTranslation()
+  const [request, setRequest] = useState<AccountPoolLocalQuotaResetRequest>({
+    clear_cooldown: true,
+    reset_request_quota: false,
+    force_probe: false,
+  })
+
+  useEffect(() => {
+    if (props.open && props.account) {
+      setRequest(defaultLocalQuotaResetRequest(props.account))
+    }
+  }, [props.account, props.open])
+
+  const canForceProbe = Boolean(
+    props.account &&
+    canForceProbeAfterLocalQuotaReset(props.poolPlatform, props.account)
+  )
+  const hasAction =
+    request.clear_cooldown || request.reset_request_quota || request.force_probe
+
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className='sm:max-w-[520px]'>
+        <DialogHeader>
+          <DialogTitle>{t('Reset local quota state')}</DialogTitle>
+          <DialogDescription>
+            {t(
+              "This clears only Wynth's local cooldown or counters. It does not reset upstream provider quota."
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id='account-pool-local-quota-reset-form'
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (hasAction) props.onSubmit(request)
+          }}
+        >
+          <FieldSet>
+            <FieldLegend variant='label'>
+              {t('Local reset options')}
+            </FieldLegend>
+            <FieldGroup>
+              <Field orientation='horizontal'>
+                <Checkbox
+                  id='clear-account-pool-quota-cooldown'
+                  checked={request.clear_cooldown}
+                  onCheckedChange={(checked) =>
+                    setRequest((current) => ({
+                      ...current,
+                      clear_cooldown: Boolean(checked),
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='clear-account-pool-quota-cooldown'>
+                  {t('Clear local cooldown and quota exhaustion state')}
+                </FieldLabel>
+              </Field>
+              <Field orientation='horizontal'>
+                <Checkbox
+                  id='reset-account-pool-request-quota-counter'
+                  checked={request.reset_request_quota}
+                  onCheckedChange={(checked) =>
+                    setRequest((current) => ({
+                      ...current,
+                      reset_request_quota: Boolean(checked),
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='reset-account-pool-request-quota-counter'>
+                  {t('Reset local request quota window counter')}
+                </FieldLabel>
+              </Field>
+              <Field
+                orientation='horizontal'
+                data-disabled={!canForceProbe || undefined}
+              >
+                <Checkbox
+                  id='force-account-pool-quota-reprobe'
+                  checked={request.force_probe}
+                  disabled={!canForceProbe}
+                  onCheckedChange={(checked) =>
+                    setRequest((current) => ({
+                      ...current,
+                      force_probe: Boolean(checked),
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='force-account-pool-quota-reprobe'>
+                  {t('Force xAI quota re-probe after reset')}
+                </FieldLabel>
+              </Field>
+            </FieldGroup>
+            {!canForceProbe ? (
+              <FieldDescription>
+                {t('Forced re-probe is available only for xAI OAuth accounts.')}
+              </FieldDescription>
+            ) : null}
+          </FieldSet>
+        </form>
+        <DialogFooter>
+          <DialogClose render={<Button type='button' variant='outline' />}>
+            {t('Cancel')}
+          </DialogClose>
+          <Button
+            type='submit'
+            form='account-pool-local-quota-reset-form'
+            disabled={props.submitting || !hasAction}
+          >
+            {props.submitting ? (
+              <Loader2 data-icon='inline-start' className='animate-spin' />
+            ) : (
+              <RefreshCw data-icon='inline-start' />
+            )}
+            {props.submitting ? t('Resetting...') : t('Reset local state')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PoolDetailsSheet(props: {
   open: boolean
   pool?: AccountPool
@@ -2747,6 +2973,7 @@ function PoolDetailsSheet(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
   probingXAIQuotaAccountID?: number
+  onResetLocalQuota: (account: AccountPoolAccount) => void
   onReconcileXAIOAuth: () => void
   reconcilingXAIOAuth: boolean
   onCreateProxy: () => void
@@ -2821,6 +3048,7 @@ function PoolDetailsSheet(props: {
                 onSetAccountStatus={props.onSetAccountStatus}
                 onProbeXAIQuota={props.onProbeXAIQuota}
                 probingXAIQuotaAccountID={props.probingXAIQuotaAccountID}
+                onResetLocalQuota={props.onResetLocalQuota}
                 onReconcileXAIOAuth={props.onReconcileXAIOAuth}
                 reconcilingXAIOAuth={props.reconcilingXAIOAuth}
               />
@@ -2864,7 +3092,10 @@ function PoolDetailsSheet(props: {
   )
 }
 
-function SummaryItem(props: { label: React.ReactNode; value: React.ReactNode }) {
+function SummaryItem(props: {
+  label: React.ReactNode
+  value: React.ReactNode
+}) {
   return (
     <div className='flex min-w-0 flex-col gap-1'>
       <span className='text-muted-foreground text-xs'>{props.label}</span>
@@ -2890,6 +3121,7 @@ function AccountListSection(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
   probingXAIQuotaAccountID?: number
+  onResetLocalQuota: (account: AccountPoolAccount) => void
   onReconcileXAIOAuth: () => void
   reconcilingXAIOAuth: boolean
 }) {
@@ -2926,7 +3158,9 @@ function AccountListSection(props: {
             disabled={!props.hasBindings}
           >
             <Radar data-icon='inline-start' />
-            {props.hasBindings ? t('Batch Detect Models') : t('No bound channels')}
+            {props.hasBindings
+              ? t('Batch Detect Models')
+              : t('No bound channels')}
           </Button>
           <Button
             type='button'
@@ -3063,6 +3297,7 @@ function AccountListSection(props: {
                       props.probingXAIQuotaAccountID === account.id
                     }
                     onProbeXAIQuota={props.onProbeXAIQuota}
+                    onResetLocalQuota={props.onResetLocalQuota}
                   />
                 </TableCell>
               </TableRow>
@@ -3099,7 +3334,8 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
         )}
       </div>
       <div className='text-muted-foreground'>
-        {t('TTFT')}: {formatOptionalMilliseconds(account.last_first_token_latency_ms)}
+        {t('TTFT')}:{' '}
+        {formatOptionalMilliseconds(account.last_first_token_latency_ms)}
         {' / '}
         {t('Avg')} {formatOptionalMilliseconds(averageFirstTokenLatency)}
       </div>
@@ -3138,6 +3374,16 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
             {' / '}
             {formatOptionalTimestamp(quota.fetchedAt)}
           </div>
+          {quota.usage24h ? (
+            <div>
+              {t('Free usage (24h)')}:{' '}
+              {formatOptionalCount(quota.usage24h.requests)} {t('requests')} /{' '}
+              {formatOptionalCount(quota.usage24h.tokens)} {t('tokens')} ·{' '}
+              {quota.usage24h.source === 'logs_24h'
+                ? t('Logs (last 24 hours)')
+                : t('Counter estimate')}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -3151,6 +3397,7 @@ function AccountRowActions(props: {
   onEdit: (account: AccountPoolAccount) => void
   onDetect: (account: AccountPoolAccount) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
+  onResetLocalQuota: (account: AccountPoolAccount) => void
   onDelete: (account: AccountPoolAccount) => void
   onSetStatus: (account: AccountPoolAccount, status: string) => void
 }) {
@@ -3196,6 +3443,12 @@ function AccountRowActions(props: {
               : t('Probe xAI quota')}
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem
+          onClick={() => props.onResetLocalQuota(props.account)}
+        >
+          <RefreshCw />
+          {t('Reset local quota state')}
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => props.onSetStatus(props.account, nextStatus)}
         >
@@ -3286,7 +3539,9 @@ function BindingSection(props: {
                   </TableCell>
                   <TableCell>
                     <StatusBadge
-                      label={binding.runtime_enabled ? t('Routed') : t('Not Routed')}
+                      label={
+                        binding.runtime_enabled ? t('Routed') : t('Not Routed')
+                      }
                       variant={binding.runtime_enabled ? 'success' : 'neutral'}
                       copyable={false}
                     />
@@ -3422,30 +3677,27 @@ function BindingForm(props: {
       ),
     [props.binding?.id, props.bindings]
   )
-  const availableBindingChannels = useMemo(
-    () => {
-      const channels = disabledChannels
-        .filter((channel) => !boundChannelIDs.has(channel.id))
-        .map((channel) => ({
-          id: channel.id,
-          name: channel.name,
-        }))
-      if (
-        props.binding &&
-        !channels.some((channel) => channel.id === props.binding?.channel_id)
-      ) {
-        return [
-          {
-            id: props.binding.channel_id,
-            name: props.binding.channel_name || `#${props.binding.channel_id}`,
-          },
-          ...channels,
-        ]
-      }
-      return channels
-    },
-    [boundChannelIDs, disabledChannels, props.binding]
-  )
+  const availableBindingChannels = useMemo(() => {
+    const channels = disabledChannels
+      .filter((channel) => !boundChannelIDs.has(channel.id))
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+      }))
+    if (
+      props.binding &&
+      !channels.some((channel) => channel.id === props.binding?.channel_id)
+    ) {
+      return [
+        {
+          id: props.binding.channel_id,
+          name: props.binding.channel_name || `#${props.binding.channel_id}`,
+        },
+        ...channels,
+      ]
+    }
+    return channels
+  }, [boundChannelIDs, disabledChannels, props.binding])
 
   useEffect(() => {
     if (disabledChannelsQuery.error) {
@@ -3937,7 +4189,9 @@ function AccountImportDialog(props: {
           <FieldBlock
             label={t('Default Supported Models')}
             htmlFor='account-pool-import-default-models'
-            description={t('Used only when the imported account has no model list.')}
+            description={t(
+              'Used only when the imported account has no model list.'
+            )}
           >
             <MultiSelect
               id='account-pool-import-default-models'
@@ -3961,7 +4215,9 @@ function AccountImportDialog(props: {
           <FieldBlock
             label={t('Import Content')}
             htmlFor='account-pool-import-content'
-            description={t('Paste sub2api account export JSON or CPA YAML/JSON.')}
+            description={t(
+              'Paste sub2api account export JSON or CPA YAML/JSON.'
+            )}
           >
             <Textarea
               id='account-pool-import-content'
@@ -4079,7 +4335,9 @@ function AccountFormSheet(props: {
     props.pool?.platform === 'gemini' && form.credential_type === 'oauth'
   const showXAIOAuth =
     props.pool?.platform === 'xai' && form.credential_type === 'oauth'
-  const showXAIOverrides = props.pool?.platform === 'xai'
+  const showOutboundOverrides = platformSupportsAccountOutboundOverrides(
+    props.pool?.platform
+  )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -4097,7 +4355,9 @@ function AccountFormSheet(props: {
           <SheetTitle>
             {props.account ? t('Edit Account') : t('Add Account')}
           </SheetTitle>
-          <SheetDescription>{props.pool?.name || t('Account Pool')}</SheetDescription>
+          <SheetDescription>
+            {props.pool?.name || t('Account Pool')}
+          </SheetDescription>
         </SheetHeader>
         <form
           id='account-pool-account-form'
@@ -4320,136 +4580,155 @@ function AccountFormSheet(props: {
                 </>
               ) : (
                 <>
-              {showOAuthType ? (
-                <FieldBlock
-                  label={t('OAuth Type')}
-                  htmlFor='account-pool-account-oauth-type'
-                  description={t(
-                    'Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.'
-                  )}
-                >
-                  <Select
-                    items={oauthTypeOptions}
-                    value={form.oauth_type}
-                    onValueChange={(value) =>
-                      setField('oauth_type', value ?? '')
-                    }
+                  {showOAuthType ? (
+                    <FieldBlock
+                      label={t('OAuth Type')}
+                      htmlFor='account-pool-account-oauth-type'
+                      description={t(
+                        'Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.'
+                      )}
+                    >
+                      <Select
+                        items={oauthTypeOptions}
+                        value={form.oauth_type}
+                        onValueChange={(value) =>
+                          setField('oauth_type', value ?? '')
+                        }
+                      >
+                        <SelectTrigger id='account-pool-account-oauth-type'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {oauthTypeOptions.map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </FieldBlock>
+                  ) : null}
+                  <FieldBlock
+                    label={t('API Key')}
+                    htmlFor='account-pool-account-api-key'
                   >
-                    <SelectTrigger id='account-pool-account-oauth-type'>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        {oauthTypeOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </FieldBlock>
-              ) : null}
-              <FieldBlock label={t('API Key')} htmlFor='account-pool-account-api-key'>
-                <Input
-                  id='account-pool-account-api-key'
-                type='password'
-                value={form.api_key}
-                onChange={(event) => setField('api_key', event.target.value)}
-                placeholder={
-                  props.account?.has_credential ? t('Leave blank to keep') : ''
-                }
-              />
-            </FieldBlock>
-              <FieldBlock label={t('Email')} htmlFor='account-pool-account-email'>
-                <Input
-                  id='account-pool-account-email'
-                  value={form.email}
-                  onChange={(event) => setField('email', event.target.value)}
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Refresh Token')}
-                htmlFor='account-pool-account-refresh-token'
-              >
-                <Input
-                  id='account-pool-account-refresh-token'
-                  type='password'
-                  value={form.refresh_token}
-                  onChange={(event) =>
-                    setField('refresh_token', event.target.value)
-                  }
-                  placeholder={
-                    props.account?.has_credential
-                      ? t('Leave blank to keep')
-                      : ''
-                  }
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Access Token')}
-                htmlFor='account-pool-account-access-token'
-              >
-                <Input
-                  id='account-pool-account-access-token'
-                  type='password'
-                  value={form.access_token}
-                  onChange={(event) =>
-                    setField('access_token', event.target.value)
-                  }
-                  placeholder={
-                    props.account?.has_token ? t('Leave blank to keep') : ''
-                  }
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Token Refresh Token')}
-                htmlFor='account-pool-account-token-refresh-token'
-              >
-                <Input
-                  id='account-pool-account-token-refresh-token'
-                  type='password'
-                  value={form.token_refresh_token}
-                  onChange={(event) =>
-                    setField('token_refresh_token', event.target.value)
-                  }
-                  placeholder={
-                    props.account?.has_token ? t('Leave blank to keep') : ''
-                  }
-                />
-              </FieldBlock>
-              <NumericField
-                id='account-pool-account-token-expires-at'
-                label={t('Token Expires At')}
-                value={form.token_expires_at}
-                onChange={(value) => setField('token_expires_at', value)}
-              />
-              <NumericField
-                id='account-pool-account-token-version'
-                label={t('Token Version')}
-                value={form.token_version}
-                onChange={(value) => setField('token_version', value)}
-              />
+                    <Input
+                      id='account-pool-account-api-key'
+                      type='password'
+                      value={form.api_key}
+                      onChange={(event) =>
+                        setField('api_key', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_credential
+                          ? t('Leave blank to keep')
+                          : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Email')}
+                    htmlFor='account-pool-account-email'
+                  >
+                    <Input
+                      id='account-pool-account-email'
+                      value={form.email}
+                      onChange={(event) =>
+                        setField('email', event.target.value)
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Refresh Token')}
+                    htmlFor='account-pool-account-refresh-token'
+                  >
+                    <Input
+                      id='account-pool-account-refresh-token'
+                      type='password'
+                      value={form.refresh_token}
+                      onChange={(event) =>
+                        setField('refresh_token', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_credential
+                          ? t('Leave blank to keep')
+                          : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Access Token')}
+                    htmlFor='account-pool-account-access-token'
+                  >
+                    <Input
+                      id='account-pool-account-access-token'
+                      type='password'
+                      value={form.access_token}
+                      onChange={(event) =>
+                        setField('access_token', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_token ? t('Leave blank to keep') : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Token Refresh Token')}
+                    htmlFor='account-pool-account-token-refresh-token'
+                  >
+                    <Input
+                      id='account-pool-account-token-refresh-token'
+                      type='password'
+                      value={form.token_refresh_token}
+                      onChange={(event) =>
+                        setField('token_refresh_token', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_token ? t('Leave blank to keep') : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <NumericField
+                    id='account-pool-account-token-expires-at'
+                    label={t('Token Expires At')}
+                    value={form.token_expires_at}
+                    onChange={(value) => setField('token_expires_at', value)}
+                  />
+                  <NumericField
+                    id='account-pool-account-token-version'
+                    label={t('Token Version')}
+                    value={form.token_version}
+                    onChange={(value) => setField('token_version', value)}
+                  />
                 </>
               )}
             </FieldGroup>
           </SideDrawerSection>
-          {showXAIOverrides ? (
+          {showOutboundOverrides ? (
             <SideDrawerSection>
-              <SideDrawerSectionHeader title={t('xAI Outbound Overrides')} />
+              <SideDrawerSectionHeader
+                title={t('Account Outbound Overrides')}
+              />
               <FieldGroup>
                 <FieldBlock
                   label={t('Account Base URL')}
-                  htmlFor='account-pool-account-xai-base-url'
+                  htmlFor='account-pool-account-base-url'
                   description={t(
-                    'Overrides the channel base URL for this xAI account. HTTPS public hosts are required.'
+                    'Overrides the channel base URL for this account. HTTPS public hosts are required; Gemini service accounts use this as the Vertex endpoint.'
                   )}
                 >
                   <Input
-                    id='account-pool-account-xai-base-url'
+                    id='account-pool-account-base-url'
                     type='url'
                     value={form.base_url}
-                    placeholder='https://api.x.ai'
+                    placeholder={accountOutboundBaseURLPlaceholder(
+                      props.pool?.platform
+                    )}
                     onChange={(event) =>
                       setField('base_url', event.target.value)
                     }
@@ -4457,7 +4736,7 @@ function AccountFormSheet(props: {
                 </FieldBlock>
                 <div className={sideDrawerSwitchItemClassName()}>
                   <div className='min-w-0'>
-                    <FieldLabel htmlFor='account-pool-account-xai-header-overrides'>
+                    <FieldLabel htmlFor='account-pool-account-header-overrides'>
                       {t('Enable Account Header Overrides')}
                     </FieldLabel>
                     <p className='text-muted-foreground mt-1 text-xs'>
@@ -4467,7 +4746,7 @@ function AccountFormSheet(props: {
                     </p>
                   </div>
                   <Switch
-                    id='account-pool-account-xai-header-overrides'
+                    id='account-pool-account-header-overrides'
                     checked={form.header_override_enabled}
                     onCheckedChange={(checked) =>
                       setField('header_override_enabled', checked)
@@ -4477,10 +4756,10 @@ function AccountFormSheet(props: {
                 {form.header_override_enabled ? (
                   <FieldBlock
                     label={t('Header Overrides JSON')}
-                    htmlFor='account-pool-account-xai-header-overrides-json'
+                    htmlFor='account-pool-account-header-overrides-json'
                   >
                     <Textarea
-                      id='account-pool-account-xai-header-overrides-json'
+                      id='account-pool-account-header-overrides-json'
                       className='min-h-32 font-mono text-xs'
                       value={form.header_overrides_text}
                       onChange={(event) =>
@@ -4563,16 +4842,12 @@ function ProxyFormSheet(props: {
   onSubmit: (values: AccountPoolProxyFormValues) => void
 }) {
   const { t } = useTranslation()
-  const [form, setForm] =
-    useState<AccountPoolProxyFormValues>(emptyProxyForm())
+  const [form, setForm] = useState<AccountPoolProxyFormValues>(emptyProxyForm())
   const protocolOptions = useMemo(
     () => translateOptions(PROXY_PROTOCOL_OPTIONS, t),
     [t]
   )
-  const statusOptions = useMemo(
-    () => translateOptions(STATUS_OPTIONS, t),
-    [t]
-  )
+  const statusOptions = useMemo(() => translateOptions(STATUS_OPTIONS, t), [t])
   const fallbackProxyOptions = useMemo(
     () => [
       { value: '0', label: t('No Fallback Proxy') },
@@ -4614,7 +4889,9 @@ function ProxyFormSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent className={sideDrawerContentClassName('sm:max-w-[560px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>{props.proxy ? t('Edit Proxy') : t('Add Proxy')}</SheetTitle>
+          <SheetTitle>
+            {props.proxy ? t('Edit Proxy') : t('Add Proxy')}
+          </SheetTitle>
           <SheetDescription>{t('Proxies')}</SheetDescription>
         </SheetHeader>
         <form

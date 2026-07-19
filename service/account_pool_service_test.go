@@ -1826,6 +1826,7 @@ func setupAccountPoolServiceTestDB(t *testing.T) {
 		&model.AccountPoolAccount{},
 		&model.AccountPoolProxy{},
 		&model.AccountPoolChannelBinding{},
+		&model.AccountPoolWorkerLease{},
 	))
 	// Mirror the production SQLite migration path: GORM AutoMigrate does not reliably
 	// add the not-null oauth_type column on SQLite, so run the ensure-columns helper.

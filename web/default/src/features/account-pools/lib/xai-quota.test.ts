@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, it } from 'vitest'
 
 import type { AccountPoolAccount } from '../types'
-import { canProbeXAIQuota, xaiQuotaDisplayState } from './xai-quota'
+import {
+  canForceProbeAfterLocalQuotaReset,
+  canProbeXAIQuota,
+  defaultLocalQuotaResetRequest,
+  xaiQuotaDisplayState,
+} from './xai-quota'
 
 const account = {
   credential_type: 'oauth',
@@ -45,6 +50,16 @@ describe('xAI quota presentation', () => {
         headers_observed: true,
         media_eligible: false,
         media_eligibility_reason: 'billing_free_tier',
+        free_usage_24h_estimate: {
+          source: 'logs_24h',
+          window_seconds: 86_400,
+          observation_seconds: 86_400,
+          requests: 3,
+          prompt_tokens: 120,
+          completion_tokens: 30,
+          tokens: 150,
+          estimated: false,
+        },
         fetched_at: 1_721_347_200,
       })
     ).toEqual({
@@ -52,6 +67,12 @@ describe('xAI quota presentation', () => {
       remaining: '42 / 100',
       media: 'ineligible',
       fetchedAt: 1_721_347_200,
+      usage24h: {
+        source: 'logs_24h',
+        requests: 3,
+        tokens: 150,
+        estimated: false,
+      },
     })
   })
 
@@ -63,5 +84,30 @@ describe('xAI quota presentation', () => {
     })
     expect(state?.media).toBe('unknown')
     expect(xaiQuotaDisplayState(undefined)).toBeUndefined()
+  })
+
+  it('builds an explicitly local reset request and gates force-probe', () => {
+    expect(canForceProbeAfterLocalQuotaReset('xai', account)).toBe(true)
+    expect(canForceProbeAfterLocalQuotaReset('openai', account)).toBe(false)
+    expect(
+      defaultLocalQuotaResetRequest({
+        request_quota: 100,
+        credential_type: 'oauth',
+      } as AccountPoolAccount)
+    ).toEqual({
+      clear_cooldown: true,
+      reset_request_quota: true,
+      force_probe: false,
+    })
+    expect(
+      defaultLocalQuotaResetRequest({
+        request_quota: 0,
+        credential_type: 'api_key',
+      } as AccountPoolAccount)
+    ).toEqual({
+      clear_cooldown: true,
+      reset_request_quota: false,
+      force_probe: false,
+    })
   })
 })

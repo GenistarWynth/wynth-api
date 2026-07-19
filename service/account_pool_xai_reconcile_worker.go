@@ -145,29 +145,31 @@ func runDueAccountPoolXAIOAuthReconcileOnce(ctx context.Context, now int64) {
 	}
 	defer accountPoolXAIOAuthReconcileWorkerRunning.Store(false)
 
-	poolIDs, err := listDueAccountPoolXAIOAuthReconcilePoolIDs(ctx, now, accountPoolXAIOAuthDefaultNearExpiryWindowSeconds)
-	if err != nil {
-		logger.LogWarn(ctx, "account pool xai oauth reconcile worker: list due pools failed: "+err.Error())
-		return
-	}
-	for _, poolID := range poolIDs {
-		if ctx.Err() != nil {
+	runAccountPoolWorkerWithLease(ctx, accountPoolXAIOAuthReconcileLeaseKey, func(leaseCtx context.Context) {
+		poolIDs, err := listDueAccountPoolXAIOAuthReconcilePoolIDs(leaseCtx, now, accountPoolXAIOAuthDefaultNearExpiryWindowSeconds)
+		if err != nil {
+			logger.LogWarn(leaseCtx, "account pool xai oauth reconcile worker: list due pools failed: "+err.Error())
 			return
 		}
-		result, err := accountPoolXAIOAuthReconcileRunner(ctx, AccountPoolXAIOAuthReconcileParams{
-			PoolID:                  poolID,
-			DryRun:                  false,
-			NearExpiryWindowSeconds: accountPoolXAIOAuthDefaultNearExpiryWindowSeconds,
-			Now:                     now,
-		})
-		if err != nil {
-			if ctx.Err() == nil {
-				logger.LogWarn(ctx, fmt.Sprintf("account pool xai oauth reconcile worker: pool_id=%d failed: %v", poolID, err))
+		for _, poolID := range poolIDs {
+			if leaseCtx.Err() != nil {
+				return
 			}
-			continue
+			result, err := accountPoolXAIOAuthReconcileRunner(leaseCtx, AccountPoolXAIOAuthReconcileParams{
+				PoolID:                  poolID,
+				DryRun:                  false,
+				NearExpiryWindowSeconds: accountPoolXAIOAuthDefaultNearExpiryWindowSeconds,
+				Now:                     now,
+			})
+			if err != nil {
+				if leaseCtx.Err() == nil {
+					logger.LogWarn(leaseCtx, fmt.Sprintf("account pool xai oauth reconcile worker: pool_id=%d failed: %v", poolID, err))
+				}
+				continue
+			}
+			if result.Candidates > 0 {
+				logger.LogInfo(leaseCtx, fmt.Sprintf("account pool xai oauth reconcile worker: pool_id=%d candidates=%d applied=%d skipped=%d", poolID, result.Candidates, result.Applied, result.Skipped))
+			}
 		}
-		if result.Candidates > 0 {
-			logger.LogInfo(ctx, fmt.Sprintf("account pool xai oauth reconcile worker: pool_id=%d candidates=%d applied=%d skipped=%d", poolID, result.Candidates, result.Applied, result.Skipped))
-		}
-	}
+	})
 }

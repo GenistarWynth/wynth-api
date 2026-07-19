@@ -218,18 +218,20 @@ func runDueAccountPoolXAIQuotaProbeOnce(ctx context.Context, config accountPoolX
 	}
 	defer accountPoolXAIQuotaProbeWorkerRunning.Store(false)
 
-	candidates, err := listDueAccountPoolXAIQuotaProbeCandidates(ctx, time.Now().UTC(), config.StaleAge, config.MaxPerTick)
-	if err != nil {
-		logger.LogWarn(ctx, "account pool xai quota worker: list candidates failed: "+err.Error())
-		return
-	}
-	for _, candidate := range candidates {
-		if ctx.Err() != nil {
+	runAccountPoolWorkerWithLease(ctx, accountPoolXAIQuotaProbeLeaseKey, func(leaseCtx context.Context) {
+		candidates, err := listDueAccountPoolXAIQuotaProbeCandidates(leaseCtx, time.Now().UTC(), config.StaleAge, config.MaxPerTick)
+		if err != nil {
+			logger.LogWarn(leaseCtx, "account pool xai quota worker: list candidates failed: "+err.Error())
 			return
 		}
-		if _, err := accountPoolXAIQuotaProbeRunner(ctx, candidate.PoolID, candidate.AccountID); err != nil && ctx.Err() == nil {
-			message := sanitizeAccountPoolRuntimeErrorMessage(err.Error(), 240)
-			logger.LogWarn(ctx, fmt.Sprintf("account pool xai quota worker: probe failed pool_id=%d account_id=%d error=%s", candidate.PoolID, candidate.AccountID, message))
+		for _, candidate := range candidates {
+			if leaseCtx.Err() != nil {
+				return
+			}
+			if _, err := accountPoolXAIQuotaProbeRunner(leaseCtx, candidate.PoolID, candidate.AccountID); err != nil && leaseCtx.Err() == nil {
+				message := sanitizeAccountPoolRuntimeErrorMessage(err.Error(), 240)
+				logger.LogWarn(leaseCtx, fmt.Sprintf("account pool xai quota worker: probe failed pool_id=%d account_id=%d error=%s", candidate.PoolID, candidate.AccountID, message))
+			}
 		}
-	}
+	})
 }

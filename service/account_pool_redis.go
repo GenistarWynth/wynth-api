@@ -126,10 +126,10 @@ func accountPoolRedisBlocked(accountID int, now int64) (bool, error) {
 	return now < until, nil
 }
 
-func accountPoolRedisBlockClear(accountID int) {
+func accountPoolRedisBlockClear(accountID int) error {
 	ctx, cancel := accountPoolRedisCtx()
 	defer cancel()
-	_ = common.RDB.Del(ctx, accountPoolBlockKey(accountID)).Err()
+	return common.RDB.Del(ctx, accountPoolBlockKey(accountID)).Err()
 }
 
 // ---- Affinity (亲和) -------------------------------------------------------

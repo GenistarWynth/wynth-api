@@ -729,6 +729,53 @@ func GetAccountPoolXAIQuota(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
+func ResetAccountPoolLocalQuota(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	var req dto.AccountPoolLocalQuotaResetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	clearCooldown := true
+	if req.ClearCooldown != nil {
+		clearCooldown = *req.ClearCooldown
+	}
+	result, err := (&service.AccountPoolService{}).ResetAccountLocalQuota(c.Request.Context(), service.AccountPoolLocalQuotaResetParams{
+		PoolID:            poolID,
+		AccountID:         accountID,
+		ClearCooldown:     clearCooldown,
+		ResetRequestQuota: req.ResetRequestQuota,
+		ForceProbe:        req.ForceProbe,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.local_quota_reset", map[string]interface{}{
+		"pool_id":             poolID,
+		"account_id":          accountID,
+		"clear_cooldown":      result.CooldownCleared,
+		"reset_request_quota": result.RequestQuotaReset,
+		"force_probe":         req.ForceProbe,
+		"probe_succeeded":     result.Probe != nil,
+	})
+	common.ApiSuccess(c, dto.AccountPoolLocalQuotaResetResponse{
+		Account:           accountPoolAccountResponse(result.Account),
+		CooldownCleared:   result.CooldownCleared,
+		RequestQuotaReset: result.RequestQuotaReset,
+		Probe:             accountPoolXAIQuotaResponse(result.Probe),
+		ProbeError:        result.ProbeError,
+		UpstreamReset:     false,
+	})
+}
+
 func ImportAccountPoolXAISSOAccounts(c *gin.Context) {
 	poolID, ok := accountPoolIDFromParam(c)
 	if !ok {
@@ -1141,6 +1188,18 @@ func accountPoolXAIQuotaResponse(snapshot *service.AccountPoolXAIQuotaSnapshot) 
 		result.Tokens = &dto.AccountPoolXAIQuotaWindow{
 			Limit: snapshot.Tokens.Limit, Remaining: snapshot.Tokens.Remaining,
 			ResetUnix: snapshot.Tokens.ResetUnix, ResetAt: snapshot.Tokens.ResetAt,
+		}
+	}
+	if snapshot.FreeUsage24hEstimate != nil {
+		result.FreeUsage24hEstimate = &dto.AccountPoolXAIFreeUsageEstimate{
+			Source:             snapshot.FreeUsage24hEstimate.Source,
+			WindowSeconds:      snapshot.FreeUsage24hEstimate.WindowSeconds,
+			ObservationSeconds: snapshot.FreeUsage24hEstimate.ObservationSeconds,
+			Requests:           snapshot.FreeUsage24hEstimate.Requests,
+			PromptTokens:       snapshot.FreeUsage24hEstimate.PromptTokens,
+			CompletionTokens:   snapshot.FreeUsage24hEstimate.CompletionTokens,
+			Tokens:             snapshot.FreeUsage24hEstimate.Tokens,
+			Estimated:          snapshot.FreeUsage24hEstimate.Estimated,
 		}
 	}
 	return result

@@ -33,6 +33,26 @@ type accountPoolAPIResponse[T any] struct {
 	Data    T      `json:"data"`
 }
 
+func TestAccountPoolXAIQuotaResponseIncludesFreeUsageSource(t *testing.T) {
+	response := accountPoolXAIQuotaResponse(&service.AccountPoolXAIQuotaSnapshot{
+		Source: "hybrid_probe",
+		FreeUsage24hEstimate: &service.AccountPoolXAIFreeUsageEstimate{
+			Source:           service.AccountPoolXAIFreeUsageSourceLogs24h,
+			WindowSeconds:    86400,
+			Requests:         3,
+			PromptTokens:     120,
+			CompletionTokens: 30,
+			Tokens:           150,
+		},
+	})
+
+	require.NotNil(t, response)
+	require.NotNil(t, response.FreeUsage24hEstimate)
+	assert.Equal(t, "logs_24h", response.FreeUsage24hEstimate.Source)
+	assert.Equal(t, int64(3), response.FreeUsage24hEstimate.Requests)
+	assert.Equal(t, int64(150), response.FreeUsage24hEstimate.Tokens)
+}
+
 type accountPoolAPIResult[T any] struct {
 	Response accountPoolAPIResponse[T]
 	Raw      []byte
@@ -139,6 +159,7 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/xai/oauth/reconcile", ReconcileAccountPoolXAIOAuthAccounts)
 		group.POST("/:id/accounts/:account_id/xai/quota/probe", ProbeAccountPoolXAIQuota)
 		group.GET("/:id/accounts/:account_id/xai/quota", GetAccountPoolXAIQuota)
+		group.POST("/:id/accounts/:account_id/quota/reset", ResetAccountPoolLocalQuota)
 		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
@@ -152,6 +173,55 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/bindings/:binding_id/disable", DisableAccountPoolBinding)
 	}
 	return router
+}
+
+func TestAccountPoolAPIResetLocalQuotaDefaultsToCooldownClear(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	accountPoolService := service.AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(service.AccountPoolCreateParams{
+		Name:     "openai-pool",
+		Platform: model.AccountPoolPlatformOpenAI,
+	})
+	require.NoError(t, err)
+	account, err := accountPoolService.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "quota-limited",
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"rate_limited_until":         int64(300),
+			"request_quota_used":         int64(7),
+			"request_quota_window_start": int64(100),
+		}).Error)
+
+	type resetResponse struct {
+		Account           dto.AccountPoolAccountResponse `json:"account"`
+		CooldownCleared   bool                           `json:"cooldown_cleared"`
+		RequestQuotaReset bool                           `json:"request_quota_reset"`
+		UpstreamReset     bool                           `json:"upstream_reset"`
+	}
+	result := accountPoolAPIRequest[resetResponse](
+		t,
+		router,
+		http.MethodPost,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(account.Id)+"/quota/reset",
+		map[string]any{"reset_request_quota": true},
+	)
+	require.Equal(t, http.StatusOK, result.Code, string(result.Raw))
+	require.True(t, result.Response.Success, result.Response.Message)
+	assert.Equal(t, account.Id, result.Response.Data.Account.Id)
+	assert.True(t, result.Response.Data.CooldownCleared)
+	assert.True(t, result.Response.Data.RequestQuotaReset)
+	assert.False(t, result.Response.Data.UpstreamReset, "the API must never claim an upstream hard reset")
+
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Zero(t, stored.RateLimitedUntil)
+	assert.Zero(t, stored.RequestQuotaUsed)
+	assert.Greater(t, stored.RequestQuotaWindowStart, int64(100))
 }
 
 func TestAccountPoolAPIProbeAndGetXAIQuota(t *testing.T) {

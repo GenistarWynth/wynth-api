@@ -73,18 +73,22 @@ func accountPoolRuntimeBlocked(accountID int, now int64) bool {
 	return false
 }
 
-// clearAccountPoolRuntimeBlock removes any in-process block for accountID.
-func clearAccountPoolRuntimeBlock(accountID int) {
+// clearAccountPoolRuntimeBlock removes the distributed and in-process blocks.
+// The in-memory entry is always cleared, while a Redis error is returned so
+// explicit admin resets cannot claim the distributed cooldown was removed.
+func clearAccountPoolRuntimeBlock(accountID int) error {
 	if accountID <= 0 {
-		return
+		return nil
 	}
+	var redisErr error
 	if accountPoolRedisOn() {
-		accountPoolRedisBlockClear(accountID)
+		redisErr = accountPoolRedisBlockClear(accountID)
 	}
 	// Always clear the in-memory entry too; harmless when Redis is authoritative.
 	accountPoolRuntimeBlocks.mu.Lock()
 	defer accountPoolRuntimeBlocks.mu.Unlock()
 	delete(accountPoolRuntimeBlocks.blocks, accountID)
+	return redisErr
 }
 
 // resetAccountPoolRuntimeBlocksForTest replaces the block manager with a fresh one.

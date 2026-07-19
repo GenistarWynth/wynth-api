@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,6 +96,28 @@ func TestRunDueAccountPoolXAIOAuthReconcileAppliesAndSkipsOverlappingTick(t *tes
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for first reconcile worker tick to finish")
 	}
+}
+
+func TestRunDueAccountPoolXAIOAuthReconcileSkipsTickHeldByAnotherInstance(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	now := common.GetTimestamp()
+	pool := createAccountPoolXAIReconcileWorkerPool(t, service, "runner-lease", model.AccountPoolPlatformXAI)
+	createAccountPoolXAIReconcileWorkerAccount(t, service, pool.Id, "due", model.AccountPoolAccountStatusEnabled,
+		AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth, RefreshToken: "refresh"},
+		AccountPoolTokenState{AccessToken: "expired", ExpiresAt: now - 1})
+	acquired, err := model.AcquireAccountPoolWorkerLease(context.Background(), accountPoolXAIOAuthReconcileLeaseKey, "other-instance", 60)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	var calls atomic.Int32
+	setAccountPoolXAIOAuthReconcileRunnerForTest(t, func(context.Context, AccountPoolXAIOAuthReconcileParams) (AccountPoolXAIOAuthReconcileResult, error) {
+		calls.Add(1)
+		return AccountPoolXAIOAuthReconcileResult{}, nil
+	})
+	accountPoolXAIOAuthReconcileWorkerRunning.Store(false)
+	runDueAccountPoolXAIOAuthReconcileOnce(context.Background(), now)
+	assert.Zero(t, calls.Load())
 }
 
 func TestAccountPoolXAIOAuthReconcileWorkerIntervalUsesPositiveOverride(t *testing.T) {

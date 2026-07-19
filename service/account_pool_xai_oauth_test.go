@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestAccountPoolServiceRefreshXAIOAuthAccountPersistsRotatedTokens(t *testing.T) {
@@ -191,6 +193,205 @@ func TestAccountPoolServiceImportXAISSOAccountsReportsPartialFailure(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, "refresh-first", credential.RefreshToken)
 	assert.NotContains(t, stored.CredentialConfig, "first")
+}
+
+func TestAccountPoolServiceImportXAISSOAccountsCarriesBatchContextIntoPersistence(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	accountPoolService := AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-context-import",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+
+	oldConvert := accountPoolXAISSOConvert
+	accountPoolXAISSOConvert = func(context.Context, string, string) (*XAIOAuthTokenInfo, error) {
+		return &XAIOAuthTokenInfo{
+			AccessToken:  "access",
+			RefreshToken: "refresh",
+			Email:        "context@example.com",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAISSOConvert = oldConvert })
+
+	type contextMarkerKey struct{}
+	marker := &struct{}{}
+	type observedPersistenceContext struct {
+		marker      any
+		hasDeadline bool
+	}
+	observed := make(chan observedPersistenceContext, 1)
+	callbackName := "account_pool_test_observe_sso_import_context"
+	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register(callbackName, func(db *gorm.DB) {
+		_, hasDeadline := db.Statement.Context.Deadline()
+		observed <- observedPersistenceContext{
+			marker:      db.Statement.Context.Value(contextMarkerKey{}),
+			hasDeadline: hasDeadline,
+		}
+		db.AddError(errors.New("stop after observing persistence context"))
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Create().Remove(callbackName))
+	})
+
+	ctx := context.WithValue(context.Background(), contextMarkerKey{}, marker)
+	result, err := accountPoolService.ImportXAISSOAccounts(ctx, AccountPoolXAISSOImportParams{
+		PoolID:    pool.Id,
+		SSOTokens: []string{"sso"},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Errors, 1)
+
+	persistenceContext := <-observed
+	assert.Equal(t, marker, persistenceContext.marker)
+	assert.True(t, persistenceContext.hasDeadline, "account creation must inherit the bounded batch context")
+}
+
+func TestAccountPoolServiceImportXAISSOAccountsUsesBoundedParallelConversionAndStableAggregation(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	accountPoolService := AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-concurrent-import",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+
+	started := make(chan string, 6)
+	release := make(chan struct{})
+	var active atomic.Int32
+	var maximum atomic.Int32
+	oldConvert := accountPoolXAISSOConvert
+	accountPoolXAISSOConvert = func(ctx context.Context, ssoToken string, proxyURL string) (*XAIOAuthTokenInfo, error) {
+		assert.Empty(t, proxyURL)
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			observed := maximum.Load()
+			if current <= observed || maximum.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		started <- ssoToken
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-release:
+		}
+		if ssoToken == "token-2" {
+			return nil, errors.New("secret token-2 failed")
+		}
+		return &XAIOAuthTokenInfo{
+			AccessToken:  "access-" + ssoToken,
+			RefreshToken: "refresh-" + ssoToken,
+			Email:        ssoToken + "@example.com",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAISSOConvert = oldConvert })
+
+	type importResult struct {
+		result AccountPoolXAISSOImportResult
+		err    error
+	}
+	done := make(chan importResult, 1)
+	go func() {
+		result, importErr := accountPoolService.ImportXAISSOAccounts(context.Background(), AccountPoolXAISSOImportParams{
+			PoolID:    pool.Id,
+			SSOTokens: []string{"token-1", "token-2", "token-3", "token-4", "token-5", "token-6"},
+		})
+		done <- importResult{result: result, err: importErr}
+	}()
+
+	for index := 0; index < 3; index++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("timed out waiting for three concurrent SSO conversions")
+		}
+	}
+	assert.Equal(t, int32(3), maximum.Load())
+	close(release)
+
+	var imported importResult
+	select {
+	case imported = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for concurrent SSO import")
+	}
+	require.NoError(t, imported.err)
+	require.Len(t, imported.result.Created, 5)
+	require.Len(t, imported.result.Errors, 1)
+	assert.Equal(t, 2, imported.result.Errors[0].Index)
+	assert.NotContains(t, imported.result.Errors[0].Message, "token-2")
+	identifiers := make([]string, 0, len(imported.result.Created))
+	for _, created := range imported.result.Created {
+		identifiers = append(identifiers, created.AccountIdentifier)
+	}
+	assert.Equal(t, []string{
+		"token-1@example.com",
+		"token-3@example.com",
+		"token-4@example.com",
+		"token-5@example.com",
+		"token-6@example.com",
+	}, identifiers)
+}
+
+func TestAccountPoolXAISSOImportConfigBoundsConcurrencyAndTimeout(t *testing.T) {
+	t.Setenv(accountPoolXAISSOImportConcurrencyEnv, "5")
+	assert.Equal(t, 5, loadAccountPoolXAISSOImportConcurrency())
+	t.Setenv(accountPoolXAISSOImportConcurrencyEnv, "99")
+	assert.Equal(t, accountPoolXAISSOImportMaxConcurrency, loadAccountPoolXAISSOImportConcurrency())
+	t.Setenv(accountPoolXAISSOImportConcurrencyEnv, "0")
+	assert.Equal(t, accountPoolXAISSOImportDefaultConcurrency, loadAccountPoolXAISSOImportConcurrency())
+
+	t.Setenv(accountPoolXAISSOImportTimeoutEnv, "600")
+	assert.Equal(t, 10*time.Minute, loadAccountPoolXAISSOImportTimeout())
+	for _, value := range []string{"0", "29", "1801", "9223372036854775807"} {
+		t.Setenv(accountPoolXAISSOImportTimeoutEnv, value)
+		assert.Equal(t, accountPoolXAISSOImportDefaultTimeout, loadAccountPoolXAISSOImportTimeout())
+	}
+}
+
+func TestAccountPoolServiceImportXAISSOAccountsPassesResolvedProxyToEveryConversion(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	accountPoolService := AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-proxy-import",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	proxy, err := accountPoolService.CreateProxy(AccountPoolProxyCreateParams{
+		Name:     "import-proxy",
+		Protocol: "socks5",
+		Host:     "proxy.example.com",
+		Port:     1080,
+		Username: "operator",
+		Password: "secret",
+	})
+	require.NoError(t, err)
+
+	oldConvert := accountPoolXAISSOConvert
+	accountPoolXAISSOConvert = func(_ context.Context, ssoToken string, proxyURL string) (*XAIOAuthTokenInfo, error) {
+		assert.Equal(t, "socks5://operator:secret@proxy.example.com:1080", proxyURL)
+		return &XAIOAuthTokenInfo{
+			AccessToken:  "access-" + ssoToken,
+			RefreshToken: "refresh-" + ssoToken,
+			Email:        ssoToken + "@example.com",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAISSOConvert = oldConvert })
+
+	result, err := accountPoolService.ImportXAISSOAccounts(context.Background(), AccountPoolXAISSOImportParams{
+		PoolID:    pool.Id,
+		ProxyID:   proxy.Id,
+		SSOTokens: []string{"first", "second"},
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Created, 2)
+	assert.Empty(t, result.Errors)
 }
 
 func TestAccountPoolXAIQuotaImportProbeRunsForEachSuccessfulSSOItem(t *testing.T) {

@@ -156,19 +156,46 @@ type AccountPoolXAIBillingSnapshot struct {
 	Partial           bool     `json:"partial,omitempty"`
 }
 
+type AccountPoolXAIFreeUsageEstimate struct {
+	Source             string `json:"source"`
+	WindowSeconds      int64  `json:"window_seconds"`
+	ObservationSeconds int64  `json:"observation_seconds"`
+	Requests           int64  `json:"requests"`
+	PromptTokens       int64  `json:"prompt_tokens"`
+	CompletionTokens   int64  `json:"completion_tokens"`
+	Tokens             int64  `json:"tokens"`
+	Estimated          bool   `json:"estimated"`
+}
+
 type AccountPoolXAIQuotaSnapshot struct {
-	Source                 string                         `json:"source"`
-	Model                  string                         `json:"model,omitempty"`
-	Billing                *AccountPoolXAIBillingSnapshot `json:"billing,omitempty"`
-	Requests               *AccountPoolXAIQuotaWindow     `json:"requests,omitempty"`
-	Tokens                 *AccountPoolXAIQuotaWindow     `json:"tokens,omitempty"`
-	RetryAfterSeconds      *int                           `json:"retry_after_seconds,omitempty"`
-	StatusCode             int                            `json:"status_code,omitempty"`
-	HeadersObserved        bool                           `json:"headers_observed"`
-	MediaEligible          *bool                          `json:"media_eligible,omitempty"`
-	MediaEligibilityReason string                         `json:"media_eligibility_reason,omitempty"`
-	FetchedAt              int64                          `json:"fetched_at"`
-	ProbeError             string                         `json:"probe_error,omitempty"`
+	Source                 string                           `json:"source"`
+	Model                  string                           `json:"model,omitempty"`
+	Billing                *AccountPoolXAIBillingSnapshot   `json:"billing,omitempty"`
+	Requests               *AccountPoolXAIQuotaWindow       `json:"requests,omitempty"`
+	Tokens                 *AccountPoolXAIQuotaWindow       `json:"tokens,omitempty"`
+	RetryAfterSeconds      *int                             `json:"retry_after_seconds,omitempty"`
+	StatusCode             int                              `json:"status_code,omitempty"`
+	HeadersObserved        bool                             `json:"headers_observed"`
+	MediaEligible          *bool                            `json:"media_eligible,omitempty"`
+	MediaEligibilityReason string                           `json:"media_eligibility_reason,omitempty"`
+	FetchedAt              int64                            `json:"fetched_at"`
+	ProbeError             string                           `json:"probe_error,omitempty"`
+	FreeUsage24hEstimate   *AccountPoolXAIFreeUsageEstimate `json:"free_usage_24h_estimate,omitempty"`
+}
+
+type AccountPoolLocalQuotaResetRequest struct {
+	ClearCooldown     *bool `json:"clear_cooldown"`
+	ResetRequestQuota bool  `json:"reset_request_quota"`
+	ForceProbe        bool  `json:"force_probe"`
+}
+
+type AccountPoolLocalQuotaResetResponse struct {
+	Account           AccountPoolAccountResponse   `json:"account"`
+	CooldownCleared   bool                         `json:"cooldown_cleared"`
+	RequestQuotaReset bool                         `json:"request_quota_reset"`
+	Probe             *AccountPoolXAIQuotaSnapshot `json:"probe,omitempty"`
+	ProbeError        string                       `json:"probe_error,omitempty"`
+	UpstreamReset     bool                         `json:"upstream_reset"`
 }
 
 type AccountPoolAccountImportDefaultsRequest struct {

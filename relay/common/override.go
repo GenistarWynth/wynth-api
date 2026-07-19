@@ -432,10 +432,16 @@ func GetEffectiveHeaderOverride(info *RelayInfo) map[string]interface{} {
 	if info == nil {
 		return map[string]interface{}{}
 	}
+	var effective map[string]interface{}
 	if info.UseRuntimeHeadersOverride {
-		return sanitizeHeaderOverrideMap(info.RuntimeHeadersOverride)
+		effective = sanitizeHeaderOverrideMap(info.RuntimeHeadersOverride)
+	} else {
+		effective = sanitizeHeaderOverrideMap(getHeaderOverrideMap(info))
 	}
-	return sanitizeHeaderOverrideMap(getHeaderOverrideMap(info))
+	for name, value := range sanitizeHeaderOverrideMap(info.RuntimeAccountHeadersOverride) {
+		effective[name] = value
+	}
+	return effective
 }
 
 func tryParseOperations(paramOverride map[string]interface{}) ([]ParamOperation, bool) {

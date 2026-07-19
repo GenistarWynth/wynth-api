@@ -284,6 +284,7 @@ func migrateDB() error {
 		&AccountPoolAccount{},
 		&AccountPoolProxy{},
 		&AccountPoolChannelBinding{},
+		&AccountPoolWorkerLease{},
 		&Token{},
 		&User{},
 		&PasskeyCredential{},
@@ -351,6 +352,7 @@ func migrateDBFast() error {
 		{&AccountPoolAccount{}, "AccountPoolAccount"},
 		{&AccountPoolProxy{}, "AccountPoolProxy"},
 		{&AccountPoolChannelBinding{}, "AccountPoolChannelBinding"},
+		{&AccountPoolWorkerLease{}, "AccountPoolWorkerLease"},
 		{&Token{}, "Token"},
 		{&User{}, "User"},
 		{&PasskeyCredential{}, "PasskeyCredential"},
@@ -433,6 +435,14 @@ func migrateClickHouseLogDB() error {
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
 		return err
 	}
+	for _, statement := range []string{
+		"ALTER TABLE logs ADD COLUMN IF NOT EXISTS account_pool_id Int32 DEFAULT 0",
+		"ALTER TABLE logs ADD COLUMN IF NOT EXISTS account_pool_account_id Int32 DEFAULT 0",
+	} {
+		if err := LOG_DB.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
 	return syncClickHouseLogTTL(ttlDays)
 }
 
@@ -476,6 +486,8 @@ CREATE TABLE IF NOT EXISTS logs (
 	use_time Int32 DEFAULT 0,
 	is_stream UInt8 DEFAULT 0,
 	channel_id Int32 DEFAULT 0,
+	account_pool_id Int32 DEFAULT 0,
+	account_pool_account_id Int32 DEFAULT 0,
 	token_id Int32 DEFAULT 0,
 	`+"`group`"+` String DEFAULT '',
 	ip String DEFAULT '',

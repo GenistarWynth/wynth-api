@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type {
   AccountPoolAccount,
+  AccountPoolLocalQuotaResetRequest,
   AccountPoolXAIQuotaSnapshot,
 } from '../types'
 
@@ -26,6 +27,12 @@ export type XAIQuotaDisplayState = {
   remaining?: string
   media: 'eligible' | 'ineligible' | 'unknown'
   fetchedAt: number
+  usage24h?: {
+    source: string
+    requests: number
+    tokens: number
+    estimated: boolean
+  }
 }
 
 export function canProbeXAIQuota(
@@ -33,6 +40,23 @@ export function canProbeXAIQuota(
   account: Pick<AccountPoolAccount, 'credential_type'>
 ) {
   return platform === 'xai' && account.credential_type === 'oauth'
+}
+
+export function canForceProbeAfterLocalQuotaReset(
+  platform: string | undefined,
+  account: Pick<AccountPoolAccount, 'credential_type'>
+) {
+  return canProbeXAIQuota(platform, account)
+}
+
+export function defaultLocalQuotaResetRequest(
+  account: Pick<AccountPoolAccount, 'request_quota'>
+): AccountPoolLocalQuotaResetRequest {
+  return {
+    clear_cooldown: true,
+    reset_request_quota: account.request_quota > 0,
+    force_probe: false,
+  }
 }
 
 export function xaiQuotaDisplayState(
@@ -58,5 +82,13 @@ export function xaiQuotaDisplayState(
     remaining: remainingLabel,
     media,
     fetchedAt: snapshot.fetched_at,
+    usage24h: snapshot.free_usage_24h_estimate
+      ? {
+          source: snapshot.free_usage_24h_estimate.source,
+          requests: snapshot.free_usage_24h_estimate.requests,
+          tokens: snapshot.free_usage_24h_estimate.tokens,
+          estimated: snapshot.free_usage_24h_estimate.estimated,
+        }
+      : undefined,
   }
 }

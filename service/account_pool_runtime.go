@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -19,9 +20,9 @@ import (
 // collisions with the shared constant.ContextKey* namespace.
 const (
 	accountPoolAttemptedAccountIDsContextKey    = "account_pool_attempted_account_ids"
-	accountPoolSelectedPoolIDContextKey         = "account_pool_selected_pool_id"
+	accountPoolSelectedPoolIDContextKey         = string(constant.ContextKeyAccountPoolID)
 	accountPoolSelectedBindingIDContextKey      = "account_pool_selected_binding_id"
-	accountPoolSelectedAccountIDContextKey      = "account_pool_selected_account_id"
+	accountPoolSelectedAccountIDContextKey      = string(constant.ContextKeyAccountPoolAccountID)
 	accountPoolSelectedRetryTimesContextKey     = "account_pool_selected_retry_times"
 	accountPoolSelectedAffinityKeyContextKey    = "account_pool_selected_affinity_key"
 	accountPoolSelectedRuntimeOptionsContextKey = "account_pool_selected_runtime_options"
@@ -42,6 +43,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeVertexProjectID = ""
 		info.RuntimeVertexLocation = ""
 		info.RuntimeBaseURL = ""
+		info.RuntimeAccountHeadersOverride = nil
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -118,24 +120,29 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if selection.ProxyURL != "" {
 		info.RuntimeProxy = selection.ProxyURL
 	}
-	if selection.Platform == model.AccountPoolPlatformXAI {
-		normalizedCredential, overrideErr := normalizeAccountPoolXAIOverrides(
+	if accountPoolOutboundOverridesSupported(selection.Platform) {
+		normalizedCredential, overrideErr := normalizeAccountPoolOutboundOverrides(
 			accountPoolRuntimeContext(c),
 			selection.Platform,
 			selection.Credential,
+			nil,
 		)
 		if overrideErr != nil {
-			return fmt.Errorf("xai account outbound override validation failed: %w", overrideErr)
+			return fmt.Errorf("account outbound override validation failed: %w", overrideErr)
 		}
 		if normalizedCredential.BaseURL != nil {
 			info.RuntimeBaseURL = strings.TrimSpace(*normalizedCredential.BaseURL)
 		}
 		if normalizedCredential.HeaderOverrideEnabled != nil && *normalizedCredential.HeaderOverrideEnabled {
 			mergedHeaders := relaycommon.GetEffectiveHeaderOverride(info)
+			accountHeaders := make(map[string]interface{}, len(normalizedCredential.HeaderOverrides))
 			for name, value := range normalizedCredential.HeaderOverrides {
-				mergedHeaders[strings.ToLower(name)] = value
+				normalizedName := strings.ToLower(name)
+				mergedHeaders[normalizedName] = value
+				accountHeaders[normalizedName] = value
 			}
 			info.RuntimeHeadersOverride = mergedHeaders
+			info.RuntimeAccountHeadersOverride = accountHeaders
 			info.UseRuntimeHeadersOverride = true
 		}
 	}

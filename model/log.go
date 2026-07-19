@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
@@ -57,27 +58,29 @@ func sanitizeClickHouseLikePattern(input string) (string, error) {
 }
 
 type Log struct {
-	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
-	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
-	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content           string `json:"content"`
-	Username          string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
-	TokenName         string `json:"token_name" gorm:"index;default:''"`
-	ModelName         string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota             int    `json:"quota" gorm:"default:0"`
-	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0"`
-	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
-	UseTime           int    `json:"use_time" gorm:"default:0"`
-	IsStream          bool   `json:"is_stream"`
-	ChannelId         int    `json:"channel" gorm:"index"`
-	ChannelName       string `json:"channel_name" gorm:"->"`
-	TokenId           int    `json:"token_id" gorm:"default:0;index"`
-	Group             string `json:"group" gorm:"index"`
-	Ip                string `json:"ip" gorm:"index;default:''"`
-	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
-	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
-	Other             string `json:"other"`
+	Id                   int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	UserId               int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt            int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type;index:idx_account_pool_account_created,priority:3"`
+	Type                 int    `json:"type" gorm:"index:idx_created_at_type"`
+	Content              string `json:"content"`
+	Username             string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName            string `json:"token_name" gorm:"index;default:''"`
+	ModelName            string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota                int    `json:"quota" gorm:"default:0"`
+	PromptTokens         int    `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens     int    `json:"completion_tokens" gorm:"default:0"`
+	UseTime              int    `json:"use_time" gorm:"default:0"`
+	IsStream             bool   `json:"is_stream"`
+	ChannelId            int    `json:"channel" gorm:"index"`
+	AccountPoolId        int    `json:"account_pool_id,omitempty" gorm:"default:0;index:idx_account_pool_account_created,priority:2"`
+	AccountPoolAccountId int    `json:"account_pool_account_id,omitempty" gorm:"default:0;index:idx_account_pool_account_created,priority:1"`
+	ChannelName          string `json:"channel_name" gorm:"->"`
+	TokenId              int    `json:"token_id" gorm:"default:0;index"`
+	Group                string `json:"group" gorm:"index"`
+	Ip                   string `json:"ip" gorm:"index;default:''"`
+	RequestId            string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	UpstreamRequestId    string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	Other                string `json:"other"`
 }
 
 // don't use iota, avoid change log type value
@@ -358,21 +361,23 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}
 	}
 	log := &Log{
-		UserId:           userId,
-		Username:         username,
-		CreatedAt:        createdAt,
-		Type:             LogTypeConsume,
-		Content:          params.Content,
-		PromptTokens:     params.PromptTokens,
-		CompletionTokens: params.CompletionTokens,
-		TokenName:        params.TokenName,
-		ModelName:        params.ModelName,
-		Quota:            params.Quota,
-		ChannelId:        params.ChannelId,
-		TokenId:          params.TokenId,
-		UseTime:          params.UseTimeSeconds,
-		IsStream:         params.IsStream,
-		Group:            params.Group,
+		UserId:               userId,
+		Username:             username,
+		CreatedAt:            createdAt,
+		Type:                 LogTypeConsume,
+		Content:              params.Content,
+		PromptTokens:         params.PromptTokens,
+		CompletionTokens:     params.CompletionTokens,
+		TokenName:            params.TokenName,
+		ModelName:            params.ModelName,
+		Quota:                params.Quota,
+		ChannelId:            params.ChannelId,
+		AccountPoolId:        common.GetContextKeyInt(c, constant.ContextKeyAccountPoolID),
+		AccountPoolAccountId: common.GetContextKeyInt(c, constant.ContextKeyAccountPoolAccountID),
+		TokenId:              params.TokenId,
+		UseTime:              params.UseTimeSeconds,
+		IsStream:             params.IsStream,
+		Group:                params.Group,
 		Ip: func() string {
 			if needRecordIp {
 				return c.ClientIP()
@@ -406,6 +411,41 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			CacheCreationTokens: cacheCreationTokens,
 		})
 	}
+}
+
+type AccountPoolUsage24h struct {
+	HasLogs          bool
+	Requests         int64
+	PromptTokens     int64
+	CompletionTokens int64
+}
+
+func GetAccountPoolUsage24h(poolID int, accountID int, now int64) (AccountPoolUsage24h, error) {
+	if LOG_DB == nil {
+		return AccountPoolUsage24h{}, errors.New("log database is not configured")
+	}
+	if poolID <= 0 || accountID <= 0 || now <= 0 {
+		return AccountPoolUsage24h{}, nil
+	}
+	var aggregate struct {
+		Requests         int64 `gorm:"column:requests"`
+		PromptTokens     int64 `gorm:"column:prompt_tokens"`
+		CompletionTokens int64 `gorm:"column:completion_tokens"`
+	}
+	err := LOG_DB.Model(&Log{}).
+		Select("COUNT(*) AS requests, COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, COALESCE(SUM(completion_tokens), 0) AS completion_tokens").
+		Where("account_pool_id = ? AND account_pool_account_id = ? AND type = ? AND created_at >= ? AND created_at <= ?",
+			poolID, accountID, LogTypeConsume, now-int64(24*time.Hour/time.Second), now).
+		Scan(&aggregate).Error
+	if err != nil {
+		return AccountPoolUsage24h{}, err
+	}
+	return AccountPoolUsage24h{
+		HasLogs:          aggregate.Requests > 0,
+		Requests:         aggregate.Requests,
+		PromptTokens:     aggregate.PromptTokens,
+		CompletionTokens: aggregate.CompletionTokens,
+	}, nil
 }
 
 type RecordTaskBillingLogParams struct {

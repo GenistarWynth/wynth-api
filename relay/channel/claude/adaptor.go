@@ -42,7 +42,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	requestURL := fmt.Sprintf("%s/v1/messages", info.ChannelBaseUrl)
+	requestURL := fmt.Sprintf("%s/v1/messages", relaycommon.GetEffectiveBaseURL(info))
 	if !shouldAppendClaudeBetaQuery(info) {
 		return requestURL, nil
 	}

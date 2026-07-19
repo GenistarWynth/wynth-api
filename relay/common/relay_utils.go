@@ -36,6 +36,18 @@ func GetFullRequestURL(baseURL string, requestURL string, channelType int) strin
 	return fullRequestURL
 }
 
+// GetEffectiveBaseURL returns the selected account-pool override when present;
+// otherwise it preserves the channel's configured base URL.
+func GetEffectiveBaseURL(info *RelayInfo) string {
+	if info == nil {
+		return ""
+	}
+	if runtimeBaseURL := strings.TrimSpace(info.RuntimeBaseURL); runtimeBaseURL != "" {
+		return runtimeBaseURL
+	}
+	return info.ChannelBaseUrl
+}
+
 func GetAPIVersion(c *gin.Context) string {
 	query := c.Request.URL.Query()
 	apiVersion := query.Get("api-version")
