@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+
+import type { AccountPoolAccount } from '../types'
 import {
   allowedChannelTypesForPlatform,
+  applyXAIOAuthResultToForm,
   buildAccountPayload,
   buildAccountImportPayload,
   buildAccountPoolProxyOptions,
@@ -20,7 +23,6 @@ import {
   normalizeModelListText,
   platformSupportsOAuthCredential,
 } from './account-pool-form'
-import type { AccountPoolAccount } from '../types'
 
 function makeAccount(
   overrides: Partial<AccountPoolAccount> = {}
@@ -101,10 +103,16 @@ describe('account pool form helpers', () => {
 
   test('normalizes account pool schedule policy values', () => {
     assert.equal(normalizeAccountPoolSchedulePolicy('random'), 'random')
-    assert.equal(normalizeAccountPoolSchedulePolicy('round_robin'), 'round_robin')
+    assert.equal(
+      normalizeAccountPoolSchedulePolicy('round_robin'),
+      'round_robin'
+    )
     assert.equal(normalizeAccountPoolSchedulePolicy('priority'), 'round_robin')
     assert.equal(normalizeOptionalAccountPoolSchedulePolicy(''), '')
-    assert.equal(normalizeOptionalAccountPoolSchedulePolicy(' priority '), 'round_robin')
+    assert.equal(
+      normalizeOptionalAccountPoolSchedulePolicy(' priority '),
+      'round_robin'
+    )
   })
 
   test('serializes write-only api key credential and normalizes models in first-seen order', () => {
@@ -169,6 +177,79 @@ describe('account pool form helpers', () => {
         refresh_token: 'refresh-token',
       }
     )
+  })
+
+  test('applies exchanged xai oauth credentials without losing account settings', () => {
+    const current = {
+      ...emptyAccountForm(),
+      name: 'Grok primary',
+      priority: 8,
+      proxy_id: 12,
+    }
+
+    const values = applyXAIOAuthResultToForm(current, {
+      email: 'grok@example.com',
+      sub: 'grok-subject',
+      team_id: 'team-42',
+      subscription_tier: 'SUPER_GROK',
+      entitlement_status: 'active',
+      expires_at: 1784548800,
+      credential: {
+        type: 'oauth',
+        api_key: '',
+        email: 'grok@example.com',
+        refresh_token: 'credential-refresh',
+        id_token: 'id-token',
+        client_id: 'grok-client',
+        scope: 'openid offline_access',
+        token_type: 'Bearer',
+        sub: 'grok-subject',
+        team_id: 'team-42',
+        subscription_tier: 'SUPER_GROK',
+        entitlement_status: 'active',
+      },
+      token_state: {
+        access_token: 'access-token',
+        refresh_token: 'rotated-refresh',
+        expires_at: 1784548800,
+        version: 1,
+      },
+    })
+
+    assert.equal(values.name, 'Grok primary')
+    assert.equal(values.priority, 8)
+    assert.equal(values.proxy_id, 12)
+    assert.equal(values.credential_type, 'oauth')
+    assert.equal(values.account_identifier, 'grok-subject')
+    assert.equal(values.email, 'grok@example.com')
+    assert.equal(values.refresh_token, 'credential-refresh')
+    assert.equal(values.id_token, 'id-token')
+    assert.equal(values.client_id, 'grok-client')
+    assert.equal(values.scope, 'openid offline_access')
+    assert.equal(values.token_type, 'Bearer')
+    assert.equal(values.subject, 'grok-subject')
+    assert.equal(values.team_id, 'team-42')
+    assert.equal(values.subscription_tier, 'SUPER_GROK')
+    assert.equal(values.entitlement_status, 'active')
+    assert.equal(values.access_token, 'access-token')
+    assert.equal(values.token_refresh_token, 'rotated-refresh')
+    assert.equal(values.token_expires_at, 1784548800)
+    assert.equal(values.token_version, 1)
+    assert.deepEqual(buildAccountPayload(values).credential, {
+      type: 'oauth',
+      oauth_type: '',
+      api_key: '',
+      email: 'grok@example.com',
+      refresh_token: 'credential-refresh',
+      id_token: 'id-token',
+      client_id: 'grok-client',
+      scope: 'openid offline_access',
+      token_type: 'Bearer',
+      sub: 'grok-subject',
+      team_id: 'team-42',
+      subscription_tier: 'SUPER_GROK',
+      entitlement_status: 'active',
+    })
   })
 
   test('serializes gemini oauth_type sub-type in the credential payload', () => {

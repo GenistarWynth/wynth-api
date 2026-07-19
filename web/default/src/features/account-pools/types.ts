@@ -110,6 +110,14 @@ export type AccountPoolCredentialConfigRequest = {
   api_key: string
   email: string
   refresh_token: string
+  id_token?: string
+  client_id?: string
+  scope?: string
+  token_type?: string
+  sub?: string
+  team_id?: string
+  subscription_tier?: string
+  entitlement_status?: string
   // grok.com web-cookie credential: optional Cloudflare clearance cookie sent
   // alongside the SSO token (carried in api_key). Mirrors the backend
   // dto.AccountPoolCredentialConfigRequest field; ignored by other credential types.
@@ -121,6 +129,34 @@ export type AccountPoolTokenStateRequest = {
   refresh_token: string
   expires_at: number
   version: number
+}
+
+export type AccountPoolXAIOAuthAuthorizationRequest = {
+  proxy_id: number
+  redirect_uri?: string
+}
+
+export type AccountPoolXAIOAuthAuthorization = {
+  auth_url: string
+  session_id: string
+  state: string
+}
+
+export type AccountPoolXAIOAuthExchangeRequest = {
+  session_id: string
+  code: string
+  state?: string
+}
+
+export type AccountPoolXAIOAuthTokenResult = {
+  email?: string
+  sub?: string
+  team_id?: string
+  subscription_tier?: string
+  entitlement_status?: string
+  expires_at: number
+  credential: AccountPoolCredentialConfigRequest
+  token_state: AccountPoolTokenStateRequest
 }
 
 export type AccountPoolAccount = {

@@ -18,11 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  type ColumnDef,
-  type ColumnFiltersState,
-  type PaginationState,
-  type Row,
+import type {
+  ColumnDef,
+  ColumnFiltersState,
+  PaginationState,
+  Row,
 } from '@tanstack/react-table'
 import {
   Eye,
@@ -127,6 +127,7 @@ import {
   CHANNEL_STATUS_LABELS,
 } from '@/features/channels/constants'
 import type { Channel } from '@/features/channels/types'
+import { XAIOAuthFlow } from './components/xai-oauth-flow'
 import {
   activateAccountPoolBinding,
   accountPoolsQueryKeys,
@@ -155,6 +156,7 @@ import {
 } from './api'
 import {
   accountToFormValues,
+  applyXAIOAuthResultToForm,
   allowedChannelTypesForPlatform,
   buildAccountPayload,
   buildAccountImportPayload,
@@ -434,7 +436,21 @@ function capabilityStatusLabel(status?: string) {
     case 'config_error':
       return 'Configuration Error'
     default:
-      return status ? status.replace(/_/g, ' ') : 'Unknown'
+      return status ? status.replaceAll('_', ' ') : 'Unknown'
+  }
+}
+
+function accountOAuthTypeLabel(
+  oauthType: string,
+  t: (key: string) => string
+) {
+  switch (oauthType) {
+    case 'code_assist':
+      return t('Gemini Code Assist')
+    case 'ai_studio':
+      return t('AI Studio')
+    default:
+      return oauthType
   }
 }
 
@@ -1327,13 +1343,10 @@ export function AccountPools() {
                 },
               ],
             }}
-            getRowClassName={(row, { isMobile }) =>
-              row.original.status === 'disabled'
-                ? isMobile
-                  ? DISABLED_ROW_MOBILE
-                  : DISABLED_ROW_DESKTOP
-                : undefined
-            }
+            getRowClassName={(row, { isMobile }) => {
+              if (row.original.status !== 'disabled') return undefined
+              return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+            }}
           />
         </SectionPageLayout.Content>
       </SectionPageLayout>
@@ -1510,6 +1523,7 @@ export function AccountPools() {
         isSubmitting={
           createAccountMutation.isPending || updateAccountMutation.isPending
         }
+        onAccountRefreshed={invalidatePools}
         onOpenChange={(open) => {
           setAccountSheetOpen(open)
           if (!open) setEditingAccount(undefined)
@@ -2126,7 +2140,7 @@ function CapabilityDetectDialog(props: {
       setPoolResult(undefined)
       setPendingContext(null)
       activeContextRef.current = {
-        scope: props.account ? 'account' : 'pool',
+        scope: props.account?.id ? 'account' : 'pool',
         poolID: props.pool?.id ?? 0,
         accountID: props.account?.id,
         channelID: defaultChannelID,
@@ -2289,22 +2303,27 @@ function CapabilityDetectDialog(props: {
     detectMutation.mutate({ values: form, context })
   }
 
+  let dialogDescription = t('Account Pool')
+  if (props.pool) {
+    dialogDescription = props.account
+      ? t('Detect models for {{account}}', {
+          account: props.account.name || `#${props.account.id}`,
+        })
+      : t('Detect models for {{pool}}', { pool: props.pool.name })
+  }
+  let detectButtonLabel = t('Batch Detect Models')
+  if (!hasBindings) {
+    detectButtonLabel = t('No bound channels')
+  } else if (props.account) {
+    detectButtonLabel = t('Detect Models')
+  }
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className='sm:max-w-[640px]'>
         <DialogHeader>
           <DialogTitle>{t('Capability Detection')}</DialogTitle>
-          <DialogDescription>
-            {props.pool
-              ? props.account
-                ? t('Detect models for {{account}}', {
-                    account: props.account.name || `#${props.account.id}`,
-                  })
-                : t('Detect models for {{pool}}', {
-                    pool: props.pool.name,
-                  })
-              : t('Account Pool')}
-          </DialogDescription>
+          <DialogDescription>{dialogDescription}</DialogDescription>
         </DialogHeader>
         <form
           id='account-pool-capability-detect-form'
@@ -2528,11 +2547,7 @@ function CapabilityDetectDialog(props: {
             ) : (
               <Radar data-icon='inline-start' />
             )}
-            {!hasBindings
-              ? t('No bound channels')
-              : props.account
-                ? t('Detect Models')
-                : t('Batch Detect Models')}
+            {detectButtonLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -2819,13 +2834,7 @@ function AccountListSection(props: {
                     />
                     {account.oauth_type ? (
                       <StatusBadge
-                        label={
-                          account.oauth_type === 'code_assist'
-                            ? t('Gemini Code Assist')
-                            : account.oauth_type === 'ai_studio'
-                              ? t('AI Studio')
-                              : account.oauth_type
-                        }
+                        label={accountOAuthTypeLabel(account.oauth_type, t)}
                         variant='neutral'
                         copyable={false}
                       />
@@ -3236,6 +3245,13 @@ function BindingForm(props: {
     props.onSubmit(form)
   }
 
+  let submitIcon = <Link2 data-icon='inline-start' />
+  if (props.submitting) {
+    submitIcon = <Loader2 data-icon='inline-start' className='animate-spin' />
+  } else if (props.binding) {
+    submitIcon = <Save data-icon='inline-start' />
+  }
+
   return (
     <SideDrawerSection>
       <SideDrawerSectionHeader
@@ -3412,13 +3428,7 @@ function BindingForm(props: {
             </Button>
           )}
           <Button type='submit' disabled={props.submitting}>
-            {props.submitting ? (
-              <Loader2 data-icon='inline-start' className='animate-spin' />
-            ) : props.binding ? (
-              <Save data-icon='inline-start' />
-            ) : (
-              <Link2 data-icon='inline-start' />
-            )}
+            {submitIcon}
             {props.binding ? t('Save Changes') : t('Create Draft Binding')}
           </Button>
         </div>
@@ -3755,6 +3765,7 @@ function AccountFormSheet(props: {
   account?: AccountPoolAccount
   proxies: AccountPoolProxy[]
   isSubmitting: boolean
+  onAccountRefreshed: () => void
   onOpenChange: (open: boolean) => void
   onSubmit: (values: AccountPoolAccountFormValues) => void
 }) {
@@ -3827,6 +3838,8 @@ function AccountFormSheet(props: {
   // using OAuth credentials.
   const showOAuthType =
     props.pool?.platform === 'gemini' && form.credential_type === 'oauth'
+  const showXAIOAuth =
+    props.pool?.platform === 'xai' && form.credential_type === 'oauth'
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -4010,6 +4023,19 @@ function AccountFormSheet(props: {
                   </SelectContent>
                 </Select>
               </FieldBlock>
+              {showXAIOAuth && props.pool ? (
+                <XAIOAuthFlow
+                  poolID={props.pool.id}
+                  accountID={props.account?.id}
+                  proxyID={form.proxy_id}
+                  onAccountRefreshed={props.onAccountRefreshed}
+                  onTokenResult={(result) =>
+                    setForm((previous) =>
+                      applyXAIOAuthResultToForm(previous, result)
+                    )
+                  }
+                />
+              ) : null}
               {isGrokWeb ? (
                 <>
                   <FieldBlock

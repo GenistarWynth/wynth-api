@@ -24,6 +24,7 @@ import type {
   AccountPoolAccountStatus,
   AccountPoolBoundChannelCreateRequest,
   AccountPoolCredentialConfigRequest,
+  AccountPoolXAIOAuthTokenResult,
   AccountPoolCapabilityMode,
   AccountPoolCreateRequest,
   AccountPoolCredentialType,
@@ -136,6 +137,14 @@ export type AccountPoolAccountFormValues = {
   cf_clearance: string
   email: string
   refresh_token: string
+  id_token: string
+  client_id: string
+  scope: string
+  token_type: string
+  subject: string
+  team_id: string
+  subscription_tier: string
+  entitlement_status: string
   access_token: string
   token_refresh_token: string
   token_expires_at: number
@@ -281,6 +290,14 @@ export function emptyAccountForm(): AccountPoolAccountFormValues {
     cf_clearance: '',
     email: '',
     refresh_token: '',
+    id_token: '',
+    client_id: '',
+    scope: '',
+    token_type: '',
+    subject: '',
+    team_id: '',
+    subscription_tier: '',
+    entitlement_status: '',
     access_token: '',
     token_refresh_token: '',
     token_expires_at: 0,
@@ -358,12 +375,63 @@ function buildCredentialPayload(
     }
   }
 
-  return {
+  const credential: AccountPoolCredentialConfigRequest = {
     type: values.credential_type || 'api_key',
     oauth_type: values.oauth_type,
     api_key: values.credential_type === 'api_key' ? values.api_key.trim() : '',
     email: values.email.trim(),
     refresh_token: values.refresh_token.trim(),
+  }
+  if (values.credential_type !== 'oauth') {
+    return credential
+  }
+
+  if (values.id_token.trim()) credential.id_token = values.id_token.trim()
+  if (values.client_id.trim()) credential.client_id = values.client_id.trim()
+  if (values.scope.trim()) credential.scope = values.scope.trim()
+  if (values.token_type.trim()) credential.token_type = values.token_type.trim()
+  if (values.subject.trim()) credential.sub = values.subject.trim()
+  if (values.team_id.trim()) credential.team_id = values.team_id.trim()
+  if (values.subscription_tier.trim()) {
+    credential.subscription_tier = values.subscription_tier.trim()
+  }
+  if (values.entitlement_status.trim()) {
+    credential.entitlement_status = values.entitlement_status.trim()
+  }
+  return credential
+}
+
+export function applyXAIOAuthResultToForm(
+  current: AccountPoolAccountFormValues,
+  result: AccountPoolXAIOAuthTokenResult
+): AccountPoolAccountFormValues {
+  const credential = result.credential
+  const tokenState = result.token_state
+  const subject = credential.sub || result.sub || ''
+  const teamID = credential.team_id || result.team_id || ''
+  const email = credential.email || result.email || ''
+
+  return {
+    ...current,
+    name: current.name || email || subject,
+    account_identifier: subject || teamID || current.account_identifier,
+    credential_type: 'oauth',
+    email,
+    refresh_token: credential.refresh_token || tokenState.refresh_token,
+    id_token: credential.id_token || '',
+    client_id: credential.client_id || '',
+    scope: credential.scope || '',
+    token_type: credential.token_type || '',
+    subject,
+    team_id: teamID,
+    subscription_tier:
+      credential.subscription_tier || result.subscription_tier || '',
+    entitlement_status:
+      credential.entitlement_status || result.entitlement_status || '',
+    access_token: tokenState.access_token,
+    token_refresh_token: tokenState.refresh_token,
+    token_expires_at: tokenState.expires_at || result.expires_at,
+    token_version: tokenState.version,
   }
 }
 
@@ -389,6 +457,14 @@ export function accountToFormValues(
     cf_clearance: '',
     email: '',
     refresh_token: '',
+    id_token: '',
+    client_id: '',
+    scope: '',
+    token_type: '',
+    subject: '',
+    team_id: '',
+    subscription_tier: '',
+    entitlement_status: '',
     access_token: '',
     token_refresh_token: '',
     token_expires_at: 0,

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
+
 import type {
   AccountPool,
   AccountPoolAccount,
@@ -24,6 +25,10 @@ import type {
   AccountPoolCapabilityDetectRequest,
   AccountPoolCapabilityDetectResult,
   AccountPoolCapabilityPoolResult,
+  AccountPoolXAIOAuthAuthorization,
+  AccountPoolXAIOAuthAuthorizationRequest,
+  AccountPoolXAIOAuthExchangeRequest,
+  AccountPoolXAIOAuthTokenResult,
   AccountPoolAccountImportRequest,
   AccountPoolAccountImportResponse,
   AccountPoolBinding,
@@ -119,6 +124,42 @@ export async function updateAccountPoolAccount(
   const res = await api.put(
     `/api/account_pools/${poolID}/accounts/${accountID}`,
     data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function generateAccountPoolXAIOAuthAuthorization(
+  poolID: number,
+  data: AccountPoolXAIOAuthAuthorizationRequest
+): Promise<ApiResponse<AccountPoolXAIOAuthAuthorization>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/xai/oauth/authorize`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function exchangeAccountPoolXAIOAuthCode(
+  poolID: number,
+  data: AccountPoolXAIOAuthExchangeRequest
+): Promise<ApiResponse<AccountPoolXAIOAuthTokenResult>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/xai/oauth/exchange`,
+    data,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function refreshAccountPoolXAIOAuthAccount(
+  poolID: number,
+  accountID: number
+): Promise<ApiResponse<AccountPoolAccount>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/accounts/${accountID}/xai/oauth/refresh`,
+    null,
     accountPoolActionConfig()
   )
   return res.data
