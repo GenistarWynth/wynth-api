@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -51,23 +52,25 @@ var (
 )
 
 func loadAccountPoolXAIQuotaProbeWorkerConfig() accountPoolXAIQuotaProbeWorkerConfig {
-	intervalMinutes := common.GetEnvOrDefault(accountPoolXAIQuotaProbeIntervalEnv, int(accountPoolXAIQuotaProbeDefaultInterval/time.Minute))
-	if intervalMinutes <= 0 {
-		intervalMinutes = int(accountPoolXAIQuotaProbeDefaultInterval / time.Minute)
-	}
-	staleMinutes := common.GetEnvOrDefault(accountPoolXAIQuotaProbeStaleEnv, int(accountPoolXAIQuotaProbeDefaultStaleAge/time.Minute))
-	if staleMinutes <= 0 {
-		staleMinutes = int(accountPoolXAIQuotaProbeDefaultStaleAge / time.Minute)
-	}
 	maxPerTick := common.GetEnvOrDefault(accountPoolXAIQuotaProbeMaxPerTickEnv, accountPoolXAIQuotaProbeDefaultMaxPerTick)
 	if maxPerTick <= 0 {
 		maxPerTick = accountPoolXAIQuotaProbeDefaultMaxPerTick
 	}
 	return accountPoolXAIQuotaProbeWorkerConfig{
-		Interval:   time.Duration(intervalMinutes) * time.Minute,
-		StaleAge:   time.Duration(staleMinutes) * time.Minute,
+		Interval:   accountPoolWorkerDurationMinutesFromEnv(accountPoolXAIQuotaProbeIntervalEnv, accountPoolXAIQuotaProbeDefaultInterval),
+		StaleAge:   accountPoolWorkerDurationMinutesFromEnv(accountPoolXAIQuotaProbeStaleEnv, accountPoolXAIQuotaProbeDefaultStaleAge),
 		MaxPerTick: maxPerTick,
 	}
+}
+
+func accountPoolWorkerDurationMinutesFromEnv(name string, fallback time.Duration) time.Duration {
+	fallbackMinutes := int(fallback / time.Minute)
+	minutes := common.GetEnvOrDefault(name, fallbackMinutes)
+	maxMinutes := int64(math.MaxInt64) / int64(time.Minute)
+	if minutes <= 0 || int64(minutes) > maxMinutes {
+		return fallback
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 func accountPoolXAIQuotaCreateProbeEligible(platform string, credential AccountPoolCredentialConfig) bool {

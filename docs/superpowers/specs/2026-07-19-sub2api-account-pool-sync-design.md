@@ -133,10 +133,10 @@ Current Wynth mapping:
 - sub2api's account creation endpoint becomes an exchange payload compatible with existing Wynth create/update endpoints, avoiding duplicate validation and encryption code.
 - Scheduler cache fixes map to Wynth's DB-backed selection and in-process runtime block; they are verified rather than copied.
 
-## Defer after the account-pool Phase 2 slice
+## Follow-up boundaries after the account-pool Phase 2 slice
 
-- Automatic import-time quota probes, a periodic OAuth reconciliation worker, and a multi-replica background sweep remain deferred pending lifecycle/config/HA design. The administrator-triggered probe and reconciler are the first operational slice.
-- A locally estimated rolling 24-hour Free usage window and a dedicated quota-reset editor remain deferred. Wynth now stores authoritative billing/usage observations, but does not invent quota from token claims or incomplete history.
+- Automatic create/import-time quota probes, a periodic OAuth reconciliation worker, and a master-node background sweep are included in the final slice below. Encrypted snapshot CAS keeps persistence safe if multiple masters are misconfigured, although deployments should designate one master to avoid duplicate upstream refresh calls.
+- A locally estimated rolling 24-hour Free usage window is included below. A dedicated quota-reset editor remains deferred; Wynth does not invent authoritative upstream quota from token claims or incomplete local history.
 - Account outbound overrides are intentionally xAI-only. Extending them to OpenAI, Anthropic, Gemini, Vertex, or `grok_web` requires platform-specific review instead of assuming identical authorization/header semantics.
 - SSO import concurrency above one: the upstream flow is sensitive and long-running. The first Wynth slice uses a bounded sequential batch; parallelism can follow measured need.
 
@@ -171,11 +171,11 @@ The deferred account-pool Phase 2 slice is complete on `feat/sub2api-account-poo
 - **Safe per-account outbound overrides:** encrypted xAI credential config may contain an optional `base_url`, `header_override_enabled`, and bounded header map. A validated account value wins over the channel base URL/header of the same name; otherwise the channel remains authoritative. HTTPS/public-address validation, trusted `x.ai` handling, the explicit `ACCOUNT_POOL_XAI_ALLOW_UNSAFE_BASE_URL=true` escape hatch, header count/size limits, and credential/hop-by-hop header deny rules are enforced both on admin writes and at runtime.
 - **Typed credential rejection and reconciliation:** xAI token failures carry only status/code metadata. `invalid_grant`, `invalid_refresh_token`, `token_expired`, and `session_terminated` expire the account with an encrypted credential/token-state CAS; network/5xx failures retain the existing temporary cooldown behavior. `POST /api/account_pools/:id/xai/oauth/reconcile` defaults to dry-run, scans missing/expired/near-expiry/rejected OAuth state, and applies refresh-or-expire actions only if the encrypted snapshot is still current. The React UI always previews the dry-run result before apply.
 
-The following boundaries remain intentional:
+The following boundaries remain intentional after the final deferred slice:
 
 - Normal selection and lease acquisition continue to share `loadAccountPoolSelectionContext`; no sub2api scheduler cache/outbox was introduced.
 - No Grok composer/video generation, signed-video content proxy, or request-owner media gateway was ported.
-- No JWT-claim-only paid eligibility inference, automatic import-time quota probe, rolling local Free estimate, or background reconciliation worker was added.
+- No JWT-claim-only paid eligibility inference, exact historical Free-window reconstruction, or quota-reset editor was added. The local Free estimate remains explicitly source-labeled and read-only.
 - OpenAI, Anthropic, Gemini, Vertex, and `grok_web` outbound behavior does not consume xAI account overrides or media eligibility.
 
 ## Error handling and security
@@ -217,7 +217,7 @@ The final deferred slice keeps the existing account-pool architecture and does n
 ### Read-only rolling 24-hour Free usage estimate
 
 - Wynth's consume logs do not store account-pool account IDs, while `account_pool_accounts` already stores cumulative successful request and token counters. Adding an indexed account ID to the large log table would be a new cross-database migration and write-path contract, so it is intentionally excluded from this slice.
-- Known Free-tier quota snapshots are enriched at read/probe time with `free_usage_24h_estimate`. Accounts younger than 24 hours report the locally observed cumulative counters since account creation. Older accounts with recent activity report a 24-hour lifetime-average projection; accounts whose last successful use predates the window report zero. The object includes the source, window/coverage seconds, request and token counts, and an `estimated` flag.
+- Known Free-tier quota snapshots are enriched at read/probe time with `free_usage_24h_estimate`. Accounts younger than 24 hours report the locally observed cumulative counters since account creation. Older accounts with recent activity report a 24-hour lifetime-average projection; accounts whose last successful use predates the window report zero. The object includes the source, window/observation seconds, request and token counts, and an `estimated` flag.
 - The estimate is never used for scheduling, cooldowns, billing, settlement, or quota resets, and it is not persisted into the durable upstream snapshot. It measures Wynth-observed account-pool traffic only and cannot reconstruct requests made outside Wynth or exact historical bursts before per-request account-linked logs exist.
 
 ### Alternatives considered

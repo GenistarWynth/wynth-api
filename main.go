@@ -273,6 +273,8 @@ func runApplication() (runErr error) {
 	accountPoolWorkerCtx, stopAccountPoolWorkers := context.WithCancel(context.Background())
 	accountPoolCapabilityWorkerDone := service.StartAccountPoolCapabilityAutoDetectWorker(accountPoolWorkerCtx)
 	accountPoolProxyWorkerDone := service.StartAccountPoolProxyProber(accountPoolWorkerCtx, 0)
+	accountPoolXAIQuotaWorkerDone := service.StartAccountPoolXAIQuotaProbeWorker(accountPoolWorkerCtx)
+	accountPoolXAIOAuthReconcileWorkerDone := service.StartAccountPoolXAIOAuthReconcileWorker(accountPoolWorkerCtx)
 
 	// Per-channel monitor batch: master-only, sync.Once-guarded ticker that every
 	// minute probes channels whose per-channel monitor is due and records their
@@ -386,6 +388,8 @@ func runApplication() (runErr error) {
 		workerDone: []<-chan struct{}{
 			accountPoolCapabilityWorkerDone,
 			accountPoolProxyWorkerDone,
+			accountPoolXAIQuotaWorkerDone,
+			accountPoolXAIOAuthReconcileWorkerDone,
 		},
 		flush: func() error {
 			if common.DataExportEnabled {

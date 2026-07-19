@@ -152,6 +152,15 @@ func TestAccountPoolXAIQuotaWorkerConfigUsesPositiveOverridesAndDefaults(t *test
 		assert.Equal(t, accountPoolXAIQuotaProbeDefaultStaleAge, config.StaleAge)
 		assert.Equal(t, accountPoolXAIQuotaProbeDefaultMaxPerTick, config.MaxPerTick)
 	})
+
+	t.Run("overflowing durations use defaults", func(t *testing.T) {
+		t.Setenv(accountPoolXAIQuotaProbeIntervalEnv, "9223372036854775807")
+		t.Setenv(accountPoolXAIQuotaProbeStaleEnv, "9223372036854775807")
+
+		config := loadAccountPoolXAIQuotaProbeWorkerConfig()
+		assert.Equal(t, accountPoolXAIQuotaProbeDefaultInterval, config.Interval)
+		assert.Equal(t, accountPoolXAIQuotaProbeDefaultStaleAge, config.StaleAge)
+	})
 }
 
 func TestRunDueAccountPoolXAIQuotaProbeSkipsOverlappingTick(t *testing.T) {

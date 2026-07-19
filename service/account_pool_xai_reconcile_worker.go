@@ -32,14 +32,10 @@ var (
 )
 
 func loadAccountPoolXAIOAuthReconcileWorkerInterval() time.Duration {
-	minutes := common.GetEnvOrDefault(
+	return accountPoolWorkerDurationMinutesFromEnv(
 		accountPoolXAIOAuthReconcileIntervalEnv,
-		int(accountPoolXAIOAuthReconcileDefaultInterval/time.Minute),
+		accountPoolXAIOAuthReconcileDefaultInterval,
 	)
-	if minutes <= 0 {
-		return accountPoolXAIOAuthReconcileDefaultInterval
-	}
-	return time.Duration(minutes) * time.Minute
 }
 
 func listDueAccountPoolXAIOAuthReconcilePoolIDs(ctx context.Context, now int64, window int64) ([]int, error) {

@@ -103,6 +103,9 @@ func TestAccountPoolXAIOAuthReconcileWorkerIntervalUsesPositiveOverride(t *testi
 
 	t.Setenv(accountPoolXAIOAuthReconcileIntervalEnv, "0")
 	assert.Equal(t, accountPoolXAIOAuthReconcileDefaultInterval, loadAccountPoolXAIOAuthReconcileWorkerInterval())
+
+	t.Setenv(accountPoolXAIOAuthReconcileIntervalEnv, "9223372036854775807")
+	assert.Equal(t, accountPoolXAIOAuthReconcileDefaultInterval, loadAccountPoolXAIOAuthReconcileWorkerInterval())
 }
 
 func createAccountPoolXAIReconcileWorkerPool(t *testing.T, service AccountPoolService, name string, platform string) model.AccountPool {

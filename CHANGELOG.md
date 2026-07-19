@@ -36,6 +36,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - Added billing-backed xAI media eligibility so image generation/edit selection skips known-ineligible accounts while unknown eligibility and chat traffic remain unaffected.
 - Added encrypted, xAI-only per-account base URL and header overrides with account-over-channel precedence, SSRF validation, dangerous-header denial, bounded input, and an explicit unsafe environment escape hatch.
 - Added an administrator xAI OAuth reconciler that defaults to dry-run, previews missing/expired/near-expiry/rejected credential actions in the React UI, and applies refresh/expire operations with encrypted snapshot CAS guards.
+- Added best-effort asynchronous xAI quota probes after OAuth account creation (including post-exchange create and successful SSO import items) plus a master-node periodic stale-snapshot sweep. Defaults are 15-minute ticks, 60-minute staleness, and 10 accounts per tick; `ACCOUNT_POOL_XAI_QUOTA_PROBE_INTERVAL_MINUTES`, `ACCOUNT_POOL_XAI_QUOTA_PROBE_STALE_MINUTES`, and `ACCOUNT_POOL_XAI_QUOTA_PROBE_MAX_PER_TICK` accept positive overrides.
+- Added an apply-mode master-node xAI OAuth reconciliation sweep with immediate startup execution and a five-minute default interval (`ACCOUNT_POOL_XAI_OAUTH_RECONCILE_INTERVAL_MINUTES`). It refreshes missing/near-expiry access when a refresh token exists and expires only permanently unusable/rejected credentials.
+- Added `free_usage_24h_estimate` to known-Free xAI quota snapshots returned by probe/read/account-list APIs. The source-labeled object uses Wynth account counters since creation or a lifetime-rate projection and is never persisted into upstream snapshots or used for billing/scheduling.
 
 ### Fixed — Account Pool (号池)
 - xAI runtime and administrator refresh now honor the OAuth client ID captured during authorization and prefer the newest rotated refresh token in token state, while preserving default-client and stored-credential fallbacks for existing accounts.
@@ -45,7 +48,8 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ### Notes — Account Pool (号池)
 - Existing temporary-disable, overload, request-quota, per-model cooldown, affinity, retry, and lease scheduling already cover the corresponding newer sub2api pool-mode fixes.
-- Automatic import-time probes, rolling local Free-window estimation, periodic/background reconciliation, cross-platform account overrides, and sub2api's Grok video/content-proxy architecture remain deferred or out of scope.
+- Periodic xAI workers use the existing master-node convention and process overlap guards; encrypted credential/token-state CAS prevents stale database writes across multiple masters, but one designated master is recommended to avoid duplicate upstream refresh calls.
+- Rolling Free usage is a best-effort estimate from cumulative Wynth account counters because consume logs do not carry account-pool account IDs. It cannot reconstruct external xAI usage or exact historical bursts; a full quota-reset editor, cross-platform account overrides, and sub2api's Grok video/content-proxy architecture remain deferred or out of scope.
 
 ## [v1.0.0-rc.35] - 2026-07-18
 
