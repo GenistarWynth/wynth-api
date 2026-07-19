@@ -121,10 +121,9 @@
 - Modify: `CHANGELOG.md`
 - Update: `docs/superpowers/specs/2026-07-19-sub2api-account-pool-sync-design.md`
 
-- [ ] Add an Account Pool changelog entry covering OAuth login, refresh, SSO import, import aliases, and deliberate deferrals.
-- [ ] Run `gofmt` on changed Go files and targeted Go tests, followed by `go test ./model ./service ./controller ./relay ./middleware ./types`.
-- [ ] Run account-pool tests with `-count=3`, `go vet` on affected Go packages, frontend targeted tests, typecheck, lint, i18n validation, and production build.
-- [ ] Inspect `git diff --check`, staged secrets/URLs, and final diff scope.
-- [ ] Commit `chore(release): document grok oauth account pool sync`.
+- [x] Add an Account Pool changelog entry covering OAuth login, refresh, SSO import, import aliases, and deliberate deferrals.
+- [x] Run `gofmt` on changed Go files and targeted Go tests, followed by `go test ./model ./service ./controller ./relay ./middleware ./types`.
+- [x] Run account-pool tests with `-count=3`, `go vet` on affected Go packages, frontend targeted tests, typecheck, lint, i18n validation, and production build.
+- [x] Inspect `git diff --check`, staged secrets/URLs, and final diff scope.
+- [x] Commit `chore(release): document grok oauth account pool sync`.
 - [ ] Merge the feature branch into `main`, push the branch and main, and prepare Chinese-friendly release notes. Create a tag only if all verification is solid and a release version is explicitly selected.
-

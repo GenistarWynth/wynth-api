@@ -146,6 +146,32 @@ Current Wynth mapping:
 - Grok composer/video generation, edits/extensions, signed-video same-origin proxying, media pricing, or request-owner content authorization.
 - Wholesale OpenAI/Claude/Gemini gateway changes, upstream-source sync, channel auto-priority, or channel foundation replacement.
 
+## Implementation status
+
+Phase 1 is complete on `feat/sub2api-account-pool-sync-2026-07`:
+
+- `service/xai_oauth.go` now provides validated loopback/HTTPS redirects, PKCE authorization, a 30-minute single-use session store, callback URL/query/bare-code parsing, proxy-bound code exchange, claim extraction, client-aware refresh, and Wynth credential/token-state conversion.
+- `service/xai_sso_oauth.go` implements the trusted, redirect-capped, body-limited xAI device flow used by bounded SSO-to-OAuth import.
+- Pool-scoped Gin routes expose authorize, exchange, saved-account refresh, and SSO import operations. Existing account create/update remains the only CRUD and encryption boundary.
+- The sub2api importer accepts the current `platform: grok` OAuth export shape, the `rt` alias, RFC3339 expiry, and xAI identity/entitlement metadata. xAI exports use sub2api's `grok` platform name, preserve that metadata, and continue to redact ID/access/refresh tokens by default.
+- The React account editor contains an xAI-only OAuth panel. It opens the authorization page, accepts a complete callback URL or bare code, fills the existing account form without browser persistence, retains manual token entry as a fallback, and refreshes saved accounts in place.
+- Account list responses expose only the non-secret credential type, allowing refresh-token-only legacy xAI accounts to reopen in the OAuth editor while credential decryption failures remain visible for administrative recovery.
+- All new administrator copy is translated in `en`, `zh`, `fr`, `ja`, `ru`, and `vi` using the repository i18n scripts.
+
+The Phase 2 audit produced two narrow fixes:
+
+- Runtime and administrator xAI refresh use the client ID stored with the encrypted credential. Administrator refresh prefers the latest token-state refresh token, so a prior runtime rotation cannot leave it using an invalid stale token.
+- Administrator refresh persists rotations with a credential/token-state compare-and-swap guard. A concurrent runtime or administrator winner cannot be overwritten by an older response.
+- An OAuth account whose access token is expired and whose latest database state has no refresh token is marked `expired`, so it cannot fail every request indefinitely. The expiration update matches the loaded encrypted credential and token state, so a concurrent rotation wins safely; channel-test requests remain mutation-free.
+
+The remaining Phase 2 candidates were deliberately not force-fitted:
+
+- Normal selection and lease acquisition already share `loadAccountPoolSelectionContext`, so status, request quota, global/temp/overload cooldowns, runtime blocks, supported models, mapping, and per-model cooldown are applied consistently.
+- xAI quota readiness and Free-tier rolling estimates need an authoritative Wynth quota probe and durable snapshot schema; generic capability detection is not an equivalent data source.
+- Paid-media eligibility cannot be inferred safely from token claims. Wynth's xAI image relay has no equivalent of sub2api's billing-backed eligibility snapshot, and the sub2api video/cache architecture remains out of scope.
+- Per-account base URLs and header overrides conflict with Wynth's channel-owned upstream policy and require an explicit precedence, SSRF, redirect, and denied-header design.
+- Permanent `invalid_grant` classification and proactive reconciliation need a typed, secret-safe OAuth error contract plus multi-worker refresh-race recovery; the shipped missing-refresh invariant is deterministic without introducing that larger lifecycle.
+
 ## Error handling and security
 
 - Authorization and token endpoints are fixed to `auth.x.ai`; no request may supply an outbound OAuth endpoint.
@@ -159,7 +185,6 @@ Current Wynth mapping:
 ## Testing and acceptance
 
 - Service tests cover PKCE parameters, callback parsing, session expiry/single use, state mismatch, proxy binding, token form contracts, refresh rotation, claims, redirect validation, SSO normalization/device flow, and import aliases.
-- Controller tests cover pool platform validation, success envelopes, invalid state, encrypted account refresh persistence, and SSO import partial failure with fakes/httptest only.
-- Frontend tests cover API paths and form-state application of exchanged credentials.
+- Service tests cover invalid-state rejection and encrypted account refresh persistence; controller tests cover pool platform validation, success envelopes, and SSO import secret redaction with fakes/httptest only.
+- Frontend tests cover form-state application and serialization of exchanged credentials; the typed API paths are covered by TypeScript checking and the production build.
 - Required verification: focused Go packages, account-pool test repeats, frontend typecheck/targeted tests/lint/build, secret scan, and changelog review.
-
