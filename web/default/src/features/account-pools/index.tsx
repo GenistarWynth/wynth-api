@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   ColumnDef,
@@ -41,15 +40,33 @@ import {
   Gauge,
   RefreshCw,
 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useMediaQuery } from '@/hooks'
-import { getUserModels } from '@/lib/api'
-import { formatTimestamp } from '@/lib/format'
-import { cn } from '@/lib/utils'
+
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  DISABLED_ROW_DESKTOP,
+  DISABLED_ROW_MOBILE,
+  DataTablePage,
+  useDataTable,
+} from '@/components/data-table'
+import {
+  SideDrawerSection,
+  SideDrawerSectionHeader,
+  sideDrawerContentClassName,
+  sideDrawerFooterClassName,
+  sideDrawerFormClassName,
+  sideDrawerHeaderClassName,
+  sideDrawerSwitchItemClassName,
+} from '@/components/drawer-layout'
+import { SectionPageLayout } from '@/components/layout'
+import { LongText } from '@/components/long-text'
+import { MultiSelect } from '@/components/multi-select'
+import { StatusBadge, type StatusVariant } from '@/components/status-badge'
+import { TableId } from '@/components/table-id'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   Dialog,
   DialogClose,
@@ -102,26 +119,6 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  DISABLED_ROW_DESKTOP,
-  DISABLED_ROW_MOBILE,
-  DataTablePage,
-  useDataTable,
-} from '@/components/data-table'
-import {
-  SideDrawerSection,
-  SideDrawerSectionHeader,
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-  sideDrawerSwitchItemClassName,
-} from '@/components/drawer-layout'
-import { SectionPageLayout } from '@/components/layout'
-import { LongText } from '@/components/long-text'
-import { MultiSelect } from '@/components/multi-select'
-import { StatusBadge, type StatusVariant } from '@/components/status-badge'
-import { TableId } from '@/components/table-id'
 import { getChannels } from '@/features/channels/api'
 import {
   CHANNEL_TYPES,
@@ -129,7 +126,11 @@ import {
   CHANNEL_STATUS_LABELS,
 } from '@/features/channels/constants'
 import type { Channel } from '@/features/channels/types'
-import { XAIOAuthFlow } from './components/xai-oauth-flow'
+import { useMediaQuery } from '@/hooks'
+import { getUserModels } from '@/lib/api'
+import { formatTimestamp } from '@/lib/format'
+import { cn } from '@/lib/utils'
+
 import {
   activateAccountPoolBinding,
   accountPoolsQueryKeys,
@@ -159,6 +160,7 @@ import {
   updateAccountPoolBinding,
   updateAccountPoolProxy,
 } from './api'
+import { XAIOAuthFlow } from './components/xai-oauth-flow'
 import {
   accountToFormValues,
   applyXAIOAuthResultToForm,
@@ -474,10 +476,7 @@ function capabilityStatusLabel(status?: string) {
   }
 }
 
-function accountOAuthTypeLabel(
-  oauthType: string,
-  t: (key: string) => string
-) {
+function accountOAuthTypeLabel(oauthType: string, t: (key: string) => string) {
   switch (oauthType) {
     case 'code_assist':
       return t('Gemini Code Assist')
@@ -623,7 +622,9 @@ function bindingToFormValues(binding: AccountPoolBinding): BindingFormValues {
     fixed_models_text: Array.isArray(policy.fixed_models)
       ? policy.fixed_models.join(', ')
       : '',
-    schedule_policy: normalizeAccountPoolSchedulePolicy(binding.schedule_policy),
+    schedule_policy: normalizeAccountPoolSchedulePolicy(
+      binding.schedule_policy
+    ),
     account_retry_times: binding.account_retry_times,
     max_user_concurrency: binding.max_user_concurrency,
   }
@@ -672,7 +673,11 @@ function FieldBlock(props: {
   )
 }
 
-function BooleanBadge(props: { active: boolean; falseLabel: string; trueLabel: string }) {
+function BooleanBadge(props: {
+  active: boolean
+  falseLabel: string
+  trueLabel: string
+}) {
   const { t } = useTranslation()
 
   return (
@@ -1316,7 +1321,10 @@ export function AccountPools() {
       if (!selectedPoolID) {
         throw new Error(t('Select an account pool first'))
       }
-      return createAccountPoolBinding(selectedPoolID, buildBindingPayload(values))
+      return createAccountPoolBinding(
+        selectedPoolID,
+        buildBindingPayload(values)
+      )
     },
     onSuccess: (result) => {
       if (!result.success) {
@@ -1457,10 +1465,11 @@ export function AccountPools() {
     globalFilterFn: (row, _columnId, filterValue) => {
       const searchValue = String(filterValue).toLowerCase()
       const pool = row.original
-      return [pool.name, pool.platform, pool.status, pool.remark].some((value) =>
-        String(value || '')
-          .toLowerCase()
-          .includes(searchValue)
+      return [pool.name, pool.platform, pool.status, pool.remark].some(
+        (value) =>
+          String(value || '')
+            .toLowerCase()
+            .includes(searchValue)
       )
     },
     columnVisibilityStorageKey: 'account-pools-table-columns',
@@ -1518,7 +1527,9 @@ export function AccountPools() {
         open={poolSheetOpen}
         pool={editingPool}
         proxies={proxiesQuery.data ?? EMPTY_PROXIES}
-        isSubmitting={createPoolMutation.isPending || updatePoolMutation.isPending}
+        isSubmitting={
+          createPoolMutation.isPending || updatePoolMutation.isPending
+        }
         onOpenChange={(open) => {
           setPoolSheetOpen(open)
           if (!open) setEditingPool(undefined)
@@ -1695,9 +1706,14 @@ export function AccountPools() {
         title={t('Delete binding?')}
         desc={
           deletingBinding
-            ? t('Delete binding for channel {{name}}. The channel itself will be kept.', {
-                name: deletingBinding.channel_name || `#${deletingBinding.channel_id}`,
-              })
+            ? t(
+                'Delete binding for channel {{name}}. The channel itself will be kept.',
+                {
+                  name:
+                    deletingBinding.channel_name ||
+                    `#${deletingBinding.channel_id}`,
+                }
+              )
             : ''
         }
         destructive
@@ -1803,7 +1819,9 @@ export function AccountPools() {
         open={proxySheetOpen}
         proxy={editingProxy}
         proxies={proxiesQuery.data ?? EMPTY_PROXIES}
-        isSubmitting={createProxyMutation.isPending || updateProxyMutation.isPending}
+        isSubmitting={
+          createProxyMutation.isPending || updateProxyMutation.isPending
+        }
         onOpenChange={(open) => {
           setProxySheetOpen(open)
           if (!open) setEditingProxy(undefined)
@@ -2062,10 +2080,7 @@ function PoolFormSheet(props: {
                       <SelectContent alignItemWithTrigger={false}>
                         <SelectGroup>
                           {capabilityModeOptions.map((option) => (
-                            <SelectItem
-                              key={option.value}
-                              value={option.value}
-                            >
+                            <SelectItem key={option.value} value={option.value}>
                               {option.label}
                             </SelectItem>
                           ))}
@@ -2193,7 +2208,8 @@ function BoundChannelDialog(props: {
     () =>
       allowedChannelTypesForPlatform(platform).map((type) => ({
         value: String(type),
-        label: CHANNEL_TYPES[type as keyof typeof CHANNEL_TYPES] ?? String(type),
+        label:
+          CHANNEL_TYPES[type as keyof typeof CHANNEL_TYPES] ?? String(type),
       })),
     [platform]
   )
@@ -2340,7 +2356,8 @@ function CapabilityDetectDialog(props: {
   )
   const [singleResult, setSingleResult] =
     useState<AccountPoolCapabilityDetectResult>()
-  const [poolResult, setPoolResult] = useState<AccountPoolCapabilityPoolResult>()
+  const [poolResult, setPoolResult] =
+    useState<AccountPoolCapabilityPoolResult>()
   const [pendingContext, setPendingContext] =
     useState<CapabilityDetectRequestContext | null>(null)
   const activeContextRef = useRef<CapabilityDetectRequestContext | null>(null)
@@ -2355,15 +2372,17 @@ function CapabilityDetectDialog(props: {
     () =>
       props.bindings.map((binding) => ({
         value: String(binding.channel_id),
-        label:
-          binding.channel_name || `${t('Channel')} #${binding.channel_id}`,
+        label: binding.channel_name || `${t('Channel')} #${binding.channel_id}`,
       })),
     [props.bindings, t]
   )
   const accountNameByID = useMemo(
     () =>
       new Map(
-        props.accounts.map((account) => [account.id, account.name || `#${account.id}`])
+        props.accounts.map((account) => [
+          account.id,
+          account.name || `#${account.id}`,
+        ])
       ),
     [props.accounts]
   )
@@ -2400,10 +2419,7 @@ function CapabilityDetectDialog(props: {
     Error,
     CapabilityDetectMutationInput
   >({
-    mutationFn: async ({
-      values,
-      context,
-    }: CapabilityDetectMutationInput) => {
+    mutationFn: async ({ values, context }: CapabilityDetectMutationInput) => {
       if (!context.poolID) {
         throw new Error(t('Select an account pool first'))
       }
@@ -2425,12 +2441,19 @@ function CapabilityDetectDialog(props: {
           request
         )
         return {
-          context: { ...context, scope: 'account', accountID: context.accountID },
+          context: {
+            ...context,
+            scope: 'account',
+            accountID: context.accountID,
+          },
           response,
         }
       }
 
-      const response = await detectAccountPoolCapabilities(context.poolID, request)
+      const response = await detectAccountPoolCapabilities(
+        context.poolID,
+        request
+      )
       return {
         context: { ...context, scope: 'pool' },
         response,
@@ -2449,7 +2472,10 @@ function CapabilityDetectDialog(props: {
       })
 
       if (
-        !isActiveCapabilityDetectContext(activeContextRef.current, payload.context)
+        !isActiveCapabilityDetectContext(
+          activeContextRef.current,
+          payload.context
+        )
       ) {
         return
       }
@@ -2486,8 +2512,7 @@ function CapabilityDetectDialog(props: {
     },
     onSettled: (_payload, _error, variables) => {
       setPendingContext((previous) =>
-        previous &&
-        isActiveCapabilityDetectContext(previous, variables.context)
+        previous && isActiveCapabilityDetectContext(previous, variables.context)
           ? null
           : previous
       )
@@ -2496,7 +2521,7 @@ function CapabilityDetectDialog(props: {
 
   const isCurrentDetectionPending = Boolean(
     pendingContext &&
-      isActiveCapabilityDetectContext(activeContextRef.current, pendingContext)
+    isActiveCapabilityDetectContext(activeContextRef.current, pendingContext)
   )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -2531,7 +2556,8 @@ function CapabilityDetectDialog(props: {
       poolID: props.pool.id,
       accountID: props.account?.id,
       channelID: form.channel_id,
-      dialogNonce: activeContextRef.current?.dialogNonce ?? dialogNonceRef.current,
+      dialogNonce:
+        activeContextRef.current?.dialogNonce ?? dialogNonceRef.current,
       requestNonce: requestNonceRef.current + 1,
     }
 
@@ -2815,12 +2841,10 @@ function LocalQuotaResetDialog(props: {
 
   const canForceProbe = Boolean(
     props.account &&
-      canForceProbeAfterLocalQuotaReset(props.poolPlatform, props.account)
+    canForceProbeAfterLocalQuotaReset(props.poolPlatform, props.account)
   )
   const hasAction =
-    request.clear_cooldown ||
-    request.reset_request_quota ||
-    request.force_probe
+    request.clear_cooldown || request.reset_request_quota || request.force_probe
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -2841,7 +2865,9 @@ function LocalQuotaResetDialog(props: {
           }}
         >
           <FieldSet>
-            <FieldLegend variant='label'>{t('Local reset options')}</FieldLegend>
+            <FieldLegend variant='label'>
+              {t('Local reset options')}
+            </FieldLegend>
             <FieldGroup>
               <Field orientation='horizontal'>
                 <Checkbox
@@ -3066,7 +3092,10 @@ function PoolDetailsSheet(props: {
   )
 }
 
-function SummaryItem(props: { label: React.ReactNode; value: React.ReactNode }) {
+function SummaryItem(props: {
+  label: React.ReactNode
+  value: React.ReactNode
+}) {
   return (
     <div className='flex min-w-0 flex-col gap-1'>
       <span className='text-muted-foreground text-xs'>{props.label}</span>
@@ -3129,7 +3158,9 @@ function AccountListSection(props: {
             disabled={!props.hasBindings}
           >
             <Radar data-icon='inline-start' />
-            {props.hasBindings ? t('Batch Detect Models') : t('No bound channels')}
+            {props.hasBindings
+              ? t('Batch Detect Models')
+              : t('No bound channels')}
           </Button>
           <Button
             type='button'
@@ -3303,7 +3334,8 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
         )}
       </div>
       <div className='text-muted-foreground'>
-        {t('TTFT')}: {formatOptionalMilliseconds(account.last_first_token_latency_ms)}
+        {t('TTFT')}:{' '}
+        {formatOptionalMilliseconds(account.last_first_token_latency_ms)}
         {' / '}
         {t('Avg')} {formatOptionalMilliseconds(averageFirstTokenLatency)}
       </div>
@@ -3344,9 +3376,9 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
           </div>
           {quota.usage24h ? (
             <div>
-              {t('Free usage (24h)')}: {formatOptionalCount(quota.usage24h.requests)}{' '}
-              {t('requests')} / {formatOptionalCount(quota.usage24h.tokens)}{' '}
-              {t('tokens')} ·{' '}
+              {t('Free usage (24h)')}:{' '}
+              {formatOptionalCount(quota.usage24h.requests)} {t('requests')} /{' '}
+              {formatOptionalCount(quota.usage24h.tokens)} {t('tokens')} ·{' '}
               {quota.usage24h.source === 'logs_24h'
                 ? t('Logs (last 24 hours)')
                 : t('Counter estimate')}
@@ -3507,7 +3539,9 @@ function BindingSection(props: {
                   </TableCell>
                   <TableCell>
                     <StatusBadge
-                      label={binding.runtime_enabled ? t('Routed') : t('Not Routed')}
+                      label={
+                        binding.runtime_enabled ? t('Routed') : t('Not Routed')
+                      }
                       variant={binding.runtime_enabled ? 'success' : 'neutral'}
                       copyable={false}
                     />
@@ -3643,30 +3677,27 @@ function BindingForm(props: {
       ),
     [props.binding?.id, props.bindings]
   )
-  const availableBindingChannels = useMemo(
-    () => {
-      const channels = disabledChannels
-        .filter((channel) => !boundChannelIDs.has(channel.id))
-        .map((channel) => ({
-          id: channel.id,
-          name: channel.name,
-        }))
-      if (
-        props.binding &&
-        !channels.some((channel) => channel.id === props.binding?.channel_id)
-      ) {
-        return [
-          {
-            id: props.binding.channel_id,
-            name: props.binding.channel_name || `#${props.binding.channel_id}`,
-          },
-          ...channels,
-        ]
-      }
-      return channels
-    },
-    [boundChannelIDs, disabledChannels, props.binding]
-  )
+  const availableBindingChannels = useMemo(() => {
+    const channels = disabledChannels
+      .filter((channel) => !boundChannelIDs.has(channel.id))
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+      }))
+    if (
+      props.binding &&
+      !channels.some((channel) => channel.id === props.binding?.channel_id)
+    ) {
+      return [
+        {
+          id: props.binding.channel_id,
+          name: props.binding.channel_name || `#${props.binding.channel_id}`,
+        },
+        ...channels,
+      ]
+    }
+    return channels
+  }, [boundChannelIDs, disabledChannels, props.binding])
 
   useEffect(() => {
     if (disabledChannelsQuery.error) {
@@ -4158,7 +4189,9 @@ function AccountImportDialog(props: {
           <FieldBlock
             label={t('Default Supported Models')}
             htmlFor='account-pool-import-default-models'
-            description={t('Used only when the imported account has no model list.')}
+            description={t(
+              'Used only when the imported account has no model list.'
+            )}
           >
             <MultiSelect
               id='account-pool-import-default-models'
@@ -4182,7 +4215,9 @@ function AccountImportDialog(props: {
           <FieldBlock
             label={t('Import Content')}
             htmlFor='account-pool-import-content'
-            description={t('Paste sub2api account export JSON or CPA YAML/JSON.')}
+            description={t(
+              'Paste sub2api account export JSON or CPA YAML/JSON.'
+            )}
           >
             <Textarea
               id='account-pool-import-content'
@@ -4320,7 +4355,9 @@ function AccountFormSheet(props: {
           <SheetTitle>
             {props.account ? t('Edit Account') : t('Add Account')}
           </SheetTitle>
-          <SheetDescription>{props.pool?.name || t('Account Pool')}</SheetDescription>
+          <SheetDescription>
+            {props.pool?.name || t('Account Pool')}
+          </SheetDescription>
         </SheetHeader>
         <form
           id='account-pool-account-form'
@@ -4543,123 +4580,140 @@ function AccountFormSheet(props: {
                 </>
               ) : (
                 <>
-              {showOAuthType ? (
-                <FieldBlock
-                  label={t('OAuth Type')}
-                  htmlFor='account-pool-account-oauth-type'
-                  description={t(
-                    'Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.'
-                  )}
-                >
-                  <Select
-                    items={oauthTypeOptions}
-                    value={form.oauth_type}
-                    onValueChange={(value) =>
-                      setField('oauth_type', value ?? '')
-                    }
+                  {showOAuthType ? (
+                    <FieldBlock
+                      label={t('OAuth Type')}
+                      htmlFor='account-pool-account-oauth-type'
+                      description={t(
+                        'Code Assist routes through the cloudcode-pa Code Assist API; AI Studio uses the public Generative Language API.'
+                      )}
+                    >
+                      <Select
+                        items={oauthTypeOptions}
+                        value={form.oauth_type}
+                        onValueChange={(value) =>
+                          setField('oauth_type', value ?? '')
+                        }
+                      >
+                        <SelectTrigger id='account-pool-account-oauth-type'>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            {oauthTypeOptions.map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </FieldBlock>
+                  ) : null}
+                  <FieldBlock
+                    label={t('API Key')}
+                    htmlFor='account-pool-account-api-key'
                   >
-                    <SelectTrigger id='account-pool-account-oauth-type'>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        {oauthTypeOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </FieldBlock>
-              ) : null}
-              <FieldBlock label={t('API Key')} htmlFor='account-pool-account-api-key'>
-                <Input
-                  id='account-pool-account-api-key'
-                type='password'
-                value={form.api_key}
-                onChange={(event) => setField('api_key', event.target.value)}
-                placeholder={
-                  props.account?.has_credential ? t('Leave blank to keep') : ''
-                }
-              />
-            </FieldBlock>
-              <FieldBlock label={t('Email')} htmlFor='account-pool-account-email'>
-                <Input
-                  id='account-pool-account-email'
-                  value={form.email}
-                  onChange={(event) => setField('email', event.target.value)}
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Refresh Token')}
-                htmlFor='account-pool-account-refresh-token'
-              >
-                <Input
-                  id='account-pool-account-refresh-token'
-                  type='password'
-                  value={form.refresh_token}
-                  onChange={(event) =>
-                    setField('refresh_token', event.target.value)
-                  }
-                  placeholder={
-                    props.account?.has_credential
-                      ? t('Leave blank to keep')
-                      : ''
-                  }
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Access Token')}
-                htmlFor='account-pool-account-access-token'
-              >
-                <Input
-                  id='account-pool-account-access-token'
-                  type='password'
-                  value={form.access_token}
-                  onChange={(event) =>
-                    setField('access_token', event.target.value)
-                  }
-                  placeholder={
-                    props.account?.has_token ? t('Leave blank to keep') : ''
-                  }
-                />
-              </FieldBlock>
-              <FieldBlock
-                label={t('Token Refresh Token')}
-                htmlFor='account-pool-account-token-refresh-token'
-              >
-                <Input
-                  id='account-pool-account-token-refresh-token'
-                  type='password'
-                  value={form.token_refresh_token}
-                  onChange={(event) =>
-                    setField('token_refresh_token', event.target.value)
-                  }
-                  placeholder={
-                    props.account?.has_token ? t('Leave blank to keep') : ''
-                  }
-                />
-              </FieldBlock>
-              <NumericField
-                id='account-pool-account-token-expires-at'
-                label={t('Token Expires At')}
-                value={form.token_expires_at}
-                onChange={(value) => setField('token_expires_at', value)}
-              />
-              <NumericField
-                id='account-pool-account-token-version'
-                label={t('Token Version')}
-                value={form.token_version}
-                onChange={(value) => setField('token_version', value)}
-              />
+                    <Input
+                      id='account-pool-account-api-key'
+                      type='password'
+                      value={form.api_key}
+                      onChange={(event) =>
+                        setField('api_key', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_credential
+                          ? t('Leave blank to keep')
+                          : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Email')}
+                    htmlFor='account-pool-account-email'
+                  >
+                    <Input
+                      id='account-pool-account-email'
+                      value={form.email}
+                      onChange={(event) =>
+                        setField('email', event.target.value)
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Refresh Token')}
+                    htmlFor='account-pool-account-refresh-token'
+                  >
+                    <Input
+                      id='account-pool-account-refresh-token'
+                      type='password'
+                      value={form.refresh_token}
+                      onChange={(event) =>
+                        setField('refresh_token', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_credential
+                          ? t('Leave blank to keep')
+                          : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Access Token')}
+                    htmlFor='account-pool-account-access-token'
+                  >
+                    <Input
+                      id='account-pool-account-access-token'
+                      type='password'
+                      value={form.access_token}
+                      onChange={(event) =>
+                        setField('access_token', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_token ? t('Leave blank to keep') : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t('Token Refresh Token')}
+                    htmlFor='account-pool-account-token-refresh-token'
+                  >
+                    <Input
+                      id='account-pool-account-token-refresh-token'
+                      type='password'
+                      value={form.token_refresh_token}
+                      onChange={(event) =>
+                        setField('token_refresh_token', event.target.value)
+                      }
+                      placeholder={
+                        props.account?.has_token ? t('Leave blank to keep') : ''
+                      }
+                    />
+                  </FieldBlock>
+                  <NumericField
+                    id='account-pool-account-token-expires-at'
+                    label={t('Token Expires At')}
+                    value={form.token_expires_at}
+                    onChange={(value) => setField('token_expires_at', value)}
+                  />
+                  <NumericField
+                    id='account-pool-account-token-version'
+                    label={t('Token Version')}
+                    value={form.token_version}
+                    onChange={(value) => setField('token_version', value)}
+                  />
                 </>
               )}
             </FieldGroup>
           </SideDrawerSection>
           {showOutboundOverrides ? (
             <SideDrawerSection>
-              <SideDrawerSectionHeader title={t('Account Outbound Overrides')} />
+              <SideDrawerSectionHeader
+                title={t('Account Outbound Overrides')}
+              />
               <FieldGroup>
                 <FieldBlock
                   label={t('Account Base URL')}
@@ -4788,16 +4842,12 @@ function ProxyFormSheet(props: {
   onSubmit: (values: AccountPoolProxyFormValues) => void
 }) {
   const { t } = useTranslation()
-  const [form, setForm] =
-    useState<AccountPoolProxyFormValues>(emptyProxyForm())
+  const [form, setForm] = useState<AccountPoolProxyFormValues>(emptyProxyForm())
   const protocolOptions = useMemo(
     () => translateOptions(PROXY_PROTOCOL_OPTIONS, t),
     [t]
   )
-  const statusOptions = useMemo(
-    () => translateOptions(STATUS_OPTIONS, t),
-    [t]
-  )
+  const statusOptions = useMemo(() => translateOptions(STATUS_OPTIONS, t), [t])
   const fallbackProxyOptions = useMemo(
     () => [
       { value: '0', label: t('No Fallback Proxy') },
@@ -4839,7 +4889,9 @@ function ProxyFormSheet(props: {
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetContent className={sideDrawerContentClassName('sm:max-w-[560px]')}>
         <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>{props.proxy ? t('Edit Proxy') : t('Add Proxy')}</SheetTitle>
+          <SheetTitle>
+            {props.proxy ? t('Edit Proxy') : t('Add Proxy')}
+          </SheetTitle>
           <SheetDescription>{t('Proxies')}</SheetDescription>
         </SheetHeader>
         <form
