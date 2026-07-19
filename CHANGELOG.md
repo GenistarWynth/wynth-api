@@ -27,6 +27,7 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 ## [Unreleased]
 
 ### Added — Account Pool (号池)
+- Account import now accepts current CLIProxyAPI/CPA `codex-api-key` YAML/JSON lists and single or batched auth JSON files for OpenAI/Codex, Anthropic/Claude, Gemini/Antigravity/Google One/Vertex, and xAI pools. Imports retain compatible identity, token-expiry, priority/status, base-URL, header, proxy, and model-policy fields; CPA `direct`/`none` explicitly bypasses a pool default proxy, and the localized file-picker workflow describes the accepted config/auth files.
 - Added a complete pool-scoped Grok/X.AI OAuth login flow: PKCE authorization, single-use state sessions, callback/code exchange, encrypted account creation or update, saved-account refresh, and a guided React admin workflow.
 - Added bounded Grok Web SSO-to-Build OAuth account import through trusted `x.ai` device endpoints, with proxy support and per-item results that never echo submitted SSO secrets. Conversion now runs with three workers by default (configurable up to eight), stable input-ordered aggregation, per-item timeouts, and a bounded batch deadline.
 - Added current sub2api Grok OAuth import/export compatibility for the outbound `grok` platform and inbound `grok`/`xai` aliases, `rt`, rotated access/refresh tokens, RFC3339 expiry, OAuth client/team identity, subscription tier, and entitlement metadata.
@@ -54,6 +55,7 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - `ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY` defaults to 3 and is capped at 8; `ACCOUNT_POOL_XAI_SSO_IMPORT_TIMEOUT_SECONDS` defaults to 300 seconds and accepts 30–1800 seconds.
 
 ### Notes — Account Pool (号池)
+- CPA `disable-cooling` is intentionally not mapped to Wynth's safety cooldown state, and exclusion-only model lists remain unrestricted because Wynth stores a positive supported-model policy. CPA gateway/server configuration, plugins, commercial/panel management, routing/session-affinity engines, and request-cloak behavior were not ported.
 - Existing temporary-disable, overload, request-quota, per-model cooldown, affinity, retry, and lease scheduling already cover the corresponding newer sub2api pool-mode fixes.
 - Periodic xAI workers still use the master-node convention, but database leases now coordinate any number of masters; credential/token-state CAS remains the final stale-write guard.
 - Local quota reset does not and cannot hard-reset provider-side xAI quota. Log-backed rolling usage begins with newly linked consume logs (no backfill) and cannot observe traffic sent outside Wynth. DNS validation cannot fully eliminate post-validation rebinding by a malicious public hostname. `grok_web` outbound overrides and sub2api's Grok video/content-proxy architecture remain intentionally out of scope.

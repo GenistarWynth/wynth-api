@@ -100,6 +100,16 @@ Backend fixtures derived from CPA's current examples cover:
 
 Frontend tests cover the accepted file extensions/MIME contract and the distinct proxy option values. Final verification includes targeted Go tests, affected frontend tests, i18n checks, type checking, lint/format checks, the production frontend build, and the repository's account-pool backend package gate.
 
+## Implementation status
+
+The bounded translation design is implemented in three incremental feature commits after the design commit:
+
+- `f8a89d63` preserves CPA Codex config base URLs, headers, wildcard model exclusions, and explicit direct-proxy behavior;
+- `5aabfe21` imports provider-matched CPA auth files for OpenAI/Codex, Anthropic/Claude, Gemini variants/Vertex, and xAI, including JSON single-object and batch shapes;
+- `f14ffb3f` exposes the config/auth file formats and direct-proxy distinction in the default frontend with six-locale copy and file-acceptance coverage.
+
+Tests use local fixtures derived from the current CPA examples and auth metadata structures. They do not contact provider, CPA management, or panel endpoints. All imported secrets still pass through Wynth's existing encryption and create-account validation path, and parse errors are constrained so token, header value, and proxy credential material is not echoed.
+
 ## Explicitly rejected CPA scope
 
 - server host/port/TLS and management endpoints;
