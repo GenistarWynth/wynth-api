@@ -4,6 +4,11 @@ All notable changes to the **Wynth** fork (`GenistarWynth/wynth-api`) are docume
 
 Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) by QuantumNous. This changelog records what Wynth adds or changes on top of upstream; upstream New API features are not re-listed.
 
+## [Unreleased]
+
+### Notes
+- No additional unreleased changes after v1.0.0-rc.38.
+
 ## [v1.0.0-rc.37] - 2026-07-19
 
 ### Fixes
@@ -24,7 +29,10 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - Channel Monitor remains monitor-only; auto-priority settings no longer clutter the monitor dialog.
 - Monitor and auto-priority saves use explicit scopes so they do not overwrite each other.
 
-## [Unreleased]
+## [v1.0.0-rc.38] - 2026-07-19
+
+> Packaged from previously Unreleased account-pool work.
+
 
 ### Added — Account Pool (号池)
 - Account import now accepts current CLIProxyAPI/CPA `codex-api-key` YAML/JSON lists and single or batched auth JSON files for OpenAI/Codex, Anthropic/Claude, Gemini/Antigravity/Google One/Vertex, and xAI pools. Imports retain compatible identity, token-expiry, priority/status, base-URL, header, proxy, and model-policy fields; CPA `direct`/`none` explicitly bypasses a pool default proxy, and the localized file-picker workflow describes the accepted config/auth files.
