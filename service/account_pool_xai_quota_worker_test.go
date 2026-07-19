@@ -206,6 +206,36 @@ func TestRunDueAccountPoolXAIQuotaProbeSkipsOverlappingTick(t *testing.T) {
 	}
 }
 
+func TestRunDueAccountPoolXAIQuotaProbeSkipsTickHeldByAnotherInstance(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, service, model.AccountPoolPlatformXAI)
+	_ = createAccountPoolXAIQuotaWorkerTestAccount(t, service, pool.Id, "due", model.AccountPoolAccountStatusEnabled, nil)
+	now := common.GetTimestamp()
+	acquired, err := model.AcquireAccountPoolWorkerLease(context.Background(), accountPoolXAIQuotaProbeLeaseKey, "other-instance", now, 60)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	var calls atomic.Int32
+	setAccountPoolXAIQuotaProbeRunnerForTest(t, func(context.Context, int, int) (AccountPoolXAIQuotaSnapshot, error) {
+		calls.Add(1)
+		return AccountPoolXAIQuotaSnapshot{}, nil
+	})
+	accountPoolXAIQuotaProbeWorkerRunning.Store(false)
+	runDueAccountPoolXAIQuotaProbeOnce(context.Background(), accountPoolXAIQuotaProbeWorkerConfig{StaleAge: time.Hour, MaxPerTick: 10})
+	assert.Zero(t, calls.Load())
+}
+
+func TestAccountPoolWorkerLeaseTTLUsesBoundedOverride(t *testing.T) {
+	t.Setenv(accountPoolWorkerLeaseTTLEnv, "45")
+	assert.Equal(t, 45*time.Second, loadAccountPoolWorkerLeaseTTL())
+
+	for _, value := range []string{"0", "14", "3601", "9223372036854775807"} {
+		t.Setenv(accountPoolWorkerLeaseTTLEnv, value)
+		assert.Equal(t, accountPoolWorkerLeaseDefaultTTL, loadAccountPoolWorkerLeaseTTL())
+	}
+}
+
 func createAccountPoolXAIQuotaWorkerTestAccount(
 	t *testing.T,
 	service AccountPoolService,
