@@ -134,6 +134,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	baseURL := relaycommon.GetEffectiveBaseURL(info)
 
 	// Normalize thinking-adapter suffixes from UpstreamModelName BEFORE any
 	// routing branch so that both code_assist and the standard path send the
@@ -164,9 +165,12 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 				info.DisablePing = true
 			}
 		}
+		if strings.TrimSpace(info.RuntimeBaseURL) == "" {
+			baseURL = vertexAIBaseURL(info.RuntimeVertexLocation)
+		}
 		return fmt.Sprintf(
 			"%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
-			vertexAIBaseURL(info.RuntimeVertexLocation),
+			baseURL,
 			info.RuntimeVertexProjectID,
 			vertexAILocation(info.RuntimeVertexLocation),
 			info.UpstreamModelName,
@@ -178,17 +182,20 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	// standard branches so those are bypassed for code_assist chat. The endpoint
 	// has no /models/{model} segment and no version segment.
 	if isGeminiCloudCodePA(info) {
+		if strings.TrimSpace(info.RuntimeBaseURL) == "" {
+			baseURL = geminiCodeAssistBaseURL
+		}
 		if info.IsStream {
 			info.DisablePing = true
-			return geminiCodeAssistBaseURL + "/v1internal:streamGenerateContent?alt=sse", nil
+			return baseURL + "/v1internal:streamGenerateContent?alt=sse", nil
 		}
-		return geminiCodeAssistBaseURL + "/v1internal:generateContent", nil
+		return baseURL + "/v1internal:generateContent", nil
 	}
 
 	version := model_setting.GetGeminiVersionSetting(info.UpstreamModelName)
 
 	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
-		return fmt.Sprintf("%s/%s/models/%s:predict", info.ChannelBaseUrl, version, info.UpstreamModelName), nil
+		return fmt.Sprintf("%s/%s/models/%s:predict", baseURL, version, info.UpstreamModelName), nil
 	}
 
 	if strings.HasPrefix(info.UpstreamModelName, "text-embedding") ||
@@ -198,7 +205,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		if info.IsGeminiBatchEmbedding {
 			action = "batchEmbedContents"
 		}
-		return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
+		return fmt.Sprintf("%s/%s/models/%s:%s", baseURL, version, info.UpstreamModelName, action), nil
 	}
 
 	action := "generateContent"
@@ -208,7 +215,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			info.DisablePing = true
 		}
 	}
-	return fmt.Sprintf("%s/%s/models/%s:%s", info.ChannelBaseUrl, version, info.UpstreamModelName, action), nil
+	return fmt.Sprintf("%s/%s/models/%s:%s", baseURL, version, info.UpstreamModelName, action), nil
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {

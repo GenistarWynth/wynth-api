@@ -129,8 +129,8 @@ func TestNormalizeAccountPoolXAIHeaderOverrides(t *testing.T) {
 	}
 
 	t.Run("rejects excessive entries", func(t *testing.T) {
-		headers := make(map[string]string, accountPoolXAIHeaderOverrideMaxEntries+1)
-		for index := 0; index <= accountPoolXAIHeaderOverrideMaxEntries; index++ {
+		headers := make(map[string]string, accountPoolOutboundHeaderOverrideMaxEntries+1)
+		for index := 0; index <= accountPoolOutboundHeaderOverrideMaxEntries; index++ {
 			headers["X-Test-"+string(rune('A'+index))] = "value"
 		}
 		_, err := normalizeAccountPoolXAIHeaderOverrides(headers)

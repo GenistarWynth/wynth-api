@@ -178,7 +178,7 @@ describe('account pool form helpers', () => {
     )
   })
 
-  test('serializes and restores xAI outbound overrides only for xAI pools', () => {
+  test('serializes and restores outbound overrides for supported account pools', () => {
     const values = {
       ...emptyAccountForm(),
       name: 'xai',
@@ -196,7 +196,16 @@ describe('account pool form helpers', () => {
       header_override_enabled: true,
       header_overrides: { 'X-Trace-ID': 'trace-123' },
     })
-    assert.equal(buildAccountPayload(values, 'openai').credential.base_url, undefined)
+    for (const platform of ['openai', 'anthropic', 'gemini', 'xai']) {
+      assert.equal(
+        buildAccountPayload(values, platform).credential.base_url,
+        'https://api.x.ai/v1/'
+      )
+    }
+    assert.equal(
+      buildAccountPayload(values, 'grok_web').credential.base_url,
+      undefined
+    )
 
     const restored = accountToFormValues(
       makeAccount({

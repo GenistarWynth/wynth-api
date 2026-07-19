@@ -416,7 +416,7 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 	if err := validateAccountPoolProxyReference(params.ProxyID); err != nil {
 		return AccountPoolAccountView{}, err
 	}
-	params.Credential, err = normalizeAccountPoolXAIOverrides(context.Background(), pool.Platform, params.Credential)
+	params.Credential, err = normalizeAccountPoolOutboundOverrides(context.Background(), pool.Platform, params.Credential, nil)
 	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
@@ -544,7 +544,7 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 			return AccountPoolAccountView{}, err
 		}
 		merged := mergeAccountPoolCredentialUpdate(existingCredential, params.Credential)
-		merged, err = normalizeAccountPoolXAIOverrides(context.Background(), pool.Platform, merged)
+		merged, err = normalizeAccountPoolOutboundOverrides(context.Background(), pool.Platform, merged, nil)
 		if err != nil {
 			return AccountPoolAccountView{}, err
 		}

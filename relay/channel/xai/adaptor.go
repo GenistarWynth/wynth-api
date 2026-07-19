@@ -51,10 +51,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	baseURL := info.ChannelBaseUrl
-	if strings.TrimSpace(info.RuntimeBaseURL) != "" {
-		baseURL = info.RuntimeBaseURL
-	}
+	baseURL := relaycommon.GetEffectiveBaseURL(info)
 	return relaycommon.GetFullRequestURL(baseURL, info.RequestURLPath, info.ChannelType), nil
 }
 

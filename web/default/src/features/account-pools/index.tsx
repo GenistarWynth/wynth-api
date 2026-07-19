@@ -176,6 +176,7 @@ import {
   emptyProxyForm,
   normalizeAccountPoolSchedulePolicy,
   platformIsGrokWebCookie,
+  platformSupportsAccountOutboundOverrides,
   platformSupportsOAuthCredential,
   poolToFormValues,
   proxyToFormValues,
@@ -224,6 +225,21 @@ type CapabilityDetectFormValues = {
   apply: boolean
   merge: boolean
   timeout_seconds: number
+}
+
+function accountOutboundBaseURLPlaceholder(platform?: string) {
+  switch (platform) {
+    case 'openai':
+      return 'https://api.openai.com'
+    case 'anthropic':
+      return 'https://api.anthropic.com'
+    case 'gemini':
+      return 'https://generativelanguage.googleapis.com'
+    case 'xai':
+      return 'https://api.x.ai'
+    default:
+      return 'https://api.example.com'
+  }
 }
 
 const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
@@ -4274,7 +4290,9 @@ function AccountFormSheet(props: {
     props.pool?.platform === 'gemini' && form.credential_type === 'oauth'
   const showXAIOAuth =
     props.pool?.platform === 'xai' && form.credential_type === 'oauth'
-  const showXAIOverrides = props.pool?.platform === 'xai'
+  const showOutboundOverrides = platformSupportsAccountOutboundOverrides(
+    props.pool?.platform
+  )
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -4629,22 +4647,24 @@ function AccountFormSheet(props: {
               )}
             </FieldGroup>
           </SideDrawerSection>
-          {showXAIOverrides ? (
+          {showOutboundOverrides ? (
             <SideDrawerSection>
-              <SideDrawerSectionHeader title={t('xAI Outbound Overrides')} />
+              <SideDrawerSectionHeader title={t('Account Outbound Overrides')} />
               <FieldGroup>
                 <FieldBlock
                   label={t('Account Base URL')}
-                  htmlFor='account-pool-account-xai-base-url'
+                  htmlFor='account-pool-account-base-url'
                   description={t(
-                    'Overrides the channel base URL for this xAI account. HTTPS public hosts are required.'
+                    'Overrides the channel base URL for this account. HTTPS public hosts are required; Gemini service accounts use this as the Vertex endpoint.'
                   )}
                 >
                   <Input
-                    id='account-pool-account-xai-base-url'
+                    id='account-pool-account-base-url'
                     type='url'
                     value={form.base_url}
-                    placeholder='https://api.x.ai'
+                    placeholder={accountOutboundBaseURLPlaceholder(
+                      props.pool?.platform
+                    )}
                     onChange={(event) =>
                       setField('base_url', event.target.value)
                     }
@@ -4652,7 +4672,7 @@ function AccountFormSheet(props: {
                 </FieldBlock>
                 <div className={sideDrawerSwitchItemClassName()}>
                   <div className='min-w-0'>
-                    <FieldLabel htmlFor='account-pool-account-xai-header-overrides'>
+                    <FieldLabel htmlFor='account-pool-account-header-overrides'>
                       {t('Enable Account Header Overrides')}
                     </FieldLabel>
                     <p className='text-muted-foreground mt-1 text-xs'>
@@ -4662,7 +4682,7 @@ function AccountFormSheet(props: {
                     </p>
                   </div>
                   <Switch
-                    id='account-pool-account-xai-header-overrides'
+                    id='account-pool-account-header-overrides'
                     checked={form.header_override_enabled}
                     onCheckedChange={(checked) =>
                       setField('header_override_enabled', checked)
@@ -4672,10 +4692,10 @@ function AccountFormSheet(props: {
                 {form.header_override_enabled ? (
                   <FieldBlock
                     label={t('Header Overrides JSON')}
-                    htmlFor='account-pool-account-xai-header-overrides-json'
+                    htmlFor='account-pool-account-header-overrides-json'
                   >
                     <Textarea
-                      id='account-pool-account-xai-header-overrides-json'
+                      id='account-pool-account-header-overrides-json'
                       className='min-h-32 font-mono text-xs'
                       value={form.header_overrides_text}
                       onChange={(event) =>

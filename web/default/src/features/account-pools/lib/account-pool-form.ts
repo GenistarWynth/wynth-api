@@ -392,7 +392,7 @@ function buildCredentialPayload(
     email: values.email.trim(),
     refresh_token: values.refresh_token.trim(),
   }
-  if (platform === 'xai') {
+  if (platformSupportsAccountOutboundOverrides(platform)) {
     credential.base_url = values.base_url.trim()
     credential.header_override_enabled = values.header_override_enabled === true
     credential.header_overrides = parseHeaderOverrides(
@@ -416,6 +416,17 @@ function buildCredentialPayload(
     credential.entitlement_status = values.entitlement_status.trim()
   }
   return credential
+}
+
+export function platformSupportsAccountOutboundOverrides(
+  platform?: AccountPoolPlatform | string
+) {
+  return (
+    platform === 'openai' ||
+    platform === 'anthropic' ||
+    platform === 'gemini' ||
+    platform === 'xai'
+  )
 }
 
 export function applyXAIOAuthResultToForm(

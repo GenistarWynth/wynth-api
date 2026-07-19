@@ -118,14 +118,15 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	if selection.ProxyURL != "" {
 		info.RuntimeProxy = selection.ProxyURL
 	}
-	if selection.Platform == model.AccountPoolPlatformXAI {
-		normalizedCredential, overrideErr := normalizeAccountPoolXAIOverrides(
+	if accountPoolOutboundOverridesSupported(selection.Platform) {
+		normalizedCredential, overrideErr := normalizeAccountPoolOutboundOverrides(
 			accountPoolRuntimeContext(c),
 			selection.Platform,
 			selection.Credential,
+			nil,
 		)
 		if overrideErr != nil {
-			return fmt.Errorf("xai account outbound override validation failed: %w", overrideErr)
+			return fmt.Errorf("account outbound override validation failed: %w", overrideErr)
 		}
 		if normalizedCredential.BaseURL != nil {
 			info.RuntimeBaseURL = strings.TrimSpace(*normalizedCredential.BaseURL)
