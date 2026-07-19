@@ -196,3 +196,32 @@ The following boundaries remain intentional:
 - Service/controller tests additionally cover billing and active-probe snapshots, eligibility scheduling, outbound override validation/precedence, typed OAuth failure classification, dry-run/apply reconciliation, and concurrent CAS winners using httptest fakes only.
 - Frontend tests cover form-state application, xAI override serialization, and quota presentation; reconciler API/UI paths are covered by TypeScript checking, focused lint, and six-locale i18n validation.
 - Required verification: focused Go packages, account-pool test repeats, frontend typecheck/targeted tests/lint/build, secret scan, and changelog review.
+
+## Remaining deferred account-pool slice
+
+The final deferred slice keeps the existing account-pool architecture and does not add a second scheduler, a new log schema, or provider behavior outside xAI OAuth.
+
+### Automatic and periodic quota observation
+
+- `AccountPoolService.CreateAccount` remains the only account persistence and encryption boundary. After it successfully builds an xAI OAuth account view, it submits a best-effort probe to `gopool`; the probe is enabled during normal worker startup, never delays or changes the create result, and therefore covers normal OAuth creation, the post-exchange create request, and every successful SSO import item without duplicate call-site hooks.
+- A master-node worker performs an immediate sweep and periodic sweeps. It loads enabled xAI pools and enabled accounts, decrypts only enough credential metadata to retain OAuth accounts, orders missing/old snapshots by age, and probes at most the configured number per tick through the existing proxy-aware `ProbeXAIQuota` path.
+- Defaults are a 15-minute interval, a 60-minute stale age, and 10 accounts per tick. `ACCOUNT_POOL_XAI_QUOTA_PROBE_INTERVAL_MINUTES`, `ACCOUNT_POOL_XAI_QUOTA_PROBE_STALE_MINUTES`, and `ACCOUNT_POOL_XAI_QUOTA_PROBE_MAX_PER_TICK` override positive values. Exhaustion and recovery continue to use the existing `rate_limited_until` persistence logic.
+
+### Background OAuth reconciliation
+
+- A separate master-node worker performs an immediate sweep and then runs every five minutes by default. `ACCOUNT_POOL_XAI_OAUTH_RECONCILE_INTERVAL_MINUTES` overrides the interval with a positive value.
+- Each sweep lists enabled xAI pools and invokes the existing reconciler with `dry_run=false`. Missing or near-expiry access is refreshed only when a refresh token exists. A missing refresh token expires an account only when access is also missing or expired; a still-valid access-only account remains usable until expiry. Typed permanent credential rejection still expires through the existing encrypted credential/token-state compare-and-swap.
+- `sync.Once` controls lifecycle and `atomic.Bool` skips overlapping ticks in one process. `NODE_TYPE=slave` nodes do not start periodic sweeps. Across instances, the reconciler's credential/token-state CAS makes duplicate refresh/expire writers safe: one update wins and stale snapshots cannot overwrite it. The repository has no reusable distributed worker lease; deployments should designate one master to avoid duplicate upstream refresh calls, while CAS preserves database correctness if multiple masters are configured.
+- The administrator endpoint and React preview remain dry-run-first; only the background worker defaults to apply.
+
+### Read-only rolling 24-hour Free usage estimate
+
+- Wynth's consume logs do not store account-pool account IDs, while `account_pool_accounts` already stores cumulative successful request and token counters. Adding an indexed account ID to the large log table would be a new cross-database migration and write-path contract, so it is intentionally excluded from this slice.
+- Known Free-tier quota snapshots are enriched at read/probe time with `free_usage_24h_estimate`. Accounts younger than 24 hours report the locally observed cumulative counters since account creation. Older accounts with recent activity report a 24-hour lifetime-average projection; accounts whose last successful use predates the window report zero. The object includes the source, window/coverage seconds, request and token counts, and an `estimated` flag.
+- The estimate is never used for scheduling, cooldowns, billing, settlement, or quota resets, and it is not persisted into the durable upstream snapshot. It measures Wynth-observed account-pool traffic only and cannot reconstruct requests made outside Wynth or exact historical bursts before per-request account-linked logs exist.
+
+### Alternatives considered
+
+- Adding `account_pool_account_id` to every consume log would permit exact rolling aggregation but requires a large-table migration, new indexes, ClickHouse parity, and all text/media/task log writers to preserve the identifier.
+- Persisting hourly buckets inside `runtime_options` avoids a schema change but turns every request into a JSON read/modify/write that can contend with quota snapshots and lose concurrent buckets without a new transactional data model.
+- A system-task or Redis lease could avoid duplicate work across multiple masters, but no reusable lease exists in this repository. The selected master-node/atomic/CAS design keeps persistence safe and does not invent a one-off distributed lock protocol.
