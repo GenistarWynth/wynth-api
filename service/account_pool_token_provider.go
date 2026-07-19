@@ -160,7 +160,7 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	if refreshToken == "" {
 		err := errors.New("account pool oauth refresh_token is required")
 		if !skipFailureRecord {
-			_ = expireAccountPoolRuntimeMissingRefreshToken(account.Id, now)
+			_ = expireAccountPoolRuntimeMissingRefreshToken(account.Id, account.CredentialConfig, rawTokenState, now)
 		}
 		return "", err
 	}
@@ -339,13 +339,19 @@ func markAccountPoolRuntimeTokenRefreshFailure(accountID int, err error, now int
 		}).Error
 }
 
-func expireAccountPoolRuntimeMissingRefreshToken(accountID int, now int64) error {
+func expireAccountPoolRuntimeMissingRefreshToken(accountID int, credentialConfig string, tokenState string, now int64) error {
 	if accountID <= 0 {
 		return nil
 	}
 	const message = "account pool oauth refresh_token is required"
 	return model.DB.Model(&model.AccountPoolAccount{}).
-		Where("id = ? AND status = ?", accountID, model.AccountPoolAccountStatusEnabled).
+		Where(
+			"id = ? AND status = ? AND credential_config = ? AND token_state = ?",
+			accountID,
+			model.AccountPoolAccountStatusEnabled,
+			credentialConfig,
+			tokenState,
+		).
 		Updates(map[string]any{
 			"status":               model.AccountPoolAccountStatusExpired,
 			"rate_limited_until":   int64(0),

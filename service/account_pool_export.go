@@ -45,6 +45,10 @@ func (s AccountPoolService) ExportAccounts(poolID int, includeSecrets bool) (acc
 	if err != nil {
 		return payload, 0, err
 	}
+	exportPlatform := platform
+	if exportPlatform == model.AccountPoolPlatformXAI {
+		exportPlatform = "grok"
+	}
 
 	var accounts []model.AccountPoolAccount
 	if err := model.DB.Where("pool_id = ? AND status <> ?", poolID, model.AccountPoolAccountStatusDeleted).
@@ -62,7 +66,7 @@ func (s AccountPoolService) ExportAccounts(poolID int, includeSecrets bool) (acc
 
 	skipped := 0
 	for _, account := range accounts {
-		exported, err := exportAccountPoolAccount(account, platform, proxyKeyByID, includeSecrets)
+		exported, err := exportAccountPoolAccount(account, exportPlatform, proxyKeyByID, includeSecrets)
 		if err != nil {
 			// Skip-and-continue: one undecryptable account must not lock the admin out
 			// of exporting (backing up) every other account in the pool.

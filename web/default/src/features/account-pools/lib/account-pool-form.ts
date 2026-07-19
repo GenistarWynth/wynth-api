@@ -444,9 +444,10 @@ export function accountToFormValues(
   // selector value is restored. An oauth_type or a stored token both signal an
   // OAuth account, while a token-less account falls back to api_key.
   const inferredCredentialType: AccountPoolCredentialType =
-    (account.oauth_type && account.oauth_type !== '') || account.has_token
+    account.credential_type ||
+    ((account.oauth_type && account.oauth_type !== '') || account.has_token
       ? 'oauth'
-      : 'api_key'
+      : 'api_key')
 
   return {
     name: account.name,

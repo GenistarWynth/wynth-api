@@ -211,6 +211,7 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 	require.True(t, accountResult.Response.Success, accountResult.Response.Message)
 	assert.True(t, accountResult.Response.Data.HasCredential)
 	assert.True(t, accountResult.Response.Data.HasToken)
+	assert.Equal(t, service.AccountPoolCredentialTypeAPIKey, accountResult.Response.Data.CredentialType)
 	assert.Equal(t, 1, accountResult.Response.Data.MaxConcurrency)
 
 	unlimitedResult := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(poolResult.Response.Data.Id)+"/accounts", dto.AccountPoolAccountCreateRequest{

@@ -191,6 +191,7 @@ func TestAccountPoolServiceExportRoundTripsXAIOAuthMetadata(t *testing.T) {
 	payload, _, err := svc.ExportAccounts(pool.Id, true)
 	require.NoError(t, err)
 	require.Len(t, payload.Accounts, 1)
+	assert.Equal(t, "grok", payload.Accounts[0].Platform)
 	assert.Equal(t, "grok-id-secret", payload.Accounts[0].Credentials["id_token"])
 	assert.Equal(t, "grok-client", payload.Accounts[0].Credentials["client_id"])
 	assert.Equal(t, "team-42", payload.Accounts[0].Credentials["team_id"])

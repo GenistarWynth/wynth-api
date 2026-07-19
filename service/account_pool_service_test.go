@@ -1651,10 +1651,36 @@ func TestAccountPoolServiceCreateAndViewExposeOAuthType(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, view.OAuthType, "view must expose normalized oauth_type")
+	assert.Equal(t, AccountPoolCredentialTypeOAuth, view.CredentialType, "view must expose the non-secret credential type")
 
 	var stored model.AccountPoolAccount
 	require.NoError(t, model.DB.First(&stored, view.Id).Error)
 	assert.Equal(t, AccountPoolGeminiOAuthTypeCodeAssist, stored.OAuthType, "column must hold normalized oauth_type")
+}
+
+func TestAccountPoolServiceListAccountsKeepsCorruptCredentialVisible(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPool(t, svc)
+	created, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "recoverable-corrupt-account",
+		Credential: AccountPoolCredentialConfig{
+			Type:   AccountPoolCredentialTypeAPIKey,
+			APIKey: "secret-before-corruption",
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", created.Id).
+		Update("credential_config", "not-a-valid-encrypted-credential").Error)
+
+	accounts, err := svc.ListAccounts(pool.Id)
+	require.NoError(t, err)
+	require.Len(t, accounts, 1)
+	assert.Equal(t, created.Id, accounts[0].Id)
+	assert.True(t, accounts[0].HasCredential)
+	assert.Empty(t, accounts[0].CredentialType)
 }
 
 // TestAccountPoolServiceUpdateOAuthTypeIndependentOfSecret verifies that an admin can

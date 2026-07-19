@@ -30,7 +30,7 @@ func TestAccountPoolServiceRefreshXAIOAuthAccountPersistsRotatedTokens(t *testin
 		},
 		TokenState: AccountPoolTokenState{
 			AccessToken:  "old-access",
-			RefreshToken: "old-refresh",
+			RefreshToken: "runtime-rotated-refresh",
 			ExpiresAt:    time.Now().Add(-time.Hour).Unix(),
 			Version:      7,
 		},
@@ -39,7 +39,7 @@ func TestAccountPoolServiceRefreshXAIOAuthAccountPersistsRotatedTokens(t *testin
 
 	oldRefresh := accountPoolXAIOAuthInfoRefresh
 	accountPoolXAIOAuthInfoRefresh = func(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*XAIOAuthTokenInfo, error) {
-		assert.Equal(t, "old-refresh", refreshToken)
+		assert.Equal(t, "runtime-rotated-refresh", refreshToken)
 		assert.Empty(t, proxyURL)
 		assert.Equal(t, "stored-client", clientID)
 		return &XAIOAuthTokenInfo{
@@ -71,6 +71,74 @@ func TestAccountPoolServiceRefreshXAIOAuthAccountPersistsRotatedTokens(t *testin
 	assert.Equal(t, "new-access", tokenState.AccessToken)
 	assert.Equal(t, "new-refresh", tokenState.RefreshToken)
 	assert.Equal(t, int64(8), tokenState.Version)
+}
+
+func TestAccountPoolServiceRefreshXAIOAuthAccountDoesNotOverwriteConcurrentRotation(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	accountPoolService := AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-pool",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	account, err := accountPoolService.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "xai-account-concurrent-refresh",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "initial-refresh",
+			ClientID:     "stored-client",
+		},
+		TokenState: AccountPoolTokenState{
+			RefreshToken: "initial-refresh",
+			ExpiresAt:    time.Now().Add(-time.Hour).Unix(),
+			Version:      3,
+		},
+	})
+	require.NoError(t, err)
+
+	oldRefresh := accountPoolXAIOAuthInfoRefresh
+	accountPoolXAIOAuthInfoRefresh = func(context.Context, string, string, string) (*XAIOAuthTokenInfo, error) {
+		winnerCredential, encryptErr := EncryptAccountPoolCredentialConfig(AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "winner-refresh",
+			ClientID:     "stored-client",
+		})
+		require.NoError(t, encryptErr)
+		winnerState, encryptErr := EncryptAccountPoolTokenState(AccountPoolTokenState{
+			AccessToken:  "winner-access",
+			RefreshToken: "winner-refresh",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+			Version:      4,
+		})
+		require.NoError(t, encryptErr)
+		require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+			Where("id = ?", account.Id).
+			Updates(map[string]any{
+				"credential_config": winnerCredential,
+				"token_state":       winnerState,
+			}).Error)
+		return &XAIOAuthTokenInfo{
+			AccessToken:  "loser-access",
+			RefreshToken: "loser-refresh",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+			ClientID:     "stored-client",
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAIOAuthInfoRefresh = oldRefresh })
+
+	_, err = accountPoolService.RefreshXAIOAuthAccount(context.Background(), pool.Id, account.Id)
+	require.NoError(t, err)
+	stored, err := getAccountPoolAccountForPool(pool.Id, account.Id)
+	require.NoError(t, err)
+	credential, err := DecryptAccountPoolCredentialConfig(stored.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, "winner-refresh", credential.RefreshToken)
+	tokenState, err := DecryptAccountPoolTokenState(stored.TokenState)
+	require.NoError(t, err)
+	assert.Equal(t, "winner-access", tokenState.AccessToken)
+	assert.Equal(t, "winner-refresh", tokenState.RefreshToken)
+	assert.Equal(t, int64(4), tokenState.Version)
 }
 
 func TestAccountPoolServiceImportXAISSOAccountsReportsPartialFailure(t *testing.T) {

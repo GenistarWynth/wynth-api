@@ -130,6 +130,7 @@ type AccountPoolAccountView struct {
 	PoolID                       int               `json:"pool_id"`
 	Name                         string            `json:"name"`
 	AccountIdentifier            string            `json:"account_identifier"`
+	CredentialType               string            `json:"credential_type"`
 	OAuthType                    string            `json:"oauth_type"`
 	Status                       string            `json:"status"`
 	Priority                     int64             `json:"priority"`
@@ -1471,6 +1472,15 @@ func accountPoolNormalizeExpiresAt(value int64) int64 {
 }
 
 func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolAccountView, error) {
+	credentialType := ""
+	if strings.TrimSpace(account.CredentialConfig) != "" {
+		credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+		if err != nil {
+			common.SysError(fmt.Sprintf("account pool account view: credential type unavailable for account id=%d: %v", account.Id, err))
+		} else {
+			credentialType = strings.TrimSpace(credential.Type)
+		}
+	}
 	var supportedModels []string
 	if account.SupportedModels != "" {
 		if err := common.UnmarshalJsonStr(account.SupportedModels, &supportedModels); err != nil {
@@ -1494,6 +1504,7 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		PoolID:                       account.PoolID,
 		Name:                         account.Name,
 		AccountIdentifier:            account.AccountIdentifier,
+		CredentialType:               credentialType,
 		Status:                       account.Status,
 		Priority:                     account.Priority,
 		Weight:                       account.Weight,

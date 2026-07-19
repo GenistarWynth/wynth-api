@@ -975,6 +975,7 @@ func accountPoolAccountResponse(account service.AccountPoolAccountView) dto.Acco
 		PoolID:                    account.PoolID,
 		Name:                      account.Name,
 		AccountIdentifier:         account.AccountIdentifier,
+		CredentialType:            account.CredentialType,
 		OAuthType:                 account.OAuthType,
 		Status:                    account.Status,
 		Priority:                  account.Priority,

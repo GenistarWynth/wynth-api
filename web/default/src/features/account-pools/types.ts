@@ -164,6 +164,7 @@ export type AccountPoolAccount = {
   pool_id: number
   name: string
   account_identifier: string
+  credential_type?: AccountPoolCredentialType
   status: AccountPoolAccountStatus | string
   // Gemini OAuth sub-type ('' | 'code_assist' | 'ai_studio') exposed on the view.
   oauth_type: string

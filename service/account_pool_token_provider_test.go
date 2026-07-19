@@ -140,6 +140,54 @@ func TestAccountPoolTokenProviderReloadsRefreshTokenBeforeExpiringAccount(t *tes
 	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)
 }
 
+func TestAccountPoolTokenProviderMissingRefreshExpirationUsesLoadedStateCAS(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "xai-oauth-expiration-cas",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState: AccountPoolTokenState{
+			AccessToken: "expired-access-token",
+			ExpiresAt:   900,
+			Version:     1,
+		},
+	})
+
+	var loaded model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&loaded, account.Id).Error)
+	rotatedCredential, err := EncryptAccountPoolCredentialConfig(AccountPoolCredentialConfig{
+		Type:         AccountPoolCredentialTypeOAuth,
+		RefreshToken: "concurrent-refresh-token",
+	})
+	require.NoError(t, err)
+	rotatedState, err := EncryptAccountPoolTokenState(AccountPoolTokenState{
+		AccessToken:  "concurrent-access-token",
+		RefreshToken: "concurrent-refresh-token",
+		ExpiresAt:    2000,
+		Version:      2,
+	})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Updates(map[string]any{
+			"credential_config": rotatedCredential,
+			"token_state":       rotatedState,
+		}).Error)
+
+	require.NoError(t, expireAccountPoolRuntimeMissingRefreshToken(
+		account.Id,
+		loaded.CredentialConfig,
+		loaded.TokenState,
+		1000,
+	))
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)
+	assert.Equal(t, rotatedCredential, stored.CredentialConfig)
+	assert.Equal(t, rotatedState, stored.TokenState)
+}
+
 func TestAccountPoolTokenProviderReusesValidOAuthAccessToken(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	setAccountPoolOAuthRefreshForTest(t, func(context.Context, string, string) (*CodexOAuthTokenResult, error) {
