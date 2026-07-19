@@ -4,6 +4,14 @@ All notable changes to the **Wynth** fork (`GenistarWynth/wynth-api`) are docume
 
 Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) by QuantumNous. This changelog records what Wynth adds or changes on top of upstream; upstream New API features are not re-listed.
 
+## [v1.0.0-rc.37] - 2026-07-19
+
+### Fixes
+- Auto-priority preserves relative close-price gaps so availability, first-token latency, and throughput can outweigh small cost differences.
+- Gate-usable channels with at least an 8x effective-cost advantage now receive strict score and priority dominance within their local-group and channel-type cohort.
+- Group-wide cost ceilings extend extreme-cost dominance to split-worker single-member runs, and hysteresis can no longer retain an inverted extreme-cost order.
+- Group cost bounds continue to include both manual and upstream-generated auto-priority channels.
+
 ## [v1.0.0-rc.36] - 2026-07-19
 
 ### Features
