@@ -32,15 +32,20 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - Added current sub2api Grok OAuth import/export compatibility for the outbound `grok` platform and inbound `grok`/`xai` aliases, `rt`, rotated access/refresh tokens, RFC3339 expiry, OAuth client/team identity, subscription tier, and entitlement metadata.
 - Account views now expose the non-secret credential type, so legacy refresh-token-only xAI OAuth accounts reopen in the correct admin workflow without exposing stored credentials.
 - Added complete English, Chinese, French, Japanese, Russian, and Vietnamese translations for the Grok OAuth administrator workflow.
+- Added pool-scoped xAI quota probe/read APIs with durable `runtime_options` snapshots, Free/paid billing observations, quota cooldown recovery, and account-table status/probe controls.
+- Added billing-backed xAI media eligibility so image generation/edit selection skips known-ineligible accounts while unknown eligibility and chat traffic remain unaffected.
+- Added encrypted, xAI-only per-account base URL and header overrides with account-over-channel precedence, SSRF validation, dangerous-header denial, bounded input, and an explicit unsafe environment escape hatch.
+- Added an administrator xAI OAuth reconciler that defaults to dry-run, previews missing/expired/near-expiry/rejected credential actions in the React UI, and applies refresh/expire operations with encrypted snapshot CAS guards.
 
 ### Fixed — Account Pool (号池)
 - xAI runtime and administrator refresh now honor the OAuth client ID captured during authorization and prefer the newest rotated refresh token in token state, while preserving default-client and stored-credential fallbacks for existing accounts.
 - Administrator token refresh and missing-refresh expiration use encrypted credential/token-state compare-and-swap guards, preventing concurrent rotations from being overwritten or incorrectly retired.
 - OAuth accounts with an expired access token and no refresh token are marked expired and removed from scheduling; channel-test requests remain mutation-free.
+- xAI OAuth token failures now preserve typed status/code metadata without response-body leakage: permanent credential rejection expires the account, while network and 5xx failures use the existing temporary cooldown.
 
 ### Notes — Account Pool (号池)
 - Existing temporary-disable, overload, request-quota, per-model cooldown, affinity, retry, and lease scheduling already cover the corresponding newer sub2api pool-mode fixes.
-- Grok billing snapshots, Free-tier rolling quota estimates, paid-media quarantine, proactive background reconciliation, and per-account upstream URL/header overrides remain deferred pending Wynth-native probe, lifecycle, and security designs.
+- Automatic import-time probes, rolling local Free-window estimation, periodic/background reconciliation, cross-platform account overrides, and sub2api's Grok video/content-proxy architecture remain deferred or out of scope.
 
 ## [v1.0.0-rc.35] - 2026-07-18
 

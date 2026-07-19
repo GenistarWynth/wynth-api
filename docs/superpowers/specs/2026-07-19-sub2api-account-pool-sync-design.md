@@ -1,7 +1,8 @@
 # sub2api Account-Pool Updates -> Wynth Design
 
 - Date: 2026-07-19
-- Target branch: `feat/sub2api-account-pool-sync-2026-07`
+- Phase 1 branch: `feat/sub2api-account-pool-sync-2026-07`
+- Deferred account-pool branch: `feat/sub2api-account-pool-deferred-2026-07`
 - Reference: `/root/work/sub2api` at `d4b9797f` (`v0.1.161`)
 - Comparison baseline: the 2026-06-27 migration summarized in `docs/superpowers/specs/2026-06-27-account-pool-migration-summary.md`
 - Scope: account-pool behavior only. Wynth's channel/relay architecture remains authoritative.
@@ -132,12 +133,11 @@ Current Wynth mapping:
 - sub2api's account creation endpoint becomes an exchange payload compatible with existing Wynth create/update endpoints, avoiding duplicate validation and encryption code.
 - Scheduler cache fixes map to Wynth's DB-backed selection and in-process runtime block; they are verified rather than copied.
 
-## Defer
+## Defer after the account-pool Phase 2 slice
 
-- Proactive Grok OAuth reconciliation/background refresh: Wynth refreshes on demand with singleflight and encrypted CAS persistence. A new background reconciler needs lifecycle/config/HA design.
-- Full xAI billing snapshot, rolling Free estimate, and quota-reset UI: valuable but larger than OAuth login and needs a Wynth-native durable schema and probe policy.
-- Paid-media quarantine until that probe exists. Inferring paid eligibility from absent JWT claims would incorrectly exclude valid accounts.
-- Per-account xAI base URL and header overrides: Wynth is channel-first, and its channel already owns base URL/header policy. Adding account overrides needs an explicit precedence and SSRF/header-denylist design.
+- Automatic import-time quota probes, a periodic OAuth reconciliation worker, and a multi-replica background sweep remain deferred pending lifecycle/config/HA design. The administrator-triggered probe and reconciler are the first operational slice.
+- A locally estimated rolling 24-hour Free usage window and a dedicated quota-reset editor remain deferred. Wynth now stores authoritative billing/usage observations, but does not invent quota from token claims or incomplete history.
+- Account outbound overrides are intentionally xAI-only. Extending them to OpenAI, Anthropic, Gemini, Vertex, or `grok_web` requires platform-specific review instead of assuming identical authorization/header semantics.
 - SSO import concurrency above one: the upstream flow is sensitive and long-running. The first Wynth slice uses a bounded sequential batch; parallelism can follow measured need.
 
 ## Out of scope
@@ -164,13 +164,19 @@ The Phase 2 audit produced two narrow fixes:
 - Administrator refresh persists rotations with a credential/token-state compare-and-swap guard. A concurrent runtime or administrator winner cannot be overwritten by an older response.
 - An OAuth account whose access token is expired and whose latest database state has no refresh token is marked `expired`, so it cannot fail every request indefinitely. The expiration update matches the loaded encrypted credential and token state, so a concurrent rotation wins safely; channel-test requests remain mutation-free.
 
-The remaining Phase 2 candidates were deliberately not force-fitted:
+The deferred account-pool Phase 2 slice is complete on `feat/sub2api-account-pool-deferred-2026-07`:
 
-- Normal selection and lease acquisition already share `loadAccountPoolSelectionContext`, so status, request quota, global/temp/overload cooldowns, runtime blocks, supported models, mapping, and per-model cooldown are applied consistently.
-- xAI quota readiness and Free-tier rolling estimates need an authoritative Wynth quota probe and durable snapshot schema; generic capability detection is not an equivalent data source.
-- Paid-media eligibility cannot be inferred safely from token claims. Wynth's xAI image relay has no equivalent of sub2api's billing-backed eligibility snapshot, and the sub2api video/cache architecture remains out of scope.
-- Per-account base URLs and header overrides conflict with Wynth's channel-owned upstream policy and require an explicit precedence, SSRF, redirect, and denied-header design.
-- Permanent `invalid_grant` classification and proactive reconciliation need a typed, secret-safe OAuth error contract plus multi-worker refresh-race recovery; the shipped missing-refresh invariant is deterministic without introducing that larger lifecycle.
+- **Quota readiness and Free-tier probe:** pool-scoped manual probe/read APIs use the existing token provider and proxy resolution, store a sanitized snapshot under the account's existing `runtime_options.xai_quota`, and map observed exhaustion into `rate_limited_until`. Recovery clears only that quota cooldown. The React account table shows the last observation and exposes a probe action for xAI OAuth accounts.
+- **Paid-media eligibility:** the billing probe stores a tri-state `media_eligible` observation. xAI image generation/edit selection skips only accounts with known-false eligibility; unknown remains schedulable and chat selection is unchanged. This reuses the shared selection context rather than adding a second scheduler or global account quarantine.
+- **Safe per-account outbound overrides:** encrypted xAI credential config may contain an optional `base_url`, `header_override_enabled`, and bounded header map. A validated account value wins over the channel base URL/header of the same name; otherwise the channel remains authoritative. HTTPS/public-address validation, trusted `x.ai` handling, the explicit `ACCOUNT_POOL_XAI_ALLOW_UNSAFE_BASE_URL=true` escape hatch, header count/size limits, and credential/hop-by-hop header deny rules are enforced both on admin writes and at runtime.
+- **Typed credential rejection and reconciliation:** xAI token failures carry only status/code metadata. `invalid_grant`, `invalid_refresh_token`, `token_expired`, and `session_terminated` expire the account with an encrypted credential/token-state CAS; network/5xx failures retain the existing temporary cooldown behavior. `POST /api/account_pools/:id/xai/oauth/reconcile` defaults to dry-run, scans missing/expired/near-expiry/rejected OAuth state, and applies refresh-or-expire actions only if the encrypted snapshot is still current. The React UI always previews the dry-run result before apply.
+
+The following boundaries remain intentional:
+
+- Normal selection and lease acquisition continue to share `loadAccountPoolSelectionContext`; no sub2api scheduler cache/outbox was introduced.
+- No Grok composer/video generation, signed-video content proxy, or request-owner media gateway was ported.
+- No JWT-claim-only paid eligibility inference, automatic import-time quota probe, rolling local Free estimate, or background reconciliation worker was added.
+- OpenAI, Anthropic, Gemini, Vertex, and `grok_web` outbound behavior does not consume xAI account overrides or media eligibility.
 
 ## Error handling and security
 
@@ -178,7 +184,8 @@ The remaining Phase 2 candidates were deliberately not force-fitted:
 - Redirect URIs reject credentials, fragments, and non-HTTP(S) schemes; plain HTTP is limited to loopback hosts.
 - Session IDs, state, verifier, tokens, and cookies are generated/handled server-side and never logged or included in audit metadata.
 - Session state is constant-time compared and consumed on exchange success or failure.
-- Token and SSO HTTP bodies are size-limited. Non-2xx errors expose status and a bounded sanitized message, never submitted credentials.
+- Token and SSO HTTP bodies are size-limited. xAI OAuth token failures expose only typed status/code metadata, never response descriptions, bodies, or submitted credentials.
+- xAI account base URLs require HTTPS and a public resolved address unless the explicit unsafe environment override is enabled; credentials, fragments, dangerous transport/authentication headers, and oversized header maps are rejected.
 - Proxy selection uses existing pool/account proxy resolution and validation.
 - SSO redirects stay on `x.ai` subdomains and are capped.
 
@@ -186,5 +193,6 @@ The remaining Phase 2 candidates were deliberately not force-fitted:
 
 - Service tests cover PKCE parameters, callback parsing, session expiry/single use, state mismatch, proxy binding, token form contracts, refresh rotation, claims, redirect validation, SSO normalization/device flow, and import aliases.
 - Service tests cover invalid-state rejection and encrypted account refresh persistence; controller tests cover pool platform validation, success envelopes, and SSO import secret redaction with fakes/httptest only.
-- Frontend tests cover form-state application and serialization of exchanged credentials; the typed API paths are covered by TypeScript checking and the production build.
+- Service/controller tests additionally cover billing and active-probe snapshots, eligibility scheduling, outbound override validation/precedence, typed OAuth failure classification, dry-run/apply reconciliation, and concurrent CAS winners using httptest fakes only.
+- Frontend tests cover form-state application, xAI override serialization, and quota presentation; reconciler API/UI paths are covered by TypeScript checking, focused lint, and six-locale i18n validation.
 - Required verification: focused Go packages, account-pool test repeats, frontend typecheck/targeted tests/lint/build, secret scan, and changelog review.
