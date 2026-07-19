@@ -463,7 +463,14 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 	if err := model.DB.Create(&account).Error; err != nil {
 		return AccountPoolAccountView{}, err
 	}
-	return buildAccountPoolAccountView(account)
+	view, err := buildAccountPoolAccountView(account)
+	if err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	if accountPoolXAIQuotaCreateProbeEligible(pool.Platform, params.Credential) {
+		scheduleAccountPoolXAIQuotaProbe(pool.Id, account.Id)
+	}
+	return view, nil
 }
 
 func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {

@@ -192,3 +192,52 @@ func TestAccountPoolServiceImportXAISSOAccountsReportsPartialFailure(t *testing.
 	assert.Equal(t, "refresh-first", credential.RefreshToken)
 	assert.NotContains(t, stored.CredentialConfig, "first")
 }
+
+func TestAccountPoolXAIQuotaImportProbeRunsForEachSuccessfulSSOItem(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	accountPoolService := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, accountPoolService, model.AccountPoolPlatformXAI)
+
+	oldConvert := accountPoolXAISSOConvert
+	accountPoolXAISSOConvert = func(_ context.Context, ssoToken string, _ string) (*XAIOAuthTokenInfo, error) {
+		if ssoToken == "bad" {
+			return nil, errors.New("conversion failed")
+		}
+		return &XAIOAuthTokenInfo{
+			AccessToken:  "access-" + ssoToken,
+			RefreshToken: "refresh-" + ssoToken,
+			Email:        ssoToken + "@example.com",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAISSOConvert = oldConvert })
+
+	probed := make(chan int, 2)
+	setAccountPoolXAIQuotaProbeRunnerForTest(t, func(_ context.Context, poolID int, accountID int) (AccountPoolXAIQuotaSnapshot, error) {
+		assert.Equal(t, pool.Id, poolID)
+		probed <- accountID
+		return AccountPoolXAIQuotaSnapshot{}, nil
+	})
+	accountPoolXAIQuotaCreateProbeEnabled.Store(true)
+	t.Cleanup(func() { accountPoolXAIQuotaCreateProbeEnabled.Store(false) })
+
+	result, err := accountPoolService.ImportXAISSOAccounts(context.Background(), AccountPoolXAISSOImportParams{
+		PoolID:    pool.Id,
+		SSOTokens: []string{"first", "bad", "second"},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Created, 2)
+	require.Len(t, result.Errors, 1)
+
+	seen := make(map[int]struct{}, 2)
+	for range result.Created {
+		select {
+		case accountID := <-probed:
+			seen[accountID] = struct{}{}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for SSO import quota probe")
+		}
+	}
+	assert.Contains(t, seen, result.Created[0].Id)
+	assert.Contains(t, seen, result.Created[1].Id)
+}
