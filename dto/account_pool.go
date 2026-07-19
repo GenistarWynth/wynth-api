@@ -97,38 +97,72 @@ type AccountPoolAccountCreateRequest struct {
 }
 
 type AccountPoolAccountResponse struct {
-	Id                        int               `json:"id"`
-	PoolID                    int               `json:"pool_id"`
-	Name                      string            `json:"name"`
-	AccountIdentifier         string            `json:"account_identifier"`
-	CredentialType            string            `json:"credential_type"`
-	OAuthType                 string            `json:"oauth_type"`
-	Status                    string            `json:"status"`
-	Priority                  int64             `json:"priority"`
-	Weight                    uint              `json:"weight"`
-	MaxConcurrency            int               `json:"max_concurrency"`
-	ProxyID                   int               `json:"proxy_id"`
-	SupportedModels           []string          `json:"supported_models"`
-	ModelMapping              map[string]string `json:"model_mapping"`
-	LastUsedAt                int64             `json:"last_used_at"`
-	RateLimitedUntil          int64             `json:"rate_limited_until"`
-	TempDisabledUntil         int64             `json:"temp_disabled_until"`
-	TempDisabledReason        string            `json:"temp_disabled_reason"`
-	LastError                 string            `json:"last_error"`
-	ExpiresAt                 int64             `json:"expires_at"`
-	AutoPauseOnExpired        bool              `json:"auto_pause_on_expired"`
-	LastCapabilityCheckAt     int64             `json:"last_capability_check_at"`
-	LastCapabilityCheckStatus string            `json:"last_capability_check_status"`
-	LastCapabilityCheckError  string            `json:"last_capability_check_error"`
-	LastCapabilityCheckModels []string          `json:"last_capability_check_models"`
-	HasCredential             bool              `json:"has_credential"`
-	HasToken                  bool              `json:"has_token"`
-	RequestQuota              int64             `json:"request_quota"`
-	RequestQuotaUsed          int64             `json:"request_quota_used"`
-	RequestQuotaWindowStart   int64             `json:"request_quota_window_start"`
-	RequestQuotaWindowSeconds int64             `json:"request_quota_window_seconds"`
-	CreatedTime               int64             `json:"created_time"`
-	UpdatedTime               int64             `json:"updated_time"`
+	Id                        int                          `json:"id"`
+	PoolID                    int                          `json:"pool_id"`
+	Name                      string                       `json:"name"`
+	AccountIdentifier         string                       `json:"account_identifier"`
+	CredentialType            string                       `json:"credential_type"`
+	OAuthType                 string                       `json:"oauth_type"`
+	Status                    string                       `json:"status"`
+	Priority                  int64                        `json:"priority"`
+	Weight                    uint                         `json:"weight"`
+	MaxConcurrency            int                          `json:"max_concurrency"`
+	ProxyID                   int                          `json:"proxy_id"`
+	SupportedModels           []string                     `json:"supported_models"`
+	ModelMapping              map[string]string            `json:"model_mapping"`
+	LastUsedAt                int64                        `json:"last_used_at"`
+	RateLimitedUntil          int64                        `json:"rate_limited_until"`
+	TempDisabledUntil         int64                        `json:"temp_disabled_until"`
+	TempDisabledReason        string                       `json:"temp_disabled_reason"`
+	LastError                 string                       `json:"last_error"`
+	ExpiresAt                 int64                        `json:"expires_at"`
+	AutoPauseOnExpired        bool                         `json:"auto_pause_on_expired"`
+	LastCapabilityCheckAt     int64                        `json:"last_capability_check_at"`
+	LastCapabilityCheckStatus string                       `json:"last_capability_check_status"`
+	LastCapabilityCheckError  string                       `json:"last_capability_check_error"`
+	LastCapabilityCheckModels []string                     `json:"last_capability_check_models"`
+	HasCredential             bool                         `json:"has_credential"`
+	HasToken                  bool                         `json:"has_token"`
+	RequestQuota              int64                        `json:"request_quota"`
+	RequestQuotaUsed          int64                        `json:"request_quota_used"`
+	RequestQuotaWindowStart   int64                        `json:"request_quota_window_start"`
+	RequestQuotaWindowSeconds int64                        `json:"request_quota_window_seconds"`
+	XAIQuota                  *AccountPoolXAIQuotaSnapshot `json:"xai_quota,omitempty"`
+	CreatedTime               int64                        `json:"created_time"`
+	UpdatedTime               int64                        `json:"updated_time"`
+}
+
+type AccountPoolXAIQuotaWindow struct {
+	Limit     *int64 `json:"limit,omitempty"`
+	Remaining *int64 `json:"remaining,omitempty"`
+	ResetUnix *int64 `json:"reset_unix,omitempty"`
+	ResetAt   string `json:"reset_at,omitempty"`
+}
+
+type AccountPoolXAIBillingSnapshot struct {
+	UsagePercent      *float64 `json:"usage_percent,omitempty"`
+	MonthlyLimitCents *float64 `json:"monthly_limit_cents,omitempty"`
+	UsedCents         *float64 `json:"used_cents,omitempty"`
+	UsedPercent       *float64 `json:"used_percent,omitempty"`
+	Plan              string   `json:"plan,omitempty"`
+	WeeklyStatusCode  int      `json:"weekly_status_code,omitempty"`
+	MonthlyStatusCode int      `json:"monthly_status_code,omitempty"`
+	Partial           bool     `json:"partial,omitempty"`
+}
+
+type AccountPoolXAIQuotaSnapshot struct {
+	Source                 string                         `json:"source"`
+	Model                  string                         `json:"model,omitempty"`
+	Billing                *AccountPoolXAIBillingSnapshot `json:"billing,omitempty"`
+	Requests               *AccountPoolXAIQuotaWindow     `json:"requests,omitempty"`
+	Tokens                 *AccountPoolXAIQuotaWindow     `json:"tokens,omitempty"`
+	RetryAfterSeconds      *int                           `json:"retry_after_seconds,omitempty"`
+	StatusCode             int                            `json:"status_code,omitempty"`
+	HeadersObserved        bool                           `json:"headers_observed"`
+	MediaEligible          *bool                          `json:"media_eligible,omitempty"`
+	MediaEligibilityReason string                         `json:"media_eligibility_reason,omitempty"`
+	FetchedAt              int64                          `json:"fetched_at"`
+	ProbeError             string                         `json:"probe_error,omitempty"`
 }
 
 type AccountPoolAccountImportDefaultsRequest struct {

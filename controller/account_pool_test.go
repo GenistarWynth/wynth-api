@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -135,6 +136,8 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/xai/oauth/exchange", ExchangeAccountPoolXAIOAuthCode)
 		group.POST("/:id/accounts/xai/sso_import", ImportAccountPoolXAISSOAccounts)
 		group.POST("/:id/accounts/:account_id/xai/oauth/refresh", RefreshAccountPoolXAIOAuthAccount)
+		group.POST("/:id/accounts/:account_id/xai/quota/probe", ProbeAccountPoolXAIQuota)
+		group.GET("/:id/accounts/:account_id/xai/quota", GetAccountPoolXAIQuota)
 		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
@@ -148,6 +151,79 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/bindings/:binding_id/disable", DisableAccountPoolBinding)
 	}
 	return router
+}
+
+func TestAccountPoolAPIProbeAndGetXAIQuota(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	accountPoolService := service.AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(service.AccountPoolCreateParams{
+		Name:     "xai-pool",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	account, err := accountPoolService.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "xai-oauth",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:         service.AccountPoolCredentialTypeOAuth,
+			RefreshToken: "refresh-secret",
+		},
+		TokenState: service.AccountPoolTokenState{
+			AccessToken:  "access-secret",
+			RefreshToken: "refresh-secret",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+			Version:      1,
+		},
+	})
+	require.NoError(t, err)
+
+	eligible := false
+	expected := service.AccountPoolXAIQuotaSnapshot{
+		Source:                 "hybrid_probe",
+		StatusCode:             http.StatusOK,
+		MediaEligible:          &eligible,
+		MediaEligibilityReason: service.AccountPoolXAIMediaReasonFreeTier,
+		FetchedAt:              2_000_000_000,
+	}
+	oldProbe := accountPoolXAIQuotaProbe
+	accountPoolXAIQuotaProbe = func(_ context.Context, poolID int, accountID int) (service.AccountPoolXAIQuotaSnapshot, error) {
+		assert.Equal(t, pool.Id, poolID)
+		assert.Equal(t, account.Id, accountID)
+		return expected, nil
+	}
+	t.Cleanup(func() { accountPoolXAIQuotaProbe = oldProbe })
+
+	probeResult := accountPoolAPIRequest[service.AccountPoolXAIQuotaSnapshot](
+		t,
+		router,
+		http.MethodPost,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(account.Id)+"/xai/quota/probe",
+		nil,
+	)
+	require.Equal(t, http.StatusOK, probeResult.Code, string(probeResult.Raw))
+	require.True(t, probeResult.Response.Success, probeResult.Response.Message)
+	assert.Equal(t, expected.FetchedAt, probeResult.Response.Data.FetchedAt)
+	assert.NotContains(t, string(probeResult.Raw), "access-secret")
+	assert.NotContains(t, string(probeResult.Raw), "refresh-secret")
+
+	runtimeOptions, err := common.Marshal(service.AccountPoolRuntimeOptions{XAIQuota: &expected})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Update("runtime_options", string(runtimeOptions)).Error)
+	getResult := accountPoolAPIRequest[service.AccountPoolXAIQuotaSnapshot](
+		t,
+		router,
+		http.MethodGet,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(account.Id)+"/xai/quota",
+		nil,
+	)
+	require.Equal(t, http.StatusOK, getResult.Code, string(getResult.Raw))
+	require.True(t, getResult.Response.Success, getResult.Response.Message)
+	assert.Equal(t, expected.FetchedAt, getResult.Response.Data.FetchedAt)
+	assert.NotContains(t, string(getResult.Raw), "access-secret")
+	assert.NotContains(t, string(getResult.Raw), "refresh-secret")
 }
 
 func accountPoolAPIRequest[T any](t *testing.T, router *gin.Engine, method string, target string, body any) accountPoolAPIResult[T] {

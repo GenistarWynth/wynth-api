@@ -5493,5 +5493,13 @@
   "Repair": "Reparer",
   "Repair channel consistency?": "Reparer la coherence des canaux ?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "Cela reconstruira l index de routage des canaux a partir de chaque configuration. Le routage peut etre temporairement incomplet. Continuer ?",
-  "Resize column": "Redimensionner la colonne"
+  "Resize column": "Redimensionner la colonne",
+  "Failed to probe xAI quota": "Échec de la vérification du quota xAI",
+  "xAI quota probe completed": "Vérification du quota xAI terminée",
+  "xAI quota": "Quota xAI",
+  "Media eligibility": "Éligibilité aux médias",
+  "Eligible": "Éligible",
+  "Ineligible": "Non éligible",
+  "Probe xAI quota": "Vérifier le quota xAI",
+  "Probing xAI quota": "Vérification du quota xAI"
 }

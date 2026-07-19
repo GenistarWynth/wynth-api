@@ -5493,5 +5493,13 @@
   "Repair": "Repair",
   "Repair channel consistency?": "Repair channel consistency?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?",
-  "Resize column": "Resize column"
+  "Resize column": "Resize column",
+  "Failed to probe xAI quota": "Failed to probe xAI quota",
+  "xAI quota probe completed": "xAI quota probe completed",
+  "xAI quota": "xAI quota",
+  "Media eligibility": "Media eligibility",
+  "Eligible": "Eligible",
+  "Ineligible": "Ineligible",
+  "Probe xAI quota": "Probe xAI quota",
+  "Probing xAI quota": "Probing xAI quota"
 }

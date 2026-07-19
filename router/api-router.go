@@ -300,6 +300,8 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.POST("/:id/xai/oauth/exchange", controller.ExchangeAccountPoolXAIOAuthCode)
 			accountPoolRoute.POST("/:id/accounts/xai/sso_import", controller.ImportAccountPoolXAISSOAccounts)
 			accountPoolRoute.POST("/:id/accounts/:account_id/xai/oauth/refresh", controller.RefreshAccountPoolXAIOAuthAccount)
+			accountPoolRoute.POST("/:id/accounts/:account_id/xai/quota/probe", controller.ProbeAccountPoolXAIQuota)
+			accountPoolRoute.GET("/:id/accounts/:account_id/xai/quota", controller.GetAccountPoolXAIQuota)
 			accountPoolRoute.POST("/:id/accounts/:account_id/capabilities/detect", controller.DetectAccountPoolAccountCapability)
 			accountPoolRoute.PUT("/:id/accounts/:account_id", controller.UpdateAccountPoolAccount)
 			accountPoolRoute.DELETE("/:id/accounts/:account_id", controller.DeleteAccountPoolAccount)

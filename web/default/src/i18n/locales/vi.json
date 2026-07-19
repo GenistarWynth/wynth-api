@@ -5493,5 +5493,13 @@
   "Repair": "Sua",
   "Repair channel consistency?": "Sua tinh nhat quan kenh?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "Thao tac nay se xay dung lai chi muc dinh tuyen kenh tu moi cau hinh. Dinh tuyen co the tam thoi khong day du. Tiep tuc?",
-  "Resize column": "Doi kich thuoc cot"
+  "Resize column": "Doi kich thuoc cot",
+  "Failed to probe xAI quota": "Không thể kiểm tra hạn mức xAI",
+  "xAI quota probe completed": "Đã kiểm tra xong hạn mức xAI",
+  "xAI quota": "Hạn mức xAI",
+  "Media eligibility": "Điều kiện dùng phương tiện",
+  "Eligible": "Đủ điều kiện",
+  "Ineligible": "Không đủ điều kiện",
+  "Probe xAI quota": "Kiểm tra hạn mức xAI",
+  "Probing xAI quota": "Đang kiểm tra hạn mức xAI"
 }

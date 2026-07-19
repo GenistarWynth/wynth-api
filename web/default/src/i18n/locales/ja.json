@@ -5493,5 +5493,13 @@
   "Repair": "修復",
   "Repair channel consistency?": "チャネル整合性を修復しますか？",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "すべてのチャネル設定からルーティングインデックスを再構築します。再構築中はルーティングが一時的に不完全になる場合があります。続行しますか？",
-  "Resize column": "列のサイズを変更"
+  "Resize column": "列のサイズを変更",
+  "Failed to probe xAI quota": "xAI クォータの確認に失敗しました",
+  "xAI quota probe completed": "xAI クォータの確認が完了しました",
+  "xAI quota": "xAI クォータ",
+  "Media eligibility": "メディア利用資格",
+  "Eligible": "利用可能",
+  "Ineligible": "利用不可",
+  "Probe xAI quota": "xAI クォータを確認",
+  "Probing xAI quota": "xAI クォータを確認中"
 }

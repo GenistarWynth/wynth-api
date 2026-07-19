@@ -87,11 +87,14 @@ func accountPoolModelRateLimited(raw string, model string, now int64) bool {
 // accountPoolRuntimeOptions carries per-account-pool-account runtime
 // configuration that influences relay behavior (e.g. pool-mode retry logic).
 // It is serialized to the account_pool_accounts.runtime_options TEXT column.
-type accountPoolRuntimeOptions struct {
-	PoolMode                 bool  `json:"pool_mode"`
-	PoolModeRetryCount       int   `json:"pool_mode_retry_count"`
-	PoolModeRetryStatusCodes []int `json:"pool_mode_retry_status_codes"`
+type AccountPoolRuntimeOptions struct {
+	PoolMode                 bool                         `json:"pool_mode"`
+	PoolModeRetryCount       int                          `json:"pool_mode_retry_count"`
+	PoolModeRetryStatusCodes []int                        `json:"pool_mode_retry_status_codes"`
+	XAIQuota                 *AccountPoolXAIQuotaSnapshot `json:"xai_quota,omitempty"`
 }
+
+type accountPoolRuntimeOptions = AccountPoolRuntimeOptions
 
 // parseAccountPoolRuntimeOptions deserializes a JSON string from the
 // runtime_options column. Empty or whitespace-only input returns the zero

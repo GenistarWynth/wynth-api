@@ -38,6 +38,7 @@ import {
   Trash2,
   Upload,
   Download,
+  Gauge,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -149,6 +150,7 @@ import {
   listAccountPoolBindings,
   listAccountPoolProxies,
   listAccountPools,
+  probeAccountPoolXAIQuota,
   updateAccountPool,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
@@ -180,6 +182,7 @@ import {
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
 } from './lib/account-pool-form'
+import { canProbeXAIQuota, xaiQuotaDisplayState } from './lib/xai-quota'
 import type {
   AccountPool,
   AccountPoolAccount,
@@ -217,6 +220,11 @@ const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
 const EMPTY_BINDINGS: AccountPoolBinding[] = []
 const EMPTY_PROXIES: AccountPoolProxy[] = []
 const EMPTY_CHANNELS: Channel[] = []
+const XAI_MEDIA_ELIGIBILITY_LABELS = {
+  eligible: 'Eligible',
+  ineligible: 'Ineligible',
+  unknown: 'Unknown',
+} as const
 const POOL_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI / Codex' },
   { value: 'anthropic', label: 'Anthropic (Claude)' },
@@ -1026,6 +1034,26 @@ export function AccountPools() {
     },
   })
 
+  const probeXAIQuotaMutation = useMutation({
+    mutationFn: async (account: AccountPoolAccount) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return probeAccountPoolXAIQuota(selectedPoolID, account.id)
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to probe xAI quota')))
+        return
+      }
+      toast.success(t('xAI quota probe completed'))
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
   const importAccountsMutation = useMutation({
     mutationFn: async (values: AccountImportFormValues) => {
       if (!selectedPoolID) {
@@ -1432,6 +1460,12 @@ export function AccountPools() {
         onDeleteAccount={setDeletingAccount}
         onSetAccountStatus={(account, status) =>
           updateAccountStatusMutation.mutate({ account, status })
+        }
+        onProbeXAIQuota={(account) => probeXAIQuotaMutation.mutate(account)}
+        probingXAIQuotaAccountID={
+          probeXAIQuotaMutation.isPending
+            ? probeXAIQuotaMutation.variables?.id
+            : undefined
         }
         onCreateProxy={() => {
           setEditingProxy(undefined)
@@ -2578,6 +2612,8 @@ function PoolDetailsSheet(props: {
   onBatchDetectModels: () => void
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
+  onProbeXAIQuota: (account: AccountPoolAccount) => void
+  probingXAIQuotaAccountID?: number
   onCreateProxy: () => void
   onEditProxy: (proxy: AccountPoolProxy) => void
   onDeleteProxy: (proxy: AccountPoolProxy) => void
@@ -2634,6 +2670,7 @@ function PoolDetailsSheet(props: {
             </TabsList>
             <TabsContent value='accounts' className='min-h-0'>
               <AccountListSection
+                poolPlatform={pool?.platform}
                 accounts={props.accounts}
                 hasBindings={props.bindings.length > 0}
                 loading={props.accountsLoading}
@@ -2647,6 +2684,8 @@ function PoolDetailsSheet(props: {
                 onBatchDetectModels={props.onBatchDetectModels}
                 onDeleteAccount={props.onDeleteAccount}
                 onSetAccountStatus={props.onSetAccountStatus}
+                onProbeXAIQuota={props.onProbeXAIQuota}
+                probingXAIQuotaAccountID={props.probingXAIQuotaAccountID}
               />
             </TabsContent>
             <TabsContent value='bindings' className='min-h-0'>
@@ -2698,6 +2737,7 @@ function SummaryItem(props: { label: React.ReactNode; value: React.ReactNode }) 
 }
 
 function AccountListSection(props: {
+  poolPlatform?: string
   accounts: AccountPoolAccount[]
   hasBindings: boolean
   loading: boolean
@@ -2711,6 +2751,8 @@ function AccountListSection(props: {
   onBatchDetectModels: () => void
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
+  onProbeXAIQuota: (account: AccountPoolAccount) => void
+  probingXAIQuotaAccountID?: number
 }) {
   const { t } = useTranslation()
 
@@ -2856,6 +2898,14 @@ function AccountListSection(props: {
                     onDetect={props.onDetectAccount}
                     onDelete={props.onDeleteAccount}
                     onSetStatus={props.onSetAccountStatus}
+                    canProbeXAIQuota={canProbeXAIQuota(
+                      props.poolPlatform,
+                      account
+                    )}
+                    probingXAIQuota={
+                      props.probingXAIQuotaAccountID === account.id
+                    }
+                    onProbeXAIQuota={props.onProbeXAIQuota}
                   />
                 </TableCell>
               </TableRow>
@@ -2874,6 +2924,7 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
     account.total_first_token_latency_ms,
     account.first_token_latency_sample_count
   )
+  const quota = xaiQuotaDisplayState(account.xai_quota)
 
   return (
     <div className='flex min-w-[190px] flex-col gap-1 text-xs'>
@@ -2919,14 +2970,30 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
             }`
           : '-'}
       </div>
+      {quota ? (
+        <div className='border-border text-muted-foreground mt-1 border-t pt-1'>
+          <div>
+            {t('xAI quota')}: {quota.remaining ?? t('Unknown')}
+          </div>
+          <div>
+            {t('Media eligibility')}:{' '}
+            {t(XAI_MEDIA_ELIGIBILITY_LABELS[quota.media])}
+            {' / '}
+            {formatOptionalTimestamp(quota.fetchedAt)}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
 
 function AccountRowActions(props: {
   account: AccountPoolAccount
+  canProbeXAIQuota: boolean
+  probingXAIQuota: boolean
   onEdit: (account: AccountPoolAccount) => void
   onDetect: (account: AccountPoolAccount) => void
+  onProbeXAIQuota: (account: AccountPoolAccount) => void
   onDelete: (account: AccountPoolAccount) => void
   onSetStatus: (account: AccountPoolAccount, status: string) => void
 }) {
@@ -2957,6 +3024,21 @@ function AccountRowActions(props: {
           <Radar />
           {t('Detect Models')}
         </DropdownMenuItem>
+        {props.canProbeXAIQuota ? (
+          <DropdownMenuItem
+            disabled={props.probingXAIQuota}
+            onClick={() => props.onProbeXAIQuota(props.account)}
+          >
+            {props.probingXAIQuota ? (
+              <Loader2 className='animate-spin' />
+            ) : (
+              <Gauge />
+            )}
+            {props.probingXAIQuota
+              ? t('Probing xAI quota')
+              : t('Probe xAI quota')}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           onClick={() => props.onSetStatus(props.account, nextStatus)}
         >

@@ -126,56 +126,57 @@ type AccountPoolProxyCreateParams struct {
 }
 
 type AccountPoolAccountView struct {
-	Id                           int               `json:"id"`
-	PoolID                       int               `json:"pool_id"`
-	Name                         string            `json:"name"`
-	AccountIdentifier            string            `json:"account_identifier"`
-	CredentialType               string            `json:"credential_type"`
-	OAuthType                    string            `json:"oauth_type"`
-	Status                       string            `json:"status"`
-	Priority                     int64             `json:"priority"`
-	Weight                       uint              `json:"weight"`
-	MaxConcurrency               int               `json:"max_concurrency"`
-	ProxyID                      int               `json:"proxy_id"`
-	SupportedModels              []string          `json:"supported_models"`
-	ModelMapping                 map[string]string `json:"model_mapping"`
-	LastUsedAt                   int64             `json:"last_used_at"`
-	LastSuccessAt                int64             `json:"last_success_at"`
-	LastFailureAt                int64             `json:"last_failure_at"`
-	SuccessCount                 int64             `json:"success_count"`
-	FailureCount                 int64             `json:"failure_count"`
-	TotalPromptTokens            int64             `json:"total_prompt_tokens"`
-	TotalCompletionTokens        int64             `json:"total_completion_tokens"`
-	TotalCachedTokens            int64             `json:"total_cached_tokens"`
-	TotalCacheWriteTokens        int64             `json:"total_cache_write_tokens"`
-	LastPromptTokens             int64             `json:"last_prompt_tokens"`
-	LastCompletionTokens         int64             `json:"last_completion_tokens"`
-	LastCachedTokens             int64             `json:"last_cached_tokens"`
-	LastCacheWriteTokens         int64             `json:"last_cache_write_tokens"`
-	TotalLatencyMS               int64             `json:"total_latency_ms"`
-	LatencySampleCount           int64             `json:"latency_sample_count"`
-	LastLatencyMS                int64             `json:"last_latency_ms"`
-	TotalFirstTokenLatencyMS     int64             `json:"total_first_token_latency_ms"`
-	FirstTokenLatencySampleCount int64             `json:"first_token_latency_sample_count"`
-	LastFirstTokenLatencyMS      int64             `json:"last_first_token_latency_ms"`
-	RateLimitedUntil             int64             `json:"rate_limited_until"`
-	TempDisabledUntil            int64             `json:"temp_disabled_until"`
-	TempDisabledReason           string            `json:"temp_disabled_reason"`
-	LastError                    string            `json:"last_error"`
-	ExpiresAt                    int64             `json:"expires_at"`
-	AutoPauseOnExpired           bool              `json:"auto_pause_on_expired"`
-	LastCapabilityCheckAt        int64             `json:"last_capability_check_at"`
-	LastCapabilityCheckStatus    string            `json:"last_capability_check_status"`
-	LastCapabilityCheckError     string            `json:"last_capability_check_error"`
-	LastCapabilityCheckModels    []string          `json:"last_capability_check_models"`
-	HasCredential                bool              `json:"has_credential"`
-	HasToken                     bool              `json:"has_token"`
-	RequestQuota                 int64             `json:"request_quota"`
-	RequestQuotaUsed             int64             `json:"request_quota_used"`
-	RequestQuotaWindowStart      int64             `json:"request_quota_window_start"`
-	RequestQuotaWindowSeconds    int64             `json:"request_quota_window_seconds"`
-	CreatedTime                  int64             `json:"created_time"`
-	UpdatedTime                  int64             `json:"updated_time"`
+	Id                           int                          `json:"id"`
+	PoolID                       int                          `json:"pool_id"`
+	Name                         string                       `json:"name"`
+	AccountIdentifier            string                       `json:"account_identifier"`
+	CredentialType               string                       `json:"credential_type"`
+	OAuthType                    string                       `json:"oauth_type"`
+	Status                       string                       `json:"status"`
+	Priority                     int64                        `json:"priority"`
+	Weight                       uint                         `json:"weight"`
+	MaxConcurrency               int                          `json:"max_concurrency"`
+	ProxyID                      int                          `json:"proxy_id"`
+	SupportedModels              []string                     `json:"supported_models"`
+	ModelMapping                 map[string]string            `json:"model_mapping"`
+	LastUsedAt                   int64                        `json:"last_used_at"`
+	LastSuccessAt                int64                        `json:"last_success_at"`
+	LastFailureAt                int64                        `json:"last_failure_at"`
+	SuccessCount                 int64                        `json:"success_count"`
+	FailureCount                 int64                        `json:"failure_count"`
+	TotalPromptTokens            int64                        `json:"total_prompt_tokens"`
+	TotalCompletionTokens        int64                        `json:"total_completion_tokens"`
+	TotalCachedTokens            int64                        `json:"total_cached_tokens"`
+	TotalCacheWriteTokens        int64                        `json:"total_cache_write_tokens"`
+	LastPromptTokens             int64                        `json:"last_prompt_tokens"`
+	LastCompletionTokens         int64                        `json:"last_completion_tokens"`
+	LastCachedTokens             int64                        `json:"last_cached_tokens"`
+	LastCacheWriteTokens         int64                        `json:"last_cache_write_tokens"`
+	TotalLatencyMS               int64                        `json:"total_latency_ms"`
+	LatencySampleCount           int64                        `json:"latency_sample_count"`
+	LastLatencyMS                int64                        `json:"last_latency_ms"`
+	TotalFirstTokenLatencyMS     int64                        `json:"total_first_token_latency_ms"`
+	FirstTokenLatencySampleCount int64                        `json:"first_token_latency_sample_count"`
+	LastFirstTokenLatencyMS      int64                        `json:"last_first_token_latency_ms"`
+	RateLimitedUntil             int64                        `json:"rate_limited_until"`
+	TempDisabledUntil            int64                        `json:"temp_disabled_until"`
+	TempDisabledReason           string                       `json:"temp_disabled_reason"`
+	LastError                    string                       `json:"last_error"`
+	ExpiresAt                    int64                        `json:"expires_at"`
+	AutoPauseOnExpired           bool                         `json:"auto_pause_on_expired"`
+	LastCapabilityCheckAt        int64                        `json:"last_capability_check_at"`
+	LastCapabilityCheckStatus    string                       `json:"last_capability_check_status"`
+	LastCapabilityCheckError     string                       `json:"last_capability_check_error"`
+	LastCapabilityCheckModels    []string                     `json:"last_capability_check_models"`
+	HasCredential                bool                         `json:"has_credential"`
+	HasToken                     bool                         `json:"has_token"`
+	RequestQuota                 int64                        `json:"request_quota"`
+	RequestQuotaUsed             int64                        `json:"request_quota_used"`
+	RequestQuotaWindowStart      int64                        `json:"request_quota_window_start"`
+	RequestQuotaWindowSeconds    int64                        `json:"request_quota_window_seconds"`
+	XAIQuota                     *AccountPoolXAIQuotaSnapshot `json:"xai_quota,omitempty"`
+	CreatedTime                  int64                        `json:"created_time"`
+	UpdatedTime                  int64                        `json:"updated_time"`
 }
 
 type AccountPoolBindingView struct {
@@ -1499,6 +1500,15 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 			return AccountPoolAccountView{}, err
 		}
 	}
+	var xaiQuota *AccountPoolXAIQuotaSnapshot
+	if strings.TrimSpace(account.RuntimeOptions) != "" {
+		options, err := parseAccountPoolRuntimeOptions(account.RuntimeOptions)
+		if err != nil {
+			common.SysError(fmt.Sprintf("account pool account view: runtime options unavailable for account id=%d: %v", account.Id, err))
+		} else {
+			xaiQuota = options.XAIQuota
+		}
+	}
 	return AccountPoolAccountView{
 		Id:                           account.Id,
 		PoolID:                       account.PoolID,
@@ -1548,6 +1558,7 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		RequestQuotaUsed:             account.RequestQuotaUsed,
 		RequestQuotaWindowStart:      account.RequestQuotaWindowStart,
 		RequestQuotaWindowSeconds:    account.RequestQuotaWindowSeconds,
+		XAIQuota:                     xaiQuota,
 		CreatedTime:                  account.CreatedTime,
 		UpdatedTime:                  account.UpdatedTime,
 	}, nil

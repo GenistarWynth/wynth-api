@@ -5493,5 +5493,13 @@
   "Repair": "Исправить",
   "Repair channel consistency?": "Исправить согласованность каналов?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "Индекс маршрутизации каналов будет перестроен по всем конфигурациям. Во время операции маршрутизация может быть временно неполной. Продолжить?",
-  "Resize column": "Изменить размер столбца"
+  "Resize column": "Изменить размер столбца",
+  "Failed to probe xAI quota": "Не удалось проверить квоту xAI",
+  "xAI quota probe completed": "Проверка квоты xAI завершена",
+  "xAI quota": "Квота xAI",
+  "Media eligibility": "Доступность медиа",
+  "Eligible": "Доступно",
+  "Ineligible": "Недоступно",
+  "Probe xAI quota": "Проверить квоту xAI",
+  "Probing xAI quota": "Проверка квоты xAI"
 }

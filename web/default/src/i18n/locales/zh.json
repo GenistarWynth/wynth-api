@@ -5493,5 +5493,13 @@
   "Repair": "修复",
   "Repair channel consistency?": "修复渠道一致性？",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "这将根据所有渠道配置（包括支持的模型、分组、优先级和权重）重建渠道路由索引。重建期间路由可能暂时不完整。是否继续？",
-  "Resize column": "调整列宽"
+  "Resize column": "调整列宽",
+  "Failed to probe xAI quota": "探测 xAI 配额失败",
+  "xAI quota probe completed": "xAI 配额探测完成",
+  "xAI quota": "xAI 配额",
+  "Media eligibility": "媒体资格",
+  "Eligible": "符合资格",
+  "Ineligible": "不符合资格",
+  "Probe xAI quota": "探测 xAI 配额",
+  "Probing xAI quota": "正在探测 xAI 配额"
 }

@@ -27,6 +27,9 @@ var (
 	accountPoolXAISSOImport = func(ctx context.Context, params service.AccountPoolXAISSOImportParams) (service.AccountPoolXAISSOImportResult, error) {
 		return (&service.AccountPoolService{}).ImportXAISSOAccounts(ctx, params)
 	}
+	accountPoolXAIQuotaProbe = func(ctx context.Context, poolID int, accountID int) (service.AccountPoolXAIQuotaSnapshot, error) {
+		return (&service.AccountPoolService{}).ProbeXAIQuota(ctx, poolID, accountID)
+	}
 )
 
 func ListAccountPools(c *gin.Context) {
@@ -638,6 +641,53 @@ func RefreshAccountPoolXAIOAuthAccount(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolAccountResponse(account))
 }
 
+func ProbeAccountPoolXAIQuota(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	if _, err := accountPoolXAIPool(poolID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	result, err := accountPoolXAIQuotaProbe(c.Request.Context(), poolID, accountID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.xai_quota_probe", map[string]interface{}{
+		"pool_id":     poolID,
+		"account_id":  accountID,
+		"status_code": result.StatusCode,
+	})
+	common.ApiSuccess(c, result)
+}
+
+func GetAccountPoolXAIQuota(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	if _, err := accountPoolXAIPool(poolID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	result, err := (&service.AccountPoolService{}).GetXAIQuotaSnapshot(poolID, accountID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
+}
+
 func ImportAccountPoolXAISSOAccounts(c *gin.Context) {
 	poolID, ok := accountPoolIDFromParam(c)
 	if !ok {
@@ -1001,9 +1051,52 @@ func accountPoolAccountResponse(account service.AccountPoolAccountView) dto.Acco
 		RequestQuotaUsed:          account.RequestQuotaUsed,
 		RequestQuotaWindowStart:   account.RequestQuotaWindowStart,
 		RequestQuotaWindowSeconds: account.RequestQuotaWindowSeconds,
+		XAIQuota:                  accountPoolXAIQuotaResponse(account.XAIQuota),
 		CreatedTime:               account.CreatedTime,
 		UpdatedTime:               account.UpdatedTime,
 	}
+}
+
+func accountPoolXAIQuotaResponse(snapshot *service.AccountPoolXAIQuotaSnapshot) *dto.AccountPoolXAIQuotaSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	result := &dto.AccountPoolXAIQuotaSnapshot{
+		Source:                 snapshot.Source,
+		Model:                  snapshot.Model,
+		RetryAfterSeconds:      snapshot.RetryAfterSeconds,
+		StatusCode:             snapshot.StatusCode,
+		HeadersObserved:        snapshot.HeadersObserved,
+		MediaEligible:          snapshot.MediaEligible,
+		MediaEligibilityReason: snapshot.MediaEligibilityReason,
+		FetchedAt:              snapshot.FetchedAt,
+		ProbeError:             snapshot.ProbeError,
+	}
+	if snapshot.Billing != nil {
+		result.Billing = &dto.AccountPoolXAIBillingSnapshot{
+			UsagePercent:      snapshot.Billing.UsagePercent,
+			MonthlyLimitCents: snapshot.Billing.MonthlyLimitCents,
+			UsedCents:         snapshot.Billing.UsedCents,
+			UsedPercent:       snapshot.Billing.UsedPercent,
+			Plan:              snapshot.Billing.Plan,
+			WeeklyStatusCode:  snapshot.Billing.WeeklyStatusCode,
+			MonthlyStatusCode: snapshot.Billing.MonthlyStatusCode,
+			Partial:           snapshot.Billing.Partial,
+		}
+	}
+	if snapshot.Requests != nil {
+		result.Requests = &dto.AccountPoolXAIQuotaWindow{
+			Limit: snapshot.Requests.Limit, Remaining: snapshot.Requests.Remaining,
+			ResetUnix: snapshot.Requests.ResetUnix, ResetAt: snapshot.Requests.ResetAt,
+		}
+	}
+	if snapshot.Tokens != nil {
+		result.Tokens = &dto.AccountPoolXAIQuotaWindow{
+			Limit: snapshot.Tokens.Limit, Remaining: snapshot.Tokens.Remaining,
+			ResetUnix: snapshot.Tokens.ResetUnix, ResetAt: snapshot.Tokens.ResetAt,
+		}
+	}
+	return result
 }
 
 func accountPoolCapabilityDetectResponse(result service.AccountPoolCapabilityDetectResult) dto.AccountPoolCapabilityDetectResult {

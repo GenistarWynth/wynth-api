@@ -159,6 +159,39 @@ export type AccountPoolXAIOAuthTokenResult = {
   token_state: AccountPoolTokenStateRequest
 }
 
+export type AccountPoolXAIQuotaWindow = {
+  limit?: number
+  remaining?: number
+  reset_unix?: number
+  reset_at?: string
+}
+
+export type AccountPoolXAIBillingSnapshot = {
+  usage_percent?: number
+  monthly_limit_cents?: number
+  used_cents?: number
+  used_percent?: number
+  plan?: string
+  weekly_status_code?: number
+  monthly_status_code?: number
+  partial?: boolean
+}
+
+export type AccountPoolXAIQuotaSnapshot = {
+  source: string
+  model?: string
+  billing?: AccountPoolXAIBillingSnapshot
+  requests?: AccountPoolXAIQuotaWindow
+  tokens?: AccountPoolXAIQuotaWindow
+  retry_after_seconds?: number
+  status_code?: number
+  headers_observed: boolean
+  media_eligible?: boolean
+  media_eligibility_reason?: string
+  fetched_at: number
+  probe_error?: string
+}
+
 export type AccountPoolAccount = {
   id: number
   pool_id: number
@@ -207,6 +240,7 @@ export type AccountPoolAccount = {
   last_capability_check_models: string[]
   has_credential: boolean
   has_token: boolean
+  xai_quota?: AccountPoolXAIQuotaSnapshot
   created_time: number
   updated_time: number
 }
