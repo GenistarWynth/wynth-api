@@ -40,7 +40,14 @@ import {
   Gauge,
   RefreshCw,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -161,6 +168,7 @@ import {
   updateAccountPoolProxy,
 } from './api'
 import { XAIOAuthFlow } from './components/xai-oauth-flow'
+import { readAccountImportFile } from './lib/account-import-file'
 import {
   accountToFormValues,
   applyXAIOAuthResultToForm,
@@ -4055,9 +4063,11 @@ function AccountImportDialog(props: {
   onSubmit: (values: AccountImportFormValues) => void
 }) {
   const { t } = useTranslation()
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState<AccountImportFormValues>(
     emptyAccountImportForm()
   )
+  const [selectedFileName, setSelectedFileName] = useState('')
   const formatOptions = useMemo(
     () => [
       { value: 'sub2api', label: t('sub2api export') },
@@ -4076,6 +4086,7 @@ function AccountImportDialog(props: {
   useEffect(() => {
     if (props.open) {
       setForm(emptyAccountImportForm())
+      setSelectedFileName('')
     }
   }, [props.open])
 
@@ -4095,6 +4106,21 @@ function AccountImportDialog(props: {
       return
     }
     props.onSubmit(form)
+  }
+
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    try {
+      const result = await readAccountImportFile(file)
+      setSelectedFileName(result.name)
+      setField('content', result.content)
+    } catch {
+      setSelectedFileName(file.name)
+      toast.error(t('Failed to read file {{name}}', { name: file.name }))
+    }
   }
 
   return (
@@ -4216,9 +4242,37 @@ function AccountImportDialog(props: {
             label={t('Import Content')}
             htmlFor='account-pool-import-content'
             description={t(
-              'Paste sub2api account export JSON or CPA YAML/JSON.'
+              'Paste content or choose a file: sub2api JSON / CPA YAML/JSON.'
             )}
           >
+            <div className='flex min-w-0 flex-wrap items-center gap-2'>
+              <input
+                ref={fileInputRef}
+                id='account-pool-import-file'
+                type='file'
+                className='hidden'
+                accept='.json,.yaml,.yml,.txt,text/*,application/json,application/x-yaml'
+                onChange={handleFileChange}
+              />
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload data-icon='inline-start' />
+                {t('Choose File')}
+              </Button>
+              {selectedFileName ? (
+                <span
+                  className='text-muted-foreground min-w-0 truncate text-sm'
+                  title={selectedFileName}
+                  aria-live='polite'
+                >
+                  {t('Selected file: {{name}}', { name: selectedFileName })}
+                </span>
+              ) : null}
+            </div>
             <Textarea
               id='account-pool-import-content'
               className='min-h-[260px] font-mono text-xs'
