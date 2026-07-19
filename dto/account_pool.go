@@ -63,7 +63,10 @@ type AccountPoolCredentialConfigRequest struct {
 	Location string `json:"location"`
 	// CFClearance carries the optional grok.com cf_clearance cookie value for a
 	// grok_web_cookie credential (SECRET). The sso token rides in APIKey.
-	CFClearance string `json:"cf_clearance"`
+	CFClearance           string            `json:"cf_clearance"`
+	BaseURL               *string           `json:"base_url,omitempty"`
+	HeaderOverrideEnabled *bool             `json:"header_override_enabled,omitempty"`
+	HeaderOverrides       map[string]string `json:"header_overrides,omitempty"`
 }
 
 type AccountPoolTokenStateRequest struct {
@@ -128,6 +131,9 @@ type AccountPoolAccountResponse struct {
 	RequestQuotaWindowStart   int64                        `json:"request_quota_window_start"`
 	RequestQuotaWindowSeconds int64                        `json:"request_quota_window_seconds"`
 	XAIQuota                  *AccountPoolXAIQuotaSnapshot `json:"xai_quota,omitempty"`
+	BaseURL                   string                       `json:"base_url,omitempty"`
+	HeaderOverrideEnabled     bool                         `json:"header_override_enabled"`
+	HeaderOverrides           map[string]string            `json:"header_overrides,omitempty"`
 	CreatedTime               int64                        `json:"created_time"`
 	UpdatedTime               int64                        `json:"updated_time"`
 }

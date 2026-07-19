@@ -5484,7 +5484,22 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Failed to probe xAI quota": "Échec de la vérification du quota xAI",
+    "xAI quota probe completed": "Vérification du quota xAI terminée",
+    "xAI quota": "Quota xAI",
+    "Media eligibility": "Éligibilité aux médias",
+    "Eligible": "Éligible",
+    "Ineligible": "Non éligible",
+    "Probe xAI quota": "Vérifier le quota xAI",
+    "Probing xAI quota": "Vérification du quota xAI",
+    "xAI Outbound Overrides": "Surcharges sortantes xAI",
+    "Account Base URL": "URL de base du compte",
+    "Overrides the channel base URL for this xAI account. HTTPS public hosts are required.": "Remplace l’URL de base du canal pour ce compte xAI. Un hôte HTTPS public est requis.",
+    "Enable Account Header Overrides": "Activer les en-têtes du compte",
+    "Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.": "Les en-têtes du compte remplacent ceux du canal portant le même nom. Les en-têtes sensibles sont bloqués.",
+    "Header Overrides JSON": "Surcharges d’en-têtes JSON",
+    "Header overrides must be a JSON object with string values": "Les surcharges d’en-têtes doivent être un objet JSON de chaînes"
   },
   "Batch Operations": "Operations par lots",
   "Repair Channel Consistency": "Reparer la coherence des canaux",
@@ -5493,13 +5508,5 @@
   "Repair": "Reparer",
   "Repair channel consistency?": "Reparer la coherence des canaux ?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "Cela reconstruira l index de routage des canaux a partir de chaque configuration. Le routage peut etre temporairement incomplet. Continuer ?",
-  "Resize column": "Redimensionner la colonne",
-  "Failed to probe xAI quota": "Échec de la vérification du quota xAI",
-  "xAI quota probe completed": "Vérification du quota xAI terminée",
-  "xAI quota": "Quota xAI",
-  "Media eligibility": "Éligibilité aux médias",
-  "Eligible": "Éligible",
-  "Ineligible": "Non éligible",
-  "Probe xAI quota": "Vérifier le quota xAI",
-  "Probing xAI quota": "Vérification du quota xAI"
+  "Resize column": "Redimensionner la colonne"
 }

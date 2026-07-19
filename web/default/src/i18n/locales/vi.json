@@ -5484,7 +5484,22 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Failed to probe xAI quota": "Không thể kiểm tra hạn mức xAI",
+    "xAI quota probe completed": "Đã kiểm tra xong hạn mức xAI",
+    "xAI quota": "Hạn mức xAI",
+    "Media eligibility": "Điều kiện dùng phương tiện",
+    "Eligible": "Đủ điều kiện",
+    "Ineligible": "Không đủ điều kiện",
+    "Probe xAI quota": "Kiểm tra hạn mức xAI",
+    "Probing xAI quota": "Đang kiểm tra hạn mức xAI",
+    "xAI Outbound Overrides": "Ghi đè kết nối ra xAI",
+    "Account Base URL": "Base URL của tài khoản",
+    "Overrides the channel base URL for this xAI account. HTTPS public hosts are required.": "Ghi đè Base URL của kênh cho tài khoản xAI này. Bắt buộc dùng máy chủ HTTPS công khai.",
+    "Enable Account Header Overrides": "Bật ghi đè header tài khoản",
+    "Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.": "Header tài khoản ghi đè header cùng tên của kênh. Các header nhạy cảm bị chặn.",
+    "Header Overrides JSON": "JSON ghi đè header",
+    "Header overrides must be a JSON object with string values": "Ghi đè header phải là đối tượng JSON có giá trị chuỗi"
   },
   "Batch Operations": "Thao tac hang loat",
   "Repair Channel Consistency": "Sua tinh nhat quan kenh",
@@ -5493,13 +5508,5 @@
   "Repair": "Sua",
   "Repair channel consistency?": "Sua tinh nhat quan kenh?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "Thao tac nay se xay dung lai chi muc dinh tuyen kenh tu moi cau hinh. Dinh tuyen co the tam thoi khong day du. Tiep tuc?",
-  "Resize column": "Doi kich thuoc cot",
-  "Failed to probe xAI quota": "Không thể kiểm tra hạn mức xAI",
-  "xAI quota probe completed": "Đã kiểm tra xong hạn mức xAI",
-  "xAI quota": "Hạn mức xAI",
-  "Media eligibility": "Điều kiện dùng phương tiện",
-  "Eligible": "Đủ điều kiện",
-  "Ineligible": "Không đủ điều kiện",
-  "Probe xAI quota": "Kiểm tra hạn mức xAI",
-  "Probing xAI quota": "Đang kiểm tra hạn mức xAI"
+  "Resize column": "Doi kich thuoc cot"
 }

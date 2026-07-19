@@ -5484,7 +5484,22 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Failed to probe xAI quota": "Failed to probe xAI quota",
+    "xAI quota probe completed": "xAI quota probe completed",
+    "xAI quota": "xAI quota",
+    "Media eligibility": "Media eligibility",
+    "Eligible": "Eligible",
+    "Ineligible": "Ineligible",
+    "Probe xAI quota": "Probe xAI quota",
+    "Probing xAI quota": "Probing xAI quota",
+    "xAI Outbound Overrides": "xAI Outbound Overrides",
+    "Account Base URL": "Account Base URL",
+    "Overrides the channel base URL for this xAI account. HTTPS public hosts are required.": "Overrides the channel base URL for this xAI account. HTTPS public hosts are required.",
+    "Enable Account Header Overrides": "Enable Account Header Overrides",
+    "Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.": "Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.",
+    "Header Overrides JSON": "Header Overrides JSON",
+    "Header overrides must be a JSON object with string values": "Header overrides must be a JSON object with string values"
   },
   "Batch Operations": "Batch Operations",
   "Repair Channel Consistency": "Repair Channel Consistency",
@@ -5493,13 +5508,5 @@
   "Repair": "Repair",
   "Repair channel consistency?": "Repair channel consistency?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?",
-  "Resize column": "Resize column",
-  "Failed to probe xAI quota": "Failed to probe xAI quota",
-  "xAI quota probe completed": "xAI quota probe completed",
-  "xAI quota": "xAI quota",
-  "Media eligibility": "Media eligibility",
-  "Eligible": "Eligible",
-  "Ineligible": "Ineligible",
-  "Probe xAI quota": "Probe xAI quota",
-  "Probing xAI quota": "Probing xAI quota"
+  "Resize column": "Resize column"
 }

@@ -578,6 +578,48 @@ func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 	assert.NotContains(t, stored.CredentialConfig, "sk-account-secret")
 }
 
+func TestAccountPoolAPIValidatesAndReturnsXAIOverrides(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "xai-overrides",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+	poolID := strconv.Itoa(poolResult.Response.Data.Id)
+	baseURL := "https://api.x.ai/v1/"
+
+	created := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "xai-account",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:                  service.AccountPoolCredentialTypeAPIKey,
+			APIKey:                "xai-secret",
+			BaseURL:               &baseURL,
+			HeaderOverrideEnabled: common.GetPointer(true),
+			HeaderOverrides: map[string]string{
+				"x-trace-id": "trace-123",
+			},
+		},
+	})
+	require.True(t, created.Response.Success, created.Response.Message)
+	assert.Equal(t, "https://api.x.ai/v1", created.Response.Data.BaseURL)
+	assert.True(t, created.Response.Data.HeaderOverrideEnabled)
+	assert.Equal(t, "trace-123", created.Response.Data.HeaderOverrides["X-Trace-Id"])
+	assert.NotContains(t, string(created.Raw), "xai-secret")
+
+	privateURL := "https://127.0.0.1/v1"
+	rejected := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "unsafe",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:    service.AccountPoolCredentialTypeAPIKey,
+			APIKey:  "xai-secret",
+			BaseURL: &privateURL,
+		},
+	})
+	assert.False(t, rejected.Response.Success)
+	assert.NotContains(t, string(rejected.Raw), "xai-secret")
+}
+
 func TestAccountPoolAPIDetectAccountCapabilityDryRun(t *testing.T) {
 	withAccountPoolAPIFetchSetting(t, true)
 	setupAccountPoolAPITestDB(t)

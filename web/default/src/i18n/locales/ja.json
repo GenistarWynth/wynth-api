@@ -5484,7 +5484,22 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Failed to probe xAI quota": "xAI クォータの確認に失敗しました",
+    "xAI quota probe completed": "xAI クォータの確認が完了しました",
+    "xAI quota": "xAI クォータ",
+    "Media eligibility": "メディア利用資格",
+    "Eligible": "利用可能",
+    "Ineligible": "利用不可",
+    "Probe xAI quota": "xAI クォータを確認",
+    "Probing xAI quota": "xAI クォータを確認中",
+    "xAI Outbound Overrides": "xAI 送信オーバーライド",
+    "Account Base URL": "アカウント Base URL",
+    "Overrides the channel base URL for this xAI account. HTTPS public hosts are required.": "この xAI アカウントのチャネル Base URL を上書きします。公開 HTTPS ホストが必要です。",
+    "Enable Account Header Overrides": "アカウントヘッダー上書きを有効化",
+    "Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.": "アカウントヘッダーは同名のチャネルヘッダーを上書きします。機密ヘッダーは拒否されます。",
+    "Header Overrides JSON": "ヘッダー上書き JSON",
+    "Header overrides must be a JSON object with string values": "ヘッダー上書きは文字列値の JSON オブジェクトである必要があります"
   },
   "Batch Operations": "一括操作",
   "Repair Channel Consistency": "チャネル整合性を修復",
@@ -5493,13 +5508,5 @@
   "Repair": "修復",
   "Repair channel consistency?": "チャネル整合性を修復しますか？",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "すべてのチャネル設定からルーティングインデックスを再構築します。再構築中はルーティングが一時的に不完全になる場合があります。続行しますか？",
-  "Resize column": "列のサイズを変更",
-  "Failed to probe xAI quota": "xAI クォータの確認に失敗しました",
-  "xAI quota probe completed": "xAI クォータの確認が完了しました",
-  "xAI quota": "xAI クォータ",
-  "Media eligibility": "メディア利用資格",
-  "Eligible": "利用可能",
-  "Ineligible": "利用不可",
-  "Probe xAI quota": "xAI クォータを確認",
-  "Probing xAI quota": "xAI クォータを確認中"
+  "Resize column": "列のサイズを変更"
 }

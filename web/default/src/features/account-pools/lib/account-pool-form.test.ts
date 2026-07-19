@@ -178,6 +178,41 @@ describe('account pool form helpers', () => {
     )
   })
 
+  test('serializes and restores xAI outbound overrides only for xAI pools', () => {
+    const values = {
+      ...emptyAccountForm(),
+      name: 'xai',
+      base_url: ' https://api.x.ai/v1/ ',
+      header_override_enabled: true,
+      header_overrides_text: '{"X-Trace-ID":"trace-123"}',
+    }
+    assert.deepEqual(buildAccountPayload(values, 'xai').credential, {
+      type: 'api_key',
+      oauth_type: '',
+      api_key: '',
+      email: '',
+      refresh_token: '',
+      base_url: 'https://api.x.ai/v1/',
+      header_override_enabled: true,
+      header_overrides: { 'X-Trace-ID': 'trace-123' },
+    })
+    assert.equal(buildAccountPayload(values, 'openai').credential.base_url, undefined)
+
+    const restored = accountToFormValues(
+      makeAccount({
+        base_url: 'https://edge.x.ai',
+        header_override_enabled: true,
+        header_overrides: { 'X-Feature': 'enabled' },
+      })
+    )
+    assert.equal(restored.base_url, 'https://edge.x.ai')
+    assert.equal(restored.header_override_enabled, true)
+    assert.equal(
+      restored.header_overrides_text,
+      '{\n  "X-Feature": "enabled"\n}'
+    )
+  })
+
   test('serializes oauth credential payload', () => {
     assert.deepEqual(
       buildAccountPayload({

@@ -5484,7 +5484,22 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Failed to probe xAI quota": "Не удалось проверить квоту xAI",
+    "xAI quota probe completed": "Проверка квоты xAI завершена",
+    "xAI quota": "Квота xAI",
+    "Media eligibility": "Доступность медиа",
+    "Eligible": "Доступно",
+    "Ineligible": "Недоступно",
+    "Probe xAI quota": "Проверить квоту xAI",
+    "Probing xAI quota": "Проверка квоты xAI",
+    "xAI Outbound Overrides": "Исходящие переопределения xAI",
+    "Account Base URL": "Базовый URL аккаунта",
+    "Overrides the channel base URL for this xAI account. HTTPS public hosts are required.": "Переопределяет базовый URL канала для этого аккаунта xAI. Требуется публичный HTTPS-хост.",
+    "Enable Account Header Overrides": "Включить заголовки аккаунта",
+    "Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.": "Заголовки аккаунта заменяют одноимённые заголовки канала. Опасные заголовки запрещены.",
+    "Header Overrides JSON": "Переопределения заголовков JSON",
+    "Header overrides must be a JSON object with string values": "Переопределения заголовков должны быть JSON-объектом со строковыми значениями"
   },
   "Batch Operations": "Пакетные операции",
   "Repair Channel Consistency": "Исправить согласованность каналов",
@@ -5493,13 +5508,5 @@
   "Repair": "Исправить",
   "Repair channel consistency?": "Исправить согласованность каналов?",
   "This will rebuild the channel routing index from every channel configuration, including supported models, groups, priorities, and weights. Routing may be briefly incomplete while the rebuild is running. Continue?": "Индекс маршрутизации каналов будет перестроен по всем конфигурациям. Во время операции маршрутизация может быть временно неполной. Продолжить?",
-  "Resize column": "Изменить размер столбца",
-  "Failed to probe xAI quota": "Не удалось проверить квоту xAI",
-  "xAI quota probe completed": "Проверка квоты xAI завершена",
-  "xAI quota": "Квота xAI",
-  "Media eligibility": "Доступность медиа",
-  "Eligible": "Доступно",
-  "Ineligible": "Недоступно",
-  "Probe xAI quota": "Проверить квоту xAI",
-  "Probing xAI quota": "Проверка квоты xAI"
+  "Resize column": "Изменить размер столбца"
 }

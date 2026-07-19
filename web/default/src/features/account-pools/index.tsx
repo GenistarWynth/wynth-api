@@ -941,7 +941,10 @@ export function AccountPools() {
       if (!selectedPoolID) {
         throw new Error(t('Select an account pool first'))
       }
-      return createAccountPoolAccount(selectedPoolID, buildAccountPayload(values))
+      return createAccountPoolAccount(
+        selectedPoolID,
+        buildAccountPayload(values, selectedPool?.platform)
+      )
     },
     onSuccess: (result) => {
       if (!result.success) {
@@ -965,7 +968,7 @@ export function AccountPools() {
       return updateAccountPoolAccount(
         selectedPoolID,
         editingAccount.id,
-        buildAccountPayload(values)
+        buildAccountPayload(values, selectedPool?.platform)
       )
     },
     onSuccess: (result) => {
@@ -994,10 +997,13 @@ export function AccountPools() {
       return updateAccountPoolAccount(
         selectedPoolID,
         params.account.id,
-        buildAccountPayload({
-          ...accountToFormValues(params.account),
-          status: params.status,
-        })
+        buildAccountPayload(
+          {
+            ...accountToFormValues(params.account),
+            status: params.status,
+          },
+          selectedPool?.platform
+        )
       )
     },
     onSuccess: (result) => {
@@ -1564,7 +1570,7 @@ export function AccountPools() {
         }}
         onSubmit={(values) => {
           try {
-            buildAccountPayload(values)
+            buildAccountPayload(values, selectedPool?.platform)
           } catch (error) {
             toast.error(
               error instanceof Error ? t(error.message) : t('Invalid account')
@@ -3922,6 +3928,7 @@ function AccountFormSheet(props: {
     props.pool?.platform === 'gemini' && form.credential_type === 'oauth'
   const showXAIOAuth =
     props.pool?.platform === 'xai' && form.credential_type === 'oauth'
+  const showXAIOverrides = props.pool?.platform === 'xai'
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -4276,6 +4283,65 @@ function AccountFormSheet(props: {
               )}
             </FieldGroup>
           </SideDrawerSection>
+          {showXAIOverrides ? (
+            <SideDrawerSection>
+              <SideDrawerSectionHeader title={t('xAI Outbound Overrides')} />
+              <FieldGroup>
+                <FieldBlock
+                  label={t('Account Base URL')}
+                  htmlFor='account-pool-account-xai-base-url'
+                  description={t(
+                    'Overrides the channel base URL for this xAI account. HTTPS public hosts are required.'
+                  )}
+                >
+                  <Input
+                    id='account-pool-account-xai-base-url'
+                    type='url'
+                    value={form.base_url}
+                    placeholder='https://api.x.ai'
+                    onChange={(event) =>
+                      setField('base_url', event.target.value)
+                    }
+                  />
+                </FieldBlock>
+                <div className={sideDrawerSwitchItemClassName()}>
+                  <div className='min-w-0'>
+                    <FieldLabel htmlFor='account-pool-account-xai-header-overrides'>
+                      {t('Enable Account Header Overrides')}
+                    </FieldLabel>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.'
+                      )}
+                    </p>
+                  </div>
+                  <Switch
+                    id='account-pool-account-xai-header-overrides'
+                    checked={form.header_override_enabled}
+                    onCheckedChange={(checked) =>
+                      setField('header_override_enabled', checked)
+                    }
+                  />
+                </div>
+                {form.header_override_enabled ? (
+                  <FieldBlock
+                    label={t('Header Overrides JSON')}
+                    htmlFor='account-pool-account-xai-header-overrides-json'
+                  >
+                    <Textarea
+                      id='account-pool-account-xai-header-overrides-json'
+                      className='min-h-32 font-mono text-xs'
+                      value={form.header_overrides_text}
+                      onChange={(event) =>
+                        setField('header_overrides_text', event.target.value)
+                      }
+                      placeholder='{"X-Trace-ID":"account-trace"}'
+                    />
+                  </FieldBlock>
+                ) : null}
+              </FieldGroup>
+            </SideDrawerSection>
+          ) : null}
           <SideDrawerSection>
             <SideDrawerSectionHeader title={t('Models')} />
             <FieldGroup>

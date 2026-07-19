@@ -122,6 +122,9 @@ export type AccountPoolCredentialConfigRequest = {
   // alongside the SSO token (carried in api_key). Mirrors the backend
   // dto.AccountPoolCredentialConfigRequest field; ignored by other credential types.
   cf_clearance?: string
+  base_url?: string
+  header_override_enabled?: boolean
+  header_overrides?: Record<string, string>
 }
 
 export type AccountPoolTokenStateRequest = {
@@ -241,6 +244,9 @@ export type AccountPoolAccount = {
   has_credential: boolean
   has_token: boolean
   xai_quota?: AccountPoolXAIQuotaSnapshot
+  base_url?: string
+  header_override_enabled?: boolean
+  header_overrides?: Record<string, string>
   created_time: number
   updated_time: number
 }

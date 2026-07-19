@@ -142,6 +142,49 @@ func TestAccountPoolRuntimeRequiresXAIMediaEligibilityForImageRelay(t *testing.T
 	assert.Equal(t, eligible.Id, GetSelectedAccountPoolAccountID(ctx))
 }
 
+func TestAccountPoolRuntimeAppliesSafeXAIOverridesAfterChannelHeaders(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-overrides-runtime",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	baseURL := "https://edge.x.ai/v1"
+	enabled := true
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "overridden",
+		Credential: AccountPoolCredentialConfig{
+			Type:                  AccountPoolCredentialTypeAPIKey,
+			APIKey:                "xai-key",
+			BaseURL:               &baseURL,
+			HeaderOverrideEnabled: &enabled,
+			HeaderOverrides: map[string]string{
+				"X-Account": "account",
+				"X-Shared":  "account-wins",
+			},
+		},
+	})
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "grok-4", "grok-4")
+	info.ChannelMeta.HeadersOverride = map[string]interface{}{
+		"X-Channel": "channel",
+		"X-Shared":  "channel-loses",
+	}
+	request := &dto.GeneralOpenAIRequest{Model: "grok-4"}
+
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, info, request))
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+	assert.Equal(t, "https://edge.x.ai/v1", info.RuntimeBaseURL)
+	assert.True(t, info.UseRuntimeHeadersOverride)
+	assert.Equal(t, "channel", info.RuntimeHeadersOverride["x-channel"])
+	assert.Equal(t, "account", info.RuntimeHeadersOverride["x-account"])
+	assert.Equal(t, "account-wins", info.RuntimeHeadersOverride["x-shared"])
+}
+
 func TestAccountPoolRuntimeAppliesSelectedProxy(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	ctx := newAccountPoolRuntimeTestContext()
