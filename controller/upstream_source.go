@@ -39,24 +39,25 @@ const (
 // legacy stored JSON (version 0, pre-fold) still parses; see
 // service.MigrateAndNormalizeUpstreamSourceSyncConfigRaw for the migration.
 type upstreamSourceControllerSyncConfig struct {
-	LocalGroup                       string                             `json:"local_group"`
-	ChannelType                      int                                `json:"channel_type"`
-	DefaultPriority                  int64                              `json:"default_priority"`
-	DefaultWeight                    uint                               `json:"default_weight"`
-	EnableMonitor                    bool                               `json:"enable_monitor"`
-	MonitorIntervalMinutes           int                                `json:"monitor_interval_minutes"`
-	AutoSyncModels                   bool                               `json:"auto_sync_models"`
-	ModelStrategy                    string                             `json:"model_strategy"`
-	FixedModels                      []string                           `json:"fixed_models"`
-	AllowPrivateIP                   common.FlexibleBool                `json:"allow_private_ip"`
-	AutoSyncEnabled                  bool                               `json:"auto_sync_enabled"`
-	AutoSyncIntervalMinutes          int                                `json:"auto_sync_interval_minutes"`
-	AutoPriorityEnabled              bool                               `json:"auto_priority_enabled"`
-	AutoPriorityIntervalMinutes      int                                `json:"auto_priority_interval_minutes"`
-	AutoPriorityWindowHours          int                                `json:"auto_priority_window_hours"`
-	CodexImageGenerationBridgePolicy string                             `json:"codex_image_generation_bridge_policy"`
-	DefaultLocalGroup                string                             `json:"default_local_group"`
-	LocalGroupRules                  []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	LocalGroup                          string                             `json:"local_group"`
+	ChannelType                         int                                `json:"channel_type"`
+	DefaultPriority                     int64                              `json:"default_priority"`
+	DefaultWeight                       uint                               `json:"default_weight"`
+	EnableMonitor                       bool                               `json:"enable_monitor"`
+	MonitorIntervalMinutes              int                                `json:"monitor_interval_minutes"`
+	AutoSyncModels                      bool                               `json:"auto_sync_models"`
+	ModelStrategy                       string                             `json:"model_strategy"`
+	FixedModels                         []string                           `json:"fixed_models"`
+	AllowPrivateIP                      common.FlexibleBool                `json:"allow_private_ip"`
+	AutoSyncEnabled                     bool                               `json:"auto_sync_enabled"`
+	AutoSyncIntervalMinutes             int                                `json:"auto_sync_interval_minutes"`
+	AutoPriorityEnabled                 bool                               `json:"auto_priority_enabled"`
+	AutoPriorityIntervalMinutes         int                                `json:"auto_priority_interval_minutes"`
+	AutoPriorityWindowHours             int                                `json:"auto_priority_window_hours"`
+	AutoPriorityAvailabilityWindowHours int                                `json:"auto_priority_availability_window_hours"`
+	CodexImageGenerationBridgePolicy    string                             `json:"codex_image_generation_bridge_policy"`
+	DefaultLocalGroup                   string                             `json:"default_local_group"`
+	LocalGroupRules                     []dto.UpstreamSourceLocalGroupRule `json:"local_group_rules"`
 	// SyncConfigVersion marks whether this blob has already gone through the
 	// legacy-defaults-to-rules migration. Configs built here from a create/
 	// update request are stamped version 1 directly (never version 0) so a
@@ -308,6 +309,24 @@ func RunUpstreamSourceAutoPriority(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
+func GetUpstreamSourceRuleModelOptions(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	var req dto.UpstreamSourceRuleModelOptionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result, err := (&service.UpstreamSourceService{}).ResolveRuleModelOptions(c.Request.Context(), source.Id, req.LocalGroupRules, req.RuleIndex)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
+}
+
 func GetUpstreamSourceSyncResult(c *gin.Context) {
 	source, ok := loadUpstreamSourceForController(c)
 	if !ok {
@@ -555,6 +574,12 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	case config.AutoPriorityWindowHours > 168:
 		config.AutoPriorityWindowHours = 168
 	}
+	switch {
+	case config.AutoPriorityAvailabilityWindowHours <= 0:
+		config.AutoPriorityAvailabilityWindowHours = 24
+	case config.AutoPriorityAvailabilityWindowHours > 168:
+		config.AutoPriorityAvailabilityWindowHours = 168
+	}
 	config.ModelStrategy = normalizeUpstreamSourceControllerModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceControllerFixedModels(config.FixedModels)
 	config.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
@@ -564,13 +589,14 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 
 func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncConfig {
 	return upstreamSourceControllerSyncConfig{
-		LocalGroup:                       "default",
-		ChannelType:                      constant.ChannelTypeOpenAI,
-		AutoSyncModels:                   true,
-		AutoPriorityIntervalMinutes:      30,
-		AutoPriorityWindowHours:          24,
-		CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyFollow,
-		ModelStrategy:                    upstreamSourceControllerModelStrategyAllUpstream,
+		LocalGroup:                          "default",
+		ChannelType:                         constant.ChannelTypeOpenAI,
+		AutoSyncModels:                      true,
+		AutoPriorityIntervalMinutes:         30,
+		AutoPriorityWindowHours:             24,
+		AutoPriorityAvailabilityWindowHours: 24,
+		CodexImageGenerationBridgePolicy:    dto.CodexImageGenerationBridgePolicyFollow,
+		ModelStrategy:                       upstreamSourceControllerModelStrategyAllUpstream,
 		// DefaultLocalGroup is intentionally left empty here (not seeded to
 		// "default") so normalizeUpstreamSourceControllerSyncConfig's
 		// "copy LocalGroup when DefaultLocalGroup is empty" branch actually

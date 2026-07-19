@@ -1,3 +1,5 @@
+import { RankingIcon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { Row } from '@tanstack/react-table'
 import {
@@ -127,6 +129,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleMonitor = () => {
     setCurrentRow(channel)
     setOpen('channel-monitor')
+  }
+
+  const handleAutoPriority = () => {
+    setCurrentRow(channel)
+    setOpen('channel-auto-priority')
   }
 
   const handleFetchModels = () => {
@@ -274,6 +281,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             {t('Channel Monitor')}
             <DropdownMenuShortcut>
               <Activity size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+
+          <DropdownMenuItem onClick={handleAutoPriority}>
+            {t('Auto Priority')}
+            <DropdownMenuShortcut>
+              <HugeiconsIcon icon={RankingIcon} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 

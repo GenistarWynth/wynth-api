@@ -77,18 +77,20 @@ func TestUpstreamSourceRuleConfigPreservesExplicitFalseOverrides(t *testing.T) {
 
 func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 	raw, err := common.Marshal(map[string]any{
-		"auto_priority_enabled":          true,
-		"auto_priority_interval_minutes": 3,
-		"auto_priority_window_hours":     999,
+		"auto_priority_enabled":                   true,
+		"auto_priority_interval_minutes":          3,
+		"auto_priority_window_hours":              999,
+		"auto_priority_availability_window_hours": -1,
 		"local_group_rules": []map[string]any{
 			{
 				"name":        "OpenAI pro",
 				"local_group": "paid",
 				"platforms":   []string{"openai"},
 				"auto_priority": map[string]any{
-					"enabled":          false,
-					"interval_minutes": 0,
-					"window_hours":     48,
+					"enabled":                   false,
+					"interval_minutes":          0,
+					"window_hours":              48,
+					"availability_window_hours": 1,
 				},
 			},
 		},
@@ -101,6 +103,7 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 	assert.True(t, config.AutoPriorityEnabled)
 	assert.Equal(t, 3, config.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 168, config.AutoPriorityWindowHours)
+	assert.Equal(t, upstreamSourceAutoPriorityDefaultWindowHours, config.AutoPriorityAvailabilityWindowHours)
 	require.Len(t, config.LocalGroupRules, 1)
 	rule := config.LocalGroupRules[0]
 	require.NotNil(t, rule.AutoPriority)
@@ -108,8 +111,10 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 	assert.False(t, *rule.AutoPriority.Enabled)
 	require.NotNil(t, rule.AutoPriority.IntervalMinutes)
 	require.NotNil(t, rule.AutoPriority.WindowHours)
+	require.NotNil(t, rule.AutoPriority.AvailabilityWindowHours)
 	assert.Equal(t, 0, *rule.AutoPriority.IntervalMinutes)
 	assert.Equal(t, 48, *rule.AutoPriority.WindowHours)
+	assert.Equal(t, 1, *rule.AutoPriority.AvailabilityWindowHours)
 }
 
 func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
@@ -146,6 +151,7 @@ func TestResolveUpstreamSourceRuleAutoPriorityOverridesFallback(t *testing.T) {
 	assert.False(t, resolution.AutoPriorityEnabled)
 	assert.Equal(t, upstreamSourceAutoPriorityDefaultIntervalMinutes, resolution.AutoPriorityIntervalMinutes)
 	assert.Equal(t, upstreamSourceAutoPriorityDefaultWindowHours, resolution.AutoPriorityWindowHours)
+	assert.Equal(t, upstreamSourceAutoPriorityDefaultWindowHours, resolution.AutoPriorityAvailabilityWindowHours)
 }
 
 func TestResolveUpstreamSourceRuleAutoPriorityPreservesExplicitZeroInterval(t *testing.T) {
@@ -177,6 +183,39 @@ func TestResolveUpstreamSourceRuleAutoPriorityPreservesExplicitZeroInterval(t *t
 	assert.True(t, resolution.AutoPriorityEnabled)
 	assert.Equal(t, 0, resolution.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 48, resolution.AutoPriorityWindowHours)
+}
+
+func TestResolveUpstreamSourceRuleAutoPrioritySupportsAvailabilityWindowOverride(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"sync_config_version": 1,
+		"local_group_rules": []map[string]any{
+			{
+				"name":        "OpenAI pro",
+				"local_group": "paid",
+				"platforms":   []string{"openai"},
+				"auto_priority": map[string]any{
+					"enabled":                   true,
+					"interval_minutes":          15,
+					"window_hours":              24,
+					"availability_window_hours": 1,
+				},
+			},
+		},
+	})
+	mapping := &model.UpstreamSourceChannelMapping{
+		SyncEnabled:       true,
+		DiscoveryStatus:   model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamPlatform:  "openai",
+		UpstreamGroupName: "ChatGPT Pro",
+	}
+
+	resolution := resolveUpstreamSourceRule(config, mapping)
+
+	assert.True(t, resolution.SyncEligible)
+	assert.True(t, resolution.AutoPriorityEnabled)
+	assert.Equal(t, 15, resolution.AutoPriorityIntervalMinutes)
+	assert.Equal(t, 24, resolution.AutoPriorityWindowHours)
+	assert.Equal(t, 1, resolution.AutoPriorityAvailabilityWindowHours)
 }
 
 func TestResolveUpstreamSourceRuleImageBridgePolicyOverridesFallback(t *testing.T) {

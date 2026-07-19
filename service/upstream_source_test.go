@@ -1186,6 +1186,69 @@ func TestBuildGeneratedChannelWritesMonitorModel(t *testing.T) {
 	assert.Equal(t, "gpt-4o-mini", ch.GetOtherSettings().ChannelMonitorModel)
 }
 
+func TestBuildGeneratedChannelSeedsAutoPrioritySettingsFromRule(t *testing.T) {
+	source := &model.UpstreamSource{Id: 7, Name: "source"}
+	mapping := &model.UpstreamSourceChannelMapping{Id: 11}
+	resolution := upstreamSourceRuleResolution{
+		AutoPriorityEnabled:                 true,
+		AutoPriorityIntervalMinutes:         15,
+		AutoPriorityWindowHours:             48,
+		AutoPriorityAvailabilityWindowHours: 6,
+	}
+
+	channel := buildGeneratedChannel(source, mapping, upstreamSourceSyncConfig{}, resolution, "sk-test")
+
+	settings := channel.GetOtherSettings()
+	assert.True(t, settings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 15, settings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 48, settings.ChannelAutoPriorityWindowHours)
+	assert.Equal(t, 6, settings.ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestMergeGeneratedChannelSettingsPreservesGroupAvailabilityWindow(t *testing.T) {
+	existing := &model.Channel{Group: "alpha"}
+	existing.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityIntervalMinutes:         30,
+		ChannelAutoPriorityWindowHours:             24,
+		ChannelAutoPriorityAvailabilityWindowHours: 96,
+	})
+	channel := &model.Channel{Group: "alpha"}
+	resolution := upstreamSourceRuleResolution{
+		AutoPriorityEnabled:                 true,
+		AutoPriorityIntervalMinutes:         5,
+		AutoPriorityWindowHours:             12,
+		AutoPriorityAvailabilityWindowHours: 1,
+	}
+
+	mergeGeneratedChannelOtherSettings(channel, existing, resolution, &model.UpstreamSource{Id: 7}, &model.UpstreamSourceChannelMapping{Id: 11})
+
+	settings := channel.GetOtherSettings()
+	assert.True(t, settings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 5, settings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 12, settings.ChannelAutoPriorityWindowHours)
+	assert.Equal(t, 96, settings.ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestMergeGeneratedChannelSettingsUsesRuleAvailabilityAfterGroupMove(t *testing.T) {
+	existing := &model.Channel{Group: "alpha"}
+	existing.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:                 true,
+		ChannelAutoPriorityAvailabilityWindowHours: 96,
+	})
+	channel := &model.Channel{Group: "beta"}
+	resolution := upstreamSourceRuleResolution{
+		AutoPriorityEnabled:                 true,
+		AutoPriorityIntervalMinutes:         5,
+		AutoPriorityWindowHours:             12,
+		AutoPriorityAvailabilityWindowHours: 1,
+	}
+
+	mergeGeneratedChannelOtherSettings(channel, existing, resolution, &model.UpstreamSource{Id: 7}, &model.UpstreamSourceChannelMapping{Id: 11})
+
+	assert.Equal(t, 1, channel.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
+}
+
 func TestSyncUpstreamSourceAppliesCodexImageBridgePolicyToGeneratedNewAPIChannel(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	// sync_config_version 1: channel_type is expressed directly on the rule

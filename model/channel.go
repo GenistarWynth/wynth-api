@@ -1029,6 +1029,21 @@ func (channel *Channel) ValidateSettings() error {
 			return fmt.Errorf("settings.auto_retry_times must be between 0 and %d", dto.ChannelAutoRetryTimesMax)
 		}
 	}
+	if channelOtherSettings.ChannelAutoPriorityEnabled {
+		if channelOtherSettings.ChannelAutoPriorityIntervalMinutes < 0 {
+			return fmt.Errorf("settings.channel_auto_priority_interval_minutes must be >= 0")
+		}
+		if channelOtherSettings.ChannelAutoPriorityWindowHours != dto.NormalizeChannelAutoPriorityWindowHours(channelOtherSettings.ChannelAutoPriorityWindowHours) {
+			return fmt.Errorf("settings.channel_auto_priority_window_hours must be between 1 and %d", dto.ChannelAutoPriorityMaxWindowHours)
+		}
+		if channelOtherSettings.ChannelAutoPriorityAvailabilityWindowHours != 0 &&
+			channelOtherSettings.ChannelAutoPriorityAvailabilityWindowHours != dto.NormalizeChannelAutoPriorityWindowHours(channelOtherSettings.ChannelAutoPriorityAvailabilityWindowHours) {
+			return fmt.Errorf("settings.channel_auto_priority_availability_window_hours must be between 1 and %d", dto.ChannelAutoPriorityMaxWindowHours)
+		}
+		if channelOtherSettings.ChannelAutoPriorityRateMultiplier < 0 {
+			return fmt.Errorf("settings.channel_auto_priority_rate_multiplier must be >= 0")
+		}
+	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		if channelOtherSettings.AdvancedCustom == nil {
 			return fmt.Errorf("advanced_custom is required")

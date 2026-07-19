@@ -414,6 +414,48 @@ func GetChannelMonitorDetail(c *gin.Context) {
 	return
 }
 
+type channelMonitorSettingsUpdateRequest struct {
+	Settings string `json:"settings"`
+	Scope    string `json:"scope"`
+}
+
+func UpdateChannelMonitorSettings(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	var request channelMonitorSettingsUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if strings.TrimSpace(request.Settings) == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	channel, err := model.UpdateChannelMonitorSettings(c.Request.Context(), id, request.Settings, request.Scope)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	service.ResetProxyClientCache()
+	recordManageAudit(c, "channel.monitor_settings_update", map[string]interface{}{
+		"id":    id,
+		"scope": request.Scope,
+	})
+	channel.Key = ""
+	clearChannelInfo(channel)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    channel,
+	})
+}
+
 // GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {

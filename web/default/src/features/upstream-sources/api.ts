@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api, type ApiRequestConfig } from '@/lib/api'
+
 import type {
   ApiResponse,
   UpstreamSource,
@@ -25,6 +26,8 @@ import type {
   UpstreamSourceCredentialsUpdateRequest,
   UpstreamSourceDiscoveryResult,
   UpstreamSourceMapping,
+  UpstreamSourceRuleModelOptionsRequest,
+  UpstreamSourceRuleModelOptionsResponse,
   UpstreamSourceSessionImportRequest,
   UpstreamSourceSyncResult,
   UpstreamSourceUpdateRequest,
@@ -160,6 +163,18 @@ export async function runUpstreamSourceAutoPriority(
   const res = await api.post(
     `/api/upstream_sources/${id}/auto_priority/run`,
     undefined,
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function getUpstreamSourceRuleModelOptions(
+  id: number,
+  data: UpstreamSourceRuleModelOptionsRequest
+): Promise<ApiResponse<UpstreamSourceRuleModelOptionsResponse>> {
+  const res = await api.post(
+    `/api/upstream_sources/${id}/rule_model_options`,
+    data,
     upstreamSourceActionConfig()
   )
   return res.data

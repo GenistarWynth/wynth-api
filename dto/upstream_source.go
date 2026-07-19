@@ -96,48 +96,50 @@ type UpstreamSourceRuleAutoSync struct {
 }
 
 type UpstreamSourceRuleAutoPriority struct {
-	Enabled         *bool `json:"enabled,omitempty"`
-	IntervalMinutes *int  `json:"interval_minutes,omitempty"`
-	WindowHours     *int  `json:"window_hours,omitempty"`
+	Enabled                 *bool `json:"enabled,omitempty"`
+	IntervalMinutes         *int  `json:"interval_minutes,omitempty"`
+	WindowHours             *int  `json:"window_hours,omitempty"`
+	AvailabilityWindowHours *int  `json:"availability_window_hours,omitempty"`
 }
 
 type UpstreamSourceMappingResponse struct {
-	Id                                       int      `json:"id"`
-	SourceID                                 int      `json:"source_id"`
-	SyncEnabled                              bool     `json:"sync_enabled"`
-	UpstreamGroupID                          string   `json:"upstream_group_id"`
-	UpstreamGroupName                        string   `json:"upstream_group_name"`
-	UpstreamGroupDescription                 string   `json:"upstream_group_description"`
-	UpstreamPlatform                         string   `json:"upstream_platform"`
-	DiscoveryStatus                          string   `json:"discovery_status"`
-	UpstreamStatus                           string   `json:"upstream_status"`
-	UpstreamRateMultiplier                   *float64 `json:"upstream_rate_multiplier"`
-	EffectiveRateMultiplier                  *float64 `json:"effective_rate_multiplier"`
-	UpstreamKeyID                            string   `json:"upstream_key_id"`
-	HasUpstreamKey                           bool     `json:"has_upstream_key"`
-	LocalChannelID                           int      `json:"local_channel_id"`
-	SyncStatus                               string   `json:"sync_status"`
-	LastError                                string   `json:"last_error"`
-	LastDiscoveredAt                         int64    `json:"last_discovered_at"`
-	LastSyncedAt                             int64    `json:"last_synced_at"`
-	SyncEligible                             bool     `json:"sync_eligible"`
-	MatchedRuleName                          string   `json:"matched_rule_name"`
-	MatchReason                              string   `json:"match_reason"`
-	ResolvedLocalGroup                       string   `json:"resolved_local_group"`
-	ResolvedMonitorEnabled                   bool     `json:"resolved_monitor_enabled"`
-	ResolvedMonitorIntervalMinutes           int      `json:"resolved_monitor_interval_minutes"`
-	ResolvedAutoSyncEnabled                  bool     `json:"resolved_auto_sync_enabled"`
-	ResolvedAutoSyncIntervalMinutes          int      `json:"resolved_auto_sync_interval_minutes"`
-	ResolvedAutoPriorityEnabled              bool     `json:"resolved_auto_priority_enabled"`
-	ResolvedAutoPriorityIntervalMinutes      int      `json:"resolved_auto_priority_interval_minutes"`
-	ResolvedAutoPriorityWindowHours          int      `json:"resolved_auto_priority_window_hours"`
-	ResolvedCodexImageGenerationBridgePolicy string   `json:"resolved_codex_image_generation_bridge_policy"`
-	ResolvedModelStrategy                    string   `json:"resolved_model_strategy"`
-	ResolvedFixedModels                      []string `json:"resolved_fixed_models"`
-	ResolvedChannelType                      int      `json:"resolved_channel_type"`
-	ResolvedPriority                         int64    `json:"resolved_priority"`
-	ResolvedWeight                           uint     `json:"resolved_weight"`
-	ResolvedMonitorModel                     string   `json:"resolved_monitor_model"`
+	Id                                          int      `json:"id"`
+	SourceID                                    int      `json:"source_id"`
+	SyncEnabled                                 bool     `json:"sync_enabled"`
+	UpstreamGroupID                             string   `json:"upstream_group_id"`
+	UpstreamGroupName                           string   `json:"upstream_group_name"`
+	UpstreamGroupDescription                    string   `json:"upstream_group_description"`
+	UpstreamPlatform                            string   `json:"upstream_platform"`
+	DiscoveryStatus                             string   `json:"discovery_status"`
+	UpstreamStatus                              string   `json:"upstream_status"`
+	UpstreamRateMultiplier                      *float64 `json:"upstream_rate_multiplier"`
+	EffectiveRateMultiplier                     *float64 `json:"effective_rate_multiplier"`
+	UpstreamKeyID                               string   `json:"upstream_key_id"`
+	HasUpstreamKey                              bool     `json:"has_upstream_key"`
+	LocalChannelID                              int      `json:"local_channel_id"`
+	SyncStatus                                  string   `json:"sync_status"`
+	LastError                                   string   `json:"last_error"`
+	LastDiscoveredAt                            int64    `json:"last_discovered_at"`
+	LastSyncedAt                                int64    `json:"last_synced_at"`
+	SyncEligible                                bool     `json:"sync_eligible"`
+	MatchedRuleName                             string   `json:"matched_rule_name"`
+	MatchReason                                 string   `json:"match_reason"`
+	ResolvedLocalGroup                          string   `json:"resolved_local_group"`
+	ResolvedMonitorEnabled                      bool     `json:"resolved_monitor_enabled"`
+	ResolvedMonitorIntervalMinutes              int      `json:"resolved_monitor_interval_minutes"`
+	ResolvedAutoSyncEnabled                     bool     `json:"resolved_auto_sync_enabled"`
+	ResolvedAutoSyncIntervalMinutes             int      `json:"resolved_auto_sync_interval_minutes"`
+	ResolvedAutoPriorityEnabled                 bool     `json:"resolved_auto_priority_enabled"`
+	ResolvedAutoPriorityIntervalMinutes         int      `json:"resolved_auto_priority_interval_minutes"`
+	ResolvedAutoPriorityWindowHours             int      `json:"resolved_auto_priority_window_hours"`
+	ResolvedAutoPriorityAvailabilityWindowHours int      `json:"resolved_auto_priority_availability_window_hours"`
+	ResolvedCodexImageGenerationBridgePolicy    string   `json:"resolved_codex_image_generation_bridge_policy"`
+	ResolvedModelStrategy                       string   `json:"resolved_model_strategy"`
+	ResolvedFixedModels                         []string `json:"resolved_fixed_models"`
+	ResolvedChannelType                         int      `json:"resolved_channel_type"`
+	ResolvedPriority                            int64    `json:"resolved_priority"`
+	ResolvedWeight                              uint     `json:"resolved_weight"`
+	ResolvedMonitorModel                        string   `json:"resolved_monitor_model"`
 }
 
 type UpstreamSourceMappingUpdateRequest struct {
@@ -205,4 +207,22 @@ type UpstreamSourceAutoPriorityResult struct {
 	Failed   int                                       `json:"failed"`
 	Results  []UpstreamSourceAutoPriorityChannelResult `json:"results"`
 	Error    string                                    `json:"error,omitempty"`
+}
+
+type UpstreamSourceRuleModelOptionsMatchedMapping struct {
+	MappingID         int    `json:"mapping_id"`
+	UpstreamGroupID   string `json:"upstream_group_id"`
+	UpstreamGroupName string `json:"upstream_group_name"`
+	UpstreamPlatform  string `json:"upstream_platform"`
+	LocalChannelID    int    `json:"local_channel_id"`
+}
+
+type UpstreamSourceRuleModelOptionsRequest struct {
+	LocalGroupRules []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	RuleIndex       int                            `json:"rule_index"`
+}
+
+type UpstreamSourceRuleModelOptionsResponse struct {
+	Models          []string                                       `json:"models"`
+	MatchedMappings []UpstreamSourceRuleModelOptionsMatchedMapping `json:"matched_mappings"`
 }

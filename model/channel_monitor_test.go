@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -33,6 +34,14 @@ func marshalChannelOtherSettings(t *testing.T, settings dto.ChannelOtherSettings
 	return string(data)
 }
 
+func marshalChannelSettingsMap(t *testing.T, settings map[string]any) string {
+	t.Helper()
+
+	data, err := common.Marshal(settings)
+	require.NoError(t, err)
+	return string(data)
+}
+
 func TestNormalizeChannelMonitorSettings(t *testing.T) {
 	disabled := dto.ChannelOtherSettings{ChannelMonitorIntervalMinutes: -5}
 	assert.Equal(t, disabled, NormalizeChannelMonitorSettings(disabled))
@@ -53,6 +62,240 @@ func TestNormalizeChannelMonitorSettings(t *testing.T) {
 		ChannelMonitorIntervalMinutes: 15,
 	})
 	assert.Equal(t, 15, unchanged.ChannelMonitorIntervalMinutes)
+}
+
+func TestUpdateChannelMonitorSettingsPropagatesAvailabilityWindowWithinAutoPriorityGroup(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	channels := []Channel{
+		{
+			Name:  "selected",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_availability_window_hours": 1,
+				"channel_auto_priority_last_run_at":               123,
+				"selected_unrelated_setting":                      "keep-selected",
+			}),
+		},
+		{
+			Name:  "manual disabled auto priority",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   false,
+				"channel_auto_priority_availability_window_hours": 2,
+				"channel_auto_priority_last_run_at":               456,
+				"member_unrelated_setting":                        "keep-member",
+			}),
+		},
+		{
+			Name:  "generated",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_availability_window_hours": 3,
+				"generated_by_upstream_source_id":                 99,
+			}),
+		},
+		{
+			Name:  "different exact group",
+			Group: "alpha,beta",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_availability_window_hours": 4,
+			}),
+		},
+	}
+	require.NoError(t, DB.Create(&channels).Error)
+
+	requestedSettings := marshalChannelSettingsMap(t, map[string]any{
+		"channel_monitor_enabled":                         true,
+		"channel_monitor_interval_minutes":                5,
+		"channel_monitor_model":                           "gpt-4o-mini",
+		"channel_auto_priority_enabled":                   true,
+		"channel_auto_priority_interval_minutes":          0,
+		"channel_auto_priority_window_hours":              12,
+		"channel_auto_priority_availability_window_hours": 48,
+		"channel_auto_priority_rate_multiplier":           0.8,
+		"channel_auto_priority_last_run_at":               99,
+		"selected_unrelated_setting":                      "keep-selected",
+	})
+
+	updated, err := UpdateChannelMonitorSettings(
+		context.Background(),
+		channels[0].Id,
+		requestedSettings,
+		"",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+
+	selectedSettings := updated.GetOtherSettings()
+	assert.True(t, selectedSettings.ChannelMonitorEnabled)
+	assert.Equal(t, 5, selectedSettings.ChannelMonitorIntervalMinutes)
+	assert.Equal(t, "gpt-4o-mini", selectedSettings.ChannelMonitorModel)
+	assert.True(t, selectedSettings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 0, selectedSettings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 12, selectedSettings.ChannelAutoPriorityWindowHours)
+	assert.Equal(t, 48, selectedSettings.ChannelAutoPriorityAvailabilityWindowHours)
+	assert.Equal(t, 0.8, selectedSettings.ChannelAutoPriorityRateMultiplier)
+	assert.Equal(t, int64(123), selectedSettings.ChannelAutoPriorityLastRunAt)
+	var selectedSettingsMap map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(updated.OtherSettings, &selectedSettingsMap))
+	assert.Equal(t, "keep-selected", selectedSettingsMap["selected_unrelated_setting"])
+
+	var manualMember Channel
+	require.NoError(t, DB.First(&manualMember, channels[1].Id).Error)
+	manualMemberSettings := manualMember.GetOtherSettings()
+	assert.False(t, manualMemberSettings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 2, manualMemberSettings.ChannelAutoPriorityAvailabilityWindowHours)
+	assert.Equal(t, int64(456), manualMemberSettings.ChannelAutoPriorityLastRunAt)
+	var manualMemberSettingsMap map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(manualMember.OtherSettings, &manualMemberSettingsMap))
+	assert.Equal(t, "keep-member", manualMemberSettingsMap["member_unrelated_setting"])
+
+	var generated Channel
+	require.NoError(t, DB.First(&generated, channels[2].Id).Error)
+	assert.Equal(t, 48, generated.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
+
+	var differentGroup Channel
+	require.NoError(t, DB.First(&differentGroup, channels[3].Id).Error)
+	assert.Equal(t, 4, differentGroup.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestUpdateChannelMonitorSettingsPropagatesAvailabilityWindowFromGeneratedChannel(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	channels := []Channel{
+		{
+			Name:  "generated selected",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_interval_minutes":          15,
+				"channel_auto_priority_window_hours":              24,
+				"channel_auto_priority_availability_window_hours": 1,
+				"channel_auto_priority_rate_multiplier":           0.5,
+				"generated_by_upstream_source_id":                 99,
+			}),
+		},
+		{
+			Name:  "manual peer",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_availability_window_hours": 2,
+			}),
+		},
+		{
+			Name:  "other group",
+			Group: "beta",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_availability_window_hours": 3,
+			}),
+		},
+	}
+	require.NoError(t, DB.Create(&channels).Error)
+
+	requestedSettings := marshalChannelSettingsMap(t, map[string]any{
+		"channel_monitor_enabled":                         true,
+		"channel_monitor_interval_minutes":                5,
+		"channel_auto_priority_enabled":                   false,
+		"channel_auto_priority_interval_minutes":          60,
+		"channel_auto_priority_window_hours":              12,
+		"channel_auto_priority_availability_window_hours": 96,
+		"channel_auto_priority_rate_multiplier":           2,
+	})
+
+	updated, err := UpdateChannelMonitorSettings(
+		context.Background(),
+		channels[0].Id,
+		requestedSettings,
+		ChannelSettingsUpdateScopeAutoPriority,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+
+	selectedSettings := updated.GetOtherSettings()
+	assert.True(t, selectedSettings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 15, selectedSettings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 24, selectedSettings.ChannelAutoPriorityWindowHours)
+	assert.Equal(t, 96, selectedSettings.ChannelAutoPriorityAvailabilityWindowHours)
+	assert.Equal(t, 0.5, selectedSettings.ChannelAutoPriorityRateMultiplier)
+	assert.Equal(t, 99, selectedSettings.GeneratedByUpstreamSourceID)
+
+	var manualPeer Channel
+	require.NoError(t, DB.First(&manualPeer, channels[1].Id).Error)
+	assert.Equal(t, 96, manualPeer.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
+
+	var otherGroup Channel
+	require.NoError(t, DB.First(&otherGroup, channels[2].Id).Error)
+	assert.Equal(t, 3, otherGroup.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestUpdateChannelMonitorSettingsAllowsMonitorOnlySaveWithoutAvailabilityWindow(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	channels := []Channel{
+		{
+			Name:  "legacy selected",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"selected_unrelated_setting": "keep-selected",
+			}),
+		},
+		{
+			Name:  "auto priority peer",
+			Group: "alpha",
+			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_availability_window_hours": 72,
+			}),
+		},
+	}
+	require.NoError(t, DB.Create(&channels).Error)
+
+	requestedSettings := marshalChannelSettingsMap(t, map[string]any{
+		"channel_monitor_enabled":          true,
+		"channel_monitor_interval_minutes": 5,
+		"channel_monitor_model":            "gpt-4o-mini",
+		"selected_unrelated_setting":       "keep-selected",
+	})
+
+	updated, err := UpdateChannelMonitorSettings(
+		context.Background(),
+		channels[0].Id,
+		requestedSettings,
+		"",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+
+	selectedSettings := updated.GetOtherSettings()
+	assert.True(t, selectedSettings.ChannelMonitorEnabled)
+	assert.Equal(t, 5, selectedSettings.ChannelMonitorIntervalMinutes)
+	assert.Equal(t, "gpt-4o-mini", selectedSettings.ChannelMonitorModel)
+	var selectedSettingsMap map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(updated.OtherSettings, &selectedSettingsMap))
+	assert.NotContains(t, selectedSettingsMap, "channel_auto_priority_availability_window_hours")
+
+	var peer Channel
+	require.NoError(t, DB.First(&peer, channels[1].Id).Error)
+	assert.Equal(t, 72, peer.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestUpdateChannelMonitorSettingsRejectsNullSettingsObject(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	channel := Channel{Name: "null settings", Group: "default"}
+	require.NoError(t, DB.Create(&channel).Error)
+
+	updated, err := UpdateChannelMonitorSettings(context.Background(), channel.Id, "null", "")
+
+	assert.Nil(t, updated)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid channel monitor settings")
 }
 
 func TestRecordChannelMonitorLogAndLatest(t *testing.T) {

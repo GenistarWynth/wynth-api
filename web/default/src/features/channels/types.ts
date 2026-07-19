@@ -160,9 +160,12 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   channel_monitor_enabled?: boolean
   channel_monitor_interval_minutes?: number
+  channel_monitor_model?: string
   channel_auto_priority_enabled?: boolean
   channel_auto_priority_interval_minutes?: number
   channel_auto_priority_window_hours?: number
+  channel_auto_priority_availability_window_hours?: number
+  channel_auto_priority_rate_multiplier?: number
   channel_auto_priority_last_run_at?: number
   channel_auto_priority_last_applied_at?: number
   channel_auto_priority_last_score?: ChannelAutoPriorityScore

@@ -275,6 +275,7 @@ func SetApiRouter(router *gin.Engine) {
 			upstreamSourceRoute.POST("/:id/discover", controller.DiscoverUpstreamSource)
 			upstreamSourceRoute.GET("/:id/mappings", controller.ListUpstreamSourceMappings)
 			upstreamSourceRoute.PUT("/:id/mappings", controller.UpdateUpstreamSourceMappings)
+			upstreamSourceRoute.POST("/:id/rule_model_options", controller.GetUpstreamSourceRuleModelOptions)
 			upstreamSourceRoute.POST("/:id/sync", controller.SyncUpstreamSource)
 			upstreamSourceRoute.GET("/:id/sync_result", controller.GetUpstreamSourceSyncResult)
 			upstreamSourceRoute.POST("/:id/auto_priority/run", controller.RunUpstreamSourceAutoPriority)

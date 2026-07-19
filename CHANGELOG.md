@@ -4,6 +4,18 @@ All notable changes to the **Wynth** fork (`GenistarWynth/wynth-api`) are docume
 
 Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) by QuantumNous. This changelog records what Wynth adds or changes on top of upstream; upstream New API features are not re-listed.
 
+## [v1.0.0-rc.36] - 2026-07-19
+
+### Features
+- Non-upstream channels can enable auto-priority with configurable rate multipliers.
+- Auto-priority availability window is group-scoped and applies to all auto-priority-enabled channels in the current group, including upstream-generated channels.
+- Auto Priority is a dedicated channel row-menu entry at the same level as Channel Monitor.
+- Upstream source rule strategy overrides load monitor/fixed model options from matched group model lists.
+
+### Fixes
+- Channel Monitor remains monitor-only; auto-priority settings no longer clutter the monitor dialog.
+- Monitor and auto-priority saves use explicit scopes so they do not overwrite each other.
+
 ## [Unreleased]
 
 ## [v1.0.0-rc.35] - 2026-07-18
