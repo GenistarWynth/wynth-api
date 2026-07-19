@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/bits"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,7 +30,13 @@ const (
 	AccountPoolXAIMediaReasonForbidden    = "billing_forbidden"
 	AccountPoolXAIMediaReasonInconclusive = "billing_inconclusive"
 	AccountPoolXAIMediaReasonUnobserved   = "billing_unobserved"
+
+	AccountPoolXAIFreeUsageSourceCountersSinceCreation = "account_counters_since_creation"
+	AccountPoolXAIFreeUsageSourceLifetimeProrated      = "account_counters_lifetime_prorated"
+	AccountPoolXAIFreeUsageSourceNoRecentSuccess       = "account_counters_no_recent_success"
 )
+
+const accountPoolXAIFreeUsageWindowSeconds = int64(24 * time.Hour / time.Second)
 
 type AccountPoolXAIQuotaWindow struct {
 	Limit     *int64 `json:"limit,omitempty"`
@@ -49,19 +56,31 @@ type AccountPoolXAIBillingSnapshot struct {
 	Partial           bool     `json:"partial,omitempty"`
 }
 
+type AccountPoolXAIFreeUsageEstimate struct {
+	Source             string `json:"source"`
+	WindowSeconds      int64  `json:"window_seconds"`
+	ObservationSeconds int64  `json:"observation_seconds"`
+	Requests           int64  `json:"requests"`
+	PromptTokens       int64  `json:"prompt_tokens"`
+	CompletionTokens   int64  `json:"completion_tokens"`
+	Tokens             int64  `json:"tokens"`
+	Estimated          bool   `json:"estimated"`
+}
+
 type AccountPoolXAIQuotaSnapshot struct {
-	Source                 string                         `json:"source"`
-	Model                  string                         `json:"model,omitempty"`
-	Billing                *AccountPoolXAIBillingSnapshot `json:"billing,omitempty"`
-	Requests               *AccountPoolXAIQuotaWindow     `json:"requests,omitempty"`
-	Tokens                 *AccountPoolXAIQuotaWindow     `json:"tokens,omitempty"`
-	RetryAfterSeconds      *int                           `json:"retry_after_seconds,omitempty"`
-	StatusCode             int                            `json:"status_code,omitempty"`
-	HeadersObserved        bool                           `json:"headers_observed"`
-	MediaEligible          *bool                          `json:"media_eligible,omitempty"`
-	MediaEligibilityReason string                         `json:"media_eligibility_reason,omitempty"`
-	FetchedAt              int64                          `json:"fetched_at"`
-	ProbeError             string                         `json:"probe_error,omitempty"`
+	Source                 string                           `json:"source"`
+	Model                  string                           `json:"model,omitempty"`
+	Billing                *AccountPoolXAIBillingSnapshot   `json:"billing,omitempty"`
+	Requests               *AccountPoolXAIQuotaWindow       `json:"requests,omitempty"`
+	Tokens                 *AccountPoolXAIQuotaWindow       `json:"tokens,omitempty"`
+	RetryAfterSeconds      *int                             `json:"retry_after_seconds,omitempty"`
+	StatusCode             int                              `json:"status_code,omitempty"`
+	HeadersObserved        bool                             `json:"headers_observed"`
+	MediaEligible          *bool                            `json:"media_eligible,omitempty"`
+	MediaEligibilityReason string                           `json:"media_eligibility_reason,omitempty"`
+	FetchedAt              int64                            `json:"fetched_at"`
+	ProbeError             string                           `json:"probe_error,omitempty"`
+	FreeUsage24hEstimate   *AccountPoolXAIFreeUsageEstimate `json:"free_usage_24h_estimate,omitempty"`
 }
 
 type accountPoolXAIQuotaHTTPClientFactory func(string) (*http.Client, error)
@@ -73,7 +92,10 @@ type accountPoolXAIQuotaProber struct {
 	flight        singleflight.Group
 }
 
-var defaultAccountPoolXAIQuotaProber = newDefaultAccountPoolXAIQuotaProber()
+var (
+	defaultAccountPoolXAIQuotaProber = newDefaultAccountPoolXAIQuotaProber()
+	accountPoolXAIFreeUsageNow       = time.Now
+)
 
 type accountPoolXAIBillingProbePart struct {
 	snapshot *AccountPoolXAIBillingSnapshot
@@ -196,7 +218,7 @@ func (p *accountPoolXAIQuotaProber) probe(ctx context.Context, poolID int, accou
 		if err := persistAccountPoolXAIQuotaSnapshot(account, snapshot, now); err != nil {
 			return AccountPoolXAIQuotaSnapshot{}, err
 		}
-		return snapshot, nil
+		return enrichAccountPoolXAIFreeUsage24hEstimate(snapshot, account, now), nil
 	}
 
 	activeSnapshot, activeErr := p.probeUsage(ctx, &clientCopy, accessToken)
@@ -216,7 +238,75 @@ func (p *accountPoolXAIQuotaProber) probe(ctx context.Context, poolID int, accou
 	if err := persistAccountPoolXAIQuotaSnapshot(account, activeSnapshot, now); err != nil {
 		return AccountPoolXAIQuotaSnapshot{}, err
 	}
-	return activeSnapshot, nil
+	return enrichAccountPoolXAIFreeUsage24hEstimate(activeSnapshot, account, now), nil
+}
+
+func enrichAccountPoolXAIFreeUsage24hEstimate(snapshot AccountPoolXAIQuotaSnapshot, account model.AccountPoolAccount, now time.Time) AccountPoolXAIQuotaSnapshot {
+	snapshot.FreeUsage24hEstimate = buildAccountPoolXAIFreeUsage24hEstimate(account, snapshot, now)
+	return snapshot
+}
+
+func buildAccountPoolXAIFreeUsage24hEstimate(account model.AccountPoolAccount, snapshot AccountPoolXAIQuotaSnapshot, now time.Time) *AccountPoolXAIFreeUsageEstimate {
+	if snapshot.MediaEligibilityReason != AccountPoolXAIMediaReasonFreeTier {
+		return nil
+	}
+	nowUnix := now.Unix()
+	if account.CreatedTime <= 0 || account.CreatedTime >= nowUnix {
+		return nil
+	}
+	observationSeconds := nowUnix - account.CreatedTime
+	estimate := &AccountPoolXAIFreeUsageEstimate{
+		WindowSeconds:      accountPoolXAIFreeUsageWindowSeconds,
+		ObservationSeconds: observationSeconds,
+	}
+	if observationSeconds > accountPoolXAIFreeUsageWindowSeconds &&
+		account.LastSuccessAt > 0 && account.LastSuccessAt < nowUnix-accountPoolXAIFreeUsageWindowSeconds {
+		estimate.Source = AccountPoolXAIFreeUsageSourceNoRecentSuccess
+		return estimate
+	}
+
+	requests := max(account.SuccessCount, int64(0))
+	promptTokens := max(account.TotalPromptTokens, int64(0))
+	completionTokens := max(account.TotalCompletionTokens, int64(0))
+	if observationSeconds <= accountPoolXAIFreeUsageWindowSeconds {
+		estimate.Source = AccountPoolXAIFreeUsageSourceCountersSinceCreation
+		estimate.Requests = requests
+		estimate.PromptTokens = promptTokens
+		estimate.CompletionTokens = completionTokens
+	} else {
+		estimate.Source = AccountPoolXAIFreeUsageSourceLifetimeProrated
+		estimate.Estimated = true
+		estimate.Requests = accountPoolXAIProrateCounter(requests, accountPoolXAIFreeUsageWindowSeconds, observationSeconds)
+		estimate.PromptTokens = accountPoolXAIProrateCounter(promptTokens, accountPoolXAIFreeUsageWindowSeconds, observationSeconds)
+		estimate.CompletionTokens = accountPoolXAIProrateCounter(completionTokens, accountPoolXAIFreeUsageWindowSeconds, observationSeconds)
+	}
+	estimate.Tokens = accountPoolXAISaturatingCounterSum(estimate.PromptTokens, estimate.CompletionTokens)
+	return estimate
+}
+
+func accountPoolXAIProrateCounter(value int64, numerator int64, denominator int64) int64 {
+	if value <= 0 || numerator <= 0 || denominator <= 0 {
+		return 0
+	}
+	if numerator >= denominator {
+		return value
+	}
+	high, low := bits.Mul64(uint64(value), uint64(numerator))
+	quotient, _ := bits.Div64(high, low, uint64(denominator))
+	return int64(quotient)
+}
+
+func accountPoolXAISaturatingCounterSum(left int64, right int64) int64 {
+	if left <= 0 {
+		return max(right, int64(0))
+	}
+	if right <= 0 {
+		return left
+	}
+	if left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
 }
 
 func loadAccountPoolXAIQuotaAccount(poolID int, accountID int) (model.AccountPool, model.AccountPoolAccount, AccountPoolCredentialConfig, AccountPoolTokenState, error) {
@@ -523,6 +613,7 @@ func preferredAccountPoolXAIBillingStatus(billing *AccountPoolXAIBillingSnapshot
 }
 
 func persistAccountPoolXAIQuotaSnapshot(account model.AccountPoolAccount, snapshot AccountPoolXAIQuotaSnapshot, observedAt time.Time) error {
+	snapshot.FreeUsage24hEstimate = nil
 	options, err := parseAccountPoolRuntimeOptions(account.RuntimeOptions)
 	if err != nil {
 		return fmt.Errorf("parse account pool runtime options: %w", err)
@@ -600,5 +691,9 @@ func (s AccountPoolService) GetXAIQuotaSnapshot(poolID int, accountID int) (*Acc
 	if err != nil {
 		return nil, err
 	}
-	return options.XAIQuota, nil
+	if options.XAIQuota == nil {
+		return nil, nil
+	}
+	snapshot := enrichAccountPoolXAIFreeUsage24hEstimate(*options.XAIQuota, account, accountPoolXAIFreeUsageNow().UTC())
+	return &snapshot, nil
 }

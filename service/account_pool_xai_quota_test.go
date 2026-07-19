@@ -19,8 +19,18 @@ import (
 func TestAccountPoolXAIQuotaProbeFallsBackToActiveProbeForFreeTierAndPersistsSnapshot(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	now := time.Unix(2_000_000_000, 0).UTC()
+	previousEstimateNow := accountPoolXAIFreeUsageNow
+	accountPoolXAIFreeUsageNow = func() time.Time { return now }
+	t.Cleanup(func() { accountPoolXAIFreeUsageNow = previousEstimateNow })
 	service := AccountPoolService{}
 	pool, account := createAccountPoolXAIQuotaTestAccount(t, service, now)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).Where("id = ?", account.Id).Updates(map[string]any{
+		"created_time":            now.Add(-6 * time.Hour).Unix(),
+		"last_success_at":         now.Add(-time.Hour).Unix(),
+		"success_count":           int64(12),
+		"total_prompt_tokens":     int64(120),
+		"total_completion_tokens": int64(30),
+	}).Error)
 
 	var mu sync.Mutex
 	paths := make([]string, 0, 3)
@@ -68,6 +78,11 @@ func TestAccountPoolXAIQuotaProbeFallsBackToActiveProbeForFreeTierAndPersistsSna
 	assert.False(t, *result.MediaEligible)
 	assert.Equal(t, AccountPoolXAIMediaReasonFreeTier, result.MediaEligibilityReason)
 	assert.Equal(t, now.Unix(), result.FetchedAt)
+	require.NotNil(t, result.FreeUsage24hEstimate)
+	assert.Equal(t, AccountPoolXAIFreeUsageSourceCountersSinceCreation, result.FreeUsage24hEstimate.Source)
+	assert.False(t, result.FreeUsage24hEstimate.Estimated)
+	assert.Equal(t, int64(12), result.FreeUsage24hEstimate.Requests)
+	assert.Equal(t, int64(150), result.FreeUsage24hEstimate.Tokens)
 
 	mu.Lock()
 	assert.ElementsMatch(t, []string{"/v1/billing?format=credits", "/v1/billing", "/v1/responses"}, paths)
@@ -78,18 +93,100 @@ func TestAccountPoolXAIQuotaProbeFallsBackToActiveProbeForFreeTierAndPersistsSna
 	require.NotNil(t, persisted)
 	assert.Equal(t, result.FetchedAt, persisted.FetchedAt)
 	assert.Equal(t, int64(7), *persisted.Requests.Remaining)
+	require.NotNil(t, persisted.FreeUsage24hEstimate)
+	assert.Equal(t, int64(12), persisted.FreeUsage24hEstimate.Requests)
 	accounts, err := service.ListAccounts(pool.Id)
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
 	require.NotNil(t, accounts[0].XAIQuota)
 	assert.Equal(t, result.FetchedAt, accounts[0].XAIQuota.FetchedAt)
+	require.NotNil(t, accounts[0].XAIQuota.FreeUsage24hEstimate)
+	assert.Equal(t, int64(150), accounts[0].XAIQuota.FreeUsage24hEstimate.Tokens)
 
 	stored, err := getAccountPoolAccountForPool(pool.Id, account.Id)
 	require.NoError(t, err)
 	var options AccountPoolRuntimeOptions
 	require.NoError(t, common.UnmarshalJsonStr(stored.RuntimeOptions, &options))
 	require.NotNil(t, options.XAIQuota)
+	assert.Nil(t, options.XAIQuota.FreeUsage24hEstimate, "read-time local estimates must not be persisted into the upstream snapshot")
 	assert.True(t, options.PoolMode, "quota persistence must preserve unrelated runtime options")
+}
+
+func TestAccountPoolXAIFreeUsage24hEstimateUsesAvailableCounters(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0).UTC()
+	freeSnapshot := AccountPoolXAIQuotaSnapshot{MediaEligibilityReason: AccountPoolXAIMediaReasonFreeTier}
+
+	tests := []struct {
+		name    string
+		account model.AccountPoolAccount
+		want    *AccountPoolXAIFreeUsageEstimate
+	}{
+		{
+			name: "new account uses counters since creation",
+			account: model.AccountPoolAccount{
+				CreatedTime:           now.Add(-6 * time.Hour).Unix(),
+				LastSuccessAt:         now.Add(-time.Hour).Unix(),
+				SuccessCount:          12,
+				TotalPromptTokens:     120,
+				TotalCompletionTokens: 30,
+			},
+			want: &AccountPoolXAIFreeUsageEstimate{
+				Source:             AccountPoolXAIFreeUsageSourceCountersSinceCreation,
+				WindowSeconds:      int64(24 * time.Hour / time.Second),
+				ObservationSeconds: int64(6 * time.Hour / time.Second),
+				Requests:           12,
+				PromptTokens:       120,
+				CompletionTokens:   30,
+				Tokens:             150,
+				Estimated:          false,
+			},
+		},
+		{
+			name: "old active account uses lifetime average projection",
+			account: model.AccountPoolAccount{
+				CreatedTime:           now.Add(-48 * time.Hour).Unix(),
+				LastSuccessAt:         now.Add(-time.Hour).Unix(),
+				SuccessCount:          200,
+				TotalPromptTokens:     1000,
+				TotalCompletionTokens: 500,
+			},
+			want: &AccountPoolXAIFreeUsageEstimate{
+				Source:             AccountPoolXAIFreeUsageSourceLifetimeProrated,
+				WindowSeconds:      int64(24 * time.Hour / time.Second),
+				ObservationSeconds: int64(48 * time.Hour / time.Second),
+				Requests:           100,
+				PromptTokens:       500,
+				CompletionTokens:   250,
+				Tokens:             750,
+				Estimated:          true,
+			},
+		},
+		{
+			name: "old inactive account is known zero",
+			account: model.AccountPoolAccount{
+				CreatedTime:           now.Add(-48 * time.Hour).Unix(),
+				LastSuccessAt:         now.Add(-25 * time.Hour).Unix(),
+				SuccessCount:          200,
+				TotalPromptTokens:     1000,
+				TotalCompletionTokens: 500,
+			},
+			want: &AccountPoolXAIFreeUsageEstimate{
+				Source:             AccountPoolXAIFreeUsageSourceNoRecentSuccess,
+				WindowSeconds:      int64(24 * time.Hour / time.Second),
+				ObservationSeconds: int64(48 * time.Hour / time.Second),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, buildAccountPoolXAIFreeUsage24hEstimate(test.account, freeSnapshot, now))
+		})
+	}
+
+	paidSnapshot := AccountPoolXAIQuotaSnapshot{MediaEligibilityReason: AccountPoolXAIMediaReasonEligible}
+	assert.Nil(t, buildAccountPoolXAIFreeUsage24hEstimate(tests[0].account, paidSnapshot, now))
+	assert.Nil(t, buildAccountPoolXAIFreeUsage24hEstimate(model.AccountPoolAccount{}, freeSnapshot, now))
 }
 
 func TestAccountPoolXAIQuotaProbePersistsExhaustionInExistingRateLimitCooldown(t *testing.T) {

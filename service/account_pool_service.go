@@ -1533,7 +1533,10 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		if err != nil {
 			common.SysError(fmt.Sprintf("account pool account view: runtime options unavailable for account id=%d: %v", account.Id, err))
 		} else {
-			xaiQuota = options.XAIQuota
+			if options.XAIQuota != nil {
+				snapshot := enrichAccountPoolXAIFreeUsage24hEstimate(*options.XAIQuota, account, accountPoolXAIFreeUsageNow().UTC())
+				xaiQuota = &snapshot
+			}
 		}
 	}
 	return AccountPoolAccountView{
