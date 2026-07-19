@@ -2,9 +2,11 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -129,6 +131,10 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/accounts", CreateAccountPoolAccount)
 		group.POST("/:id/accounts/import", ImportAccountPoolAccounts)
 		group.GET("/:id/accounts/export", ExportAccountPoolAccounts)
+		group.POST("/:id/xai/oauth/authorize", GenerateAccountPoolXAIOAuthAuthorization)
+		group.POST("/:id/xai/oauth/exchange", ExchangeAccountPoolXAIOAuthCode)
+		group.POST("/:id/accounts/xai/sso_import", ImportAccountPoolXAISSOAccounts)
+		group.POST("/:id/accounts/:account_id/xai/oauth/refresh", RefreshAccountPoolXAIOAuthAccount)
 		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
@@ -240,6 +246,103 @@ func TestAccountPoolAPICreateListAndRedaction(t *testing.T) {
 	assert.NotContains(t, raw, "ciphertext")
 	assert.NotContains(t, raw, "nonce")
 	assert.NotContains(t, raw, "credential_preview")
+}
+
+func TestAccountPoolXAIOAuthAuthorizeAndExchange(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "xai-pool",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+	poolID := strconv.Itoa(poolResult.Response.Data.Id)
+
+	authorize := accountPoolAPIRequest[dto.AccountPoolXAIOAuthAuthorizationResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/xai/oauth/authorize", dto.AccountPoolXAIOAuthAuthorizationRequest{})
+	require.True(t, authorize.Response.Success, authorize.Response.Message)
+	assert.Contains(t, authorize.Response.Data.AuthURL, "https://auth.x.ai/oauth2/authorize")
+	assert.NotEmpty(t, authorize.Response.Data.SessionID)
+	assert.NotEmpty(t, authorize.Response.Data.State)
+
+	oldExchange := accountPoolXAIOAuthExchange
+	accountPoolXAIOAuthExchange = func(ctx context.Context, sessionID string, code string, state string) (*service.XAIOAuthTokenInfo, error) {
+		assert.Equal(t, authorize.Response.Data.SessionID, sessionID)
+		assert.Equal(t, "callback-code", code)
+		assert.Equal(t, authorize.Response.Data.State, state)
+		return &service.XAIOAuthTokenInfo{
+			AccessToken:  "access-secret",
+			RefreshToken: "refresh-secret",
+			ClientID:     "client-id",
+			Email:        "xai@example.com",
+			Subject:      "subject-1",
+			ExpiresAt:    1_900_000_000,
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAIOAuthExchange = oldExchange })
+
+	exchange := accountPoolAPIRequest[dto.AccountPoolXAIOAuthTokenResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/xai/oauth/exchange", dto.AccountPoolXAIOAuthExchangeRequest{
+		SessionID: authorize.Response.Data.SessionID,
+		Code:      "callback-code",
+		State:     authorize.Response.Data.State,
+	})
+	require.True(t, exchange.Response.Success, exchange.Response.Message)
+	assert.Equal(t, "xai@example.com", exchange.Response.Data.Email)
+	assert.Equal(t, service.AccountPoolCredentialTypeOAuth, exchange.Response.Data.Credential.Type)
+	assert.Equal(t, "refresh-secret", exchange.Response.Data.Credential.RefreshToken)
+	assert.Equal(t, "access-secret", exchange.Response.Data.TokenState.AccessToken)
+	assert.Equal(t, int64(1_900_000_000), exchange.Response.Data.TokenState.ExpiresAt)
+}
+
+func TestAccountPoolXAIOAuthRoutesRejectNonXAIPool(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	pool := createAccountPoolAPITestPool(t, router)
+
+	result := accountPoolAPIRequest[dto.AccountPoolXAIOAuthAuthorizationResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/xai/oauth/authorize", dto.AccountPoolXAIOAuthAuthorizationRequest{})
+	assert.False(t, result.Response.Success)
+	assert.Contains(t, strings.ToLower(result.Response.Message), "xai")
+}
+
+func TestAccountPoolXAIOAuthRefreshAndSSOImportRoutes(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "xai-pool",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+	poolID := poolResult.Response.Data.Id
+
+	oldRefresh := accountPoolXAIOAuthRefreshAccount
+	accountPoolXAIOAuthRefreshAccount = func(ctx context.Context, gotPoolID int, accountID int) (service.AccountPoolAccountView, error) {
+		assert.Equal(t, poolID, gotPoolID)
+		assert.Equal(t, 42, accountID)
+		return service.AccountPoolAccountView{Id: accountID, PoolID: gotPoolID, Name: "refreshed", HasCredential: true, HasToken: true}, nil
+	}
+	t.Cleanup(func() { accountPoolXAIOAuthRefreshAccount = oldRefresh })
+
+	refresh := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(poolID)+"/accounts/42/xai/oauth/refresh", nil)
+	require.True(t, refresh.Response.Success, refresh.Response.Message)
+	assert.Equal(t, "refreshed", refresh.Response.Data.Name)
+
+	oldImport := accountPoolXAISSOImport
+	accountPoolXAISSOImport = func(ctx context.Context, params service.AccountPoolXAISSOImportParams) (service.AccountPoolXAISSOImportResult, error) {
+		assert.Equal(t, poolID, params.PoolID)
+		assert.Equal(t, []string{"sso-secret"}, params.SSOTokens)
+		return service.AccountPoolXAISSOImportResult{
+			Created: []service.AccountPoolAccountView{{Id: 77, PoolID: poolID, Name: "imported", HasCredential: true, HasToken: true}},
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAISSOImport = oldImport })
+
+	importResult := accountPoolAPIRequest[dto.AccountPoolXAISSOImportResponse](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(poolID)+"/accounts/xai/sso_import", dto.AccountPoolXAISSOImportRequest{
+		SSOTokens: []string{"sso-secret"},
+		Name:      "Imported Grok",
+	})
+	require.True(t, importResult.Response.Success, importResult.Response.Message)
+	require.Len(t, importResult.Response.Data.Created, 1)
+	assert.Equal(t, 77, importResult.Response.Data.Created[0].Id)
+	assert.NotContains(t, string(importResult.Raw), "sso-secret")
 }
 
 func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {

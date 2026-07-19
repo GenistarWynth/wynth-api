@@ -39,10 +39,18 @@ type AccountPoolResponse struct {
 }
 
 type AccountPoolCredentialConfigRequest struct {
-	Type         string `json:"type"`
-	APIKey       string `json:"api_key"`
-	Email        string `json:"email"`
-	RefreshToken string `json:"refresh_token"`
+	Type              string `json:"type"`
+	APIKey            string `json:"api_key"`
+	Email             string `json:"email"`
+	RefreshToken      string `json:"refresh_token"`
+	IDToken           string `json:"id_token,omitempty"`
+	ClientID          string `json:"client_id,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	TokenType         string `json:"token_type,omitempty"`
+	Subject           string `json:"sub,omitempty"`
+	TeamID            string `json:"team_id,omitempty"`
+	SubscriptionTier  string `json:"subscription_tier,omitempty"`
+	EntitlementStatus string `json:"entitlement_status,omitempty"`
 	// OAuthType selects the Gemini OAuth sub-type ("code_assist" or "ai_studio").
 	// Only meaningful for Gemini OAuth accounts; ignored otherwise.
 	OAuthType string `json:"oauth_type"`
@@ -153,6 +161,51 @@ type AccountPoolAccountImportResponse struct {
 	ProxyReused  int                             `json:"proxy_reused"`
 	Accounts     []AccountPoolAccountResponse    `json:"accounts,omitempty"`
 	Errors       []AccountPoolAccountImportError `json:"errors,omitempty"`
+}
+
+type AccountPoolXAIOAuthAuthorizationRequest struct {
+	ProxyID     int    `json:"proxy_id"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+type AccountPoolXAIOAuthAuthorizationResponse struct {
+	AuthURL   string `json:"auth_url"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
+}
+
+type AccountPoolXAIOAuthExchangeRequest struct {
+	SessionID string `json:"session_id" binding:"required"`
+	Code      string `json:"code" binding:"required"`
+	State     string `json:"state"`
+}
+
+type AccountPoolXAIOAuthTokenResponse struct {
+	Email             string                             `json:"email,omitempty"`
+	Subject           string                             `json:"sub,omitempty"`
+	TeamID            string                             `json:"team_id,omitempty"`
+	SubscriptionTier  string                             `json:"subscription_tier,omitempty"`
+	EntitlementStatus string                             `json:"entitlement_status,omitempty"`
+	ExpiresAt         int64                              `json:"expires_at"`
+	Credential        AccountPoolCredentialConfigRequest `json:"credential"`
+	TokenState        AccountPoolTokenStateRequest       `json:"token_state"`
+}
+
+type AccountPoolXAISSOImportRequest struct {
+	SSOTokens       []string          `json:"sso_tokens" binding:"required"`
+	Name            string            `json:"name"`
+	Status          string            `json:"status"`
+	Priority        int64             `json:"priority"`
+	Weight          uint              `json:"weight"`
+	MaxConcurrency  *int              `json:"max_concurrency"`
+	ProxyID         int               `json:"proxy_id"`
+	SupportedModels []string          `json:"supported_models"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+}
+
+type AccountPoolXAISSOImportResponse struct {
+	Created []AccountPoolAccountResponse    `json:"created"`
+	Errors  []AccountPoolAccountImportError `json:"errors"`
 }
 
 type AccountPoolCapabilityDetectRequest struct {

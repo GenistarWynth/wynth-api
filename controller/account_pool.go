@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -14,6 +15,19 @@ import (
 )
 
 const maxAccountPoolImportRequestBodyBytes = 16 << 20
+
+var (
+	accountPoolXAIOAuthSessions = service.NewXAIOAuthSessionStore()
+	accountPoolXAIOAuthExchange = func(ctx context.Context, sessionID string, code string, state string) (*service.XAIOAuthTokenInfo, error) {
+		return service.ExchangeXAIOAuthCode(ctx, accountPoolXAIOAuthSessions, sessionID, code, state)
+	}
+	accountPoolXAIOAuthRefreshAccount = func(ctx context.Context, poolID int, accountID int) (service.AccountPoolAccountView, error) {
+		return (&service.AccountPoolService{}).RefreshXAIOAuthAccount(ctx, poolID, accountID)
+	}
+	accountPoolXAISSOImport = func(ctx context.Context, params service.AccountPoolXAISSOImportParams) (service.AccountPoolXAISSOImportResult, error) {
+		return (&service.AccountPoolService{}).ImportXAISSOAccounts(ctx, params)
+	}
+)
 
 func ListAccountPools(c *gin.Context) {
 	pools, err := (&service.AccountPoolService{}).ListPools()
@@ -538,6 +552,191 @@ func DisableAccountPoolBinding(c *gin.Context) {
 	common.ApiSuccess(c, accountPoolBindingResponse(binding))
 }
 
+func GenerateAccountPoolXAIOAuthAuthorization(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	pool, err := accountPoolXAIPool(poolID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var req dto.AccountPoolXAIOAuthAuthorizationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	proxyURL, err := service.ResolveAccountPoolRuntimeProxyURL(req.ProxyID, pool.DefaultProxyID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result, err := service.GenerateXAIOAuthAuthorization(accountPoolXAIOAuthSessions, proxyURL, req.RedirectURI)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.xai_oauth_authorize", map[string]interface{}{
+		"pool_id":  poolID,
+		"proxy_id": req.ProxyID,
+	})
+	common.ApiSuccess(c, dto.AccountPoolXAIOAuthAuthorizationResponse{
+		AuthURL:   result.AuthURL,
+		SessionID: result.SessionID,
+		State:     result.State,
+	})
+}
+
+func ExchangeAccountPoolXAIOAuthCode(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	if _, err := accountPoolXAIPool(poolID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var req dto.AccountPoolXAIOAuthExchangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	info, err := accountPoolXAIOAuthExchange(c.Request.Context(), req.SessionID, req.Code, req.State)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.xai_oauth_exchange", map[string]interface{}{
+		"pool_id": poolID,
+	})
+	common.ApiSuccess(c, accountPoolXAIOAuthTokenResponse(*info))
+}
+
+func RefreshAccountPoolXAIOAuthAccount(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	if _, err := accountPoolXAIPool(poolID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	accountID, ok := accountPoolAccountIDFromParam(c)
+	if !ok {
+		return
+	}
+	account, err := accountPoolXAIOAuthRefreshAccount(c.Request.Context(), poolID, accountID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "account_pool.xai_oauth_refresh", map[string]interface{}{
+		"pool_id":    poolID,
+		"account_id": accountID,
+	})
+	common.ApiSuccess(c, accountPoolAccountResponse(account))
+}
+
+func ImportAccountPoolXAISSOAccounts(c *gin.Context) {
+	poolID, ok := accountPoolIDFromParam(c)
+	if !ok {
+		return
+	}
+	if _, err := accountPoolXAIPool(poolID); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAccountPoolImportRequestBodyBytes)
+	var req dto.AccountPoolXAISSOImportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	maxConcurrency, maxConcurrencySet := accountPoolMaxConcurrencyRequestValue(req.MaxConcurrency)
+	result, err := accountPoolXAISSOImport(c.Request.Context(), service.AccountPoolXAISSOImportParams{
+		PoolID:            poolID,
+		SSOTokens:         req.SSOTokens,
+		Name:              req.Name,
+		Status:            req.Status,
+		Priority:          req.Priority,
+		Weight:            req.Weight,
+		MaxConcurrency:    maxConcurrency,
+		MaxConcurrencySet: maxConcurrencySet,
+		ProxyID:           req.ProxyID,
+		SupportedModels:   req.SupportedModels,
+		ModelMapping:      req.ModelMapping,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	created := make([]dto.AccountPoolAccountResponse, 0, len(result.Created))
+	for _, account := range result.Created {
+		created = append(created, accountPoolAccountResponse(account))
+	}
+	importErrors := make([]dto.AccountPoolAccountImportError, 0, len(result.Errors))
+	for _, item := range result.Errors {
+		importErrors = append(importErrors, dto.AccountPoolAccountImportError{
+			Index:   item.Index,
+			Name:    item.Name,
+			Message: item.Message,
+		})
+	}
+	recordManageAudit(c, "account_pool.xai_sso_import", map[string]interface{}{
+		"pool_id": poolID,
+		"created": len(created),
+		"failed":  len(importErrors),
+	})
+	common.ApiSuccess(c, dto.AccountPoolXAISSOImportResponse{
+		Created: created,
+		Errors:  importErrors,
+	})
+}
+
+func accountPoolXAIPool(poolID int) (model.AccountPool, error) {
+	pool, err := (&service.AccountPoolService{}).GetPool(poolID)
+	if err != nil {
+		return model.AccountPool{}, err
+	}
+	if pool.Platform != model.AccountPoolPlatformXAI {
+		return model.AccountPool{}, errors.New("account pool is not an xai pool")
+	}
+	return pool, nil
+}
+
+func accountPoolXAIOAuthTokenResponse(info service.XAIOAuthTokenInfo) dto.AccountPoolXAIOAuthTokenResponse {
+	credential := info.AccountPoolCredential()
+	tokenState := info.AccountPoolTokenState()
+	return dto.AccountPoolXAIOAuthTokenResponse{
+		Email:             info.Email,
+		Subject:           info.Subject,
+		TeamID:            info.TeamID,
+		SubscriptionTier:  info.SubscriptionTier,
+		EntitlementStatus: info.EntitlementStatus,
+		ExpiresAt:         info.ExpiresAt,
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:              credential.Type,
+			Email:             credential.Email,
+			RefreshToken:      credential.RefreshToken,
+			IDToken:           credential.IDToken,
+			ClientID:          credential.ClientID,
+			Scope:             credential.Scope,
+			TokenType:         credential.TokenType,
+			Subject:           credential.Subject,
+			TeamID:            credential.TeamID,
+			SubscriptionTier:  credential.SubscriptionTier,
+			EntitlementStatus: credential.EntitlementStatus,
+		},
+		TokenState: dto.AccountPoolTokenStateRequest{
+			AccessToken:  tokenState.AccessToken,
+			RefreshToken: tokenState.RefreshToken,
+			ExpiresAt:    tokenState.ExpiresAt,
+			Version:      tokenState.Version,
+		},
+	}
+}
+
 func accountPoolIDFromParam(c *gin.Context) (int, bool) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id == 0 {
@@ -604,6 +803,14 @@ func accountPoolAccountCreateParams(poolID int, req dto.AccountPoolAccountCreate
 			APIKey:             req.Credential.APIKey,
 			Email:              req.Credential.Email,
 			RefreshToken:       req.Credential.RefreshToken,
+			IDToken:            req.Credential.IDToken,
+			ClientID:           req.Credential.ClientID,
+			Scope:              req.Credential.Scope,
+			TokenType:          req.Credential.TokenType,
+			Subject:            req.Credential.Subject,
+			TeamID:             req.Credential.TeamID,
+			SubscriptionTier:   req.Credential.SubscriptionTier,
+			EntitlementStatus:  req.Credential.EntitlementStatus,
 			ServiceAccountJSON: req.Credential.ServiceAccountJSON,
 			Location:           req.Credential.Location,
 			CFClearance:        req.Credential.CFClearance,
