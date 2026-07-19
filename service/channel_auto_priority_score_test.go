@@ -734,6 +734,272 @@ func TestScoreAutoPriorityCandidatesCrossSourceCohortCostBounds(t *testing.T) {
 	})
 }
 
+func TestScoreAutoPriorityCandidatesExtremeCostDominance(t *testing.T) {
+	t.Run("close prices preserve enough quality signal for the healthier channel to win", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1001,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.04,
+				Availability:            floatPtr(0.5),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     90000,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           1,
+				ThroughputSampleCount:   1,
+			},
+			{
+				ChannelID:               1002,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.05,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     100,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           20,
+				ThroughputSampleCount:   1,
+			},
+		}, 1000)
+
+		cheap := resultByChannelID(results, 1001)
+		healthy := resultByChannelID(results, 1002)
+		require.NotNil(t, cheap)
+		require.NotNil(t, healthy)
+		assert.Greater(t, healthy.FinalScore, cheap.FinalScore)
+		assert.Greater(t, healthy.ComputedPriority, cheap.ComputedPriority)
+	})
+
+	t.Run("usable extreme cheap channel dominates the best expensive metrics", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1011,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.001,
+				Availability:            floatPtr(0),
+				MonitorCheckCount:       2,
+				FirstTokenLatencyMS:     90000,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           1,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          1,
+			},
+			{
+				ChannelID:               1012,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.05,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     100,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           20,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          1,
+			},
+		}, 1000)
+
+		cheap := resultByChannelID(results, 1011)
+		expensive := resultByChannelID(results, 1012)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, 1.0)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, int64(10))
+	})
+
+	t.Run("exact eight times cost gap triggers dominance", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1021,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.001,
+				MonitorCheckCount:       10,
+				FirstTokenLatencyMS:     90000,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           1,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          0.008,
+			},
+			{
+				ChannelID:               1022,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.008,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     100,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           20,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          0.008,
+			},
+		}, 1000)
+
+		cheap := resultByChannelID(results, 1021)
+		expensive := resultByChannelID(results, 1022)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, 1.0)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, int64(10))
+	})
+
+	t.Run("tiny valid costs preserve ratios and dominance", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1,
+				LocalGroup:              "tiny",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 1e-15,
+				Availability:            floatPtr(0),
+				MonitorCheckCount:       2,
+				FirstTokenLatencyMS:     90000,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           1,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         1e-17,
+			},
+			{
+				ChannelID:               2,
+				LocalGroup:              "tiny",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 8e-15,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     100,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           20,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         1e-17,
+			},
+		}, 1000)
+
+		cheap := resultByChannelID(results, 1)
+		expensive := resultByChannelID(results, 2)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.InDelta(t, 1, cheap.EffectivePriceScore, 1e-12)
+		assert.InDelta(t, 0.125, expensive.EffectivePriceScore, 1e-12)
+		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, 1.0)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, int64(10))
+	})
+
+	t.Run("unusable extreme cheap channel does not force dominance", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1031,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.001,
+				Availability:            floatPtr(0),
+				MonitorCheckCount:       3,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          1,
+			},
+			{
+				ChannelID:               1032,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.05,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     100,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           20,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          1,
+			},
+		}, 1000)
+
+		cheap := resultByChannelID(results, 1031)
+		expensive := resultByChannelID(results, 1032)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.Less(t, cheap.FinalScore, expensive.FinalScore)
+		assert.Less(t, cheap.ComputedPriority, expensive.ComputedPriority)
+	})
+
+	t.Run("hysteresis cannot retain the expensive channel above extreme cheap", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1041,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         251,
+				EffectiveRateMultiplier: 0.001,
+				Availability:            floatPtr(0),
+				MonitorCheckCount:       2,
+				FirstTokenLatencyMS:     90000,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           1,
+				ThroughputSampleCount:   1,
+				HasPreviousSnapshot:     true,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          1,
+			},
+			{
+				ChannelID:               1042,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         259,
+				EffectiveRateMultiplier: 0.05,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     100,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           20,
+				ThroughputSampleCount:   1,
+				HasPreviousSnapshot:     true,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          1,
+			},
+		}, 1000)
+
+		cheap := resultByChannelID(results, 1041)
+		expensive := resultByChannelID(results, 1042)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.Greater(t, cheap.ComputedPriority, expensive.ComputedPriority)
+		assert.Greater(t, cheap.NewPriority, expensive.NewPriority)
+		assert.True(t, cheap.Applied)
+	})
+
+	t.Run("single member uses cohort ceiling for dominance correction", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1051,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.001,
+				Availability:            floatPtr(0),
+				MonitorCheckCount:       2,
+				FirstTokenLatencyMS:     90000,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           1,
+				ThroughputSampleCount:   1,
+				CohortCostFloor:         0.00001,
+				CohortCostCeil:          0.05,
+			},
+		}, 1000)
+
+		require.Len(t, results, 1)
+		result := results[0]
+		syntheticExpensivePriceScore := 100 * 0.00001 / 0.05
+		syntheticExpensiveFinalScore := 0.75*syntheticExpensivePriceScore + 0.12*100 + 0.05*100 + 0.08*100
+		syntheticExpensivePriority := int64(math.Round(syntheticExpensiveFinalScore * 10))
+		assert.InDelta(t, 1, result.EffectivePriceScore, 0.0001)
+		assert.GreaterOrEqual(t, result.FinalScore-syntheticExpensiveFinalScore, 1.0)
+		assert.GreaterOrEqual(t, result.ComputedPriority-syntheticExpensivePriority, int64(10))
+	})
+}
+
 func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {
 	assert.True(t, autoPriorityDeltaBelowThreshold(100, 109, 10))
 	assert.False(t, autoPriorityDeltaBelowThreshold(100, 110, 10))

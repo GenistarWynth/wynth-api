@@ -1098,6 +1098,25 @@ func TestAutoPriorityLocalGroupCostBoundsAggregatesAcrossSources(t *testing.T) {
 	assert.InDelta(t, 0.20, bounds[cohort][1], 0.0001)
 }
 
+func TestAutoPriorityLocalGroupCostBoundsIncludesManualAndGeneratedChannels(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+
+	createAutoPriorityTestChannel(t, "manual cheap", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:        true,
+		ChannelAutoPriorityRateMultiplier: 0.001,
+	})
+	source := createSyncTestSource(t, nil)
+	_, _ = createGeneratedAutoPriorityTestChannel(t, source.Id, 0.05, "generated expensive", 100)
+
+	bounds, err := autoPriorityLocalGroupCostBounds(context.Background(), []string{"default"}, []int{constant.ChannelTypeOpenAI})
+
+	require.NoError(t, err)
+	cohort := autoPriorityCohortKey("default", constant.ChannelTypeOpenAI)
+	require.Contains(t, bounds, cohort)
+	assert.InDelta(t, 0.001, bounds[cohort][0], 0.0001)
+	assert.InDelta(t, 0.05, bounds[cohort][1], 0.0001)
+}
+
 func TestAutoPriorityLocalGroupCostBoundsReturnsEmptyForNoGroups(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 
@@ -1140,10 +1159,8 @@ func TestRunUpstreamSourceAutoPriorityUsesCrossSourceCostBoundsWithinLocalGroup(
 	assert.Equal(t, expensiveChannel.Id, r.LocalChannelID)
 
 	// Without the cross-source cost bounds fix, source A's run only ever sees
-	// its own single channel, so the price cohort is degenerate and
-	// EffectivePriceScore is forced to 100 regardless of actual cost. With the
-	// fix, source A's 0.20 multiplier is scored against the group-wide
-	// [0.05, 0.20] range (which includes source B's cheaper channel) and lands
-	// at the bottom of that range.
-	assert.InDelta(t, 0, r.EffectivePriceScore, 0.0001)
+	// its own single channel, so EffectivePriceScore is forced to 100 regardless
+	// of actual cost. With group-wide bounds, the inverse-cost score preserves the
+	// real 4x gap: 0.05 / 0.20 * 100 = 25.
+	assert.InDelta(t, 25, r.EffectivePriceScore, 0.0001)
 }
