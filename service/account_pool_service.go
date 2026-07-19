@@ -1582,6 +1582,14 @@ func accountPoolCredentialHasValue(config AccountPoolCredentialConfig) bool {
 		strings.TrimSpace(config.APIKey) != "" ||
 		strings.TrimSpace(config.RefreshToken) != "" ||
 		strings.TrimSpace(config.Email) != "" ||
+		strings.TrimSpace(config.IDToken) != "" ||
+		strings.TrimSpace(config.ClientID) != "" ||
+		strings.TrimSpace(config.Scope) != "" ||
+		strings.TrimSpace(config.TokenType) != "" ||
+		strings.TrimSpace(config.Subject) != "" ||
+		strings.TrimSpace(config.TeamID) != "" ||
+		strings.TrimSpace(config.SubscriptionTier) != "" ||
+		strings.TrimSpace(config.EntitlementStatus) != "" ||
 		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
 		strings.TrimSpace(config.CFClearance) != ""
 }
@@ -1619,6 +1627,30 @@ func mergeAccountPoolCredentialUpdate(existing, incoming AccountPoolCredentialCo
 	if strings.TrimSpace(incoming.RefreshToken) != "" {
 		merged.RefreshToken = incoming.RefreshToken
 	}
+	if strings.TrimSpace(incoming.IDToken) != "" {
+		merged.IDToken = incoming.IDToken
+	}
+	if strings.TrimSpace(incoming.ClientID) != "" {
+		merged.ClientID = incoming.ClientID
+	}
+	if strings.TrimSpace(incoming.Scope) != "" {
+		merged.Scope = incoming.Scope
+	}
+	if strings.TrimSpace(incoming.TokenType) != "" {
+		merged.TokenType = incoming.TokenType
+	}
+	if strings.TrimSpace(incoming.Subject) != "" {
+		merged.Subject = incoming.Subject
+	}
+	if strings.TrimSpace(incoming.TeamID) != "" {
+		merged.TeamID = incoming.TeamID
+	}
+	if strings.TrimSpace(incoming.SubscriptionTier) != "" {
+		merged.SubscriptionTier = incoming.SubscriptionTier
+	}
+	if strings.TrimSpace(incoming.EntitlementStatus) != "" {
+		merged.EntitlementStatus = incoming.EntitlementStatus
+	}
 	if strings.TrimSpace(incoming.ServiceAccountJSON) != "" {
 		merged.ServiceAccountJSON = incoming.ServiceAccountJSON
 	}
@@ -1635,6 +1667,14 @@ func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
 	return strings.TrimSpace(config.APIKey) != "" ||
 		strings.TrimSpace(config.RefreshToken) != "" ||
 		strings.TrimSpace(config.Email) != "" ||
+		strings.TrimSpace(config.IDToken) != "" ||
+		strings.TrimSpace(config.ClientID) != "" ||
+		strings.TrimSpace(config.Scope) != "" ||
+		strings.TrimSpace(config.TokenType) != "" ||
+		strings.TrimSpace(config.Subject) != "" ||
+		strings.TrimSpace(config.TeamID) != "" ||
+		strings.TrimSpace(config.SubscriptionTier) != "" ||
+		strings.TrimSpace(config.EntitlementStatus) != "" ||
 		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
 		strings.TrimSpace(config.CFClearance) != ""
 }

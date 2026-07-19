@@ -47,6 +47,17 @@ type AccountPoolCredentialConfig struct {
 	APIKey       string `json:"api_key"`
 	Email        string `json:"email"`
 	RefreshToken string `json:"refresh_token"`
+	// The remaining OAuth metadata is encrypted with the credential blob. xAI
+	// uses ClientID when an account was authorized with a non-default public
+	// client, while IDToken/claims let admin imports retain account identity.
+	IDToken           string `json:"id_token,omitempty"`
+	ClientID          string `json:"client_id,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	TokenType         string `json:"token_type,omitempty"`
+	Subject           string `json:"sub,omitempty"`
+	TeamID            string `json:"team_id,omitempty"`
+	SubscriptionTier  string `json:"subscription_tier,omitempty"`
+	EntitlementStatus string `json:"entitlement_status,omitempty"`
 	// ServiceAccountJSON holds the raw GCP service-account JSON for a Vertex AI
 	// service_account credential. It is a SECRET and lives in the encrypted
 	// credential blob. project_id is read from this JSON at runtime.
