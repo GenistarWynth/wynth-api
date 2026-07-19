@@ -20,6 +20,11 @@ func TestAccountPoolServiceReconcileXAIOAuthAccountsDryRunClassifiesCandidates(t
 	missingRefresh := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
 		Name:       "missing-refresh",
 		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState: AccountPoolTokenState{Version: 1},
+	})
+	validAccessOnly := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "valid-access-only",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
 		TokenState: AccountPoolTokenState{AccessToken: "still-valid", ExpiresAt: 5000, Version: 1},
 	})
 	expiredAccess := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
@@ -51,7 +56,7 @@ func TestAccountPoolServiceReconcileXAIOAuthAccountsDryRunClassifiesCandidates(t
 
 	require.NoError(t, err)
 	assert.True(t, result.DryRun)
-	assert.Equal(t, 4, result.Scanned)
+	assert.Equal(t, 5, result.Scanned)
 	assert.Equal(t, 3, result.Candidates)
 	assert.Zero(t, result.Applied)
 	items := accountPoolXAIOAuthReconcileItemsByID(result.Items)
@@ -60,8 +65,9 @@ func TestAccountPoolServiceReconcileXAIOAuthAccountsDryRunClassifiesCandidates(t
 	assert.Equal(t, AccountPoolXAIOAuthReconcileActionRefresh, items[expiredAccess.Id].Action)
 	assert.Equal(t, AccountPoolXAIOAuthReconcileReasonAccessExpired, items[expiredAccess.Id].Reason)
 	assert.Equal(t, AccountPoolXAIOAuthReconcileReasonAccessNearExpiry, items[nearExpiry.Id].Reason)
+	assert.NotContains(t, items, validAccessOnly.Id, "valid access-only credentials must remain usable until access expiry")
 
-	for _, accountID := range []int{missingRefresh.Id, expiredAccess.Id, nearExpiry.Id} {
+	for _, accountID := range []int{missingRefresh.Id, validAccessOnly.Id, expiredAccess.Id, nearExpiry.Id} {
 		var stored model.AccountPoolAccount
 		require.NoError(t, model.DB.First(&stored, accountID).Error)
 		assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)

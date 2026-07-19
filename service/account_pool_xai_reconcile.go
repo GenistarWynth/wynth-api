@@ -173,13 +173,18 @@ func classifyAccountPoolXAIOAuthReconcileCandidate(account model.AccountPoolAcco
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(account.LastError)), "xai oauth credential rejected") {
 		return AccountPoolXAIOAuthReconcileActionExpire, AccountPoolXAIOAuthReconcileReasonCredentialRejected
 	}
+	accessMissing := strings.TrimSpace(state.AccessToken) == ""
+	accessExpired := state.ExpiresAt > 0 && state.ExpiresAt <= now
 	if accountPoolRuntimeRefreshToken(credential, state) == "" {
-		return AccountPoolXAIOAuthReconcileActionExpire, AccountPoolXAIOAuthReconcileReasonMissingRefreshToken
+		if accessMissing || accessExpired {
+			return AccountPoolXAIOAuthReconcileActionExpire, AccountPoolXAIOAuthReconcileReasonMissingRefreshToken
+		}
+		return "", ""
 	}
-	if strings.TrimSpace(state.AccessToken) == "" {
+	if accessMissing {
 		return AccountPoolXAIOAuthReconcileActionRefresh, AccountPoolXAIOAuthReconcileReasonAccessMissing
 	}
-	if state.ExpiresAt > 0 && state.ExpiresAt <= now {
+	if accessExpired {
 		return AccountPoolXAIOAuthReconcileActionRefresh, AccountPoolXAIOAuthReconcileReasonAccessExpired
 	}
 	if state.ExpiresAt > 0 && state.ExpiresAt <= now+window {
