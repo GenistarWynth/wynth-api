@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type {
   AccountPoolAccount,
+  AccountPoolLocalQuotaResetRequest,
   AccountPoolXAIQuotaSnapshot,
 } from '../types'
 
@@ -33,6 +34,23 @@ export function canProbeXAIQuota(
   account: Pick<AccountPoolAccount, 'credential_type'>
 ) {
   return platform === 'xai' && account.credential_type === 'oauth'
+}
+
+export function canForceProbeAfterLocalQuotaReset(
+  platform: string | undefined,
+  account: Pick<AccountPoolAccount, 'credential_type'>
+) {
+  return canProbeXAIQuota(platform, account)
+}
+
+export function defaultLocalQuotaResetRequest(
+  account: Pick<AccountPoolAccount, 'request_quota'>
+): AccountPoolLocalQuotaResetRequest {
+  return {
+    clear_cooldown: true,
+    reset_request_quota: account.request_quota > 0,
+    force_probe: false,
+  }
 }
 
 export function xaiQuotaDisplayState(

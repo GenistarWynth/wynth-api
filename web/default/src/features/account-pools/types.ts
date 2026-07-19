@@ -221,6 +221,21 @@ export type AccountPoolXAIQuotaSnapshot = {
   probe_error?: string
 }
 
+export type AccountPoolLocalQuotaResetRequest = {
+  clear_cooldown: boolean
+  reset_request_quota: boolean
+  force_probe: boolean
+}
+
+export type AccountPoolLocalQuotaResetResponse = {
+  account: AccountPoolAccount
+  cooldown_cleared: boolean
+  request_quota_reset: boolean
+  probe?: AccountPoolXAIQuotaSnapshot
+  probe_error?: string
+  upstream_reset: boolean
+}
+
 export type AccountPoolAccount = {
   id: number
   pool_id: number

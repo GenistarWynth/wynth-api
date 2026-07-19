@@ -34,6 +34,8 @@ import type {
   AccountPoolXAIQuotaSnapshot,
   AccountPoolAccountImportRequest,
   AccountPoolAccountImportResponse,
+  AccountPoolLocalQuotaResetRequest,
+  AccountPoolLocalQuotaResetResponse,
   AccountPoolBinding,
   AccountPoolBoundChannelCreateRequest,
   AccountPoolBindingCreateRequest,
@@ -187,6 +189,19 @@ export async function probeAccountPoolXAIQuota(
   const res = await api.post(
     `/api/account_pools/${poolID}/accounts/${accountID}/xai/quota/probe`,
     null,
+    accountPoolActionConfig()
+  )
+  return res.data
+}
+
+export async function resetAccountPoolLocalQuota(
+  poolID: number,
+  accountID: number,
+  data: AccountPoolLocalQuotaResetRequest
+): Promise<ApiResponse<AccountPoolLocalQuotaResetResponse>> {
+  const res = await api.post(
+    `/api/account_pools/${poolID}/accounts/${accountID}/quota/reset`,
+    data,
     accountPoolActionConfig()
   )
   return res.data

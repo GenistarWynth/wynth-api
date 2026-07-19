@@ -153,6 +153,7 @@ import {
   listAccountPools,
   probeAccountPoolXAIQuota,
   reconcileAccountPoolXAIOAuthAccounts,
+  resetAccountPoolLocalQuota,
   updateAccountPool,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
@@ -184,7 +185,12 @@ import {
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
 } from './lib/account-pool-form'
-import { canProbeXAIQuota, xaiQuotaDisplayState } from './lib/xai-quota'
+import {
+  canForceProbeAfterLocalQuotaReset,
+  canProbeXAIQuota,
+  defaultLocalQuotaResetRequest,
+  xaiQuotaDisplayState,
+} from './lib/xai-quota'
 import type {
   AccountPool,
   AccountPoolAccount,
@@ -193,6 +199,7 @@ import type {
   AccountPoolCapabilityDetectResult,
   AccountPoolCapabilityMode,
   AccountPoolCapabilityPoolResult,
+  AccountPoolLocalQuotaResetRequest,
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
   AccountPoolSchedulePolicy,
@@ -827,6 +834,8 @@ export function AccountPools() {
   const [accountSheetOpen, setAccountSheetOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<AccountPoolAccount>()
   const [deletingAccount, setDeletingAccount] = useState<AccountPoolAccount>()
+  const [resettingQuotaAccount, setResettingQuotaAccount] =
+    useState<AccountPoolAccount>()
   const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false)
   const [detectingAccount, setDetectingAccount] = useState<AccountPoolAccount>()
   const [accountImportOpen, setAccountImportOpen] = useState(false)
@@ -1092,6 +1101,37 @@ export function AccountPools() {
         return
       }
       toast.success(t('xAI quota probe completed'))
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const resetLocalQuotaMutation = useMutation({
+    mutationFn: async (request: AccountPoolLocalQuotaResetRequest) => {
+      if (!selectedPoolID || !resettingQuotaAccount) {
+        throw new Error(t('Select an account first'))
+      }
+      return resetAccountPoolLocalQuota(
+        selectedPoolID,
+        resettingQuotaAccount.id,
+        request
+      )
+    },
+    onSuccess: (result) => {
+      if (!result.success || !result.data) {
+        toast.error(
+          apiErrorMessage(result, t('Failed to reset local quota state'))
+        )
+        return
+      }
+      if (result.data.probe_error) {
+        toast.warning(t('Local quota state reset; xAI re-probe failed'))
+      } else {
+        toast.success(t('Local quota state reset'))
+      }
+      setResettingQuotaAccount(undefined)
       invalidatePools()
     },
     onError: (error) => {
@@ -1514,6 +1554,7 @@ export function AccountPools() {
             setBoundChannelDialogOpen(false)
             setCapabilityDialogOpen(false)
             setDetectingAccount(undefined)
+            setResettingQuotaAccount(undefined)
             setXAIOAuthReconcilePreview(undefined)
           }
         }}
@@ -1547,6 +1588,7 @@ export function AccountPools() {
             ? probeXAIQuotaMutation.variables?.id
             : undefined
         }
+        onResetLocalQuota={setResettingQuotaAccount}
         onReconcileXAIOAuth={() => {
           if (selectedPoolID) {
             reconcileXAIOAuthMutation.mutate({
@@ -1574,6 +1616,18 @@ export function AccountPools() {
         onSetBindingStatus={(binding, status) =>
           setBindingStatusMutation.mutate({ binding, status })
         }
+      />
+      <LocalQuotaResetDialog
+        open={Boolean(resettingQuotaAccount)}
+        account={resettingQuotaAccount}
+        poolPlatform={selectedPool?.platform}
+        submitting={resetLocalQuotaMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open && !resetLocalQuotaMutation.isPending) {
+            setResettingQuotaAccount(undefined)
+          }
+        }}
+        onSubmit={(request) => resetLocalQuotaMutation.mutate(request)}
       />
       <ConfirmDialog
         open={Boolean(xaiOAuthReconcilePreview)}
@@ -2722,6 +2776,136 @@ function CapabilityDetectDialog(props: {
   )
 }
 
+function LocalQuotaResetDialog(props: {
+  open: boolean
+  account?: AccountPoolAccount
+  poolPlatform?: string
+  submitting: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (request: AccountPoolLocalQuotaResetRequest) => void
+}) {
+  const { t } = useTranslation()
+  const [request, setRequest] = useState<AccountPoolLocalQuotaResetRequest>({
+    clear_cooldown: true,
+    reset_request_quota: false,
+    force_probe: false,
+  })
+
+  useEffect(() => {
+    if (props.open && props.account) {
+      setRequest(defaultLocalQuotaResetRequest(props.account))
+    }
+  }, [props.account, props.open])
+
+  const canForceProbe = Boolean(
+    props.account &&
+      canForceProbeAfterLocalQuotaReset(props.poolPlatform, props.account)
+  )
+  const hasAction =
+    request.clear_cooldown ||
+    request.reset_request_quota ||
+    request.force_probe
+
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className='sm:max-w-[520px]'>
+        <DialogHeader>
+          <DialogTitle>{t('Reset local quota state')}</DialogTitle>
+          <DialogDescription>
+            {t(
+              "This clears only Wynth's local cooldown or counters. It does not reset upstream provider quota."
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          id='account-pool-local-quota-reset-form'
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (hasAction) props.onSubmit(request)
+          }}
+        >
+          <FieldSet>
+            <FieldLegend variant='label'>{t('Local reset options')}</FieldLegend>
+            <FieldGroup>
+              <Field orientation='horizontal'>
+                <Checkbox
+                  id='clear-account-pool-quota-cooldown'
+                  checked={request.clear_cooldown}
+                  onCheckedChange={(checked) =>
+                    setRequest((current) => ({
+                      ...current,
+                      clear_cooldown: Boolean(checked),
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='clear-account-pool-quota-cooldown'>
+                  {t('Clear local cooldown and quota exhaustion state')}
+                </FieldLabel>
+              </Field>
+              <Field orientation='horizontal'>
+                <Checkbox
+                  id='reset-account-pool-request-quota-counter'
+                  checked={request.reset_request_quota}
+                  onCheckedChange={(checked) =>
+                    setRequest((current) => ({
+                      ...current,
+                      reset_request_quota: Boolean(checked),
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='reset-account-pool-request-quota-counter'>
+                  {t('Reset local request quota window counter')}
+                </FieldLabel>
+              </Field>
+              <Field
+                orientation='horizontal'
+                data-disabled={!canForceProbe || undefined}
+              >
+                <Checkbox
+                  id='force-account-pool-quota-reprobe'
+                  checked={request.force_probe}
+                  disabled={!canForceProbe}
+                  onCheckedChange={(checked) =>
+                    setRequest((current) => ({
+                      ...current,
+                      force_probe: Boolean(checked),
+                    }))
+                  }
+                />
+                <FieldLabel htmlFor='force-account-pool-quota-reprobe'>
+                  {t('Force xAI quota re-probe after reset')}
+                </FieldLabel>
+              </Field>
+            </FieldGroup>
+            {!canForceProbe ? (
+              <FieldDescription>
+                {t('Forced re-probe is available only for xAI OAuth accounts.')}
+              </FieldDescription>
+            ) : null}
+          </FieldSet>
+        </form>
+        <DialogFooter>
+          <DialogClose render={<Button type='button' variant='outline' />}>
+            {t('Cancel')}
+          </DialogClose>
+          <Button
+            type='submit'
+            form='account-pool-local-quota-reset-form'
+            disabled={props.submitting || !hasAction}
+          >
+            {props.submitting ? (
+              <Loader2 data-icon='inline-start' className='animate-spin' />
+            ) : (
+              <RefreshCw data-icon='inline-start' />
+            )}
+            {props.submitting ? t('Resetting...') : t('Reset local state')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PoolDetailsSheet(props: {
   open: boolean
   pool?: AccountPool
@@ -2747,6 +2931,7 @@ function PoolDetailsSheet(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
   probingXAIQuotaAccountID?: number
+  onResetLocalQuota: (account: AccountPoolAccount) => void
   onReconcileXAIOAuth: () => void
   reconcilingXAIOAuth: boolean
   onCreateProxy: () => void
@@ -2821,6 +3006,7 @@ function PoolDetailsSheet(props: {
                 onSetAccountStatus={props.onSetAccountStatus}
                 onProbeXAIQuota={props.onProbeXAIQuota}
                 probingXAIQuotaAccountID={props.probingXAIQuotaAccountID}
+                onResetLocalQuota={props.onResetLocalQuota}
                 onReconcileXAIOAuth={props.onReconcileXAIOAuth}
                 reconcilingXAIOAuth={props.reconcilingXAIOAuth}
               />
@@ -2890,6 +3076,7 @@ function AccountListSection(props: {
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
   probingXAIQuotaAccountID?: number
+  onResetLocalQuota: (account: AccountPoolAccount) => void
   onReconcileXAIOAuth: () => void
   reconcilingXAIOAuth: boolean
 }) {
@@ -3063,6 +3250,7 @@ function AccountListSection(props: {
                       props.probingXAIQuotaAccountID === account.id
                     }
                     onProbeXAIQuota={props.onProbeXAIQuota}
+                    onResetLocalQuota={props.onResetLocalQuota}
                   />
                 </TableCell>
               </TableRow>
@@ -3151,6 +3339,7 @@ function AccountRowActions(props: {
   onEdit: (account: AccountPoolAccount) => void
   onDetect: (account: AccountPoolAccount) => void
   onProbeXAIQuota: (account: AccountPoolAccount) => void
+  onResetLocalQuota: (account: AccountPoolAccount) => void
   onDelete: (account: AccountPoolAccount) => void
   onSetStatus: (account: AccountPoolAccount, status: string) => void
 }) {
@@ -3196,6 +3385,12 @@ function AccountRowActions(props: {
               : t('Probe xAI quota')}
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem
+          onClick={() => props.onResetLocalQuota(props.account)}
+        >
+          <RefreshCw />
+          {t('Reset local quota state')}
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => props.onSetStatus(props.account, nextStatus)}
         >

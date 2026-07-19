@@ -171,6 +171,21 @@ type AccountPoolXAIQuotaSnapshot struct {
 	ProbeError             string                         `json:"probe_error,omitempty"`
 }
 
+type AccountPoolLocalQuotaResetRequest struct {
+	ClearCooldown     *bool `json:"clear_cooldown"`
+	ResetRequestQuota bool  `json:"reset_request_quota"`
+	ForceProbe        bool  `json:"force_probe"`
+}
+
+type AccountPoolLocalQuotaResetResponse struct {
+	Account           AccountPoolAccountResponse   `json:"account"`
+	CooldownCleared   bool                         `json:"cooldown_cleared"`
+	RequestQuotaReset bool                         `json:"request_quota_reset"`
+	Probe             *AccountPoolXAIQuotaSnapshot `json:"probe,omitempty"`
+	ProbeError        string                       `json:"probe_error,omitempty"`
+	UpstreamReset     bool                         `json:"upstream_reset"`
+}
+
 type AccountPoolAccountImportDefaultsRequest struct {
 	Status          string            `json:"status"`
 	Priority        int64             `json:"priority"`

@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, it } from 'vitest'
 
 import type { AccountPoolAccount } from '../types'
-import { canProbeXAIQuota, xaiQuotaDisplayState } from './xai-quota'
+import {
+  canForceProbeAfterLocalQuotaReset,
+  canProbeXAIQuota,
+  defaultLocalQuotaResetRequest,
+  xaiQuotaDisplayState,
+} from './xai-quota'
 
 const account = {
   credential_type: 'oauth',
@@ -63,5 +68,30 @@ describe('xAI quota presentation', () => {
     })
     expect(state?.media).toBe('unknown')
     expect(xaiQuotaDisplayState(undefined)).toBeUndefined()
+  })
+
+  it('builds an explicitly local reset request and gates force-probe', () => {
+    expect(canForceProbeAfterLocalQuotaReset('xai', account)).toBe(true)
+    expect(canForceProbeAfterLocalQuotaReset('openai', account)).toBe(false)
+    expect(
+      defaultLocalQuotaResetRequest({
+        request_quota: 100,
+        credential_type: 'oauth',
+      } as AccountPoolAccount)
+    ).toEqual({
+      clear_cooldown: true,
+      reset_request_quota: true,
+      force_probe: false,
+    })
+    expect(
+      defaultLocalQuotaResetRequest({
+        request_quota: 0,
+        credential_type: 'api_key',
+      } as AccountPoolAccount)
+    ).toEqual({
+      clear_cooldown: true,
+      reset_request_quota: false,
+      force_probe: false,
+    })
   })
 })
