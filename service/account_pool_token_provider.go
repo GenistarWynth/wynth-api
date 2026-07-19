@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 
 	"golang.org/x/sync/singleflight"
+	"gorm.io/gorm"
 )
 
 const accountPoolOAuthRefreshSkewSeconds = int64(60)
@@ -27,6 +28,7 @@ type AccountPoolRuntimeCredentialRequest struct {
 
 type accountPoolOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
 type accountPoolClaudeOAuthRefreshFunc func(context.Context, string, string) (*CodexOAuthTokenResult, error)
+type accountPoolXAIOAuthRefreshFunc func(context.Context, string, string, string) (*CodexOAuthTokenResult, error)
 
 // accountPoolGeminiOAuthRefreshFunc carries the account's oauth_type so the Gemini
 // refresh can select the correct OAuth client (e.g. antigravity vs gemini-cli).
@@ -43,7 +45,7 @@ var (
 	accountPoolOAuthRefresh       accountPoolOAuthRefreshFunc       = RefreshCodexOAuthTokenWithProxy
 	accountPoolClaudeOAuthRefresh accountPoolClaudeOAuthRefreshFunc = RefreshClaudeOAuthTokenWithProxy
 	accountPoolGeminiOAuthRefresh accountPoolGeminiOAuthRefreshFunc = RefreshGeminiOAuthTokenForType
-	accountPoolXAIOAuthRefresh    accountPoolOAuthRefreshFunc       = RefreshXAIOAuthTokenWithProxy
+	accountPoolXAIOAuthRefresh    accountPoolXAIOAuthRefreshFunc    = RefreshXAIOAuthTokenForClientWithProxy
 	accountPoolTokenStateUpdate   accountPoolTokenStateUpdateFunc   = updateAccountPoolRuntimeTokenState
 	accountPoolVertexSATokenMint  accountPoolVertexSATokenMintFunc  = MintVertexServiceAccountToken
 )
@@ -83,11 +85,8 @@ func ResolveAccountPoolRuntimeCredential(ctx context.Context, req AccountPoolRun
 		return "", nil
 	}
 	refreshToken := accountPoolRuntimeRefreshToken(req.Credential, req.TokenState)
-	if refreshToken == "" {
-		if strings.TrimSpace(req.TokenState.AccessToken) != "" && req.TokenState.ExpiresAt == 0 {
-			return strings.TrimSpace(req.TokenState.AccessToken), nil
-		}
-		return "", errors.New("account pool oauth refresh_token is required")
+	if refreshToken == "" && strings.TrimSpace(req.TokenState.AccessToken) != "" && req.TokenState.ExpiresAt == 0 {
+		return strings.TrimSpace(req.TokenState.AccessToken), nil
 	}
 	if req.AccountID <= 0 {
 		return "", errors.New("account pool account id is required for oauth refresh")
@@ -159,7 +158,11 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	}
 	refreshToken := accountPoolRuntimeRefreshToken(credential, state)
 	if refreshToken == "" {
-		return "", errors.New("account pool oauth refresh_token is required")
+		err := errors.New("account pool oauth refresh_token is required")
+		if !skipFailureRecord {
+			_ = expireAccountPoolRuntimeMissingRefreshToken(account.Id, now)
+		}
+		return "", err
 	}
 
 	// Dispatch to the platform-specific refresh function.
@@ -170,7 +173,7 @@ func refreshAccountPoolRuntimeOAuthTokenOnce(ctx context.Context, accountID int,
 	case model.AccountPoolPlatformGemini:
 		result, err = accountPoolGeminiOAuthRefresh(ctx, account.OAuthType, refreshToken, proxyURL)
 	case model.AccountPoolPlatformXAI:
-		result, err = accountPoolXAIOAuthRefresh(ctx, refreshToken, proxyURL)
+		result, err = accountPoolXAIOAuthRefresh(ctx, refreshToken, proxyURL, credential.ClientID)
 	case model.AccountPoolPlatformOpenAI, "":
 		result, err = accountPoolOAuthRefresh(ctx, refreshToken, proxyURL)
 	default:
@@ -333,6 +336,26 @@ func markAccountPoolRuntimeTokenRefreshFailure(accountID int, err error, now int
 			"temp_disabled_until":  now + accountPoolTemporaryDisableSeconds,
 			"temp_disabled_reason": reason,
 			"last_error":           message,
+		}).Error
+}
+
+func expireAccountPoolRuntimeMissingRefreshToken(accountID int, now int64) error {
+	if accountID <= 0 {
+		return nil
+	}
+	const message = "account pool oauth refresh_token is required"
+	return model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ? AND status = ?", accountID, model.AccountPoolAccountStatusEnabled).
+		Updates(map[string]any{
+			"status":               model.AccountPoolAccountStatusExpired,
+			"rate_limited_until":   int64(0),
+			"temp_disabled_until":  int64(0),
+			"overload_until":       int64(0),
+			"temp_disabled_reason": "",
+			"last_error":           message,
+			"last_failure_at":      now,
+			"failure_count":        gorm.Expr("failure_count + ?", 1),
+			"updated_time":         now,
 		}).Error
 }
 

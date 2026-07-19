@@ -41,6 +41,105 @@ func TestAccountPoolTokenProviderNoopsWithoutAnyCredential(t *testing.T) {
 	assert.Empty(t, token)
 }
 
+func TestAccountPoolTokenProviderExpiresUnrecoverableXAIOAuthAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	expiredState := AccountPoolTokenState{
+		AccessToken: "expired-access-token",
+		ExpiresAt:   900,
+		Version:     1,
+	}
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "xai-oauth-missing-refresh",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState: expiredState,
+	})
+
+	_, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID:  account.Id,
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState: expiredState,
+		Platform:   model.AccountPoolPlatformXAI,
+		Now:        1000,
+	})
+
+	require.ErrorContains(t, err, "refresh_token is required")
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusExpired, stored.Status)
+	assert.Contains(t, stored.LastError, "refresh_token is required")
+	assert.Equal(t, int64(1000), stored.LastFailureAt)
+}
+
+func TestAccountPoolTokenProviderDoesNotExpireMissingRefreshDuringChannelTest(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	expiredState := AccountPoolTokenState{
+		AccessToken: "expired-access-token",
+		ExpiresAt:   900,
+		Version:     1,
+	}
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "xai-oauth-channel-test",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState: expiredState,
+	})
+
+	_, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID:         account.Id,
+		Credential:        AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState:        expiredState,
+		Platform:          model.AccountPoolPlatformXAI,
+		Now:               1000,
+		SkipFailureRecord: true,
+	})
+
+	require.ErrorContains(t, err, "refresh_token is required")
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)
+	assert.Empty(t, stored.LastError)
+}
+
+func TestAccountPoolTokenProviderReloadsRefreshTokenBeforeExpiringAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "xai-oauth-concurrent-refresh",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "database-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{ExpiresAt: 900, Version: 1},
+	})
+	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, refreshToken string, _ string, clientID string) (*CodexOAuthTokenResult, error) {
+		assert.Equal(t, "database-refresh-token", refreshToken)
+		assert.Empty(t, clientID)
+		return &CodexOAuthTokenResult{
+			AccessToken:  "refreshed-access-token",
+			RefreshToken: "rotated-refresh-token",
+			ExpiresAt:    time.Unix(2000, 0),
+		}, nil
+	})
+
+	token, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID:  account.Id,
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth},
+		TokenState: AccountPoolTokenState{ExpiresAt: 900, Version: 1},
+		Platform:   model.AccountPoolPlatformXAI,
+		Now:        1000,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "refreshed-access-token", token)
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)
+}
+
 func TestAccountPoolTokenProviderReusesValidOAuthAccessToken(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	setAccountPoolOAuthRefreshForTest(t, func(context.Context, string, string) (*CodexOAuthTokenResult, error) {
@@ -473,7 +572,7 @@ func TestAccountPoolTokenProviderXAIAPIKeyResolvesDirectly(t *testing.T) {
 
 	var xaiCalls, codexCalls, claudeCalls int
 
-	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string) (*CodexOAuthTokenResult, error) {
+	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, _ string, _ string, _ string) (*CodexOAuthTokenResult, error) {
 		xaiCalls++
 		return nil, errors.New("xai oauth refresh must NOT be called for api-key account")
 	})
@@ -532,7 +631,7 @@ func setAccountPoolGeminiOAuthRefreshForTest(t *testing.T, refresh accountPoolGe
 	t.Cleanup(func() { accountPoolGeminiOAuthRefresh = old })
 }
 
-func setAccountPoolXAIOAuthRefreshForTest(t *testing.T, refresh accountPoolOAuthRefreshFunc) {
+func setAccountPoolXAIOAuthRefreshForTest(t *testing.T, refresh accountPoolXAIOAuthRefreshFunc) {
 	t.Helper()
 	old := accountPoolXAIOAuthRefresh
 	accountPoolXAIOAuthRefresh = refresh
@@ -553,6 +652,7 @@ func TestAccountPoolTokenProviderXAIOAuthDispatchesToXAISeam(t *testing.T) {
 		Credential: AccountPoolCredentialConfig{
 			Type:         AccountPoolCredentialTypeOAuth,
 			RefreshToken: "xai-refresh-token",
+			ClientID:     "stored-xai-client",
 		},
 		TokenState: AccountPoolTokenState{
 			ExpiresAt: 900,
@@ -579,9 +679,10 @@ func TestAccountPoolTokenProviderXAIOAuthDispatchesToXAISeam(t *testing.T) {
 		return nil, errors.New("gemini seam must NOT be called for xai")
 	})
 
-	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, refreshToken string, _ string) (*CodexOAuthTokenResult, error) {
+	setAccountPoolXAIOAuthRefreshForTest(t, func(_ context.Context, refreshToken string, _ string, clientID string) (*CodexOAuthTokenResult, error) {
 		xaiCalls++
 		assert.Equal(t, "xai-refresh-token", refreshToken)
+		assert.Equal(t, "stored-xai-client", clientID)
 		return &CodexOAuthTokenResult{
 			AccessToken:  "xai-access-token",
 			RefreshToken: "xai-refresh-next",

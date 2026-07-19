@@ -344,6 +344,18 @@ func RefreshXAIOAuthTokenWithProxy(ctx context.Context, refreshToken string, pro
 	return refreshXAIOAuthToken(ctx, client, xaiOAuthTokenURL, clientID, refreshToken)
 }
 
+func RefreshXAIOAuthTokenForClientWithProxy(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*CodexOAuthTokenResult, error) {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		clientID = common.GetEnvOrDefaultString("XAI_OAUTH_CLIENT_ID", xaiOAuthDefaultClientID)
+	}
+	client, err := getXAIOAuthHTTPClient(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return refreshXAIOAuthToken(ctx, client, xaiOAuthTokenURL, clientID, refreshToken)
+}
+
 func refreshXAIOAuthToken(
 	ctx context.Context,
 	client *http.Client,
