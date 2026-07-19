@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -127,6 +128,42 @@ func TestRefreshXAIOAuthTokenNon2xxReturnsError(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "xai oauth refresh failed")
 	assert.Contains(t, err.Error(), "401")
+}
+
+func TestRefreshXAIOAuthTokenClassifiesPermanentCredentialFailureWithoutLeakingBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"code":"invalid_grant","message":"refresh token super-secret-token was revoked"}}`))
+	}))
+	defer srv.Close()
+	overrideXAIOAuthTokenURLForTest(t, srv.URL)
+
+	result, err := RefreshXAIOAuthTokenWithProxy(context.Background(), "super-secret-token", "")
+	require.Error(t, err)
+	assert.Nil(t, result)
+	var tokenErr *XAIOAuthTokenError
+	require.True(t, errors.As(err, &tokenErr))
+	assert.Equal(t, http.StatusUnauthorized, tokenErr.StatusCode)
+	assert.Equal(t, "invalid_grant", tokenErr.Code)
+	assert.True(t, IsXAIOAuthPermanentCredentialError(err))
+	assert.NotContains(t, err.Error(), "super-secret-token")
+	assert.NotContains(t, err.Error(), "was revoked")
+}
+
+func TestRefreshXAIOAuthTokenTreatsServerFailureAsTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"temporarily_unavailable"}`))
+	}))
+	defer srv.Close()
+	overrideXAIOAuthTokenURLForTest(t, srv.URL)
+
+	_, err := RefreshXAIOAuthTokenWithProxy(context.Background(), "refresh-token", "")
+	require.Error(t, err)
+	var tokenErr *XAIOAuthTokenError
+	require.True(t, errors.As(err, &tokenErr))
+	assert.Equal(t, "temporarily_unavailable", tokenErr.Code)
+	assert.False(t, IsXAIOAuthPermanentCredentialError(err))
 }
 
 // TestRefreshXAIOAuthTokenMissingAccessToken verifies that a 200 response with an

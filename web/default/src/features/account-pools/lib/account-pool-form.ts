@@ -38,6 +38,8 @@ import type {
 
 const MODEL_MAPPING_ERROR =
   'Model mapping must be a JSON object with string values'
+const HEADER_OVERRIDES_ERROR =
+  'Header overrides must be a JSON object with string values'
 
 // Channel type numbers (mirror web/default/src/features/channels/constants.ts).
 const CHANNEL_TYPE_OPENAI = 1
@@ -145,6 +147,9 @@ export type AccountPoolAccountFormValues = {
   team_id: string
   subscription_tier: string
   entitlement_status: string
+  base_url: string
+  header_override_enabled: boolean
+  header_overrides_text: string
   access_token: string
   token_refresh_token: string
   token_expires_at: number
@@ -298,6 +303,9 @@ export function emptyAccountForm(): AccountPoolAccountFormValues {
     team_id: '',
     subscription_tier: '',
     entitlement_status: '',
+    base_url: '',
+    header_override_enabled: false,
+    header_overrides_text: '',
     access_token: '',
     token_refresh_token: '',
     token_expires_at: 0,
@@ -322,12 +330,13 @@ export function emptyAccountForm(): AccountPoolAccountFormValues {
 }
 
 export function buildAccountPayload(
-  values: AccountPoolAccountFormValues
+  values: AccountPoolAccountFormValues,
+  platform?: AccountPoolPlatform | string
 ): AccountPoolAccountCreateRequest {
   return {
     name: values.name.trim(),
     account_identifier: values.account_identifier.trim(),
-    credential: buildCredentialPayload(values),
+    credential: buildCredentialPayload(values, platform),
     token_state: {
       access_token: values.access_token.trim(),
       refresh_token: values.token_refresh_token.trim(),
@@ -362,7 +371,8 @@ export function buildAccountPayload(
 // are not used. Other credential types keep their existing shape so the upstream
 // contract (and existing payload tests) stay unchanged.
 function buildCredentialPayload(
-  values: AccountPoolAccountFormValues
+  values: AccountPoolAccountFormValues,
+  platform?: AccountPoolPlatform | string
 ): AccountPoolCredentialConfigRequest {
   if (values.credential_type === 'grok_web_cookie') {
     return {
@@ -381,6 +391,13 @@ function buildCredentialPayload(
     api_key: values.credential_type === 'api_key' ? values.api_key.trim() : '',
     email: values.email.trim(),
     refresh_token: values.refresh_token.trim(),
+  }
+  if (platform === 'xai') {
+    credential.base_url = values.base_url.trim()
+    credential.header_override_enabled = values.header_override_enabled === true
+    credential.header_overrides = parseHeaderOverrides(
+      values.header_overrides_text
+    )
   }
   if (values.credential_type !== 'oauth') {
     return credential
@@ -466,6 +483,12 @@ export function accountToFormValues(
     team_id: '',
     subscription_tier: '',
     entitlement_status: '',
+    base_url: account.base_url || '',
+    header_override_enabled: account.header_override_enabled === true,
+    header_overrides_text:
+      Object.keys(account.header_overrides || {}).length > 0
+        ? JSON.stringify(account.header_overrides, null, 2)
+        : '',
     access_token: '',
     token_refresh_token: '',
     token_expires_at: 0,
@@ -612,6 +635,21 @@ function parseModelMapping(value: string): Record<string, string> {
     return parsed
   } catch {
     throw new Error(MODEL_MAPPING_ERROR)
+  }
+}
+
+function parseHeaderOverrides(value: string): Record<string, string> {
+  const text = value.trim()
+  if (!text) return {}
+
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (!isStringRecord(parsed)) {
+      throw new Error(HEADER_OVERRIDES_ERROR)
+    }
+    return parsed
+  } catch {
+    throw new Error(HEADER_OVERRIDES_ERROR)
   }
 }
 

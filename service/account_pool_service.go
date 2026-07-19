@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -126,56 +127,60 @@ type AccountPoolProxyCreateParams struct {
 }
 
 type AccountPoolAccountView struct {
-	Id                           int               `json:"id"`
-	PoolID                       int               `json:"pool_id"`
-	Name                         string            `json:"name"`
-	AccountIdentifier            string            `json:"account_identifier"`
-	CredentialType               string            `json:"credential_type"`
-	OAuthType                    string            `json:"oauth_type"`
-	Status                       string            `json:"status"`
-	Priority                     int64             `json:"priority"`
-	Weight                       uint              `json:"weight"`
-	MaxConcurrency               int               `json:"max_concurrency"`
-	ProxyID                      int               `json:"proxy_id"`
-	SupportedModels              []string          `json:"supported_models"`
-	ModelMapping                 map[string]string `json:"model_mapping"`
-	LastUsedAt                   int64             `json:"last_used_at"`
-	LastSuccessAt                int64             `json:"last_success_at"`
-	LastFailureAt                int64             `json:"last_failure_at"`
-	SuccessCount                 int64             `json:"success_count"`
-	FailureCount                 int64             `json:"failure_count"`
-	TotalPromptTokens            int64             `json:"total_prompt_tokens"`
-	TotalCompletionTokens        int64             `json:"total_completion_tokens"`
-	TotalCachedTokens            int64             `json:"total_cached_tokens"`
-	TotalCacheWriteTokens        int64             `json:"total_cache_write_tokens"`
-	LastPromptTokens             int64             `json:"last_prompt_tokens"`
-	LastCompletionTokens         int64             `json:"last_completion_tokens"`
-	LastCachedTokens             int64             `json:"last_cached_tokens"`
-	LastCacheWriteTokens         int64             `json:"last_cache_write_tokens"`
-	TotalLatencyMS               int64             `json:"total_latency_ms"`
-	LatencySampleCount           int64             `json:"latency_sample_count"`
-	LastLatencyMS                int64             `json:"last_latency_ms"`
-	TotalFirstTokenLatencyMS     int64             `json:"total_first_token_latency_ms"`
-	FirstTokenLatencySampleCount int64             `json:"first_token_latency_sample_count"`
-	LastFirstTokenLatencyMS      int64             `json:"last_first_token_latency_ms"`
-	RateLimitedUntil             int64             `json:"rate_limited_until"`
-	TempDisabledUntil            int64             `json:"temp_disabled_until"`
-	TempDisabledReason           string            `json:"temp_disabled_reason"`
-	LastError                    string            `json:"last_error"`
-	ExpiresAt                    int64             `json:"expires_at"`
-	AutoPauseOnExpired           bool              `json:"auto_pause_on_expired"`
-	LastCapabilityCheckAt        int64             `json:"last_capability_check_at"`
-	LastCapabilityCheckStatus    string            `json:"last_capability_check_status"`
-	LastCapabilityCheckError     string            `json:"last_capability_check_error"`
-	LastCapabilityCheckModels    []string          `json:"last_capability_check_models"`
-	HasCredential                bool              `json:"has_credential"`
-	HasToken                     bool              `json:"has_token"`
-	RequestQuota                 int64             `json:"request_quota"`
-	RequestQuotaUsed             int64             `json:"request_quota_used"`
-	RequestQuotaWindowStart      int64             `json:"request_quota_window_start"`
-	RequestQuotaWindowSeconds    int64             `json:"request_quota_window_seconds"`
-	CreatedTime                  int64             `json:"created_time"`
-	UpdatedTime                  int64             `json:"updated_time"`
+	Id                           int                          `json:"id"`
+	PoolID                       int                          `json:"pool_id"`
+	Name                         string                       `json:"name"`
+	AccountIdentifier            string                       `json:"account_identifier"`
+	CredentialType               string                       `json:"credential_type"`
+	OAuthType                    string                       `json:"oauth_type"`
+	Status                       string                       `json:"status"`
+	Priority                     int64                        `json:"priority"`
+	Weight                       uint                         `json:"weight"`
+	MaxConcurrency               int                          `json:"max_concurrency"`
+	ProxyID                      int                          `json:"proxy_id"`
+	SupportedModels              []string                     `json:"supported_models"`
+	ModelMapping                 map[string]string            `json:"model_mapping"`
+	LastUsedAt                   int64                        `json:"last_used_at"`
+	LastSuccessAt                int64                        `json:"last_success_at"`
+	LastFailureAt                int64                        `json:"last_failure_at"`
+	SuccessCount                 int64                        `json:"success_count"`
+	FailureCount                 int64                        `json:"failure_count"`
+	TotalPromptTokens            int64                        `json:"total_prompt_tokens"`
+	TotalCompletionTokens        int64                        `json:"total_completion_tokens"`
+	TotalCachedTokens            int64                        `json:"total_cached_tokens"`
+	TotalCacheWriteTokens        int64                        `json:"total_cache_write_tokens"`
+	LastPromptTokens             int64                        `json:"last_prompt_tokens"`
+	LastCompletionTokens         int64                        `json:"last_completion_tokens"`
+	LastCachedTokens             int64                        `json:"last_cached_tokens"`
+	LastCacheWriteTokens         int64                        `json:"last_cache_write_tokens"`
+	TotalLatencyMS               int64                        `json:"total_latency_ms"`
+	LatencySampleCount           int64                        `json:"latency_sample_count"`
+	LastLatencyMS                int64                        `json:"last_latency_ms"`
+	TotalFirstTokenLatencyMS     int64                        `json:"total_first_token_latency_ms"`
+	FirstTokenLatencySampleCount int64                        `json:"first_token_latency_sample_count"`
+	LastFirstTokenLatencyMS      int64                        `json:"last_first_token_latency_ms"`
+	RateLimitedUntil             int64                        `json:"rate_limited_until"`
+	TempDisabledUntil            int64                        `json:"temp_disabled_until"`
+	TempDisabledReason           string                       `json:"temp_disabled_reason"`
+	LastError                    string                       `json:"last_error"`
+	ExpiresAt                    int64                        `json:"expires_at"`
+	AutoPauseOnExpired           bool                         `json:"auto_pause_on_expired"`
+	LastCapabilityCheckAt        int64                        `json:"last_capability_check_at"`
+	LastCapabilityCheckStatus    string                       `json:"last_capability_check_status"`
+	LastCapabilityCheckError     string                       `json:"last_capability_check_error"`
+	LastCapabilityCheckModels    []string                     `json:"last_capability_check_models"`
+	HasCredential                bool                         `json:"has_credential"`
+	HasToken                     bool                         `json:"has_token"`
+	RequestQuota                 int64                        `json:"request_quota"`
+	RequestQuotaUsed             int64                        `json:"request_quota_used"`
+	RequestQuotaWindowStart      int64                        `json:"request_quota_window_start"`
+	RequestQuotaWindowSeconds    int64                        `json:"request_quota_window_seconds"`
+	XAIQuota                     *AccountPoolXAIQuotaSnapshot `json:"xai_quota,omitempty"`
+	BaseURL                      string                       `json:"base_url,omitempty"`
+	HeaderOverrideEnabled        bool                         `json:"header_override_enabled"`
+	HeaderOverrides              map[string]string            `json:"header_overrides,omitempty"`
+	CreatedTime                  int64                        `json:"created_time"`
+	UpdatedTime                  int64                        `json:"updated_time"`
 }
 
 type AccountPoolBindingView struct {
@@ -400,7 +405,8 @@ func (s AccountPoolService) DeletePool(id int) error {
 }
 
 func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
-	if _, err := getAccountPoolExistingPool(params.PoolID); err != nil {
+	pool, err := getAccountPoolExistingPool(params.PoolID)
+	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
 	name := strings.TrimSpace(params.Name)
@@ -408,6 +414,10 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
 	}
 	if err := validateAccountPoolProxyReference(params.ProxyID); err != nil {
+		return AccountPoolAccountView{}, err
+	}
+	params.Credential, err = normalizeAccountPoolXAIOverrides(context.Background(), pool.Platform, params.Credential)
+	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
 	credentialConfig, err := EncryptAccountPoolCredentialConfig(params.Credential)
@@ -457,7 +467,8 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 }
 
 func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
-	if _, err := getAccountPoolExistingPool(poolID); err != nil {
+	pool, err := getAccountPoolExistingPool(poolID)
+	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
 	account, err := getAccountPoolAccountForPool(poolID, accountID)
@@ -526,6 +537,10 @@ func (s AccountPoolService) UpdateAccount(poolID int, accountID int, params Acco
 			return AccountPoolAccountView{}, err
 		}
 		merged := mergeAccountPoolCredentialUpdate(existingCredential, params.Credential)
+		merged, err = normalizeAccountPoolXAIOverrides(context.Background(), pool.Platform, merged)
+		if err != nil {
+			return AccountPoolAccountView{}, err
+		}
 		credentialConfig, err := EncryptAccountPoolCredentialConfig(merged)
 		if err != nil {
 			return AccountPoolAccountView{}, err
@@ -1473,13 +1488,19 @@ func accountPoolNormalizeExpiresAt(value int64) int64 {
 
 func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolAccountView, error) {
 	credentialType := ""
+	credential := AccountPoolCredentialConfig{}
 	if strings.TrimSpace(account.CredentialConfig) != "" {
-		credential, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
+		decrypted, err := DecryptAccountPoolCredentialConfig(account.CredentialConfig)
 		if err != nil {
 			common.SysError(fmt.Sprintf("account pool account view: credential type unavailable for account id=%d: %v", account.Id, err))
 		} else {
+			credential = decrypted
 			credentialType = strings.TrimSpace(credential.Type)
 		}
+	}
+	baseURL := ""
+	if credential.BaseURL != nil {
+		baseURL = *credential.BaseURL
 	}
 	var supportedModels []string
 	if account.SupportedModels != "" {
@@ -1497,6 +1518,15 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 	if strings.TrimSpace(account.LastCapabilityCheckModels) != "" {
 		if err := common.UnmarshalJsonStr(account.LastCapabilityCheckModels, &lastCapabilityCheckModels); err != nil {
 			return AccountPoolAccountView{}, err
+		}
+	}
+	var xaiQuota *AccountPoolXAIQuotaSnapshot
+	if strings.TrimSpace(account.RuntimeOptions) != "" {
+		options, err := parseAccountPoolRuntimeOptions(account.RuntimeOptions)
+		if err != nil {
+			common.SysError(fmt.Sprintf("account pool account view: runtime options unavailable for account id=%d: %v", account.Id, err))
+		} else {
+			xaiQuota = options.XAIQuota
 		}
 	}
 	return AccountPoolAccountView{
@@ -1548,6 +1578,10 @@ func buildAccountPoolAccountView(account model.AccountPoolAccount) (AccountPoolA
 		RequestQuotaUsed:             account.RequestQuotaUsed,
 		RequestQuotaWindowStart:      account.RequestQuotaWindowStart,
 		RequestQuotaWindowSeconds:    account.RequestQuotaWindowSeconds,
+		XAIQuota:                     xaiQuota,
+		BaseURL:                      baseURL,
+		HeaderOverrideEnabled:        credential.HeaderOverrideEnabled != nil && *credential.HeaderOverrideEnabled,
+		HeaderOverrides:              credential.HeaderOverrides,
 		CreatedTime:                  account.CreatedTime,
 		UpdatedTime:                  account.UpdatedTime,
 	}, nil
@@ -1602,7 +1636,8 @@ func accountPoolCredentialHasValue(config AccountPoolCredentialConfig) bool {
 		strings.TrimSpace(config.SubscriptionTier) != "" ||
 		strings.TrimSpace(config.EntitlementStatus) != "" ||
 		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
-		strings.TrimSpace(config.CFClearance) != ""
+		strings.TrimSpace(config.CFClearance) != "" ||
+		config.BaseURL != nil || config.HeaderOverrideEnabled != nil || config.HeaderOverrides != nil
 }
 
 // mergeAccountPoolCredentialUpdate overlays the non-empty fields of an incoming
@@ -1671,6 +1706,15 @@ func mergeAccountPoolCredentialUpdate(existing, incoming AccountPoolCredentialCo
 	if strings.TrimSpace(incoming.CFClearance) != "" {
 		merged.CFClearance = incoming.CFClearance
 	}
+	if incoming.BaseURL != nil {
+		merged.BaseURL = incoming.BaseURL
+	}
+	if incoming.HeaderOverrideEnabled != nil {
+		merged.HeaderOverrideEnabled = incoming.HeaderOverrideEnabled
+	}
+	if incoming.HeaderOverrides != nil {
+		merged.HeaderOverrides = incoming.HeaderOverrides
+	}
 	return merged
 }
 
@@ -1687,7 +1731,8 @@ func accountPoolCredentialHasSecret(config AccountPoolCredentialConfig) bool {
 		strings.TrimSpace(config.SubscriptionTier) != "" ||
 		strings.TrimSpace(config.EntitlementStatus) != "" ||
 		strings.TrimSpace(config.ServiceAccountJSON) != "" ||
-		strings.TrimSpace(config.CFClearance) != ""
+		strings.TrimSpace(config.CFClearance) != "" ||
+		config.BaseURL != nil || config.HeaderOverrideEnabled != nil || config.HeaderOverrides != nil
 }
 
 func accountPoolTokenStateHasValue(state AccountPoolTokenState) bool {

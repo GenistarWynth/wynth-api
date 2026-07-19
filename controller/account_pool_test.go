@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -135,6 +136,9 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/xai/oauth/exchange", ExchangeAccountPoolXAIOAuthCode)
 		group.POST("/:id/accounts/xai/sso_import", ImportAccountPoolXAISSOAccounts)
 		group.POST("/:id/accounts/:account_id/xai/oauth/refresh", RefreshAccountPoolXAIOAuthAccount)
+		group.POST("/:id/xai/oauth/reconcile", ReconcileAccountPoolXAIOAuthAccounts)
+		group.POST("/:id/accounts/:account_id/xai/quota/probe", ProbeAccountPoolXAIQuota)
+		group.GET("/:id/accounts/:account_id/xai/quota", GetAccountPoolXAIQuota)
 		group.POST("/:id/accounts/:account_id/capabilities/detect", DetectAccountPoolAccountCapability)
 		group.PUT("/:id/accounts/:account_id", UpdateAccountPoolAccount)
 		group.DELETE("/:id/accounts/:account_id", DeleteAccountPoolAccount)
@@ -148,6 +152,79 @@ func accountPoolAPIRouter() *gin.Engine {
 		group.POST("/:id/bindings/:binding_id/disable", DisableAccountPoolBinding)
 	}
 	return router
+}
+
+func TestAccountPoolAPIProbeAndGetXAIQuota(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	accountPoolService := service.AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(service.AccountPoolCreateParams{
+		Name:     "xai-pool",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	account, err := accountPoolService.CreateAccount(service.AccountPoolAccountCreateParams{
+		PoolID: pool.Id,
+		Name:   "xai-oauth",
+		Credential: service.AccountPoolCredentialConfig{
+			Type:         service.AccountPoolCredentialTypeOAuth,
+			RefreshToken: "refresh-secret",
+		},
+		TokenState: service.AccountPoolTokenState{
+			AccessToken:  "access-secret",
+			RefreshToken: "refresh-secret",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+			Version:      1,
+		},
+	})
+	require.NoError(t, err)
+
+	eligible := false
+	expected := service.AccountPoolXAIQuotaSnapshot{
+		Source:                 "hybrid_probe",
+		StatusCode:             http.StatusOK,
+		MediaEligible:          &eligible,
+		MediaEligibilityReason: service.AccountPoolXAIMediaReasonFreeTier,
+		FetchedAt:              2_000_000_000,
+	}
+	oldProbe := accountPoolXAIQuotaProbe
+	accountPoolXAIQuotaProbe = func(_ context.Context, poolID int, accountID int) (service.AccountPoolXAIQuotaSnapshot, error) {
+		assert.Equal(t, pool.Id, poolID)
+		assert.Equal(t, account.Id, accountID)
+		return expected, nil
+	}
+	t.Cleanup(func() { accountPoolXAIQuotaProbe = oldProbe })
+
+	probeResult := accountPoolAPIRequest[service.AccountPoolXAIQuotaSnapshot](
+		t,
+		router,
+		http.MethodPost,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(account.Id)+"/xai/quota/probe",
+		nil,
+	)
+	require.Equal(t, http.StatusOK, probeResult.Code, string(probeResult.Raw))
+	require.True(t, probeResult.Response.Success, probeResult.Response.Message)
+	assert.Equal(t, expected.FetchedAt, probeResult.Response.Data.FetchedAt)
+	assert.NotContains(t, string(probeResult.Raw), "access-secret")
+	assert.NotContains(t, string(probeResult.Raw), "refresh-secret")
+
+	runtimeOptions, err := common.Marshal(service.AccountPoolRuntimeOptions{XAIQuota: &expected})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", account.Id).
+		Update("runtime_options", string(runtimeOptions)).Error)
+	getResult := accountPoolAPIRequest[service.AccountPoolXAIQuotaSnapshot](
+		t,
+		router,
+		http.MethodGet,
+		"/api/account_pools/"+strconv.Itoa(pool.Id)+"/accounts/"+strconv.Itoa(account.Id)+"/xai/quota",
+		nil,
+	)
+	require.Equal(t, http.StatusOK, getResult.Code, string(getResult.Raw))
+	require.True(t, getResult.Response.Success, getResult.Response.Message)
+	assert.Equal(t, expected.FetchedAt, getResult.Response.Data.FetchedAt)
+	assert.NotContains(t, string(getResult.Raw), "access-secret")
+	assert.NotContains(t, string(getResult.Raw), "refresh-secret")
 }
 
 func accountPoolAPIRequest[T any](t *testing.T, router *gin.Engine, method string, target string, body any) accountPoolAPIResult[T] {
@@ -346,6 +423,38 @@ func TestAccountPoolXAIOAuthRefreshAndSSOImportRoutes(t *testing.T) {
 	assert.NotContains(t, string(importResult.Raw), "sso-secret")
 }
 
+func TestAccountPoolXAIOAuthReconcileRouteDefaultsToDryRunAndAllowsApply(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	accountPoolService := service.AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(service.AccountPoolCreateParams{Name: "xai-reconcile", Platform: model.AccountPoolPlatformXAI})
+	require.NoError(t, err)
+
+	var requests []service.AccountPoolXAIOAuthReconcileParams
+	oldReconcile := accountPoolXAIOAuthReconcile
+	accountPoolXAIOAuthReconcile = func(ctx context.Context, params service.AccountPoolXAIOAuthReconcileParams) (service.AccountPoolXAIOAuthReconcileResult, error) {
+		requests = append(requests, params)
+		return service.AccountPoolXAIOAuthReconcileResult{
+			PoolID:     params.PoolID,
+			DryRun:     params.DryRun,
+			Candidates: 2,
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAIOAuthReconcile = oldReconcile })
+
+	preview := accountPoolAPIRequest[service.AccountPoolXAIOAuthReconcileResult](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/xai/oauth/reconcile", dto.AccountPoolXAIOAuthReconcileRequest{})
+	require.True(t, preview.Response.Success, preview.Response.Message)
+	assert.True(t, preview.Response.Data.DryRun)
+
+	apply := false
+	applyResult := accountPoolAPIRequest[service.AccountPoolXAIOAuthReconcileResult](t, router, http.MethodPost, "/api/account_pools/"+strconv.Itoa(pool.Id)+"/xai/oauth/reconcile", dto.AccountPoolXAIOAuthReconcileRequest{DryRun: &apply})
+	require.True(t, applyResult.Response.Success, applyResult.Response.Message)
+	assert.False(t, applyResult.Response.Data.DryRun)
+	require.Len(t, requests, 2)
+	assert.True(t, requests[0].DryRun)
+	assert.False(t, requests[1].DryRun)
+}
+
 func TestAccountPoolAPICreateGeminiCodeAssistOAuthType(t *testing.T) {
 	setupAccountPoolAPITestDB(t)
 	router := accountPoolAPIRouter()
@@ -500,6 +609,48 @@ func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {
 	require.NoError(t, model.DB.First(&stored, accountID).Error)
 	assert.Equal(t, model.AccountPoolAccountStatusDeleted, stored.Status)
 	assert.NotContains(t, stored.CredentialConfig, "sk-account-secret")
+}
+
+func TestAccountPoolAPIValidatesAndReturnsXAIOverrides(t *testing.T) {
+	setupAccountPoolAPITestDB(t)
+	router := accountPoolAPIRouter()
+	poolResult := accountPoolAPIRequest[dto.AccountPoolResponse](t, router, http.MethodPost, "/api/account_pools", dto.AccountPoolCreateRequest{
+		Name:     "xai-overrides",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.True(t, poolResult.Response.Success, poolResult.Response.Message)
+	poolID := strconv.Itoa(poolResult.Response.Data.Id)
+	baseURL := "https://api.x.ai/v1/"
+
+	created := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "xai-account",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:                  service.AccountPoolCredentialTypeAPIKey,
+			APIKey:                "xai-secret",
+			BaseURL:               &baseURL,
+			HeaderOverrideEnabled: common.GetPointer(true),
+			HeaderOverrides: map[string]string{
+				"x-trace-id": "trace-123",
+			},
+		},
+	})
+	require.True(t, created.Response.Success, created.Response.Message)
+	assert.Equal(t, "https://api.x.ai/v1", created.Response.Data.BaseURL)
+	assert.True(t, created.Response.Data.HeaderOverrideEnabled)
+	assert.Equal(t, "trace-123", created.Response.Data.HeaderOverrides["X-Trace-Id"])
+	assert.NotContains(t, string(created.Raw), "xai-secret")
+
+	privateURL := "https://127.0.0.1/v1"
+	rejected := accountPoolAPIRequest[dto.AccountPoolAccountResponse](t, router, http.MethodPost, "/api/account_pools/"+poolID+"/accounts", dto.AccountPoolAccountCreateRequest{
+		Name: "unsafe",
+		Credential: dto.AccountPoolCredentialConfigRequest{
+			Type:    service.AccountPoolCredentialTypeAPIKey,
+			APIKey:  "xai-secret",
+			BaseURL: &privateURL,
+		},
+	})
+	assert.False(t, rejected.Response.Success)
+	assert.NotContains(t, string(rejected.Raw), "xai-secret")
 }
 
 func TestAccountPoolAPIDetectAccountCapabilityDryRun(t *testing.T) {

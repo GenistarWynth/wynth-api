@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -106,6 +107,82 @@ func TestAccountPoolRuntimeAppliesSelectedAccountCredentialAndModel(t *testing.T
 	assert.Equal(t, account.Id, GetSelectedAccountPoolAccountID(ctx))
 	assert.Contains(t, GetAccountPoolAttemptedAccountIDs(ctx), account.Id)
 	assert.Equal(t, []string{"7"}, ctx.GetStringSlice("use_channel"))
+}
+
+func TestAccountPoolRuntimeRequiresXAIMediaEligibilityForImageRelay(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-media-runtime",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	ineligible := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "ineligible",
+		Priority: 100,
+	})
+	eligible := createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name:     "eligible",
+		Priority: 10,
+	})
+	falseValue := false
+	trueValue := true
+	setAccountPoolSchedulerXAIQuota(t, ineligible.Id, &falseValue)
+	setAccountPoolSchedulerXAIQuota(t, eligible.Id, &trueValue)
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "grok-imagine-image", "grok-imagine-image")
+	info.RelayMode = relayconstant.RelayModeImagesGenerations
+	request := &dto.GeneralOpenAIRequest{Model: "grok-imagine-image"}
+
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, info, request))
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+	assert.Equal(t, eligible.Id, GetSelectedAccountPoolAccountID(ctx))
+}
+
+func TestAccountPoolRuntimeAppliesSafeXAIOverridesAfterChannelHeaders(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool, err := service.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-overrides-runtime",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+	channel := createAccountPoolServiceTestChannel(t, common.ChannelStatusManuallyDisabled)
+	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
+	baseURL := "https://edge.x.ai/v1"
+	enabled := true
+	createAccountPoolSchedulerAccount(t, service, pool.Id, AccountPoolAccountCreateParams{
+		Name: "overridden",
+		Credential: AccountPoolCredentialConfig{
+			Type:                  AccountPoolCredentialTypeAPIKey,
+			APIKey:                "xai-key",
+			BaseURL:               &baseURL,
+			HeaderOverrideEnabled: &enabled,
+			HeaderOverrides: map[string]string{
+				"X-Account": "account",
+				"X-Shared":  "account-wins",
+			},
+		},
+	})
+
+	ctx := newAccountPoolRuntimeTestContext()
+	info := newAccountPoolRuntimeTestRelayInfo(channel.Id, "grok-4", "grok-4")
+	info.ChannelMeta.HeadersOverride = map[string]interface{}{
+		"X-Channel": "channel",
+		"X-Shared":  "channel-loses",
+	}
+	request := &dto.GeneralOpenAIRequest{Model: "grok-4"}
+
+	require.NoError(t, ApplyAccountPoolRuntimeSelection(ctx, info, request))
+	defer ReleaseAccountPoolRuntimeSelection(ctx)
+	assert.Equal(t, "https://edge.x.ai/v1", info.RuntimeBaseURL)
+	assert.True(t, info.UseRuntimeHeadersOverride)
+	assert.Equal(t, "channel", info.RuntimeHeadersOverride["x-channel"])
+	assert.Equal(t, "account", info.RuntimeHeadersOverride["x-account"])
+	assert.Equal(t, "account-wins", info.RuntimeHeadersOverride["x-shared"])
 }
 
 func TestAccountPoolRuntimeAppliesSelectedProxy(t *testing.T) {

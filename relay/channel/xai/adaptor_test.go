@@ -84,6 +84,25 @@ func TestConvertImageRequestOmitsUnsupportedFields(t *testing.T) {
 	assert.NotContains(t, upstream, "n")
 }
 
+func TestGetRequestURLUsesAccountPoolRuntimeBaseURL(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RequestURLPath: "/v1/responses",
+		RuntimeBaseURL: "https://edge.x.ai/custom",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelBaseUrl: "https://api.x.ai",
+		},
+	}
+
+	got, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "https://edge.x.ai/custom/v1/responses", got)
+
+	info.RuntimeBaseURL = ""
+	got, err = (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "https://api.x.ai/v1/responses", got)
+}
+
 func TestAdvertisedImageModelsRouteThroughImageConversion(t *testing.T) {
 	models := []string{"grok-imagine-image-pro", "grok-imagine-image", "grok-2-image-1212"}
 	for _, model := range models {

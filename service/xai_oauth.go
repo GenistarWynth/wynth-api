@@ -151,6 +151,45 @@ type XAIOAuthTokenInfo struct {
 	EntitlementStatus string `json:"entitlement_status,omitempty"`
 }
 
+// XAIOAuthTokenError is a metadata-only OAuth token endpoint failure. It keeps
+// provider response bodies and descriptions out of logs while preserving the
+// stable error code needed to distinguish rejected credentials from outages.
+type XAIOAuthTokenError struct {
+	StatusCode int
+	Code       string
+}
+
+func (e *XAIOAuthTokenError) Error() string {
+	if e == nil {
+		return "xai oauth token request failed"
+	}
+	if e.Code != "" {
+		return fmt.Sprintf("xai oauth token request failed: status=%d code=%s", e.StatusCode, e.Code)
+	}
+	return fmt.Sprintf("xai oauth token request failed: status=%d", e.StatusCode)
+}
+
+func IsXAIOAuthPermanentCredentialError(err error) bool {
+	var tokenErr *XAIOAuthTokenError
+	if !errors.As(err, &tokenErr) {
+		return false
+	}
+	switch tokenErr.Code {
+	case "invalid_grant", "invalid_refresh_token", "token_expired", "session_terminated":
+		return true
+	default:
+		return false
+	}
+}
+
+func xaiOAuthErrorCode(err error) string {
+	var tokenErr *XAIOAuthTokenError
+	if errors.As(err, &tokenErr) {
+		return tokenErr.Code
+	}
+	return ""
+}
+
 func (i XAIOAuthTokenInfo) AccountPoolCredential() AccountPoolCredentialConfig {
 	return AccountPoolCredentialConfig{
 		Type:              AccountPoolCredentialTypeOAuth,
@@ -424,7 +463,27 @@ func requestXAIOAuthToken(ctx context.Context, client *http.Client, tokenURL str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("xai oauth token request failed: status=%d", resp.StatusCode)
+		var payload struct {
+			Error any    `json:"error"`
+			Code  string `json:"code"`
+		}
+		_ = common.DecodeJson(io.LimitReader(resp.Body, xaiOAuthMaxTokenBodyBytes), &payload)
+		code := strings.TrimSpace(payload.Code)
+		switch value := payload.Error.(type) {
+		case string:
+			if code == "" {
+				code = value
+			}
+		case map[string]any:
+			if code == "" {
+				code, _ = value["code"].(string)
+			}
+			if code == "" {
+				code, _ = value["type"].(string)
+			}
+		}
+		code = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(code), "-", "_"))
+		return nil, &XAIOAuthTokenError{StatusCode: resp.StatusCode, Code: code}
 	}
 	var payload struct {
 		AccessToken  string `json:"access_token"`

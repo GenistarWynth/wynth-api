@@ -167,6 +167,9 @@ type RelayInfo struct {
 	// RuntimeProxy overrides the persisted channel proxy for a single relay attempt.
 	// It is used for account-pool proxy routing without mutating channel settings.
 	RuntimeProxy string
+	// RuntimeBaseURL overrides the persisted channel base URL for the selected
+	// account-pool account. Provider adaptors opt in explicitly (currently xAI).
+	RuntimeBaseURL string
 	// RuntimeAccountID carries the selected upstream account identifier for provider
 	// adaptors that need it in addition to the runtime credential.
 	RuntimeAccountID string

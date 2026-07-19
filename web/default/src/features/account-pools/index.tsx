@@ -38,6 +38,8 @@ import {
   Trash2,
   Upload,
   Download,
+  Gauge,
+  RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -149,6 +151,8 @@ import {
   listAccountPoolBindings,
   listAccountPoolProxies,
   listAccountPools,
+  probeAccountPoolXAIQuota,
+  reconcileAccountPoolXAIOAuthAccounts,
   updateAccountPool,
   updateAccountPoolAccount,
   updateAccountPoolBinding,
@@ -180,6 +184,7 @@ import {
   type AccountPoolFormValues,
   type AccountPoolProxyFormValues,
 } from './lib/account-pool-form'
+import { canProbeXAIQuota, xaiQuotaDisplayState } from './lib/xai-quota'
 import type {
   AccountPool,
   AccountPoolAccount,
@@ -191,6 +196,7 @@ import type {
   AccountPoolBindingCreateRequest,
   AccountPoolProxy,
   AccountPoolSchedulePolicy,
+  AccountPoolXAIOAuthReconcileResult,
   ApiResponse,
 } from './types'
 
@@ -217,6 +223,11 @@ const EMPTY_ACCOUNTS: AccountPoolAccount[] = []
 const EMPTY_BINDINGS: AccountPoolBinding[] = []
 const EMPTY_PROXIES: AccountPoolProxy[] = []
 const EMPTY_CHANNELS: Channel[] = []
+const XAI_MEDIA_ELIGIBILITY_LABELS = {
+  eligible: 'Eligible',
+  ineligible: 'Ineligible',
+  unknown: 'Unknown',
+} as const
 const POOL_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI / Codex' },
   { value: 'anthropic', label: 'Anthropic (Claude)' },
@@ -451,6 +462,40 @@ function accountOAuthTypeLabel(
       return t('AI Studio')
     default:
       return oauthType
+  }
+}
+
+function xaiOAuthReconcileReasonLabel(
+  reason: string,
+  t: (key: string) => string
+) {
+  switch (reason) {
+    case 'missing_refresh_token':
+      return t('Missing refresh token')
+    case 'access_token_missing':
+      return t('Access token missing')
+    case 'access_token_expired':
+      return t('Access token expired')
+    case 'access_token_near_expiry':
+      return t('Access token near expiry')
+    case 'credential_rejected':
+      return t('Credential rejected')
+    default:
+      return t('Unknown')
+  }
+}
+
+function xaiOAuthReconcileActionLabel(
+  action: string,
+  t: (key: string) => string
+) {
+  switch (action) {
+    case 'refresh_credentials':
+      return t('Refresh credentials')
+    case 'expire_account':
+      return t('Expire account')
+    default:
+      return t('Unknown')
   }
 }
 
@@ -787,6 +832,8 @@ export function AccountPools() {
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [exportSecretsConfirmOpen, setExportSecretsConfirmOpen] =
     useState(false)
+  const [xaiOAuthReconcilePreview, setXAIOAuthReconcilePreview] =
+    useState<AccountPoolXAIOAuthReconcileResult>()
   const [proxySheetOpen, setProxySheetOpen] = useState(false)
   const [editingProxy, setEditingProxy] = useState<AccountPoolProxy>()
   const [deletingProxy, setDeletingProxy] = useState<AccountPoolProxy>()
@@ -933,7 +980,10 @@ export function AccountPools() {
       if (!selectedPoolID) {
         throw new Error(t('Select an account pool first'))
       }
-      return createAccountPoolAccount(selectedPoolID, buildAccountPayload(values))
+      return createAccountPoolAccount(
+        selectedPoolID,
+        buildAccountPayload(values, selectedPool?.platform)
+      )
     },
     onSuccess: (result) => {
       if (!result.success) {
@@ -957,7 +1007,7 @@ export function AccountPools() {
       return updateAccountPoolAccount(
         selectedPoolID,
         editingAccount.id,
-        buildAccountPayload(values)
+        buildAccountPayload(values, selectedPool?.platform)
       )
     },
     onSuccess: (result) => {
@@ -986,10 +1036,13 @@ export function AccountPools() {
       return updateAccountPoolAccount(
         selectedPoolID,
         params.account.id,
-        buildAccountPayload({
-          ...accountToFormValues(params.account),
-          status: params.status,
-        })
+        buildAccountPayload(
+          {
+            ...accountToFormValues(params.account),
+            status: params.status,
+          },
+          selectedPool?.platform
+        )
       )
     },
     onSuccess: (result) => {
@@ -1019,6 +1072,60 @@ export function AccountPools() {
       }
       toast.success(t('Account deleted'))
       setDeletingAccount(undefined)
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const probeXAIQuotaMutation = useMutation({
+    mutationFn: async (account: AccountPoolAccount) => {
+      if (!selectedPoolID) {
+        throw new Error(t('Select an account pool first'))
+      }
+      return probeAccountPoolXAIQuota(selectedPoolID, account.id)
+    },
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(apiErrorMessage(result, t('Failed to probe xAI quota')))
+        return
+      }
+      toast.success(t('xAI quota probe completed'))
+      invalidatePools()
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  const reconcileXAIOAuthMutation = useMutation({
+    mutationFn: async (params: { poolID: number; dryRun: boolean }) =>
+      reconcileAccountPoolXAIOAuthAccounts(params.poolID, {
+        dry_run: params.dryRun,
+      }),
+    onSuccess: (result, variables) => {
+      if (!result.success || !result.data) {
+        toast.error(
+          apiErrorMessage(result, t('Failed to reconcile xAI OAuth accounts'))
+        )
+        return
+      }
+      if (variables.dryRun) {
+        if (result.data.candidates === 0) {
+          toast.success(t('No xAI OAuth accounts need reconciliation'))
+          return
+        }
+        setXAIOAuthReconcilePreview(result.data)
+        return
+      }
+      toast.success(
+        t('Reconciled {{applied}} account(s); skipped {{skipped}}', {
+          applied: result.data.applied,
+          skipped: result.data.skipped,
+        })
+      )
+      setXAIOAuthReconcilePreview(undefined)
       invalidatePools()
     },
     onError: (error) => {
@@ -1407,6 +1514,7 @@ export function AccountPools() {
             setBoundChannelDialogOpen(false)
             setCapabilityDialogOpen(false)
             setDetectingAccount(undefined)
+            setXAIOAuthReconcilePreview(undefined)
           }
         }}
         onCreateAccount={() => {
@@ -1433,6 +1541,21 @@ export function AccountPools() {
         onSetAccountStatus={(account, status) =>
           updateAccountStatusMutation.mutate({ account, status })
         }
+        onProbeXAIQuota={(account) => probeXAIQuotaMutation.mutate(account)}
+        probingXAIQuotaAccountID={
+          probeXAIQuotaMutation.isPending
+            ? probeXAIQuotaMutation.variables?.id
+            : undefined
+        }
+        onReconcileXAIOAuth={() => {
+          if (selectedPoolID) {
+            reconcileXAIOAuthMutation.mutate({
+              poolID: selectedPoolID,
+              dryRun: true,
+            })
+          }
+        }}
+        reconcilingXAIOAuth={reconcileXAIOAuthMutation.isPending}
         onCreateProxy={() => {
           setEditingProxy(undefined)
           setProxySheetOpen(true)
@@ -1452,6 +1575,50 @@ export function AccountPools() {
           setBindingStatusMutation.mutate({ binding, status })
         }
       />
+      <ConfirmDialog
+        open={Boolean(xaiOAuthReconcilePreview)}
+        onOpenChange={(open) => {
+          if (!open && !reconcileXAIOAuthMutation.isPending) {
+            setXAIOAuthReconcilePreview(undefined)
+          }
+        }}
+        title={t('Apply xAI OAuth reconciliation?')}
+        desc={
+          xaiOAuthReconcilePreview
+            ? t(
+                'Dry run found {{count}} account(s) requiring credential refresh or expiration.',
+                { count: xaiOAuthReconcilePreview.candidates }
+              )
+            : ''
+        }
+        confirmText={t('Apply Reconciliation')}
+        isLoading={reconcileXAIOAuthMutation.isPending}
+        handleConfirm={() => {
+          if (xaiOAuthReconcilePreview) {
+            reconcileXAIOAuthMutation.mutate({
+              poolID: xaiOAuthReconcilePreview.pool_id,
+              dryRun: false,
+            })
+          }
+        }}
+      >
+        {xaiOAuthReconcilePreview ? (
+          <div className='max-h-56 space-y-2 overflow-y-auto text-sm'>
+            {xaiOAuthReconcilePreview.items.map((item) => (
+              <div
+                key={item.account_id}
+                className='border-border bg-muted/40 rounded-md border p-2'
+              >
+                <div className='font-medium'>{item.name}</div>
+                <div className='text-muted-foreground text-xs'>
+                  {xaiOAuthReconcileReasonLabel(item.reason, t)} ·{' '}
+                  {xaiOAuthReconcileActionLabel(item.action, t)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </ConfirmDialog>
       <ConfirmDialog
         open={Boolean(deletingBinding)}
         onOpenChange={(open) => !open && setDeletingBinding(undefined)}
@@ -1530,7 +1697,7 @@ export function AccountPools() {
         }}
         onSubmit={(values) => {
           try {
-            buildAccountPayload(values)
+            buildAccountPayload(values, selectedPool?.platform)
           } catch (error) {
             toast.error(
               error instanceof Error ? t(error.message) : t('Invalid account')
@@ -2578,6 +2745,10 @@ function PoolDetailsSheet(props: {
   onBatchDetectModels: () => void
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
+  onProbeXAIQuota: (account: AccountPoolAccount) => void
+  probingXAIQuotaAccountID?: number
+  onReconcileXAIOAuth: () => void
+  reconcilingXAIOAuth: boolean
   onCreateProxy: () => void
   onEditProxy: (proxy: AccountPoolProxy) => void
   onDeleteProxy: (proxy: AccountPoolProxy) => void
@@ -2634,6 +2805,7 @@ function PoolDetailsSheet(props: {
             </TabsList>
             <TabsContent value='accounts' className='min-h-0'>
               <AccountListSection
+                poolPlatform={pool?.platform}
                 accounts={props.accounts}
                 hasBindings={props.bindings.length > 0}
                 loading={props.accountsLoading}
@@ -2647,6 +2819,10 @@ function PoolDetailsSheet(props: {
                 onBatchDetectModels={props.onBatchDetectModels}
                 onDeleteAccount={props.onDeleteAccount}
                 onSetAccountStatus={props.onSetAccountStatus}
+                onProbeXAIQuota={props.onProbeXAIQuota}
+                probingXAIQuotaAccountID={props.probingXAIQuotaAccountID}
+                onReconcileXAIOAuth={props.onReconcileXAIOAuth}
+                reconcilingXAIOAuth={props.reconcilingXAIOAuth}
               />
             </TabsContent>
             <TabsContent value='bindings' className='min-h-0'>
@@ -2698,6 +2874,7 @@ function SummaryItem(props: { label: React.ReactNode; value: React.ReactNode }) 
 }
 
 function AccountListSection(props: {
+  poolPlatform?: string
   accounts: AccountPoolAccount[]
   hasBindings: boolean
   loading: boolean
@@ -2711,6 +2888,10 @@ function AccountListSection(props: {
   onBatchDetectModels: () => void
   onDeleteAccount: (account: AccountPoolAccount) => void
   onSetAccountStatus: (account: AccountPoolAccount, status: string) => void
+  onProbeXAIQuota: (account: AccountPoolAccount) => void
+  probingXAIQuotaAccountID?: number
+  onReconcileXAIOAuth: () => void
+  reconcilingXAIOAuth: boolean
 }) {
   const { t } = useTranslation()
 
@@ -2719,6 +2900,24 @@ function AccountListSection(props: {
       <div className='flex items-center justify-between gap-3'>
         <SideDrawerSectionHeader title={t('Accounts')} />
         <div className='flex items-center gap-2'>
+          {props.poolPlatform === 'xai' ? (
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={props.onReconcileXAIOAuth}
+              disabled={props.reconcilingXAIOAuth}
+            >
+              {props.reconcilingXAIOAuth ? (
+                <Loader2 data-icon='inline-start' className='animate-spin' />
+              ) : (
+                <RefreshCw data-icon='inline-start' />
+              )}
+              {props.reconcilingXAIOAuth
+                ? t('Reconciling xAI OAuth...')
+                : t('Reconcile xAI OAuth')}
+            </Button>
+          ) : null}
           <Button
             type='button'
             size='sm'
@@ -2856,6 +3055,14 @@ function AccountListSection(props: {
                     onDetect={props.onDetectAccount}
                     onDelete={props.onDeleteAccount}
                     onSetStatus={props.onSetAccountStatus}
+                    canProbeXAIQuota={canProbeXAIQuota(
+                      props.poolPlatform,
+                      account
+                    )}
+                    probingXAIQuota={
+                      props.probingXAIQuotaAccountID === account.id
+                    }
+                    onProbeXAIQuota={props.onProbeXAIQuota}
                   />
                 </TableCell>
               </TableRow>
@@ -2874,6 +3081,7 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
     account.total_first_token_latency_ms,
     account.first_token_latency_sample_count
   )
+  const quota = xaiQuotaDisplayState(account.xai_quota)
 
   return (
     <div className='flex min-w-[190px] flex-col gap-1 text-xs'>
@@ -2919,14 +3127,30 @@ function AccountRuntimeStats(props: { account: AccountPoolAccount }) {
             }`
           : '-'}
       </div>
+      {quota ? (
+        <div className='border-border text-muted-foreground mt-1 border-t pt-1'>
+          <div>
+            {t('xAI quota')}: {quota.remaining ?? t('Unknown')}
+          </div>
+          <div>
+            {t('Media eligibility')}:{' '}
+            {t(XAI_MEDIA_ELIGIBILITY_LABELS[quota.media])}
+            {' / '}
+            {formatOptionalTimestamp(quota.fetchedAt)}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
 
 function AccountRowActions(props: {
   account: AccountPoolAccount
+  canProbeXAIQuota: boolean
+  probingXAIQuota: boolean
   onEdit: (account: AccountPoolAccount) => void
   onDetect: (account: AccountPoolAccount) => void
+  onProbeXAIQuota: (account: AccountPoolAccount) => void
   onDelete: (account: AccountPoolAccount) => void
   onSetStatus: (account: AccountPoolAccount, status: string) => void
 }) {
@@ -2957,6 +3181,21 @@ function AccountRowActions(props: {
           <Radar />
           {t('Detect Models')}
         </DropdownMenuItem>
+        {props.canProbeXAIQuota ? (
+          <DropdownMenuItem
+            disabled={props.probingXAIQuota}
+            onClick={() => props.onProbeXAIQuota(props.account)}
+          >
+            {props.probingXAIQuota ? (
+              <Loader2 className='animate-spin' />
+            ) : (
+              <Gauge />
+            )}
+            {props.probingXAIQuota
+              ? t('Probing xAI quota')
+              : t('Probe xAI quota')}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           onClick={() => props.onSetStatus(props.account, nextStatus)}
         >
@@ -3840,6 +4079,7 @@ function AccountFormSheet(props: {
     props.pool?.platform === 'gemini' && form.credential_type === 'oauth'
   const showXAIOAuth =
     props.pool?.platform === 'xai' && form.credential_type === 'oauth'
+  const showXAIOverrides = props.pool?.platform === 'xai'
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -4194,6 +4434,65 @@ function AccountFormSheet(props: {
               )}
             </FieldGroup>
           </SideDrawerSection>
+          {showXAIOverrides ? (
+            <SideDrawerSection>
+              <SideDrawerSectionHeader title={t('xAI Outbound Overrides')} />
+              <FieldGroup>
+                <FieldBlock
+                  label={t('Account Base URL')}
+                  htmlFor='account-pool-account-xai-base-url'
+                  description={t(
+                    'Overrides the channel base URL for this xAI account. HTTPS public hosts are required.'
+                  )}
+                >
+                  <Input
+                    id='account-pool-account-xai-base-url'
+                    type='url'
+                    value={form.base_url}
+                    placeholder='https://api.x.ai'
+                    onChange={(event) =>
+                      setField('base_url', event.target.value)
+                    }
+                  />
+                </FieldBlock>
+                <div className={sideDrawerSwitchItemClassName()}>
+                  <div className='min-w-0'>
+                    <FieldLabel htmlFor='account-pool-account-xai-header-overrides'>
+                      {t('Enable Account Header Overrides')}
+                    </FieldLabel>
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t(
+                        'Account headers override same-name channel headers. Authorization, cookies, proxy headers, and transport headers are blocked.'
+                      )}
+                    </p>
+                  </div>
+                  <Switch
+                    id='account-pool-account-xai-header-overrides'
+                    checked={form.header_override_enabled}
+                    onCheckedChange={(checked) =>
+                      setField('header_override_enabled', checked)
+                    }
+                  />
+                </div>
+                {form.header_override_enabled ? (
+                  <FieldBlock
+                    label={t('Header Overrides JSON')}
+                    htmlFor='account-pool-account-xai-header-overrides-json'
+                  >
+                    <Textarea
+                      id='account-pool-account-xai-header-overrides-json'
+                      className='min-h-32 font-mono text-xs'
+                      value={form.header_overrides_text}
+                      onChange={(event) =>
+                        setField('header_overrides_text', event.target.value)
+                      }
+                      placeholder='{"X-Trace-ID":"account-trace"}'
+                    />
+                  </FieldBlock>
+                ) : null}
+              </FieldGroup>
+            </SideDrawerSection>
+          ) : null}
           <SideDrawerSection>
             <SideDrawerSectionHeader title={t('Models')} />
             <FieldGroup>

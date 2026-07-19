@@ -311,6 +311,73 @@ func TestAccountPoolTokenProviderRefreshFailureTemporarilyDisablesAccount(t *tes
 	assert.NotContains(t, stored.TempDisabledReason, "sk-refresh-secret-token")
 }
 
+func TestAccountPoolTokenProviderExpiresXAIPermanentCredentialFailure(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name: "xai-invalid-grant",
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "rejected-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{ExpiresAt: 900, Version: 1},
+	})
+	setAccountPoolXAIOAuthRefreshForTest(t, func(context.Context, string, string, string) (*CodexOAuthTokenResult, error) {
+		return nil, &XAIOAuthTokenError{StatusCode: 401, Code: "invalid_grant"}
+	})
+
+	_, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID: account.Id,
+		Credential: AccountPoolCredentialConfig{
+			Type:         AccountPoolCredentialTypeOAuth,
+			RefreshToken: "rejected-refresh-token",
+		},
+		TokenState: AccountPoolTokenState{ExpiresAt: 900, Version: 1},
+		Platform:   model.AccountPoolPlatformXAI,
+		Now:        1000,
+	})
+
+	require.Error(t, err)
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusExpired, stored.Status)
+	assert.Zero(t, stored.TempDisabledUntil)
+	assert.Equal(t, int64(1000), stored.LastFailureAt)
+	assert.Contains(t, stored.LastError, "xai oauth credential rejected")
+	assert.Contains(t, stored.LastError, "invalid_grant")
+	assert.NotContains(t, stored.LastError, "rejected-refresh-token")
+}
+
+func TestAccountPoolTokenProviderKeepsXAITransientFailureOnCooldown(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformXAI)
+	account := createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
+		Name:       "xai-transient-refresh",
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth, RefreshToken: "refresh-token"},
+		TokenState: AccountPoolTokenState{ExpiresAt: 900, Version: 1},
+	})
+	setAccountPoolXAIOAuthRefreshForTest(t, func(context.Context, string, string, string) (*CodexOAuthTokenResult, error) {
+		return nil, &XAIOAuthTokenError{StatusCode: 503, Code: "temporarily_unavailable"}
+	})
+
+	_, err := ResolveAccountPoolRuntimeCredential(context.Background(), AccountPoolRuntimeCredentialRequest{
+		AccountID:  account.Id,
+		Credential: AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth, RefreshToken: "refresh-token"},
+		TokenState: AccountPoolTokenState{ExpiresAt: 900, Version: 1},
+		Platform:   model.AccountPoolPlatformXAI,
+		Now:        1000,
+	})
+
+	require.Error(t, err)
+	var stored model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&stored, account.Id).Error)
+	assert.Equal(t, model.AccountPoolAccountStatusEnabled, stored.Status)
+	assert.Equal(t, int64(1060), stored.TempDisabledUntil)
+	assert.Contains(t, stored.LastError, "temporarily_unavailable")
+}
+
 func TestAccountPoolTokenProviderSingleflightsConcurrentRefresh(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	service := AccountPoolService{}

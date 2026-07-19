@@ -21,6 +21,7 @@ type AccountPoolSelectionRequest struct {
 	BindingID            int
 	RequestModel         string
 	ChannelUpstreamModel string
+	RequireXAIMedia      bool
 	AttemptedAccountIDs  map[int]struct{}
 	AffinityKey          string
 	Now                  int64
@@ -120,6 +121,14 @@ func loadAccountPoolSelectionContext(req AccountPoolSelectionRequest) (accountPo
 		// bridging the DB cooldown read-propagation window without a DB round-trip.
 		if accountPoolRuntimeBlocked(account.Id, now) {
 			continue
+		}
+		if req.RequireXAIMedia && pool.Platform == model.AccountPoolPlatformXAI {
+			options, err := parseAccountPoolRuntimeOptions(account.RuntimeOptions)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("account pool: treating xai media eligibility as unknown for account id=%d name=%q due to invalid runtime_options: %v", account.Id, account.Name, err))
+			} else if options.XAIQuota != nil && options.XAIQuota.MediaEligible != nil && !*options.XAIQuota.MediaEligible {
+				continue
+			}
 		}
 		supportedModels, err := parseAccountPoolSupportedModels(account.SupportedModels)
 		if err != nil {

@@ -122,6 +122,9 @@ export type AccountPoolCredentialConfigRequest = {
   // alongside the SSO token (carried in api_key). Mirrors the backend
   // dto.AccountPoolCredentialConfigRequest field; ignored by other credential types.
   cf_clearance?: string
+  base_url?: string
+  header_override_enabled?: boolean
+  header_overrides?: Record<string, string>
 }
 
 export type AccountPoolTokenStateRequest = {
@@ -157,6 +160,65 @@ export type AccountPoolXAIOAuthTokenResult = {
   expires_at: number
   credential: AccountPoolCredentialConfigRequest
   token_state: AccountPoolTokenStateRequest
+}
+
+export type AccountPoolXAIOAuthReconcileRequest = {
+  dry_run?: boolean
+  near_expiry_window_seconds?: number
+}
+
+export type AccountPoolXAIOAuthReconcileItem = {
+  account_id: number
+  name: string
+  status: string
+  reason: string
+  action: string
+  applied: boolean
+  outcome: string
+}
+
+export type AccountPoolXAIOAuthReconcileResult = {
+  pool_id: number
+  dry_run: boolean
+  near_expiry_window_seconds: number
+  scanned: number
+  candidates: number
+  applied: number
+  skipped: number
+  items: AccountPoolXAIOAuthReconcileItem[]
+}
+
+export type AccountPoolXAIQuotaWindow = {
+  limit?: number
+  remaining?: number
+  reset_unix?: number
+  reset_at?: string
+}
+
+export type AccountPoolXAIBillingSnapshot = {
+  usage_percent?: number
+  monthly_limit_cents?: number
+  used_cents?: number
+  used_percent?: number
+  plan?: string
+  weekly_status_code?: number
+  monthly_status_code?: number
+  partial?: boolean
+}
+
+export type AccountPoolXAIQuotaSnapshot = {
+  source: string
+  model?: string
+  billing?: AccountPoolXAIBillingSnapshot
+  requests?: AccountPoolXAIQuotaWindow
+  tokens?: AccountPoolXAIQuotaWindow
+  retry_after_seconds?: number
+  status_code?: number
+  headers_observed: boolean
+  media_eligible?: boolean
+  media_eligibility_reason?: string
+  fetched_at: number
+  probe_error?: string
 }
 
 export type AccountPoolAccount = {
@@ -207,6 +269,10 @@ export type AccountPoolAccount = {
   last_capability_check_models: string[]
   has_credential: boolean
   has_token: boolean
+  xai_quota?: AccountPoolXAIQuotaSnapshot
+  base_url?: string
+  header_override_enabled?: boolean
+  header_overrides?: Record<string, string>
   created_time: number
   updated_time: number
 }

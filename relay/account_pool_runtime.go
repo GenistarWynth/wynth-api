@@ -40,6 +40,7 @@ type accountPoolRuntimeRelaySnapshot struct {
 	upstreamModelName       string
 	channelSettingProxy     string
 	runtimeProxy            string
+	runtimeBaseURL          string
 	runtimeAccountID        string
 	runtimeAnthropicOAuth   bool
 	runtimeGeminiOAuth      bool
@@ -258,6 +259,7 @@ func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRun
 		snapshot.channelSettingProxy = info.ChannelSetting.Proxy
 	}
 	snapshot.runtimeProxy = info.RuntimeProxy
+	snapshot.runtimeBaseURL = info.RuntimeBaseURL
 	snapshot.runtimeAccountID = info.RuntimeAccountID
 	snapshot.runtimeAnthropicOAuth = info.RuntimeAnthropicOAuth
 	snapshot.runtimeGeminiOAuth = info.RuntimeGeminiOAuth
@@ -287,6 +289,7 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 		info.ChannelSetting.Proxy = snapshot.channelSettingProxy
 	}
 	info.RuntimeProxy = snapshot.runtimeProxy
+	info.RuntimeBaseURL = snapshot.runtimeBaseURL
 	info.RuntimeAccountID = snapshot.runtimeAccountID
 	info.RuntimeAnthropicOAuth = snapshot.runtimeAnthropicOAuth
 	info.RuntimeGeminiOAuth = snapshot.runtimeGeminiOAuth

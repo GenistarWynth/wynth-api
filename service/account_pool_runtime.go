@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,6 +41,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeVertexServiceAccount = false
 		info.RuntimeVertexProjectID = ""
 		info.RuntimeVertexLocation = ""
+		info.RuntimeBaseURL = ""
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -49,8 +51,10 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		ChannelID:            info.ChannelId,
 		RequestModel:         info.OriginModelName,
 		ChannelUpstreamModel: info.UpstreamModelName,
-		AttemptedAccountIDs:  GetAccountPoolAttemptedAccountIDs(c),
-		AffinityKey:          affinityKey,
+		RequireXAIMedia: info.RelayMode == relayconstant.RelayModeImagesGenerations ||
+			info.RelayMode == relayconstant.RelayModeImagesEdits,
+		AttemptedAccountIDs: GetAccountPoolAttemptedAccountIDs(c),
+		AffinityKey:         affinityKey,
 	})
 	if err != nil {
 		if errors.Is(err, ErrAccountPoolBindingNotRuntimeEnabled) {
@@ -113,6 +117,27 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 	info.UpstreamModelName = selection.UpstreamModelName
 	if selection.ProxyURL != "" {
 		info.RuntimeProxy = selection.ProxyURL
+	}
+	if selection.Platform == model.AccountPoolPlatformXAI {
+		normalizedCredential, overrideErr := normalizeAccountPoolXAIOverrides(
+			accountPoolRuntimeContext(c),
+			selection.Platform,
+			selection.Credential,
+		)
+		if overrideErr != nil {
+			return fmt.Errorf("xai account outbound override validation failed: %w", overrideErr)
+		}
+		if normalizedCredential.BaseURL != nil {
+			info.RuntimeBaseURL = strings.TrimSpace(*normalizedCredential.BaseURL)
+		}
+		if normalizedCredential.HeaderOverrideEnabled != nil && *normalizedCredential.HeaderOverrideEnabled {
+			mergedHeaders := relaycommon.GetEffectiveHeaderOverride(info)
+			for name, value := range normalizedCredential.HeaderOverrides {
+				mergedHeaders[strings.ToLower(name)] = value
+			}
+			info.RuntimeHeadersOverride = mergedHeaders
+			info.UseRuntimeHeadersOverride = true
+		}
 	}
 	// Signal to the Claude adaptor whether to use OAuth Bearer auth instead of x-api-key.
 	if selection.Platform == model.AccountPoolPlatformAnthropic {

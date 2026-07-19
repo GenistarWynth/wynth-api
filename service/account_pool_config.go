@@ -69,6 +69,11 @@ type AccountPoolCredentialConfig struct {
 	// grok_web_cookie credential. It is a SECRET and lives in the encrypted
 	// credential blob alongside the sso token (carried in APIKey).
 	CFClearance string `json:"cf_clearance,omitempty"`
+	// xAI account-pool-only outbound overrides. Pointers preserve the distinction
+	// between an omitted admin update and an explicit clear/disable operation.
+	BaseURL               *string           `json:"base_url,omitempty"`
+	HeaderOverrideEnabled *bool             `json:"header_override_enabled,omitempty"`
+	HeaderOverrides       map[string]string `json:"header_overrides,omitempty"`
 }
 
 type AccountPoolTokenState struct {
