@@ -42,6 +42,7 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - Consume logs now record the selected account-pool pool/account IDs. `free_usage_24h_estimate` prefers exact Wynth-observed rolling usage from linked consume logs (`logs_24h`) and falls back to cumulative account counters (`counter_estimate`) for legacy/unlinked history; it remains read-only metadata and is never used for billing or scheduling.
 
 ### Fixed — Account Pool (号池)
+- Account-level header overrides are now reapplied after channel parameter-override operations, Redis cooldown deletion failures are reported instead of being presented as a successful reset, worker lease expiry uses the shared database clock, and the SSO import batch deadline now reaches account persistence.
 - xAI runtime and administrator refresh now honor the OAuth client ID captured during authorization and prefer the newest rotated refresh token in token state, while preserving default-client and stored-credential fallbacks for existing accounts.
 - Administrator token refresh and missing-refresh expiration use encrypted credential/token-state compare-and-swap guards, preventing concurrent rotations from being overwritten or incorrectly retired.
 - OAuth accounts with an expired access token and no refresh token are marked expired and removed from scheduling; channel-test requests remain mutation-free.

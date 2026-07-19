@@ -247,7 +247,7 @@ func (s AccountPoolService) ImportXAISSOAccounts(ctx context.Context, params Acc
 			identifier = strings.TrimSpace(info.Subject)
 		}
 		name := accountPoolXAISSOAccountName(params.Name, identifier, index, len(tokens))
-		created, createErr := s.CreateAccount(AccountPoolAccountCreateParams{
+		created, createErr := s.CreateAccountWithContext(batchCtx, AccountPoolAccountCreateParams{
 			PoolID:            params.PoolID,
 			Name:              name,
 			AccountIdentifier: identifier,

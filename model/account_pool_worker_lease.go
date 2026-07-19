@@ -14,17 +14,23 @@ type AccountPoolWorkerLease struct {
 	UpdatedAt int64  `json:"updated_at" gorm:"bigint;not null"`
 }
 
-func AcquireAccountPoolWorkerLease(ctx context.Context, leaseKey string, ownerID string, now int64, ttlSeconds int64) (bool, error) {
+var accountPoolWorkerLeaseNow = getDBTimestamp
+
+func AcquireAccountPoolWorkerLease(ctx context.Context, leaseKey string, ownerID string, ttlSeconds int64) (bool, error) {
 	leaseKey = strings.TrimSpace(leaseKey)
 	ownerID = strings.TrimSpace(ownerID)
-	if leaseKey == "" || ownerID == "" || now <= 0 || ttlSeconds <= 0 {
-		return false, errors.New("account pool worker lease key, owner, time, and TTL are required")
+	if leaseKey == "" || ownerID == "" || ttlSeconds <= 0 {
+		return false, errors.New("account pool worker lease key, owner, and TTL are required")
 	}
 	if DB == nil {
 		return false, errors.New("database is not configured")
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	now, err := accountPoolWorkerLeaseNow(ctx)
+	if err != nil {
+		return false, err
 	}
 	expiresAt := accountPoolWorkerLeaseExpiry(now, ttlSeconds)
 	db := DB.WithContext(ctx)
@@ -59,17 +65,21 @@ func AcquireAccountPoolWorkerLease(ctx context.Context, leaseKey string, ownerID
 	return existing.OwnerID == ownerID && existing.ExpiresAt > now, nil
 }
 
-func RenewAccountPoolWorkerLease(ctx context.Context, leaseKey string, ownerID string, now int64, ttlSeconds int64) (bool, error) {
+func RenewAccountPoolWorkerLease(ctx context.Context, leaseKey string, ownerID string, ttlSeconds int64) (bool, error) {
 	leaseKey = strings.TrimSpace(leaseKey)
 	ownerID = strings.TrimSpace(ownerID)
-	if leaseKey == "" || ownerID == "" || now <= 0 || ttlSeconds <= 0 {
-		return false, errors.New("account pool worker lease key, owner, time, and TTL are required")
+	if leaseKey == "" || ownerID == "" || ttlSeconds <= 0 {
+		return false, errors.New("account pool worker lease key, owner, and TTL are required")
 	}
 	if DB == nil {
 		return false, errors.New("database is not configured")
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	now, err := accountPoolWorkerLeaseNow(ctx)
+	if err != nil {
+		return false, err
 	}
 	result := DB.WithContext(ctx).Model(&AccountPoolWorkerLease{}).
 		Where("lease_key = ? AND owner_id = ? AND expires_at > ?", leaseKey, ownerID, now).

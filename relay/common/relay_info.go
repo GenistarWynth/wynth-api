@@ -162,8 +162,11 @@ type RelayInfo struct {
 	RetryIndex                            int
 	LastError                             *types.NewAPIError
 	RuntimeHeadersOverride                map[string]interface{}
-	UseRuntimeHeadersOverride             bool
-	ParamOverrideAudit                    []string
+	// RuntimeAccountHeadersOverride is merged last so selected-account values
+	// retain precedence over channel static and parameter-based header changes.
+	RuntimeAccountHeadersOverride map[string]interface{}
+	UseRuntimeHeadersOverride     bool
+	ParamOverrideAudit            []string
 	// RuntimeProxy overrides the persisted channel proxy for a single relay attempt.
 	// It is used for account-pool proxy routing without mutating channel settings.
 	RuntimeProxy string

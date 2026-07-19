@@ -43,6 +43,7 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		info.RuntimeVertexProjectID = ""
 		info.RuntimeVertexLocation = ""
 		info.RuntimeBaseURL = ""
+		info.RuntimeAccountHeadersOverride = nil
 	}
 	if c == nil || info == nil || info.ChannelMeta == nil {
 		return nil
@@ -134,10 +135,14 @@ func ApplyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 		}
 		if normalizedCredential.HeaderOverrideEnabled != nil && *normalizedCredential.HeaderOverrideEnabled {
 			mergedHeaders := relaycommon.GetEffectiveHeaderOverride(info)
+			accountHeaders := make(map[string]interface{}, len(normalizedCredential.HeaderOverrides))
 			for name, value := range normalizedCredential.HeaderOverrides {
-				mergedHeaders[strings.ToLower(name)] = value
+				normalizedName := strings.ToLower(name)
+				mergedHeaders[normalizedName] = value
+				accountHeaders[normalizedName] = value
 			}
 			info.RuntimeHeadersOverride = mergedHeaders
+			info.RuntimeAccountHeadersOverride = accountHeaders
 			info.UseRuntimeHeadersOverride = true
 		}
 	}

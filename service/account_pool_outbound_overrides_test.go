@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,6 +135,27 @@ func TestAccountPoolRuntimeOutboundOverridesAccountWinsForEverySupportedPlatform
 			assert.Equal(t, "account", info.RuntimeHeadersOverride["x-shared"])
 			assert.Equal(t, "present", info.RuntimeHeadersOverride["x-account"])
 			assert.Equal(t, "preserved", info.RuntimeHeadersOverride["x-channel"])
+
+			info.ChannelMeta.ParamOverride = map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode":  "set_header",
+						"path":  "X-Shared",
+						"value": "channel-param-override",
+					},
+					map[string]interface{}{
+						"mode":  "set_header",
+						"path":  "X-Param-Only",
+						"value": "kept",
+					},
+				},
+			}
+			_, err := relaycommon.ApplyParamOverrideWithRelayInfo([]byte(`{"model":"model"}`), info)
+			require.NoError(t, err)
+			effective := relaycommon.GetEffectiveHeaderOverride(info)
+			assert.Equal(t, "account", effective["x-shared"])
+			assert.Equal(t, "present", effective["x-account"])
+			assert.Equal(t, "kept", effective["x-param-only"])
 		})
 	}
 }

@@ -16,7 +16,7 @@ The implementation uses five incremental slices:
 
 Add `POST /api/account_pools/:id/accounts/:account_id/quota/reset` with three explicit options:
 
-- `clear_cooldown` defaults to true and clears the local rate-limit cooldown, the in-process/Redis runtime block, and quota-related temporary-disable metadata. It also clears the stored xAI quota observation so stale exhausted state is not presented as current.
+- `clear_cooldown` defaults to true and clears the local rate-limit cooldown, the in-process/Redis runtime block, and quota-related temporary-disable metadata. Redis deletion failures are returned as an incomplete reset so the API never claims a distributed block was cleared when it remains live. The operation also clears the stored xAI quota observation so stale exhausted state is not presented as current.
 - `reset_request_quota` clears `request_quota_used` and restarts the configured local request-quota window.
 - `force_probe` performs a fresh xAI OAuth quota probe after the local reset. It is rejected for accounts that cannot be probed.
 
@@ -28,7 +28,7 @@ Replace the xAI-only validation entry point with a shared policy. Supported pool
 
 The base URL policy requires an absolute HTTPS URL without userinfo, query, or fragment. Official platform hosts are trusted defaults; custom public hosts remain supported after DNS resolution and private/link-local/loopback/multicast rejection. A development-only HTTP escape hatch remains available through a renamed generic environment option, with the existing xAI option retained as a compatibility alias.
 
-Header validation is shared across platforms, bounded by entry/name/value/total size, and blocks authentication/provider-billing, cookie, proxy/forwarding, connection, content framing, compression, and WebSocket handshake headers. Runtime merge order is channel headers first and account headers second, so account values win. Provider URL builders opt into `RuntimeBaseURL`; Vertex and Gemini Code Assist retain their provider defaults when no account override exists.
+Header validation is shared across platforms, bounded by entry/name/value/total size, and blocks authentication/provider-billing, cookie, proxy/forwarding, connection, content framing, compression, and WebSocket handshake headers. Runtime merge order is channel static and parameter-based headers first and account headers last, so account values remain final at request time. Provider URL builders opt into `RuntimeBaseURL`; Vertex and Gemini Code Assist retain their provider defaults when no account override exists.
 
 The React account form shows the same fields for every supported pool and keeps them hidden for `grok_web`.
 
@@ -40,7 +40,7 @@ For xAI Free accounts, query consume logs over `[now-24h, now]` by account ID. I
 
 ## Distributed worker leases
 
-Add `account_pool_worker_leases` with a primary-key lease name, owner ID, expiry, and update timestamp. Acquisition is a portable insert-if-missing plus conditional update (`expired OR same owner`); renewal and release require owner match. Each maintenance tick obtains a lease, renews it on a heartbeat, cancels work if ownership is lost, and releases best-effort on completion. Process-local atomic guards remain as a cheap re-entry defense.
+Add `account_pool_worker_leases` with a primary-key lease name, owner ID, expiry, and update timestamp. Acquisition is a portable insert-if-missing plus conditional update (`expired OR same owner`); renewal and release require owner match. Lease comparisons and expiry use the primary database clock rather than individual node clocks. Each maintenance tick obtains a lease, renews it on a heartbeat, cancels work if ownership is lost, and releases best-effort on completion. Process-local atomic guards remain as a cheap re-entry defense.
 
 The initial leased workers are:
 
@@ -53,7 +53,7 @@ TTL recovery guarantees that a crashed holder does not block future ticks indefi
 
 xAI SSO conversion uses three workers by default and accepts at most eight through `ACCOUNT_POOL_XAI_SSO_IMPORT_CONCURRENCY`. The existing 25-item request bound remains. Each conversion receives a 90-second per-item timeout, the batch receives a bounded total deadline (`ACCOUNT_POOL_XAI_SSO_IMPORT_TIMEOUT_SECONDS`, default 300 seconds), and the selected account/pool proxy URL is reused for every item.
 
-Conversions fill an indexed outcome array. Account creation and response aggregation then run in input order, preserving stable names, indexes, successes, and failures. Returned errors remain static and never contain SSO tokens, proxy credentials, or provider response bodies.
+Conversions fill an indexed outcome array. Account creation and response aggregation then run in input order under the same bounded batch context, preserving stable names, indexes, successes, and failures while carrying timeout cancellation into database persistence. Returned errors remain static and never contain SSO tokens, proxy credentials, or provider response bodies.
 
 ## API and configuration reference
 

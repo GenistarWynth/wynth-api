@@ -50,6 +50,7 @@ type accountPoolRuntimeRelaySnapshot struct {
 	runtimeVertexProjectID  string
 	runtimeVertexLocation   string
 	runtimeHeadersOverride  map[string]interface{}
+	runtimeAccountHeaders   map[string]interface{}
 	useRuntimeHeaders       bool
 	isStream                bool
 	upstreamRequestBodySize int64
@@ -269,6 +270,7 @@ func snapshotAccountPoolRuntimeRelay(info *relaycommon.RelayInfo) accountPoolRun
 	snapshot.runtimeVertexProjectID = info.RuntimeVertexProjectID
 	snapshot.runtimeVertexLocation = info.RuntimeVertexLocation
 	snapshot.runtimeHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(info.RuntimeHeadersOverride)
+	snapshot.runtimeAccountHeaders = cloneAccountPoolRuntimeHeadersOverride(info.RuntimeAccountHeadersOverride)
 	snapshot.useRuntimeHeaders = info.UseRuntimeHeadersOverride
 	snapshot.isStream = info.IsStream
 	snapshot.upstreamRequestBodySize = info.UpstreamRequestBodySize
@@ -299,6 +301,7 @@ func restoreAccountPoolRuntimeRelay(info *relaycommon.RelayInfo, snapshot accoun
 	info.RuntimeVertexProjectID = snapshot.runtimeVertexProjectID
 	info.RuntimeVertexLocation = snapshot.runtimeVertexLocation
 	info.RuntimeHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(snapshot.runtimeHeadersOverride)
+	info.RuntimeAccountHeadersOverride = cloneAccountPoolRuntimeHeadersOverride(snapshot.runtimeAccountHeaders)
 	info.UseRuntimeHeadersOverride = snapshot.useRuntimeHeaders
 	info.IsStream = snapshot.isStream
 	info.UpstreamRequestBodySize = snapshot.upstreamRequestBodySize

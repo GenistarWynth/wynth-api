@@ -102,6 +102,40 @@ func TestResetAccountLocalQuotaPreservesNonQuotaTemporaryDisable(t *testing.T) {
 	assert.Equal(t, "authentication failed", stored.LastError)
 }
 
+func TestResetAccountLocalQuotaReportsRedisBlockClearFailure(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	mr := setupAccountPoolRedisForTest(t)
+	resetAccountPoolRuntimeBlocksForTest()
+	now := time.Unix(2_000_000_000, 0).UTC()
+	service := AccountPoolService{}
+	pool, account := createAccountPoolXAIQuotaTestAccount(t, service, now)
+	blockAccountPoolRuntime(account.Id, now.Add(time.Hour).Unix())
+	require.True(t, accountPoolRuntimeBlocked(account.Id, now.Unix()))
+
+	mr.SetError("CRASHED")
+	result, err := service.ResetAccountLocalQuota(context.Background(), AccountPoolLocalQuotaResetParams{
+		PoolID:        pool.Id,
+		AccountID:     account.Id,
+		ClearCooldown: true,
+		Now:           now.Unix(),
+	})
+	require.Error(t, err)
+	assert.False(t, result.CooldownCleared)
+
+	mr.SetError("")
+	assert.True(t, accountPoolRuntimeBlocked(account.Id, now.Unix()), "the API must not claim a Redis block was cleared when DEL failed")
+
+	result, err = service.ResetAccountLocalQuota(context.Background(), AccountPoolLocalQuotaResetParams{
+		PoolID:        pool.Id,
+		AccountID:     account.Id,
+		ClearCooldown: true,
+		Now:           now.Unix(),
+	})
+	require.NoError(t, err)
+	assert.True(t, result.CooldownCleared)
+	assert.False(t, accountPoolRuntimeBlocked(account.Id, now.Unix()))
+}
+
 func TestResetAccountLocalQuotaForceProbeIsPostCommitAndSecretSafe(t *testing.T) {
 	setupAccountPoolServiceTestDB(t)
 	now := time.Unix(2_000_000_000, 0).UTC()

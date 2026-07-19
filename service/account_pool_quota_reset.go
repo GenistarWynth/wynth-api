@@ -97,7 +97,9 @@ func (s AccountPoolService) ResetAccountLocalQuota(ctx context.Context, params A
 		return AccountPoolLocalQuotaResetResult{}, errors.New("account pool account not found")
 	}
 	if params.ClearCooldown {
-		clearAccountPoolRuntimeBlock(params.AccountID)
+		if clearErr := clearAccountPoolRuntimeBlock(params.AccountID); clearErr != nil {
+			return AccountPoolLocalQuotaResetResult{}, errors.New("failed to clear distributed account quota cooldown")
+		}
 	}
 
 	result := AccountPoolLocalQuotaResetResult{

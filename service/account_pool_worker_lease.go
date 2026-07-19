@@ -51,7 +51,6 @@ func runAccountPoolWorkerWithLease(ctx context.Context, leaseKey string, run fun
 		ctx,
 		leaseKey,
 		accountPoolWorkerLeaseOwnerID,
-		common.GetTimestamp(),
 		int64(ttl/time.Second),
 	)
 	if err != nil {
@@ -86,7 +85,6 @@ func runAccountPoolWorkerWithLease(ctx context.Context, leaseKey string, run fun
 					leaseCtx,
 					leaseKey,
 					accountPoolWorkerLeaseOwnerID,
-					common.GetTimestamp(),
 					int64(ttl/time.Second),
 				)
 				if renewErr != nil || !renewed {

@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestAccountPoolServiceRefreshXAIOAuthAccountPersistsRotatedTokens(t *testing.T) {
@@ -192,6 +193,59 @@ func TestAccountPoolServiceImportXAISSOAccountsReportsPartialFailure(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, "refresh-first", credential.RefreshToken)
 	assert.NotContains(t, stored.CredentialConfig, "first")
+}
+
+func TestAccountPoolServiceImportXAISSOAccountsCarriesBatchContextIntoPersistence(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	accountPoolService := AccountPoolService{}
+	pool, err := accountPoolService.CreatePool(AccountPoolCreateParams{
+		Name:     "xai-context-import",
+		Platform: model.AccountPoolPlatformXAI,
+	})
+	require.NoError(t, err)
+
+	oldConvert := accountPoolXAISSOConvert
+	accountPoolXAISSOConvert = func(context.Context, string, string) (*XAIOAuthTokenInfo, error) {
+		return &XAIOAuthTokenInfo{
+			AccessToken:  "access",
+			RefreshToken: "refresh",
+			Email:        "context@example.com",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+		}, nil
+	}
+	t.Cleanup(func() { accountPoolXAISSOConvert = oldConvert })
+
+	type contextMarkerKey struct{}
+	marker := &struct{}{}
+	type observedPersistenceContext struct {
+		marker      any
+		hasDeadline bool
+	}
+	observed := make(chan observedPersistenceContext, 1)
+	callbackName := "account_pool_test_observe_sso_import_context"
+	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register(callbackName, func(db *gorm.DB) {
+		_, hasDeadline := db.Statement.Context.Deadline()
+		observed <- observedPersistenceContext{
+			marker:      db.Statement.Context.Value(contextMarkerKey{}),
+			hasDeadline: hasDeadline,
+		}
+		db.AddError(errors.New("stop after observing persistence context"))
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Create().Remove(callbackName))
+	})
+
+	ctx := context.WithValue(context.Background(), contextMarkerKey{}, marker)
+	result, err := accountPoolService.ImportXAISSOAccounts(ctx, AccountPoolXAISSOImportParams{
+		PoolID:    pool.Id,
+		SSOTokens: []string{"sso"},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Errors, 1)
+
+	persistenceContext := <-observed
+	assert.Equal(t, marker, persistenceContext.marker)
+	assert.True(t, persistenceContext.hasDeadline, "account creation must inherit the bounded batch context")
 }
 
 func TestAccountPoolServiceImportXAISSOAccountsUsesBoundedParallelConversionAndStableAggregation(t *testing.T) {

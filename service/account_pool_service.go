@@ -405,7 +405,15 @@ func (s AccountPoolService) DeletePool(id int) error {
 }
 
 func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
-	pool, err := getAccountPoolExistingPool(params.PoolID)
+	return s.CreateAccountWithContext(context.Background(), params)
+}
+
+func (s AccountPoolService) CreateAccountWithContext(ctx context.Context, params AccountPoolAccountCreateParams) (AccountPoolAccountView, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	db := model.DB.WithContext(ctx)
+	pool, err := getAccountPoolExistingPoolWithDB(db, params.PoolID)
 	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
@@ -413,10 +421,10 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 	if name == "" {
 		return AccountPoolAccountView{}, errors.New("account pool account name is required")
 	}
-	if err := validateAccountPoolProxyReference(params.ProxyID); err != nil {
+	if err := validateAccountPoolProxyReferenceWithDB(db, params.ProxyID); err != nil {
 		return AccountPoolAccountView{}, err
 	}
-	params.Credential, err = normalizeAccountPoolOutboundOverrides(context.Background(), pool.Platform, params.Credential, nil)
+	params.Credential, err = normalizeAccountPoolOutboundOverrides(ctx, pool.Platform, params.Credential, nil)
 	if err != nil {
 		return AccountPoolAccountView{}, err
 	}
@@ -460,7 +468,7 @@ func (s AccountPoolService) CreateAccount(params AccountPoolAccountCreateParams)
 		RequestQuota:              accountPoolNormalizeRequestQuota(params.RequestQuota),
 		RequestQuotaWindowSeconds: accountPoolNormalizeRequestQuota(params.RequestQuotaWindowSeconds),
 	}
-	if err := model.DB.Create(&account).Error; err != nil {
+	if err := db.Create(&account).Error; err != nil {
 		return AccountPoolAccountView{}, err
 	}
 	view, err := buildAccountPoolAccountView(account)
@@ -1322,10 +1330,15 @@ func validateAccountPoolMutableBindingStatus(status string) error {
 }
 
 func validateAccountPoolProxyReference(proxyID int) error {
+	return validateAccountPoolProxyReferenceWithDB(model.DB, proxyID)
+}
+
+func validateAccountPoolProxyReferenceWithDB(db *gorm.DB, proxyID int) error {
 	if proxyID <= 0 {
 		return nil
 	}
-	if _, err := getAccountPoolExistingProxy(proxyID); err != nil {
+	var proxy model.AccountPoolProxy
+	if err := db.Where("status <> ?", model.AccountPoolProxyStatusDeleted).First(&proxy, proxyID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New("account pool proxy not found")
 		}
@@ -1347,8 +1360,12 @@ func getAccountPoolAccountForPool(poolID int, accountID int) (model.AccountPoolA
 }
 
 func getAccountPoolExistingPool(poolID int) (model.AccountPool, error) {
+	return getAccountPoolExistingPoolWithDB(model.DB, poolID)
+}
+
+func getAccountPoolExistingPoolWithDB(db *gorm.DB, poolID int) (model.AccountPool, error) {
 	var pool model.AccountPool
-	err := model.DB.Where("status <> ?", model.AccountPoolStatusDeleted).First(&pool, poolID).Error
+	err := db.Where("status <> ?", model.AccountPoolStatusDeleted).First(&pool, poolID).Error
 	return pool, err
 }
 

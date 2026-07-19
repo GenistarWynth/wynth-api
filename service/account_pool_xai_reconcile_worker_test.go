@@ -106,7 +106,7 @@ func TestRunDueAccountPoolXAIOAuthReconcileSkipsTickHeldByAnotherInstance(t *tes
 	createAccountPoolXAIReconcileWorkerAccount(t, service, pool.Id, "due", model.AccountPoolAccountStatusEnabled,
 		AccountPoolCredentialConfig{Type: AccountPoolCredentialTypeOAuth, RefreshToken: "refresh"},
 		AccountPoolTokenState{AccessToken: "expired", ExpiresAt: now - 1})
-	acquired, err := model.AcquireAccountPoolWorkerLease(context.Background(), accountPoolXAIOAuthReconcileLeaseKey, "other-instance", now, 60)
+	acquired, err := model.AcquireAccountPoolWorkerLease(context.Background(), accountPoolXAIOAuthReconcileLeaseKey, "other-instance", 60)
 	require.NoError(t, err)
 	require.True(t, acquired)
 

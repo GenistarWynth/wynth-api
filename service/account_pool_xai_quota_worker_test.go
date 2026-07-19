@@ -211,8 +211,7 @@ func TestRunDueAccountPoolXAIQuotaProbeSkipsTickHeldByAnotherInstance(t *testing
 	service := AccountPoolService{}
 	pool := createAccountPoolServiceTestPoolWithPlatform(t, service, model.AccountPoolPlatformXAI)
 	_ = createAccountPoolXAIQuotaWorkerTestAccount(t, service, pool.Id, "due", model.AccountPoolAccountStatusEnabled, nil)
-	now := common.GetTimestamp()
-	acquired, err := model.AcquireAccountPoolWorkerLease(context.Background(), accountPoolXAIQuotaProbeLeaseKey, "other-instance", now, 60)
+	acquired, err := model.AcquireAccountPoolWorkerLease(context.Background(), accountPoolXAIQuotaProbeLeaseKey, "other-instance", 60)
 	require.NoError(t, err)
 	require.True(t, acquired)
 
