@@ -6,6 +6,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+### Changed
+- Post-mortem recovery is now opt-in per channel under **Channel Monitor → Post-mortem recovery**, using `channel_dead_recovery_enabled`, `channel_dead_recovery_min_minutes`, and `channel_dead_recovery_max_minutes`. Existing channels default to off, the former global Routing Reliability controls are no longer used, and the worker retains a fixed safety cap of five probes per minute.
+
 ## [v1.0.0-rc.42] - 2026-07-20
 
 ### Added

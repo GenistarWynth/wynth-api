@@ -85,12 +85,6 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_minutes'],
           'monitor_setting.channel_test_mode':
             settings['monitor_setting.channel_test_mode'],
-          'monitor_setting.dead_channel_recovery_min_minutes':
-            settings['monitor_setting.dead_channel_recovery_min_minutes'],
-          'monitor_setting.dead_channel_recovery_max_minutes':
-            settings['monitor_setting.dead_channel_recovery_max_minutes'],
-          'monitor_setting.dead_channel_recovery_max_per_tick':
-            settings['monitor_setting.dead_channel_recovery_max_per_tick'],
         }}
       />
     ),

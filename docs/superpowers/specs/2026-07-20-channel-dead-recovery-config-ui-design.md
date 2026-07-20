@@ -1,27 +1,29 @@
-# Configurable Dead-Channel Recovery and Next-Check UI Design
+# Per-Channel Dead-Recovery Settings Design
 
 ## Goal
 
-Make post-mortem recovery for auto-disabled, unmonitored channels configurable at runtime and expose the next scheduled recovery probe in the existing channel monitor UI.
+Make post-mortem recovery opt-in per channel, remove its global System Settings controls, and keep the next scheduled probe visible in Channel Monitor only when that channel is eligible.
 
 ## Architecture
 
-The existing `monitor_setting` configuration gains three integer fields: minimum delay minutes, maximum delay minutes, and maximum probes per one-minute worker tick. `operation_setting` owns defaults and normalization so every consumer receives safe values: 15/120/5 when unset, minimum delay reset to 15 below 1, maximum raised to the normalized minimum when smaller, and per-tick count reset to 5 below 1 or capped at 50 above the supported limit.
+`dto.ChannelOtherSettings` owns `channel_dead_recovery_enabled`, `channel_dead_recovery_min_minutes`, and `channel_dead_recovery_max_minutes`. Missing settings mean disabled with display/runtime defaults of 15 and 120 minutes. Model-level normalization makes malformed stored values safe, while the dedicated update scope validates newly submitted values and merges only these three keys.
 
-Pure eligibility and deterministic timing functions move from `controller` into `model`, which is already allowed to depend on `operation_setting`. Both the one-minute worker and `AttachChannelMonitorInfo` call those helpers with the same normalized settings. The deterministic seed remains channel ID plus `status_time`, preserving the current scattering behavior.
+The worker no longer reads recovery parameters from `operation_setting.MonitorSetting`. Eligibility requires auto-disabled status, monitoring off, and per-channel recovery enabled. Deterministic scatter continues to use channel ID plus `status_time`, with the normalized bounds from that channel. The one-minute worker retains a fixed internal cap of five probes to limit stampedes; no cap is exposed through product settings.
 
-`ChannelMonitorInfo` gains `dead_recovery_eligible`, `dead_recovery_next_check_at`, and `dead_recovery_seconds_until_next_check`. Eligibility remains exactly auto-disabled plus per-channel monitor disabled. Enabled, manually disabled, and monitor-enabled channels expose `false` and no recovery timestamp.
-
-The existing Routing Reliability settings section gets three compact numeric fields. The existing Channel Monitor dialog reuses its relative-time formatter and shows “Next post-mortem recovery: …” only for eligible channels. All six frontend locales receive translations.
+The existing Channel Monitor dialog shows a “Post-mortem recovery” button only while its monitor switch is off. The button opens a secondary dialog containing the enable switch, minimum and maximum delays, and helper text explaining that the feature applies only to auto-disabled channels with monitoring off. The secondary dialog saves through the existing channel settings endpoint using the dedicated `dead-recovery` scope so monitor and auto-priority fields remain untouched.
 
 ## Data Flow
 
-1. Administrators save `monitor_setting.dead_channel_recovery_*` through the existing option API.
-2. `GetMonitorSetting` normalizes loaded values and environment-overridden monitor settings.
-3. Each one-minute recovery tick reads normalized settings, filters eligible due channels using the shared next-check calculation, and caps probes with `max_per_tick`.
-4. Channel list/detail hydration reads the same settings and shared timing helper to attach the next-check API fields.
-5. The monitor dialog parses the fields and renders the relative next-check time only when `dead_recovery_eligible` is true.
+1. Channel Monitor reads recovery values from the selected channel’s `settings` JSON and applies 15/120 defaults without enabling the feature.
+2. The secondary dialog validates integer minutes (`min >= 1`, `max >= min`) and sends only channel settings plus scope `dead-recovery`.
+3. The backend merges only the three dead-recovery keys and rejects invalid enabled ranges.
+4. Each worker tick filters channels using per-channel eligibility and next-check calculations, shuffles due candidates, and starts at most five probes.
+5. Channel list/detail hydration emits next-check fields only for eligible channels, so the existing relative-time presentation stays hidden for every other state.
+
+## Migration and Compatibility
+
+Existing channels remain opted out because the enable key is absent. Leftover `monitor_setting.dead_channel_recovery_*` JSON may still be accepted by generic configuration loading, but the typed admin surface and runtime do not expose or consume it.
 
 ## Validation and Tests
 
-Backend normalization tests cover unset/default and invalid values. Model tests cover deterministic configured bounds, eligibility, next-check calculation, and API exposure. Controller filter tests continue to protect status/monitor exclusions and configured batch caps. Frontend schema and display-text tests protect the payload contract and eligible-only label. Verification includes touched Go packages, frontend tests, typecheck, lint on changed files, formatting, and production build.
+Backend tests cover default/invalid normalization, exact eligibility, deterministic channel-specific delay bounds, fixed-cap filtering, eligible-only monitor info, and isolated `dead-recovery` persistence. Frontend tests cover read/write defaults, range validation, scope typing, removal of global fields, monitor-off button visibility, and the nested dialog contract. Verification includes all Go tests, all frontend tests, i18n checks, typecheck, changed-file lint and whitespace checks, and a production build.

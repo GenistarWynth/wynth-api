@@ -45,34 +45,9 @@ export const routingReliabilitySchema = z
         .int()
         .min(1, 'Interval must be at least 1 minute'),
       channel_test_mode: z.enum(channelTestModes),
-      dead_channel_recovery_min_minutes: z.coerce
-        .number()
-        .int()
-        .min(1, 'Minimum recovery delay must be at least 1 minute'),
-      dead_channel_recovery_max_minutes: z.coerce
-        .number()
-        .int()
-        .min(1, 'Maximum recovery delay must be at least 1 minute'),
-      dead_channel_recovery_max_per_tick: z.coerce
-        .number()
-        .int()
-        .min(1)
-        .max(50, 'Recovery probes per minute must be between 1 and 50'),
     }),
   })
   .superRefine((values, ctx) => {
-    if (
-      values.monitor_setting.dead_channel_recovery_max_minutes <
-      values.monitor_setting.dead_channel_recovery_min_minutes
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['monitor_setting', 'dead_channel_recovery_max_minutes'],
-        message:
-          'Maximum recovery delay must be greater than or equal to the minimum',
-      })
-    }
-
     const disableParsed = parseHttpStatusCodeRules(
       values.AutomaticDisableStatusCodes
     )

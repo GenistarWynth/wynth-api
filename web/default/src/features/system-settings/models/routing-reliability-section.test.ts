@@ -17,9 +17,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { routingReliabilitySchema } from './routing-reliability-schema'
+
+const sectionSource = readFileSync(
+  fileURLToPath(new URL('./routing-reliability-section.tsx', import.meta.url)),
+  'utf8'
+)
 
 const validValues = {
   RetryTimes: 1,
@@ -33,43 +40,38 @@ const validValues = {
     auto_test_channel_enabled: false,
     auto_test_channel_minutes: 10,
     channel_test_mode: 'scheduled_all' as const,
-    dead_channel_recovery_min_minutes: 15,
-    dead_channel_recovery_max_minutes: 120,
-    dead_channel_recovery_max_per_tick: 5,
   },
 }
 
-describe('routing reliability recovery settings validation', () => {
-  test('keeps valid recovery settings in the parsed form values', () => {
-    const parsed = routingReliabilitySchema.parse(validValues)
-
-    assert.equal(parsed.monitor_setting.dead_channel_recovery_min_minutes, 15)
-    assert.equal(parsed.monitor_setting.dead_channel_recovery_max_minutes, 120)
-    assert.equal(parsed.monitor_setting.dead_channel_recovery_max_per_tick, 5)
-  })
-
-  test('rejects a maximum below the minimum', () => {
-    const result = routingReliabilitySchema.safeParse({
+describe('routing reliability settings ownership', () => {
+  test('drops leftover global dead-recovery values from parsed form data', () => {
+    const parsed = routingReliabilitySchema.parse({
       ...validValues,
       monitor_setting: {
         ...validValues.monitor_setting,
-        dead_channel_recovery_min_minutes: 30,
-        dead_channel_recovery_max_minutes: 29,
+        dead_channel_recovery_min_minutes: 15,
+        dead_channel_recovery_max_minutes: 120,
+        dead_channel_recovery_max_per_tick: 5,
       },
     })
 
-    assert.equal(result.success, false)
+    assert.equal(
+      'dead_channel_recovery_min_minutes' in parsed.monitor_setting,
+      false
+    )
+    assert.equal(
+      'dead_channel_recovery_max_minutes' in parsed.monitor_setting,
+      false
+    )
+    assert.equal(
+      'dead_channel_recovery_max_per_tick' in parsed.monitor_setting,
+      false
+    )
   })
 
-  test('rejects more than 50 probes per tick', () => {
-    const result = routingReliabilitySchema.safeParse({
-      ...validValues,
-      monitor_setting: {
-        ...validValues.monitor_setting,
-        dead_channel_recovery_max_per_tick: 51,
-      },
-    })
-
-    assert.equal(result.success, false)
+  test('does not render global dead-recovery controls', () => {
+    assert.doesNotMatch(sectionSource, /dead_channel_recovery_min_minutes/)
+    assert.doesNotMatch(sectionSource, /dead_channel_recovery_max_minutes/)
+    assert.doesNotMatch(sectionSource, /dead_channel_recovery_max_per_tick/)
   })
 })

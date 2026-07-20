@@ -1,12 +1,33 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import type { Channel } from '../types'
 import {
   buildChannelAutoPrioritySettingsPayload,
+  buildChannelDeadRecoverySettingsPayload,
   buildChannelMonitorSettingsPayload,
+  isChannelDeadRecoveryRangeValid,
   isChannelAutoPriorityManagedByUpstream,
   readChannelAutoPrioritySettings,
+  readChannelDeadRecoverySettings,
   readChannelMonitorSettings,
 } from './channel-monitor'
 
@@ -20,6 +41,62 @@ function channel(settings: Record<string, unknown>, testModel = ''): Channel {
 }
 
 describe('channel monitor settings persistence', () => {
+  test('keeps post-mortem recovery off by default with 15/120 minute bounds', () => {
+    assert.deepEqual(readChannelDeadRecoverySettings(channel({})), {
+      enabled: false,
+      minMinutes: 15,
+      maxMinutes: 120,
+    })
+  })
+
+  test('normalizes malformed stored post-mortem recovery bounds for display', () => {
+    assert.deepEqual(
+      readChannelDeadRecoverySettings(
+        channel({
+          channel_dead_recovery_enabled: true,
+          channel_dead_recovery_min_minutes: 30,
+          channel_dead_recovery_max_minutes: 10,
+        })
+      ),
+      {
+        enabled: true,
+        minMinutes: 30,
+        maxMinutes: 30,
+      }
+    )
+  })
+
+  test('writes only post-mortem recovery fields while preserving other settings', () => {
+    const payload = buildChannelDeadRecoverySettingsPayload(
+      channel({
+        channel_monitor_enabled: false,
+        channel_auto_priority_enabled: true,
+        some_other_setting: 'keep-me',
+      }),
+      {
+        enabled: true,
+        minMinutes: 20,
+        maxMinutes: 40,
+      }
+    )
+    const settings = JSON.parse(payload.settings as string)
+
+    assert.equal(settings.channel_dead_recovery_enabled, true)
+    assert.equal(settings.channel_dead_recovery_min_minutes, 20)
+    assert.equal(settings.channel_dead_recovery_max_minutes, 40)
+    assert.equal(settings.channel_monitor_enabled, false)
+    assert.equal(settings.channel_auto_priority_enabled, true)
+    assert.equal(settings.some_other_setting, 'keep-me')
+  })
+
+  test('accepts only integer post-mortem recovery ranges with max at least min', () => {
+    assert.equal(isChannelDeadRecoveryRangeValid('1', '1'), true)
+    assert.equal(isChannelDeadRecoveryRangeValid('15', '120'), true)
+    assert.equal(isChannelDeadRecoveryRangeValid('0', '120'), false)
+    assert.equal(isChannelDeadRecoveryRangeValid('1.5', '120'), false)
+    assert.equal(isChannelDeadRecoveryRangeValid('30', '29'), false)
+  })
+
   test('identifies generated channels whose auto priority is rule-managed', () => {
     assert.equal(
       isChannelAutoPriorityManagedByUpstream(

@@ -93,6 +93,7 @@ import {
   type MonitorVisualStatus,
 } from '../../lib/channel-monitor'
 import type { Channel, ChannelMonitorRecord } from '../../types'
+import { ChannelDeadRecoveryDialog } from './channel-dead-recovery-dialog'
 
 interface ChannelMonitorDialogProps {
   open: boolean
@@ -447,6 +448,8 @@ export function ChannelMonitorDialog({
   const [savedMonitorSettings, setSavedMonitorSettings] =
     useState<ChannelMonitorSettingsDraft>(monitorDefaults)
   const [isSavingMonitorSettings, setIsSavingMonitorSettings] = useState(false)
+  const [deadRecoveryDialogOpen, setDeadRecoveryDialogOpen] = useState(false)
+  const [deadRecoveryChannel, setDeadRecoveryChannel] = useState(channel)
   const [historyViewMode, setHistoryViewMode] =
     useState<MonitorHistoryViewMode>('availability')
   const query = useQuery({
@@ -461,7 +464,8 @@ export function ChannelMonitorDialog({
     setMonitorIntervalInput(String(monitorDefaults.intervalMinutes))
     setMonitorModel(monitorDefaults.monitorModel)
     setSavedMonitorSettings(monitorDefaults)
-  }, [monitorDefaults, open])
+    setDeadRecoveryChannel(channel)
+  }, [channel, monitorDefaults, open])
 
   const detail = query.data?.data
   const detailLoadError = query.isError ? query.error.message : null
@@ -554,9 +558,15 @@ export function ChannelMonitorDialog({
     }
   }
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) setDeadRecoveryDialogOpen(false)
+    onOpenChange(nextOpen)
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='text-card-foreground max-h-[calc(100vh-2rem)] overflow-y-auto p-0 sm:max-w-[520px]'>
+    <>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent className='text-card-foreground max-h-[calc(100vh-2rem)] overflow-y-auto p-0 sm:max-w-[520px]'>
         <DialogHeader className='sr-only'>
           <DialogTitle>{t('Channel Monitor')}</DialogTitle>
           <DialogDescription>{channel?.name ?? t('No data')}</DialogDescription>
@@ -682,6 +692,20 @@ export function ChannelMonitorDialog({
                   />
                 </Field>
               </FieldGroup>
+
+              {!monitorEnabled && (
+                <div className='flex justify-start'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    onClick={() => setDeadRecoveryDialogOpen(true)}
+                  >
+                    <RefreshCw data-icon='inline-start' />
+                    {t('Post-mortem recovery')}
+                  </Button>
+                </div>
+              )}
 
               <div className='flex justify-end'>
                 <Button
@@ -830,7 +854,14 @@ export function ChannelMonitorDialog({
             )}
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+      <ChannelDeadRecoveryDialog
+        open={deadRecoveryDialogOpen}
+        onOpenChange={setDeadRecoveryDialogOpen}
+        channel={deadRecoveryChannel}
+        onSaved={setDeadRecoveryChannel}
+      />
+    </>
   )
 }

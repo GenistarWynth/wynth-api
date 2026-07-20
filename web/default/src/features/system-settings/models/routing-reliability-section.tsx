@@ -72,9 +72,6 @@ type RoutingReliabilitySectionProps = {
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
     'monitor_setting.channel_test_mode': ChannelTestMode
-    'monitor_setting.dead_channel_recovery_min_minutes': number
-    'monitor_setting.dead_channel_recovery_max_minutes': number
-    'monitor_setting.dead_channel_recovery_max_per_tick': number
   }
 }
 
@@ -93,9 +90,6 @@ type NormalizedRoutingReliabilityValues = {
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_mode': ChannelTestMode
-  'monitor_setting.dead_channel_recovery_min_minutes': number
-  'monitor_setting.dead_channel_recovery_max_minutes': number
-  'monitor_setting.dead_channel_recovery_max_per_tick': number
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
@@ -122,12 +116,6 @@ const buildFormDefaults = (
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
-    dead_channel_recovery_min_minutes:
-      defaults['monitor_setting.dead_channel_recovery_min_minutes'],
-    dead_channel_recovery_max_minutes:
-      defaults['monitor_setting.dead_channel_recovery_max_minutes'],
-    dead_channel_recovery_max_per_tick:
-      defaults['monitor_setting.dead_channel_recovery_max_per_tick'],
   },
 })
 
@@ -154,12 +142,6 @@ const normalizeDefaults = (
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
-  'monitor_setting.dead_channel_recovery_min_minutes':
-    defaults['monitor_setting.dead_channel_recovery_min_minutes'],
-  'monitor_setting.dead_channel_recovery_max_minutes':
-    defaults['monitor_setting.dead_channel_recovery_max_minutes'],
-  'monitor_setting.dead_channel_recovery_max_per_tick':
-    defaults['monitor_setting.dead_channel_recovery_max_per_tick'],
 })
 
 const normalizeFormValues = (
@@ -183,12 +165,6 @@ const normalizeFormValues = (
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
-  'monitor_setting.dead_channel_recovery_min_minutes':
-    values.monitor_setting.dead_channel_recovery_min_minutes,
-  'monitor_setting.dead_channel_recovery_max_minutes':
-    values.monitor_setting.dead_channel_recovery_max_minutes,
-  'monitor_setting.dead_channel_recovery_max_per_tick':
-    values.monitor_setting.dead_channel_recovery_max_per_tick,
 })
 
 export function RoutingReliabilitySection({
@@ -445,84 +421,6 @@ export function RoutingReliabilitySection({
                 )}
               />
 
-              <FormField
-                control={form.control}
-                name='monitor_setting.dead_channel_recovery_min_minutes'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Post-mortem recovery minimum (minutes)')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={1}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Earliest randomized delay before retrying an auto-disabled channel without per-channel monitoring.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.dead_channel_recovery_max_minutes'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Post-mortem recovery maximum (minutes)')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={1}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Latest randomized delay before retrying an auto-disabled channel without per-channel monitoring.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.dead_channel_recovery_max_per_tick'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Maximum recovery probes per minute')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={1}
-                        max={50}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Maximum post-mortem recovery probes started by each one-minute worker tick.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
             </div>
           </div>
 

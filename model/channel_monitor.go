@@ -10,7 +10,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 )
 
@@ -25,9 +24,14 @@ const (
 	ChannelMonitorRetentionSeconds         = int64(7 * 24 * 60 * 60)
 	ChannelSettingsUpdateScopeMonitor      = "monitor"
 	ChannelSettingsUpdateScopeAutoPriority = "auto-priority"
+	ChannelSettingsUpdateScopeDeadRecovery = "dead-recovery"
+	DefaultChannelDeadRecoveryMinMinutes   = 15
+	DefaultChannelDeadRecoveryMaxMinutes   = 120
 
 	channelAutoPriorityIntervalKey           = "channel_auto_priority_interval_minutes"
 	channelAutoPriorityAvailabilityWindowKey = "channel_auto_priority_availability_window_hours"
+	channelDeadRecoveryMinMinutesKey         = "channel_dead_recovery_min_minutes"
+	channelDeadRecoveryMaxMinutesKey         = "channel_dead_recovery_max_minutes"
 )
 
 type ChannelMonitorLog struct {
@@ -100,6 +104,12 @@ var channelAutoPriorityEditableSettingKeys = []string{
 	"channel_auto_priority_rate_multiplier",
 }
 
+var channelDeadRecoveryEditableSettingKeys = []string{
+	"channel_dead_recovery_enabled",
+	channelDeadRecoveryMinMinutesKey,
+	channelDeadRecoveryMaxMinutesKey,
+}
+
 func NormalizeChannelMonitorSettings(settings dto.ChannelOtherSettings) dto.ChannelOtherSettings {
 	if !settings.ChannelMonitorEnabled {
 		return settings
@@ -108,6 +118,19 @@ func NormalizeChannelMonitorSettings(settings dto.ChannelOtherSettings) dto.Chan
 		settings.ChannelMonitorIntervalMinutes = DefaultChannelMonitorIntervalMinutes
 	} else if settings.ChannelMonitorIntervalMinutes < MinimumChannelMonitorIntervalMinutes {
 		settings.ChannelMonitorIntervalMinutes = MinimumChannelMonitorIntervalMinutes
+	}
+	return settings
+}
+
+func NormalizeChannelDeadRecoverySettings(settings dto.ChannelOtherSettings) dto.ChannelOtherSettings {
+	if settings.ChannelDeadRecoveryMinMinutes < 1 {
+		settings.ChannelDeadRecoveryMinMinutes = DefaultChannelDeadRecoveryMinMinutes
+	}
+	if settings.ChannelDeadRecoveryMaxMinutes < 1 {
+		settings.ChannelDeadRecoveryMaxMinutes = DefaultChannelDeadRecoveryMaxMinutes
+	}
+	if settings.ChannelDeadRecoveryMaxMinutes < settings.ChannelDeadRecoveryMinMinutes {
+		settings.ChannelDeadRecoveryMaxMinutes = settings.ChannelDeadRecoveryMinMinutes
 	}
 	return settings
 }
@@ -131,12 +154,12 @@ func parseChannelSettingsObject(raw string) (map[string]any, dto.ChannelOtherSet
 	return settingsObject, settings, nil
 }
 
-// UpdateChannelMonitorSettings persists monitor or auto-priority settings
-// without overwriting the other settings domain, worker-owned snapshots, or
-// unrelated JSON keys. An empty scope retains the legacy combined-update
-// behavior. Generated channels retain rule ownership of their per-channel
-// auto-priority settings, but the schedule interval and availability window
-// are group-scoped and remain editable from any channel in the group.
+// UpdateChannelMonitorSettings persists one channel-settings domain without
+// overwriting the others, worker-owned snapshots, or unrelated JSON keys. An
+// empty scope retains the legacy combined monitor and auto-priority behavior.
+// Generated channels retain rule ownership of their per-channel auto-priority
+// settings, but the schedule interval and availability window are group-scoped
+// and remain editable from any channel in the group.
 func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedRaw, scope string) (*Channel, error) {
 	requestedObject, requestedSettings, err := parseChannelSettingsObject(requestedRaw)
 	if err != nil {
@@ -144,13 +167,18 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 	}
 	updateMonitorSettings := scope == "" || scope == ChannelSettingsUpdateScopeMonitor
 	updateAutoPrioritySettings := scope == "" || scope == ChannelSettingsUpdateScopeAutoPriority
-	if !updateMonitorSettings && !updateAutoPrioritySettings {
+	updateDeadRecoverySettings := scope == ChannelSettingsUpdateScopeDeadRecovery
+	if !updateMonitorSettings && !updateAutoPrioritySettings && !updateDeadRecoverySettings {
 		return nil, fmt.Errorf("invalid channel settings update scope %q", scope)
 	}
 	_, availabilityWindowRequested := requestedObject[channelAutoPriorityAvailabilityWindowKey]
 	availabilityWindowRequested = updateAutoPrioritySettings && availabilityWindowRequested
 	_, intervalRequested := requestedObject[channelAutoPriorityIntervalKey]
 	intervalRequested = updateAutoPrioritySettings && intervalRequested
+	_, deadRecoveryMinRequested := requestedObject[channelDeadRecoveryMinMinutesKey]
+	deadRecoveryMinRequested = updateDeadRecoverySettings && deadRecoveryMinRequested
+	_, deadRecoveryMaxRequested := requestedObject[channelDeadRecoveryMaxMinutesKey]
+	deadRecoveryMaxRequested = updateDeadRecoverySettings && deadRecoveryMaxRequested
 
 	var updatedChannel Channel
 	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -211,6 +239,26 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 						currentObject[key] = value
 					}
 				}
+			}
+		}
+
+		if updateDeadRecoverySettings {
+			for _, key := range channelDeadRecoveryEditableSettingKeys {
+				if value, exists := requestedObject[key]; exists {
+					currentObject[key] = value
+				} else {
+					delete(currentObject, key)
+				}
+			}
+			if deadRecoveryMinRequested && requestedSettings.ChannelDeadRecoveryMinMinutes < 1 {
+				return fmt.Errorf("settings.%s must be >= 1", channelDeadRecoveryMinMinutesKey)
+			}
+			if deadRecoveryMaxRequested && requestedSettings.ChannelDeadRecoveryMaxMinutes < 1 {
+				return fmt.Errorf("settings.%s must be >= 1", channelDeadRecoveryMaxMinutesKey)
+			}
+			effective := NormalizeChannelDeadRecoverySettings(requestedSettings)
+			if deadRecoveryMaxRequested && requestedSettings.ChannelDeadRecoveryMaxMinutes < effective.ChannelDeadRecoveryMinMinutes {
+				return fmt.Errorf("settings.%s must be >= settings.%s", channelDeadRecoveryMaxMinutesKey, channelDeadRecoveryMinMinutesKey)
 			}
 		}
 
@@ -532,10 +580,10 @@ func channelStatusTime(channel *Channel) int64 {
 	}
 }
 
-func DeadChannelRecoveryDelaySeconds(channel *Channel, settings operation_setting.DeadChannelRecoverySettings) int64 {
-	settings = operation_setting.NormalizeDeadChannelRecoverySettings(settings)
-	minSeconds := int64(settings.MinMinutes) * 60
-	maxSeconds := int64(settings.MaxMinutes) * 60
+func DeadChannelRecoveryDelaySeconds(channel *Channel) int64 {
+	settings := NormalizeChannelDeadRecoverySettings(GetChannelMonitorSettingsReadOnly(channel))
+	minSeconds := int64(settings.ChannelDeadRecoveryMinMinutes) * 60
+	maxSeconds := int64(settings.ChannelDeadRecoveryMaxMinutes) * 60
 	span := maxSeconds - minSeconds
 	if span <= 0 {
 		return minSeconds
@@ -552,16 +600,16 @@ func DeadChannelRecoveryDelaySeconds(channel *Channel, settings operation_settin
 	return minSeconds + int64(seed%uint64(span+1))
 }
 
-func DeadChannelRecoveryNextCheckAt(channel *Channel, settings operation_setting.DeadChannelRecoverySettings) int64 {
-	return channelStatusTime(channel) + DeadChannelRecoveryDelaySeconds(channel, settings)
+func DeadChannelRecoveryNextCheckAt(channel *Channel) int64 {
+	return channelStatusTime(channel) + DeadChannelRecoveryDelaySeconds(channel)
 }
 
 func IsDeadChannelRecoveryEligible(channel *Channel) bool {
 	if channel == nil || channel.Status != common.ChannelStatusAutoDisabled {
 		return false
 	}
-	settings := NormalizeChannelMonitorSettings(GetChannelMonitorSettingsReadOnly(channel))
-	return !settings.ChannelMonitorEnabled
+	settings := NormalizeChannelDeadRecoverySettings(GetChannelMonitorSettingsReadOnly(channel))
+	return !settings.ChannelMonitorEnabled && settings.ChannelDeadRecoveryEnabled
 }
 
 func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
@@ -580,8 +628,6 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 	if err != nil {
 		return err
 	}
-	recoverySettings := operation_setting.GetDeadChannelRecoverySettings()
-
 	for _, channel := range channels {
 		if channel == nil {
 			continue
@@ -593,7 +639,7 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 		}
 		if IsDeadChannelRecoveryEligible(channel) {
 			info.DeadRecoveryEligible = true
-			info.DeadRecoveryNextCheckAt = DeadChannelRecoveryNextCheckAt(channel, recoverySettings)
+			info.DeadRecoveryNextCheckAt = DeadChannelRecoveryNextCheckAt(channel)
 			if info.DeadRecoveryNextCheckAt > now {
 				info.DeadRecoverySecondsUntilNextCheck = info.DeadRecoveryNextCheckAt - now
 			}

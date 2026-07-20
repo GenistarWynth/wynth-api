@@ -167,6 +167,9 @@ export interface ChannelOtherSettings {
   channel_monitor_enabled?: boolean
   channel_monitor_interval_minutes?: number
   channel_monitor_model?: string
+  channel_dead_recovery_enabled?: boolean
+  channel_dead_recovery_min_minutes?: number
+  channel_dead_recovery_max_minutes?: number
   channel_auto_priority_enabled?: boolean
   channel_auto_priority_interval_minutes?: number
   channel_auto_priority_window_hours?: number

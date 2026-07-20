@@ -52,6 +52,9 @@ type ChannelOtherSettings struct {
 	ChannelMonitorEnabled                      bool                      `json:"channel_monitor_enabled,omitempty"`
 	ChannelMonitorIntervalMinutes              int                       `json:"channel_monitor_interval_minutes,omitempty"`
 	ChannelMonitorModel                        string                    `json:"channel_monitor_model,omitempty"`
+	ChannelDeadRecoveryEnabled                 bool                      `json:"channel_dead_recovery_enabled,omitempty"`
+	ChannelDeadRecoveryMinMinutes              int                       `json:"channel_dead_recovery_min_minutes,omitempty"`
+	ChannelDeadRecoveryMaxMinutes              int                       `json:"channel_dead_recovery_max_minutes,omitempty"`
 	ChannelAutoPriorityEnabled                 bool                      `json:"channel_auto_priority_enabled,omitempty"`
 	ChannelAutoPriorityIntervalMinutes         int                       `json:"channel_auto_priority_interval_minutes,omitempty"`
 	ChannelAutoPriorityWindowHours             int                       `json:"channel_auto_priority_window_hours,omitempty"`

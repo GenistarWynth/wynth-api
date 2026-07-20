@@ -167,6 +167,12 @@ export interface ChannelMonitorSettingsDraft {
   monitorModel: string
 }
 
+export interface ChannelDeadRecoverySettingsDraft {
+  enabled: boolean
+  minMinutes: number
+  maxMinutes: number
+}
+
 export interface ChannelAutoPrioritySettingsDraft {
   autoPriorityEnabled: boolean
   autoPriorityIntervalMinutes: number
@@ -176,6 +182,8 @@ export interface ChannelAutoPrioritySettingsDraft {
 }
 
 export const DEFAULT_MONITOR_INTERVAL_MINUTES = 10
+export const DEFAULT_CHANNEL_DEAD_RECOVERY_MIN_MINUTES = 15
+export const DEFAULT_CHANNEL_DEAD_RECOVERY_MAX_MINUTES = 120
 export const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
 export const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
 export const MAX_AUTO_PRIORITY_WINDOW_HOURS = 168
@@ -207,6 +215,29 @@ export function normalizeMonitorInterval(value: unknown, fallback: number) {
   const interval = Number(value)
   if (Number.isInteger(interval) && interval >= 1) return interval
   return fallback
+}
+
+export function normalizeChannelDeadRecoveryMinutes(
+  value: unknown,
+  fallback: number
+) {
+  const minutes = Number(value)
+  if (Number.isInteger(minutes) && minutes >= 1) return minutes
+  return fallback
+}
+
+export function isChannelDeadRecoveryRangeValid(
+  minMinutes: unknown,
+  maxMinutes: unknown
+) {
+  const minimum = Number(minMinutes)
+  const maximum = Number(maxMinutes)
+  return (
+    Number.isInteger(minimum) &&
+    minimum >= 1 &&
+    Number.isInteger(maximum) &&
+    maximum >= minimum
+  )
 }
 
 export function normalizeAutoPriorityInterval(
@@ -295,6 +326,28 @@ export function readChannelAutoPrioritySettings(
   }
 }
 
+export function readChannelDeadRecoverySettings(
+  channel: Channel | null
+): ChannelDeadRecoverySettingsDraft {
+  const settings = parseChannelSettings(channel?.settings)
+  const minMinutes = normalizeChannelDeadRecoveryMinutes(
+    settings.channel_dead_recovery_min_minutes,
+    DEFAULT_CHANNEL_DEAD_RECOVERY_MIN_MINUTES
+  )
+  const maxMinutes = Math.max(
+    minMinutes,
+    normalizeChannelDeadRecoveryMinutes(
+      settings.channel_dead_recovery_max_minutes,
+      DEFAULT_CHANNEL_DEAD_RECOVERY_MAX_MINUTES
+    )
+  )
+  return {
+    enabled: settings.channel_dead_recovery_enabled === true,
+    minMinutes,
+    maxMinutes,
+  }
+}
+
 // buildChannelMonitorSettingsPayload serializes the draft back into a partial
 // channel update. Only `settings` is returned; channel.Update() persists via
 // GORM Updates (field-aware), so omitted fields (e.g. test_model) are untouched.
@@ -358,6 +411,30 @@ export function buildChannelAutoPrioritySettingsPayload(
     delete settings.channel_auto_priority_window_hours
     delete settings.channel_auto_priority_rate_multiplier
   }
+  return {
+    settings: JSON.stringify(settings),
+  }
+}
+
+export function buildChannelDeadRecoverySettingsPayload(
+  channel: Channel,
+  draft: ChannelDeadRecoverySettingsDraft
+): Pick<Channel, 'settings'> {
+  const settings = parseChannelSettings(channel.settings)
+  const minMinutes = normalizeChannelDeadRecoveryMinutes(
+    draft.minMinutes,
+    DEFAULT_CHANNEL_DEAD_RECOVERY_MIN_MINUTES
+  )
+  const maxMinutes = Math.max(
+    minMinutes,
+    normalizeChannelDeadRecoveryMinutes(
+      draft.maxMinutes,
+      DEFAULT_CHANNEL_DEAD_RECOVERY_MAX_MINUTES
+    )
+  )
+  settings.channel_dead_recovery_enabled = draft.enabled
+  settings.channel_dead_recovery_min_minutes = minMinutes
+  settings.channel_dead_recovery_max_minutes = maxMinutes
   return {
     settings: JSON.stringify(settings),
   }

@@ -116,7 +116,7 @@ export async function getChannelMonitorDetail(
 export async function updateChannelMonitorSettings(
   id: number,
   data: Pick<Channel, 'settings'>,
-  scope: 'monitor' | 'auto-priority'
+  scope: 'monitor' | 'auto-priority' | 'dead-recovery'
 ): Promise<{ success: boolean; message?: string; data?: Channel }> {
   const res = await api.put(
     `/api/channel/${id}/monitor`,

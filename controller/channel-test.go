@@ -972,14 +972,15 @@ func testAccountPoolChannelMonitorSchedulability(channel *model.Channel, now int
 	return result, true
 }
 
-func filterDueDeadChannelRecoveryCandidates(channels []*model.Channel, now int64, recoverySettings operation_setting.DeadChannelRecoverySettings) []*model.Channel {
-	recoverySettings = operation_setting.NormalizeDeadChannelRecoverySettings(recoverySettings)
+const deadChannelRecoveryMaxPerTick = 5
+
+func filterDueDeadChannelRecoveryCandidates(channels []*model.Channel, now int64) []*model.Channel {
 	due := make([]*model.Channel, 0)
 	for _, channel := range channels {
 		if !model.IsDeadChannelRecoveryEligible(channel) {
 			continue
 		}
-		nextAt := model.DeadChannelRecoveryNextCheckAt(channel, recoverySettings)
+		nextAt := model.DeadChannelRecoveryNextCheckAt(channel)
 		if now < nextAt {
 			continue
 		}
@@ -990,8 +991,8 @@ func filterDueDeadChannelRecoveryCandidates(channels []*model.Channel, now int64
 	}
 	// Randomize order each tick so no fixed channel always goes first.
 	rand.Shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] })
-	if len(due) > recoverySettings.MaxPerTick {
-		due = due[:recoverySettings.MaxPerTick]
+	if len(due) > deadChannelRecoveryMaxPerTick {
+		due = due[:deadChannelRecoveryMaxPerTick]
 	}
 	return due
 }
@@ -1003,8 +1004,7 @@ func runDueDeadChannelRecoveryBatch(testUserID int) {
 		return
 	}
 	now := common.GetTimestamp()
-	recoverySettings := operation_setting.GetDeadChannelRecoverySettings()
-	candidates := filterDueDeadChannelRecoveryCandidates(channels, now, recoverySettings)
+	candidates := filterDueDeadChannelRecoveryCandidates(channels, now)
 	if len(candidates) == 0 {
 		return
 	}

@@ -1,5 +1,23 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -13,6 +31,12 @@ const mutateDrawerSource = readFileSync(
   ),
   'utf8'
 )
+const deadRecoveryDialogPath = fileURLToPath(
+  new URL('./channel-dead-recovery-dialog.tsx', import.meta.url)
+)
+const deadRecoveryDialogSource = existsSync(deadRecoveryDialogPath)
+  ? readFileSync(deadRecoveryDialogPath, 'utf8')
+  : ''
 
 describe('channel monitor dialog theme contract', () => {
   test('does not force a dark color scheme over the current app theme', () => {
@@ -100,5 +124,24 @@ describe('channel monitor dialog theme contract', () => {
       dialogSource,
       /monitorRefreshText\(info, t, formatRelativeTime\)/
     )
+  })
+
+  test('shows a monitor-off-only trigger for the nested recovery dialog', () => {
+    assert.match(dialogSource, /!monitorEnabled && \(/)
+    assert.match(dialogSource, /setDeadRecoveryDialogOpen\(true\)/)
+    assert.match(dialogSource, /<ChannelDeadRecoveryDialog/)
+    assert.match(dialogSource, /Post-mortem recovery/)
+  })
+
+  test('renders channel-level recovery controls in a secondary dialog', () => {
+    assert.match(deadRecoveryDialogSource, /<Dialog open=/)
+    assert.match(deadRecoveryDialogSource, /Enable post-mortem recovery/)
+    assert.match(
+      deadRecoveryDialogSource,
+      /Only applies when this channel is auto-disabled and monitoring is off\./
+    )
+    assert.match(deadRecoveryDialogSource, /channel-dead-recovery-min/)
+    assert.match(deadRecoveryDialogSource, /channel-dead-recovery-max/)
+    assert.match(deadRecoveryDialogSource, /'dead-recovery'/)
   })
 })

@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,38 +42,92 @@ func marshalChannelSettingsMap(t *testing.T, settings map[string]any) string {
 	return string(data)
 }
 
-func TestDeadChannelRecoveryDelaySecondsUsesConfiguredBounds(t *testing.T) {
-	channel := &Channel{Id: 42, Status: common.ChannelStatusAutoDisabled}
-	channel.SetOtherInfo(map[string]any{"status_time": int64(1_700_000_000)})
-	settings := operation_setting.DeadChannelRecoverySettings{
-		MinMinutes: 20,
-		MaxMinutes: 25,
-		MaxPerTick: 5,
+func TestNormalizeChannelDeadRecoverySettings(t *testing.T) {
+	tests := []struct {
+		name string
+		in   dto.ChannelOtherSettings
+		want dto.ChannelOtherSettings
+	}{
+		{
+			name: "missing values stay disabled and use defaults",
+			want: dto.ChannelOtherSettings{
+				ChannelDeadRecoveryMinMinutes: DefaultChannelDeadRecoveryMinMinutes,
+				ChannelDeadRecoveryMaxMinutes: DefaultChannelDeadRecoveryMaxMinutes,
+			},
+		},
+		{
+			name: "valid values stay unchanged",
+			in: dto.ChannelOtherSettings{
+				ChannelDeadRecoveryEnabled:    true,
+				ChannelDeadRecoveryMinMinutes: 20,
+				ChannelDeadRecoveryMaxMinutes: 25,
+			},
+			want: dto.ChannelOtherSettings{
+				ChannelDeadRecoveryEnabled:    true,
+				ChannelDeadRecoveryMinMinutes: 20,
+				ChannelDeadRecoveryMaxMinutes: 25,
+			},
+		},
+		{
+			name: "maximum cannot be below normalized minimum",
+			in: dto.ChannelOtherSettings{
+				ChannelDeadRecoveryEnabled:    true,
+				ChannelDeadRecoveryMinMinutes: 30,
+				ChannelDeadRecoveryMaxMinutes: 10,
+			},
+			want: dto.ChannelOtherSettings{
+				ChannelDeadRecoveryEnabled:    true,
+				ChannelDeadRecoveryMinMinutes: 30,
+				ChannelDeadRecoveryMaxMinutes: 30,
+			},
+		},
 	}
 
-	delay := DeadChannelRecoveryDelaySeconds(channel, settings)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, NormalizeChannelDeadRecoverySettings(test.in))
+		})
+	}
+}
+
+func TestDeadChannelRecoveryDelaySecondsUsesChannelBounds(t *testing.T) {
+	channel := &Channel{Id: 42, Status: common.ChannelStatusAutoDisabled}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelDeadRecoveryEnabled:    true,
+		ChannelDeadRecoveryMinMinutes: 20,
+		ChannelDeadRecoveryMaxMinutes: 25,
+	})
+	channel.SetOtherInfo(map[string]any{"status_time": int64(1_700_000_000)})
+
+	delay := DeadChannelRecoveryDelaySeconds(channel)
 
 	assert.GreaterOrEqual(t, delay, int64(20*60))
 	assert.LessOrEqual(t, delay, int64(25*60))
-	assert.Equal(t, delay, DeadChannelRecoveryDelaySeconds(channel, settings))
-	assert.Equal(t, int64(30*60), DeadChannelRecoveryDelaySeconds(channel, operation_setting.DeadChannelRecoverySettings{
-		MinMinutes: 30,
-		MaxMinutes: 30,
-		MaxPerTick: 5,
-	}))
+	assert.Equal(t, delay, DeadChannelRecoveryDelaySeconds(channel))
+
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelDeadRecoveryEnabled:    true,
+		ChannelDeadRecoveryMinMinutes: 30,
+		ChannelDeadRecoveryMaxMinutes: 30,
+	})
+	assert.Equal(t, int64(30*60), DeadChannelRecoveryDelaySeconds(channel))
 }
 
 func TestIsDeadChannelRecoveryEligible(t *testing.T) {
-	makeChannel := func(status int, monitorEnabled bool) *Channel {
+	makeChannel := func(status int, monitorEnabled, recoveryEnabled bool) *Channel {
 		channel := &Channel{Id: 1, Status: status}
-		channel.SetOtherSettings(dto.ChannelOtherSettings{ChannelMonitorEnabled: monitorEnabled})
+		channel.SetOtherSettings(dto.ChannelOtherSettings{
+			ChannelMonitorEnabled:      monitorEnabled,
+			ChannelDeadRecoveryEnabled: recoveryEnabled,
+		})
 		return channel
 	}
 
-	assert.True(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusAutoDisabled, false)))
-	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusAutoDisabled, true)))
-	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusManuallyDisabled, false)))
-	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusEnabled, false)))
+	assert.True(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusAutoDisabled, false, true)))
+	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusAutoDisabled, false, false)))
+	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusAutoDisabled, true, true)))
+	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusManuallyDisabled, false, true)))
+	assert.False(t, IsDeadChannelRecoveryEligible(makeChannel(common.ChannelStatusEnabled, false, true)))
 	assert.False(t, IsDeadChannelRecoveryEligible(nil))
 }
 
@@ -338,6 +391,79 @@ func TestUpdateChannelMonitorSettingsRejectsNullSettingsObject(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid channel monitor settings")
 }
 
+func TestUpdateChannelMonitorSettingsDeadRecoveryScopePreservesOtherDomains(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	channel := Channel{
+		Name:  "dead recovery settings",
+		Group: "default",
+		OtherSettings: marshalChannelSettingsMap(t, map[string]any{
+			"channel_monitor_enabled":                    false,
+			"channel_monitor_interval_minutes":           9,
+			"channel_auto_priority_enabled":              true,
+			"channel_auto_priority_interval_minutes":     30,
+			"channel_auto_priority_window_hours":         24,
+			"channel_dead_recovery_enabled":              false,
+			"channel_dead_recovery_min_minutes":          15,
+			"channel_dead_recovery_max_minutes":          120,
+			"unrelated_setting_owned_by_another_feature": "keep",
+		}),
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+
+	requested := marshalChannelSettingsMap(t, map[string]any{
+		"channel_monitor_enabled":                    true,
+		"channel_auto_priority_enabled":              false,
+		"channel_dead_recovery_enabled":              true,
+		"channel_dead_recovery_min_minutes":          20,
+		"channel_dead_recovery_max_minutes":          40,
+		"unrelated_setting_owned_by_another_feature": "replace",
+	})
+	updated, err := UpdateChannelMonitorSettings(
+		context.Background(),
+		channel.Id,
+		requested,
+		ChannelSettingsUpdateScopeDeadRecovery,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+
+	settings := updated.GetOtherSettings()
+	assert.False(t, settings.ChannelMonitorEnabled)
+	assert.Equal(t, 9, settings.ChannelMonitorIntervalMinutes)
+	assert.True(t, settings.ChannelAutoPriorityEnabled)
+	assert.Equal(t, 30, settings.ChannelAutoPriorityIntervalMinutes)
+	assert.True(t, settings.ChannelDeadRecoveryEnabled)
+	assert.Equal(t, 20, settings.ChannelDeadRecoveryMinMinutes)
+	assert.Equal(t, 40, settings.ChannelDeadRecoveryMaxMinutes)
+	var settingsMap map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(updated.OtherSettings, &settingsMap))
+	assert.Equal(t, "keep", settingsMap["unrelated_setting_owned_by_another_feature"])
+}
+
+func TestUpdateChannelMonitorSettingsDeadRecoveryScopeRejectsInvalidRange(t *testing.T) {
+	setupChannelMonitorTestDB(t)
+
+	channel := Channel{Name: "invalid dead recovery settings", Group: "default"}
+	require.NoError(t, DB.Create(&channel).Error)
+	requested := marshalChannelSettingsMap(t, map[string]any{
+		"channel_dead_recovery_enabled":     true,
+		"channel_dead_recovery_min_minutes": 30,
+		"channel_dead_recovery_max_minutes": 29,
+	})
+
+	updated, err := UpdateChannelMonitorSettings(
+		context.Background(),
+		channel.Id,
+		requested,
+		ChannelSettingsUpdateScopeDeadRecovery,
+	)
+
+	assert.Nil(t, updated)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "channel_dead_recovery_max_minutes")
+}
+
 func TestRecordChannelMonitorLogAndLatest(t *testing.T) {
 	setupChannelMonitorTestDB(t)
 
@@ -570,9 +696,13 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 			OtherSettings: marshalChannelOtherSettings(t, dto.ChannelOtherSettings{}),
 		},
 		{
-			Id:            4,
-			Status:        common.ChannelStatusAutoDisabled,
-			OtherSettings: marshalChannelOtherSettings(t, dto.ChannelOtherSettings{}),
+			Id:     4,
+			Status: common.ChannelStatusAutoDisabled,
+			OtherSettings: marshalChannelOtherSettings(t, dto.ChannelOtherSettings{
+				ChannelDeadRecoveryEnabled:    true,
+				ChannelDeadRecoveryMinMinutes: 1,
+				ChannelDeadRecoveryMaxMinutes: 1,
+			}),
 		},
 	}
 	channels[3].SetOtherInfo(map[string]any{"status_time": now - 60})
@@ -641,8 +771,7 @@ func TestAttachChannelMonitorInfo(t *testing.T) {
 	assert.Nil(t, channels[2].MonitorInfo.SevenDayAvailability)
 	assert.False(t, channels[2].MonitorInfo.DeadRecoveryEligible)
 
-	recoverySettings := operation_setting.GetDeadChannelRecoverySettings()
-	wantDeadRecoveryNextCheckAt := DeadChannelRecoveryNextCheckAt(channels[3], recoverySettings)
+	wantDeadRecoveryNextCheckAt := DeadChannelRecoveryNextCheckAt(channels[3])
 	require.NotNil(t, channels[3].MonitorInfo)
 	assert.True(t, channels[3].MonitorInfo.DeadRecoveryEligible)
 	assert.Equal(t, wantDeadRecoveryNextCheckAt, channels[3].MonitorInfo.DeadRecoveryNextCheckAt)
