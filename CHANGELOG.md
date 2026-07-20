@@ -7,7 +7,16 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 ## [Unreleased]
 
 ### Notes
-- No additional unreleased changes after v1.0.0-rc.38.
+- No additional unreleased changes after v1.0.0-rc.39.
+
+## [v1.0.0-rc.39] - 2026-07-20
+
+### Added
+- Channel account import now supports multi-select of CPA/auth JSON files and merges multiple single-account files into one batch import payload.
+- Channel settings gain a compact **Client identity simulation** control (`off` / `codex_cli` / `claude_code`) for OpenAI, Anthropic, and Codex channels. Outbound requests can reuse the exact built-in Codex CLI and Claude Code header bundles after header overrides, without inventing User-Agent/Stainless/originator values.
+
+### Notes
+- Client identity simulation changes fingerprint headers only; it does not change channel auth schemes. Account-pool OAuth paths continue to apply their existing Claude Code mimicry independently.
 
 ## [v1.0.0-rc.37] - 2026-07-19
 
