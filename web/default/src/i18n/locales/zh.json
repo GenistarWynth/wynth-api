@@ -2230,7 +2230,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -5539,7 +5539,11 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Choose Files": "选择文件（可多选）",
+    "Selected files: {{name}}": "已选文件：{{name}}",
+    "Loaded {{count}} files for import": "已加载 {{count}} 个文件，准备导入",
+    "Paste content or choose one/multiple files: sub2api JSON, or CLIProxyAPI / CPA config YAML/JSON and auth JSON files. Multiple CPA auth JSON files are merged into one batch.": "可粘贴内容，或选择一个/多个文件：sub2api JSON，或 CLIProxyAPI / CPA 配置 YAML/JSON 与 auth JSON。多个 CPA auth JSON 会自动合并成一批导入。"
   },
   "Batch Operations": "批量操作",
   "Repair Channel Consistency": "修复渠道一致性",

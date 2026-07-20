@@ -2230,7 +2230,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -5539,7 +5539,11 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Choose Files": "ファイルを選択（複数可）",
+    "Selected files: {{name}}": "選択したファイル：{{name}}",
+    "Loaded {{count}} files for import": "{{count}} 個のファイルを読み込みました",
+    "Paste content or choose one/multiple files: sub2api JSON, or CLIProxyAPI / CPA config YAML/JSON and auth JSON files. Multiple CPA auth JSON files are merged into one batch.": "内容を貼り付けるか、1つまたは複数のファイルを選択してください：sub2api JSON、または CLIProxyAPI / CPA の設定 YAML/JSON と auth JSON。複数の CPA auth JSON は1つのバッチに結合されます。"
   },
   "Batch Operations": "一括操作",
   "Repair Channel Consistency": "チャネル整合性を修復",

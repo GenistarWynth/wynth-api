@@ -53,4 +53,102 @@ describe('account import file reading', () => {
       content,
     })
   })
+
+  test('merges multiple CPA auth JSON object files into one array payload', async () => {
+    const accountImportFile = await import('./account-import-file')
+    const result = await accountImportFile.readAccountImportFiles([
+      {
+        name: 'xai-a@mailtd.ccwu.cc.json',
+        text: async () =>
+          JSON.stringify({
+            type: 'xai',
+            email: 'xai-a@mailtd.ccwu.cc',
+            access_token: 'access-a',
+            refresh_token: 'refresh-a',
+          }),
+      },
+      {
+        name: 'xai-b@mailtd.ccwu.cc.json',
+        text: async () =>
+          JSON.stringify({
+            type: 'xai',
+            email: 'xai-b@mailtd.ccwu.cc',
+            access_token: 'access-b',
+            refresh_token: 'refresh-b',
+          }),
+      },
+    ])
+
+    assert.deepEqual(result.names, [
+      'xai-a@mailtd.ccwu.cc.json',
+      'xai-b@mailtd.ccwu.cc.json',
+    ])
+    assert.deepEqual(result.failedNames, [])
+    assert.deepEqual(JSON.parse(result.content), [
+      {
+        type: 'xai',
+        email: 'xai-a@mailtd.ccwu.cc',
+        access_token: 'access-a',
+        refresh_token: 'refresh-a',
+      },
+      {
+        type: 'xai',
+        email: 'xai-b@mailtd.ccwu.cc',
+        access_token: 'access-b',
+        refresh_token: 'refresh-b',
+      },
+    ])
+  })
+
+  test('flattens nested JSON arrays when merging multiple files', async () => {
+    const accountImportFile = await import('./account-import-file')
+    const result = await accountImportFile.readAccountImportFiles([
+      {
+        name: 'batch-a.json',
+        text: async () =>
+          JSON.stringify([
+            { type: 'xai', email: 'a@example.com', refresh_token: 'ra' },
+          ]),
+      },
+      {
+        name: 'single-b.json',
+        text: async () =>
+          JSON.stringify({
+            type: 'xai',
+            email: 'b@example.com',
+            refresh_token: 'rb',
+          }),
+      },
+    ])
+
+    assert.deepEqual(JSON.parse(result.content), [
+      { type: 'xai', email: 'a@example.com', refresh_token: 'ra' },
+      { type: 'xai', email: 'b@example.com', refresh_token: 'rb' },
+    ])
+  })
+
+  test('summarizes selected file names for dialog display', async () => {
+    const accountImportFile = await import('./account-import-file')
+    assert.equal(
+      accountImportFile.summarizeAccountImportFileNames(['a.json']),
+      'a.json'
+    )
+    assert.equal(
+      accountImportFile.summarizeAccountImportFileNames([
+        'a.json',
+        'b.json',
+        'c.json',
+      ]),
+      'a.json, b.json, c.json'
+    )
+    assert.equal(
+      accountImportFile.summarizeAccountImportFileNames([
+        'a.json',
+        'b.json',
+        'c.json',
+        'd.json',
+      ]),
+      'a.json, b.json, c.json (+1 more)'
+    )
+  })
 })

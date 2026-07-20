@@ -2230,7 +2230,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Imposer une réponse JSON syntaxiquement valide",
@@ -5539,7 +5539,11 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Choose Files": "Choisir des fichiers",
+    "Selected files: {{name}}": "Fichiers sélectionnés : {{name}}",
+    "Loaded {{count}} files for import": "{{count}} fichiers chargés pour l’import",
+    "Paste content or choose one/multiple files: sub2api JSON, or CLIProxyAPI / CPA config YAML/JSON and auth JSON files. Multiple CPA auth JSON files are merged into one batch.": "Collez le contenu ou choisissez un/plusieurs fichiers : JSON sub2api, ou fichiers de config YAML/JSON et auth JSON CLIProxyAPI / CPA. Plusieurs fichiers auth JSON CPA sont fusionnés en un lot."
   },
   "Batch Operations": "Operations par lots",
   "Repair Channel Consistency": "Reparer la coherence des canaux",

@@ -170,7 +170,8 @@ import {
 import { XAIOAuthFlow } from './components/xai-oauth-flow'
 import {
   ACCOUNT_IMPORT_FILE_ACCEPT,
-  readAccountImportFile,
+  readAccountImportFiles,
+  summarizeAccountImportFileNames,
 } from './lib/account-import-file'
 import {
   accountToFormValues,
@@ -4120,17 +4121,37 @@ function AccountImportDialog(props: {
   }
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
+    const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (!file) return
+    if (files.length === 0) return
 
     try {
-      const result = await readAccountImportFile(file)
-      setSelectedFileName(result.name)
-      setField('content', result.content)
+      const result = await readAccountImportFiles(files)
+      const summary = summarizeAccountImportFileNames(result.names)
+      setSelectedFileName(summary)
+      if (result.content.trim()) {
+        setField('content', result.content)
+      }
+      if (result.failedNames.length > 0) {
+        toast.error(
+          t('Failed to read file {{name}}', {
+            name: summarizeAccountImportFileNames(result.failedNames),
+          })
+        )
+      } else if (result.names.length > 1) {
+        toast.success(
+          t('Loaded {{count}} files for import', {
+            count: result.names.length,
+          })
+        )
+      }
     } catch {
-      setSelectedFileName(file.name)
-      toast.error(t('Failed to read file {{name}}', { name: file.name }))
+      setSelectedFileName(summarizeAccountImportFileNames(files.map((f) => f.name)))
+      toast.error(
+        t('Failed to read file {{name}}', {
+          name: summarizeAccountImportFileNames(files.map((f) => f.name)),
+        })
+      )
     }
   }
 
@@ -4253,7 +4274,7 @@ function AccountImportDialog(props: {
             label={t('Import Content')}
             htmlFor='account-pool-import-content'
             description={t(
-              'Paste content or choose a file: sub2api JSON, or CLIProxyAPI / CPA config YAML/JSON and auth JSON files.'
+              'Paste content or choose one/multiple files: sub2api JSON, or CLIProxyAPI / CPA config YAML/JSON and auth JSON files. Multiple CPA auth JSON files are merged into one batch.'
             )}
           >
             <div className='flex min-w-0 flex-wrap items-center gap-2'>
@@ -4263,6 +4284,7 @@ function AccountImportDialog(props: {
                 type='file'
                 className='hidden'
                 accept={ACCOUNT_IMPORT_FILE_ACCEPT}
+                multiple
                 onChange={handleFileChange}
               />
               <Button
@@ -4272,7 +4294,7 @@ function AccountImportDialog(props: {
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Upload data-icon='inline-start' />
-                {t('Choose File')}
+                {t('Choose Files')}
               </Button>
               {selectedFileName ? (
                 <span
@@ -4280,7 +4302,7 @@ function AccountImportDialog(props: {
                   title={selectedFileName}
                   aria-live='polite'
                 >
-                  {t('Selected file: {{name}}', { name: selectedFileName })}
+                  {t('Selected files: {{name}}', { name: selectedFileName })}
                 </span>
               ) : null}
             </div>
