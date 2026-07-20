@@ -561,7 +561,7 @@ export function ChannelMutateDrawer({
   // Fetch channel details if editing
   const { data: channelData, isLoading: isChannelLoading } = useQuery({
     queryKey: channelsQueryKeys.detail(currentRow?.id || 0),
-    queryFn: () => getChannel(currentRow!.id),
+    queryFn: () => getChannel(currentRow?.id ?? 0),
     enabled: isEditing && Boolean(currentRow?.id),
   })
 
@@ -727,7 +727,7 @@ export function ChannelMutateDrawer({
   const groupOptions = useMemo(() => {
     if (!groupsData?.data) return []
     const allGroups = new Set([...groupsData.data, ...(currentGroups || [])])
-    return Array.from(allGroups).map((group) => ({
+    return [...allGroups].map((group) => ({
       value: group,
       label: group,
     }))
@@ -777,7 +777,7 @@ export function ChannelMutateDrawer({
   // Transform models to multi-select options
   const modelOptions = useMemo(() => {
     const allModels = new Set([...allModelsList, ...currentModelsArray])
-    return Array.from(allModels).map((model) => ({
+    return [...allModels].map((model) => ({
       value: model,
       label: model,
     }))
@@ -808,8 +808,8 @@ export function ChannelMutateDrawer({
         return acc
       }, [])
 
-      const missingSourceModels = Array.from(
-        new Set(
+      const missingSourceModels = [
+        ...new Set(
           entries
             .filter(
               (entry) =>
@@ -817,11 +817,11 @@ export function ChannelMutateDrawer({
                 !currentModelsArray.includes(entry.source)
             )
             .map((entry) => entry.source)
-        )
-      )
+        ),
+      ]
 
-      const exposedTargetModels = Array.from(
-        new Set(
+      const exposedTargetModels = [
+        ...new Set(
           entries
             .filter(
               (entry) =>
@@ -829,8 +829,8 @@ export function ChannelMutateDrawer({
                 currentModelsArray.includes(entry.target)
             )
             .map((entry) => entry.target)
-        )
-      )
+        ),
+      ]
 
       return {
         invalidJson: false,
@@ -864,7 +864,7 @@ export function ChannelMutateDrawer({
 
     return {
       lastCheckTime: settings.upstream_model_update_last_check_time,
-      detectedModels: Array.from(new Set(detectedModels)),
+      detectedModels: [...new Set(detectedModels)],
     }
   }, [currentSettings])
 
@@ -884,21 +884,27 @@ export function ChannelMutateDrawer({
   const modelsHasErrors = Boolean(
     formErrors.models || formErrors.group || formErrors.model_mapping
   )
-  const identityStatus: ChannelEditorSectionStatus = identityHasErrors
-    ? 'error'
-    : watchedValues.name?.trim() && watchedValues.type
-      ? 'complete'
-      : 'idle'
-  const credentialsStatus: ChannelEditorSectionStatus = credentialsHasErrors
-    ? 'error'
-    : watchedValues.base_url?.trim() || watchedValues.key?.trim()
-      ? 'complete'
-      : 'idle'
-  const modelsStatus: ChannelEditorSectionStatus = modelsHasErrors
-    ? 'error'
-    : currentModelsArray.length > 0 || (currentGroups?.length ?? 0) > 0
-      ? 'complete'
-      : 'idle'
+  let identityStatus: ChannelEditorSectionStatus = 'idle'
+  if (identityHasErrors) {
+    identityStatus = 'error'
+  } else if (watchedValues.name?.trim() && watchedValues.type) {
+    identityStatus = 'complete'
+  }
+  let credentialsStatus: ChannelEditorSectionStatus = 'idle'
+  if (credentialsHasErrors) {
+    credentialsStatus = 'error'
+  } else if (watchedValues.base_url?.trim() || watchedValues.key?.trim()) {
+    credentialsStatus = 'complete'
+  }
+  let modelsStatus: ChannelEditorSectionStatus = 'idle'
+  if (modelsHasErrors) {
+    modelsStatus = 'error'
+  } else if (
+    currentModelsArray.length > 0 ||
+    (currentGroups?.length ?? 0) > 0
+  ) {
+    modelsStatus = 'complete'
+  }
   const routingStrategyConfigured = Boolean(
     watchedValues.priority ||
     watchedValues.weight ||
@@ -1423,12 +1429,13 @@ export function ChannelMutateDrawer({
       }
 
       // Validate model_mapping JSON format
-      const hasModelMapping =
-        typeof data.model_mapping === 'string' &&
-        data.model_mapping.trim() !== ''
+      const modelMapping = data.model_mapping?.trim()
+        ? data.model_mapping
+        : ''
+      const hasModelMapping = modelMapping !== ''
 
       if (hasModelMapping) {
-        const validation = validateModelMappingJson(data.model_mapping!)
+        const validation = validateModelMappingJson(modelMapping)
         if (!validation.valid) {
           toast.error(t(validation.error || 'Invalid model mapping'))
           return
@@ -1441,7 +1448,7 @@ export function ChannelMutateDrawer({
       // Check for missing models in model_mapping
       if (hasModelMapping) {
         const missingModels = findMissingModelsInMapping(
-          data.model_mapping!,
+          modelMapping,
           normalizedModels
         )
 
@@ -1449,7 +1456,7 @@ export function ChannelMutateDrawer({
           missingModels.length > 0 &&
           hasModelConfigChanged(
             normalizedModels,
-            data.model_mapping || '',
+            modelMapping,
             initialModelsRef.current,
             initialModelMappingRef.current
           )
@@ -1460,9 +1467,9 @@ export function ChannelMutateDrawer({
             return
           }
           if (confirmAction === 'add') {
-            const updatedModels = Array.from(
-              new Set([...normalizedModels, ...missingModels])
-            )
+            const updatedModels = [
+              ...new Set([...normalizedModels, ...missingModels]),
+            ]
             data.models = formatModelsArray(updatedModels)
             form.setValue('models', data.models)
           }
@@ -2213,9 +2220,7 @@ export function ChannelMutateDrawer({
                                 multiple={isBatchMode}
                                 onChange={async (e) => {
                                   const fileList = e.target.files
-                                  const files = fileList
-                                    ? Array.from(fileList)
-                                    : []
+                                  const files = fileList ? [...fileList] : []
                                   // allow re-selecting the same file
                                   e.target.value = ''
 
@@ -2516,12 +2521,10 @@ export function ChannelMutateDrawer({
                             <FormItem>
                               <FormLabel>{t('Add Mode')}</FormLabel>
                               <Select
-                                items={[
-                                  ...addModeOptions.map((option) => ({
-                                    value: option.value,
-                                    label: t(option.label),
-                                  })),
-                                ]}
+                                items={addModeOptions.map((option) => ({
+                                  value: option.value,
+                                  label: t(option.label),
+                                }))}
                                 onValueChange={field.onChange}
                                 value={field.value}
                               >
@@ -2589,6 +2592,32 @@ export function ChannelMutateDrawer({
                             }
                             return t(getKeyPromptForType(currentType))
                           })()
+                          const multiKeyAction =
+                            keyMode === 'replace'
+                              ? t('replaced')
+                              : t('appended')
+                          let keyDescription: ReactNode = t(
+                            FIELD_DESCRIPTIONS.KEY
+                          )
+                          if (isEditing) {
+                            keyDescription = (
+                              <>
+                                {t(
+                                  'Enter new key to update, or leave empty to keep current key'
+                                )}
+                                {isMultiKeyChannel && (
+                                  <span className='text-warning mt-1 block'>
+                                    {t('Multi-key channel: Keys will be')}{' '}
+                                    {multiKeyAction}
+                                  </span>
+                                )}
+                              </>
+                            )
+                          } else if (isBatchMode) {
+                            keyDescription = t(
+                              'Enter one API key per line for batch creation'
+                            )
+                          }
                           return (
                             <FormItem>
                               <FormLabel>{t('API Key *')}</FormLabel>
@@ -2602,29 +2631,7 @@ export function ChannelMutateDrawer({
                               <FormDescription>
                                 <div className='flex flex-col gap-2'>
                                   <span>
-                                    {isEditing ? (
-                                      <>
-                                        {t(
-                                          'Enter new key to update, or leave empty to keep current key'
-                                        )}
-                                        {isMultiKeyChannel && (
-                                          <span className='text-warning mt-1 block'>
-                                            {t(
-                                              'Multi-key channel: Keys will be'
-                                            )}{' '}
-                                            {keyMode === 'replace'
-                                              ? t('replaced')
-                                              : t('appended')}
-                                          </span>
-                                        )}
-                                      </>
-                                    ) : isBatchMode ? (
-                                      t(
-                                        'Enter one API key per line for batch creation'
-                                      )
-                                    ) : (
-                                      t(FIELD_DESCRIPTIONS.KEY)
-                                    )}
+                                    {keyDescription}
                                   </span>
                                   {isBatchMode && (
                                     <Button
@@ -3680,7 +3687,7 @@ export function ChannelMutateDrawer({
                                         field.onChange(
                                           JSON.stringify(parsed, null, 2)
                                         )
-                                      } catch (_e) {
+                                      } catch {
                                         /* ignore invalid JSON */
                                       }
                                     }}
@@ -3748,6 +3755,52 @@ export function ChannelMutateDrawer({
                           />
 
                           <div className='divide-border space-y-0 divide-y border-y'>
+                            <FormField
+                              control={form.control}
+                              name='client_identity_preset'
+                              render={({ field }) => (
+                                <FormItem className='flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+                                  <div className='space-y-0.5'>
+                                    <FormLabel className='text-sm'>
+                                      {t('Client identity simulation')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Uses the exact built-in official CLI header bundle for strict upstreams.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Select
+                                      value={field.value || 'off'}
+                                      onValueChange={field.onChange}
+                                      disabled={isSubmitting}
+                                    >
+                                      <SelectTrigger
+                                        size='sm'
+                                        className='w-full sm:w-40'
+                                      >
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectGroup>
+                                          <SelectItem value='off'>
+                                            {t('Off')}
+                                          </SelectItem>
+                                          <SelectItem value='codex_cli'>
+                                            {t('Codex CLI')}
+                                          </SelectItem>
+                                          <SelectItem value='claude_code'>
+                                            {t('Claude Code')}
+                                          </SelectItem>
+                                        </SelectGroup>
+                                      </SelectContent>
+                                    </Select>
+                                  </FormControl>
+                                </FormItem>
+                              )}
+                            />
+
                             <FormField
                               control={form.control}
                               name='allow_service_tier'

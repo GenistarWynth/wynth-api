@@ -189,3 +189,61 @@ describe('Codex channel field passthrough settings', () => {
     assert.equal(defaults.allow_include_obfuscation, false)
   })
 })
+
+describe('channel client identity preset', () => {
+  test('restores a valid preset from existing settings', () => {
+    const defaults = transformChannelToFormDefaults(
+      baseChannel({
+        type: 14,
+        settings: JSON.stringify({ client_identity_preset: 'claude_code' }),
+      })
+    )
+
+    assert.equal(defaults.client_identity_preset, 'claude_code')
+  })
+
+  test('normalizes an unknown preset to off', () => {
+    const defaults = transformChannelToFormDefaults(
+      baseChannel({
+        settings: JSON.stringify({ client_identity_preset: 'custom' }),
+      })
+    )
+
+    assert.equal(defaults.client_identity_preset, 'off')
+  })
+
+  test('writes the selected preset for supported channel types', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'OpenAI channel',
+        type: 1,
+        models: 'gpt-test',
+        group: ['default'],
+        client_identity_preset: 'codex_cli',
+      },
+      1
+    )
+
+    const settings = JSON.parse(String(payload.settings))
+    assert.equal(settings.client_identity_preset, 'codex_cli')
+  })
+
+  test('removes the preset for unsupported channel types', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'Gemini channel',
+        type: 24,
+        models: 'gemini-test',
+        group: ['default'],
+        settings: JSON.stringify({ client_identity_preset: 'claude_code' }),
+        client_identity_preset: 'claude_code',
+      },
+      1
+    )
+
+    const settings = JSON.parse(String(payload.settings))
+    assert.equal(settings.client_identity_preset, undefined)
+  })
+})

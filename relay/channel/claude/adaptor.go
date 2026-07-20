@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/clientidentity"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -89,7 +90,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		// Required OAuth flags come first; any client-supplied flags not already in the
 		// bundle are appended (union, deduplicated, order-preserving).
 		req.Set("anthropic-beta", mergeAnthropicBetaFlags(AnthropicOAuthBetaFeatures, c.Request.Header.Get("anthropic-beta")))
-		for k, v := range claudeCodeMimicryHeaders() {
+		for k, v := range clientidentity.ClaudeCodeMimicryHeaders() {
 			req.Set(k, v)
 		}
 	} else {

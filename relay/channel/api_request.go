@@ -13,6 +13,7 @@ import (
 
 	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel/clientidentity"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -320,6 +321,18 @@ func finalizeAnthropicOAuthAuthHeader(header http.Header, apiKey string) {
 	header.Set("Authorization", "Bearer "+apiKey)
 }
 
+func finalizeRequestHeaders(header http.Header, info *common.RelayInfo) {
+	if header == nil || info == nil {
+		return
+	}
+	if info.ChannelMeta != nil {
+		clientidentity.Apply(header, info.ChannelOtherSettings.ClientIdentityPreset)
+	}
+	if info.RuntimeAnthropicOAuth {
+		finalizeAnthropicOAuthAuthHeader(header, info.ApiKey)
+	}
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -343,11 +356,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
-	// Defense-in-depth: if this is an Anthropic OAuth request, ensure no x-api-key
-	// leakage from HeadersOverride templates (which resolve {api_key} = OAuth token).
-	if info != nil && info.RuntimeAnthropicOAuth {
-		finalizeAnthropicOAuthAuthHeader(req.Header, info.ApiKey)
-	}
+	finalizeRequestHeaders(req.Header, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -380,6 +389,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+	finalizeRequestHeaders(req.Header, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -407,6 +417,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	finalizeRequestHeaders(targetHeader, info)
 	// Reset any handshake context captured by a prior dial on this same info so a
 	// stale 401/429 cannot be attached to a later transport-level failure.
 	info.WsHandshakeStatusCode = 0

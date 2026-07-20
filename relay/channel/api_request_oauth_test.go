@@ -4,9 +4,42 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFinalizeRequestHeadersAppliesPresetBeforeOAuthAuth(t *testing.T) {
+	header := http.Header{}
+	header.Set("Authorization", "Bearer overridden-token")
+	header.Set("User-Agent", "custom-override")
+	header.Set("x-api-key", "leaked-token")
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey: "oauth-token",
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				ClientIdentityPreset: dto.ClientIdentityPresetClaudeCode,
+			},
+		},
+		RuntimeAnthropicOAuth: true,
+	}
+
+	finalizeRequestHeaders(header, info)
+
+	require.Equal(t, http.Header{
+		"Anthropic-Dangerous-Direct-Browser-Access": {"true"},
+		"Authorization":               {"Bearer oauth-token"},
+		"User-Agent":                  {"claude-cli/2.1.161 (external, cli)"},
+		"X-App":                       {"cli"},
+		"X-Stainless-Arch":            {"arm64"},
+		"X-Stainless-Lang":            {"js"},
+		"X-Stainless-Os":              {"Linux"},
+		"X-Stainless-Package-Version": {"0.94.0"},
+		"X-Stainless-Runtime":         {"node"},
+		"X-Stainless-Runtime-Version": {"v24.3.0"},
+	}, header)
+}
 
 // TestFinalizeAnthropicOAuthAuthHeader_RemovesXApiKey verifies the defense-in-depth
 // finalizer that prevents an OAuth Bearer token from leaking into x-api-key:

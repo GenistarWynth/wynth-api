@@ -24,7 +24,7 @@ import {
   ERROR_MESSAGES,
   MODEL_FETCHABLE_TYPES,
 } from '../constants'
-import type { Channel } from '../types'
+import type { Channel, ClientIdentityPreset } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
   advancedCustomConfigUsesRelativeUpstreamPath,
@@ -198,6 +198,9 @@ export const channelFormSchema = z
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
     azure_responses_version: z.string().optional(), // Azure specific
     // Field passthrough controls (stored in settings JSON)
+    client_identity_preset: z
+      .enum(['off', 'codex_cli', 'claude_code'])
+      .optional(),
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
     disable_store: z.boolean().optional(), // OpenAI only
     allow_safety_identifier: z.boolean().optional(), // OpenAI only
@@ -360,6 +363,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
   // Field passthrough controls
+  client_identity_preset: 'off',
   allow_service_tier: false,
   disable_store: false,
   allow_safety_identifier: false,
@@ -420,6 +424,7 @@ export function transformChannelToFormDefaults(
   let azureResponsesVersion = ''
   let isEnterpriseAccount = false
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
+  let clientIdentityPreset: ClientIdentityPreset = 'off'
   let allowServiceTier = false
   let disableStore = false
   let allowSafetyIdentifier = false
@@ -445,6 +450,9 @@ export function transformChannelToFormDefaults(
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
+      clientIdentityPreset = normalizeClientIdentityPreset(
+        parsed.client_identity_preset
+      )
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
@@ -512,6 +520,7 @@ export function transformChannelToFormDefaults(
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
+    client_identity_preset: clientIdentityPreset,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
@@ -559,6 +568,13 @@ function normalizeAutoRetryTimes(value: unknown): number | undefined {
   const retryTimes = Math.trunc(numeric)
   if (retryTimes < 0 || retryTimes > 10) return undefined
   return retryTimes
+}
+
+function normalizeClientIdentityPreset(value: unknown): ClientIdentityPreset {
+  if (value === 'codex_cli' || value === 'claude_code') {
+    return value
+  }
+  return 'off'
 }
 
 function normalizeCodexImageGenerationBridgePolicy(
@@ -627,9 +643,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   // - OpenAI (type 1), Anthropic (type 14), and Codex (type 57): allow_service_tier
   // - OpenAI and Codex: disable_store, allow_safety_identifier, allow_include_obfuscation
   if (formData.type === 1 || formData.type === 14 || formData.type === 57) {
+    settingsObj.client_identity_preset = normalizeClientIdentityPreset(
+      formData.client_identity_preset
+    )
     settingsObj.allow_service_tier = formData.allow_service_tier === true
-  } else if ('allow_service_tier' in settingsObj) {
-    delete settingsObj.allow_service_tier
+  } else {
+    if ('client_identity_preset' in settingsObj) {
+      delete settingsObj.client_identity_preset
+    }
+    if ('allow_service_tier' in settingsObj) {
+      delete settingsObj.allow_service_tier
+    }
   }
 
   if (formData.type === 1 || formData.type === 57) {

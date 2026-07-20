@@ -140,8 +140,11 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
 }
 
+export type ClientIdentityPreset = 'off' | 'codex_cli' | 'claude_code'
+
 export interface ChannelOtherSettings {
   azure_responses_version?: string
+  client_identity_preset?: ClientIdentityPreset
   vertex_key_type?: 'json' | 'api_key'
   openrouter_enterprise?: boolean
   aws_key_type?: 'ak_sk' | 'api_key'

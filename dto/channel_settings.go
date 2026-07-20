@@ -31,6 +31,7 @@ const (
 
 type ChannelOtherSettings struct {
 	AzureResponsesVersion                      string                    `json:"azure_responses_version,omitempty"`
+	ClientIdentityPreset                       string                    `json:"client_identity_preset,omitempty"`
 	VertexKeyType                              VertexKeyType             `json:"vertex_key_type,omitempty"` // "json" or "api_key"
 	OpenRouterEnterprise                       *bool                     `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery                            bool                      `json:"claude_beta_query,omitempty"`          // Claude 渠道是否强制追加 ?beta=true
@@ -64,6 +65,23 @@ type ChannelOtherSettings struct {
 	CodexImageGenerationBridgePolicy           string                    `json:"codex_image_generation_bridge_policy,omitempty"`
 	AutoRetryTimes                             *int                      `json:"auto_retry_times,omitempty"`
 	AdvancedCustom                             *AdvancedCustomConfig     `json:"advanced_custom,omitempty"`
+}
+
+const (
+	ClientIdentityPresetOff        = "off"
+	ClientIdentityPresetCodexCLI   = "codex_cli"
+	ClientIdentityPresetClaudeCode = "claude_code"
+)
+
+func NormalizeClientIdentityPreset(preset string) string {
+	switch strings.TrimSpace(preset) {
+	case ClientIdentityPresetCodexCLI:
+		return ClientIdentityPresetCodexCLI
+	case ClientIdentityPresetClaudeCode:
+		return ClientIdentityPresetClaudeCode
+	default:
+		return ClientIdentityPresetOff
+	}
 }
 
 const ChannelAutoRetryTimesMax = 10

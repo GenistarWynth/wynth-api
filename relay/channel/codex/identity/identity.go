@@ -5,12 +5,15 @@ import (
 	"strings"
 )
 
-const CodexCLIUserAgent = "codex_cli_rs/0.145.0"
+const (
+	CodexCLIOriginator = "codex_cli_rs"
+	CodexCLIUserAgent  = "codex_cli_rs/0.145.0"
+)
 
 var officialOriginators = map[string]string{
-	"codex_cli_rs": "codex_cli_rs",
-	"codex-tui":    "codex-tui",
-	"codex_vscode": "codex_vscode",
+	CodexCLIOriginator: CodexCLIOriginator,
+	"codex-tui":        "codex-tui",
+	"codex_vscode":     "codex_vscode",
 }
 
 // NormalizeIdentityHeaders pairs the final Codex User-Agent and originator.
@@ -36,7 +39,7 @@ func NormalizeIdentityHeaders(header http.Header) {
 			}
 		}
 	}
-	header.Set("originator", "codex_cli_rs")
+	header.Set("originator", CodexCLIOriginator)
 	header.Set("User-Agent", CodexCLIUserAgent)
 }
 

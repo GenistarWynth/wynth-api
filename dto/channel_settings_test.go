@@ -7,6 +7,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNormalizeClientIdentityPreset(t *testing.T) {
+	tests := []struct {
+		name   string
+		preset string
+		want   string
+	}{
+		{name: "off", preset: ClientIdentityPresetOff, want: ClientIdentityPresetOff},
+		{name: "codex cli", preset: ClientIdentityPresetCodexCLI, want: ClientIdentityPresetCodexCLI},
+		{name: "claude code", preset: ClientIdentityPresetClaudeCode, want: ClientIdentityPresetClaudeCode},
+		{name: "trims whitespace", preset: "  codex_cli  ", want: ClientIdentityPresetCodexCLI},
+		{name: "unknown falls back to off", preset: "custom", want: ClientIdentityPresetOff},
+		{name: "empty falls back to off", preset: "", want: ClientIdentityPresetOff},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, NormalizeClientIdentityPreset(tt.preset))
+		})
+	}
+}
+
 func TestAdvancedCustomValidateResponsesToChatConverterPath(t *testing.T) {
 	valid := &AdvancedCustomConfig{
 		Routes: []AdvancedCustomRoute{
