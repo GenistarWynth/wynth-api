@@ -3,6 +3,7 @@ package clientidentity
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -11,8 +12,20 @@ import (
 	"github.com/google/uuid"
 )
 
+// AnthropicOAuthBetaFeatures is the anthropic-beta value required for OAuth / Claude Code
+// style clients. Kept here as the shared source of truth so both the Claude adaptor
+// OAuth path and the channel identity preset emit the exact same flag list.
+//
+// It enables the oauth-2025-04-20 protocol flag plus Claude-Code-specific features.
+// Tunable: update this list when Anthropic releases new beta flags.
+const AnthropicOAuthBetaFeatures = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+
+// ClaudeCodeAnthropicVersion is the anthropic-version header used by Claude Code.
+const ClaudeCodeAnthropicVersion = "2023-06-01"
+
 // ClaudeCodeMimicryHeaders returns the exact built-in Claude Code CLI identity
-// header bundle. Callers receive a new map so they cannot mutate the bundle.
+// header bundle (without protocol version / beta). Callers receive a new map so
+// they cannot mutate the bundle.
 func ClaudeCodeMimicryHeaders() map[string]string {
 	return map[string]string{
 		"User-Agent":                                "claude-cli/2.1.161 (external, cli)",
@@ -25,6 +38,63 @@ func ClaudeCodeMimicryHeaders() map[string]string {
 		"X-App":                                     "cli",
 		"Anthropic-Dangerous-Direct-Browser-Access": "true",
 	}
+}
+
+// ClaudeCodeInteractiveIdentityHeaders returns the complete Claude Code outbound
+// identity fingerprint used by the official Claude Code / OAuth client path.
+//
+// This intentionally includes:
+//   - the stainless / UA / X-App mimicry bundle
+//   - anthropic-version
+//   - anthropic-beta (Claude Code + OAuth feature flags)
+//
+// Auth scheme (x-api-key vs Authorization Bearer) is NOT included; callers keep
+// whatever auth the channel/adaptor already selected.
+func ClaudeCodeInteractiveIdentityHeaders() map[string]string {
+	headers := ClaudeCodeMimicryHeaders()
+	headers["anthropic-version"] = ClaudeCodeAnthropicVersion
+	headers["anthropic-beta"] = AnthropicOAuthBetaFeatures
+	// Stainless retry/timeout headers appear on real Claude Code requests and are
+	// part of the channel Claude CLI passthrough allowlist.
+	headers["X-Stainless-Retry-Count"] = "0"
+	return headers
+}
+
+// MergeAnthropicBetaFlags merges required Claude Code / OAuth bundle flags with
+// client-supplied beta flags into a single deduplicated, comma-separated string.
+//
+// Ordering: required flags appear first (preserving their order), then any
+// client-supplied flags that are not already present are appended in order.
+// If clientBeta is empty, the bundle is returned unchanged.
+func MergeAnthropicBetaFlags(bundle, clientBeta string) string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, 8)
+
+	for _, f := range strings.Split(bundle, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if _, ok := seen[f]; !ok {
+			seen[f] = struct{}{}
+			result = append(result, f)
+		}
+	}
+
+	if clientBeta != "" {
+		for _, f := range strings.Split(clientBeta, ",") {
+			f = strings.TrimSpace(f)
+			if f == "" {
+				continue
+			}
+			if _, ok := seen[f]; !ok {
+				seen[f] = struct{}{}
+				result = append(result, f)
+			}
+		}
+	}
+
+	return strings.Join(result, ",")
 }
 
 // CodexInteractiveIdentityHeaders returns the identity/session header bundle that
@@ -81,9 +151,7 @@ func Apply(header http.Header, preset string) {
 	case dto.ClientIdentityPresetCodexCLI:
 		applyCodexInteractiveIdentity(header)
 	case dto.ClientIdentityPresetClaudeCode:
-		for name, value := range ClaudeCodeMimicryHeaders() {
-			header.Set(name, value)
-		}
+		applyClaudeCodeInteractiveIdentity(header)
 	}
 }
 
@@ -128,5 +196,28 @@ func applyCodexInteractiveIdentity(header http.Header) {
 	if header.Get("originator") == "" {
 		header.Set("originator", codexidentity.CodexCLIOriginator)
 		header.Set("User-Agent", codexidentity.CodexCLIUserAgent)
+	}
+}
+
+func applyClaudeCodeInteractiveIdentity(header http.Header) {
+	// Force the exact Claude Code mimicry bundle first.
+	for name, value := range ClaudeCodeMimicryHeaders() {
+		header.Set(name, value)
+	}
+
+	// Protocol headers required by real Claude Code / OAuth clients.
+	if header.Get("anthropic-version") == "" {
+		header.Set("anthropic-version", ClaudeCodeAnthropicVersion)
+	}
+	// Always ensure the Claude Code beta feature flags are present, while
+	// preserving any extra client-supplied beta flags.
+	header.Set(
+		"anthropic-beta",
+		MergeAnthropicBetaFlags(AnthropicOAuthBetaFeatures, header.Get("anthropic-beta")),
+	)
+
+	// Stainless retry counter is present on real Claude Code traffic.
+	if header.Get("X-Stainless-Retry-Count") == "" {
+		header.Set("X-Stainless-Retry-Count", "0")
 	}
 }

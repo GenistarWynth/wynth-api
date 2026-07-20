@@ -66,6 +66,13 @@ func channelUsesCodexCLIIdentity(channel *model.Channel) bool {
 	return dto.NormalizeClientIdentityPreset(channel.GetOtherSettings().ClientIdentityPreset) == dto.ClientIdentityPresetCodexCLI
 }
 
+func channelUsesClaudeCodeIdentity(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return dto.NormalizeClientIdentityPreset(channel.GetOtherSettings().ClientIdentityPreset) == dto.ClientIdentityPresetClaudeCode
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -82,6 +89,10 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	}
 	if channelUsesCodexCLIIdentity(channel) {
 		return string(constant.EndpointTypeOpenAIResponse)
+	}
+	// Claude Code clients speak Anthropic Messages (/v1/messages), not OpenAI chat.
+	if channelUsesClaudeCodeIdentity(channel) {
+		return string(constant.EndpointTypeAnthropic)
 	}
 	return normalized
 }
@@ -862,6 +873,9 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	if channelUsesCodexCLIIdentity(channel) {
 		return true
 	}
+	if channelUsesClaudeCodeIdentity(channel) {
+		return true
+	}
 	// Generated upstream-source channels also stream-probe (when their type
 	// supports stream options) so first-token latency gets recorded like any
 	// other channel. Upstreams that ignore stream=true and return a plain JSON
@@ -880,6 +894,9 @@ func resolveChannelTestStream(c *gin.Context, channel *model.Channel) bool {
 		}
 	}
 	if channelUsesCodexCLIIdentity(channel) {
+		return true
+	}
+	if channelUsesClaudeCodeIdentity(channel) {
 		return true
 	}
 	return false

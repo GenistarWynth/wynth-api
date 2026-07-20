@@ -55,3 +55,32 @@ func TestResolveChannelTestStreamDefaultsCodexCLIIdentityToStream(t *testing.T) 
 	normal := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	assert.False(t, resolveChannelTestStream(c, normal))
 }
+
+func TestNormalizeChannelTestEndpointUsesMessagesForClaudeCodeIdentity(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ClientIdentityPreset: dto.ClientIdentityPresetClaudeCode,
+	})
+	assert.Equal(t, string(constant.EndpointTypeAnthropic), normalizeChannelTestEndpoint(channel, "claude-sonnet-4", ""))
+}
+
+func TestShouldUseStreamForAutomaticChannelTestForcesClaudeCodeIdentity(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ClientIdentityPreset: dto.ClientIdentityPresetClaudeCode,
+	})
+	assert.True(t, shouldUseStreamForAutomaticChannelTest(channel))
+}
+
+func TestResolveChannelTestStreamDefaultsClaudeCodeIdentityToStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ClientIdentityPreset: dto.ClientIdentityPresetClaudeCode,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/channel/test/1", nil)
+	c, _ := gin.CreateTestContext(nil)
+	c.Request = req
+	assert.True(t, resolveChannelTestStream(c, channel))
+}
+

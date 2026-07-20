@@ -3,6 +3,7 @@ package clientidentity
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -22,6 +23,19 @@ func TestClaudeCodeMimicryHeadersExact(t *testing.T) {
 		"X-App":                                     "cli",
 		"Anthropic-Dangerous-Direct-Browser-Access": "true",
 	}, ClaudeCodeMimicryHeaders())
+}
+
+func TestClaudeCodeInteractiveIdentityHeadersExact(t *testing.T) {
+	headers := ClaudeCodeInteractiveIdentityHeaders()
+	for k, v := range ClaudeCodeMimicryHeaders() {
+		require.Equal(t, v, headers[k], k)
+	}
+	require.Equal(t, ClaudeCodeAnthropicVersion, headers["anthropic-version"])
+	require.Equal(t, AnthropicOAuthBetaFeatures, headers["anthropic-beta"])
+	require.Equal(t, "0", headers["X-Stainless-Retry-Count"])
+	for _, flag := range strings.Split(AnthropicOAuthBetaFeatures, ",") {
+		require.Contains(t, headers["anthropic-beta"], flag)
+	}
 }
 
 func TestApplyClientIdentityPresetExactHeaders(t *testing.T) {
@@ -60,19 +74,35 @@ func TestApplyClientIdentityPresetExactHeaders(t *testing.T) {
 		require.Equal(t, "user", meta["thread_source"])
 	})
 
-	t.Run("claude code", func(t *testing.T) {
+	t.Run("claude code full fingerprint", func(t *testing.T) {
 		header := http.Header{}
+		header.Set("User-Agent", "custom-override")
+		header.Set("anthropic-beta", "custom-flag-2025")
 		Apply(header, dto.ClientIdentityPresetClaudeCode)
-		require.Equal(t, http.Header{
-			"Anthropic-Dangerous-Direct-Browser-Access": {"true"},
-			"User-Agent":                  {"claude-cli/2.1.161 (external, cli)"},
-			"X-App":                       {"cli"},
-			"X-Stainless-Arch":            {"arm64"},
-			"X-Stainless-Lang":            {"js"},
-			"X-Stainless-Os":              {"Linux"},
-			"X-Stainless-Package-Version": {"0.94.0"},
-			"X-Stainless-Runtime":         {"node"},
-			"X-Stainless-Runtime-Version": {"v24.3.0"},
-		}, header)
+
+		require.Equal(t, "claude-cli/2.1.161 (external, cli)", header.Get("User-Agent"))
+		require.Equal(t, "js", header.Get("X-Stainless-Lang"))
+		require.Equal(t, "0.94.0", header.Get("X-Stainless-Package-Version"))
+		require.Equal(t, "Linux", header.Get("X-Stainless-OS"))
+		require.Equal(t, "arm64", header.Get("X-Stainless-Arch"))
+		require.Equal(t, "node", header.Get("X-Stainless-Runtime"))
+		require.Equal(t, "v24.3.0", header.Get("X-Stainless-Runtime-Version"))
+		require.Equal(t, "cli", header.Get("X-App"))
+		require.Equal(t, "true", header.Get("Anthropic-Dangerous-Direct-Browser-Access"))
+		require.Equal(t, ClaudeCodeAnthropicVersion, header.Get("anthropic-version"))
+		require.Equal(t, "0", header.Get("X-Stainless-Retry-Count"))
+
+		beta := header.Get("anthropic-beta")
+		for _, flag := range strings.Split(AnthropicOAuthBetaFeatures, ",") {
+			require.Contains(t, beta, flag)
+		}
+		require.Contains(t, beta, "custom-flag-2025")
 	})
+}
+
+func TestMergeAnthropicBetaFlags(t *testing.T) {
+	require.Equal(t, AnthropicOAuthBetaFeatures, MergeAnthropicBetaFlags(AnthropicOAuthBetaFeatures, ""))
+	merged := MergeAnthropicBetaFlags(AnthropicOAuthBetaFeatures, "custom-flag-2025,oauth-2025-04-20")
+	require.Contains(t, merged, "custom-flag-2025")
+	require.Equal(t, 1, strings.Count(merged, "oauth-2025-04-20"))
 }

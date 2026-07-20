@@ -27,18 +27,15 @@ func TestFinalizeRequestHeadersAppliesPresetBeforeOAuthAuth(t *testing.T) {
 
 	finalizeRequestHeaders(header, info)
 
-	require.Equal(t, http.Header{
-		"Anthropic-Dangerous-Direct-Browser-Access": {"true"},
-		"Authorization":               {"Bearer oauth-token"},
-		"User-Agent":                  {"claude-cli/2.1.161 (external, cli)"},
-		"X-App":                       {"cli"},
-		"X-Stainless-Arch":            {"arm64"},
-		"X-Stainless-Lang":            {"js"},
-		"X-Stainless-Os":              {"Linux"},
-		"X-Stainless-Package-Version": {"0.94.0"},
-		"X-Stainless-Runtime":         {"node"},
-		"X-Stainless-Runtime-Version": {"v24.3.0"},
-	}, header)
+	require.Equal(t, "Bearer oauth-token", header.Get("Authorization"))
+	require.Empty(t, header.Get("x-api-key"))
+	require.Equal(t, "claude-cli/2.1.161 (external, cli)", header.Get("User-Agent"))
+	require.Equal(t, "cli", header.Get("X-App"))
+	require.Equal(t, "true", header.Get("Anthropic-Dangerous-Direct-Browser-Access"))
+	require.Equal(t, "2023-06-01", header.Get("anthropic-version"))
+	require.Equal(t, "0", header.Get("X-Stainless-Retry-Count"))
+	require.Contains(t, header.Get("anthropic-beta"), "oauth-2025-04-20")
+	require.Contains(t, header.Get("anthropic-beta"), "claude-code-20250219")
 }
 
 // TestFinalizeAnthropicOAuthAuthHeader_RemovesXApiKey verifies the defense-in-depth
