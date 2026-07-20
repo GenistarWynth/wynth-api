@@ -6,6 +6,8 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.42] - 2026-07-20
+
 ### Added
 - Auto-priority scheduling now runs per local channel group: any overdue or never-run enabled member makes the full manual/generated cohort due, and successful runs synchronize the shared interval and last-run timestamp across the group.
 - Channel Auto Priority settings can force an immediate recompute for the current group, bypassing the due gate once.
