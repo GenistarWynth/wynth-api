@@ -6,8 +6,8 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
-### Notes
-- No additional unreleased changes after v1.0.0-rc.40.
+### Fixed
+- Client identity simulation for Codex CLI now emits a full interactive Codex fingerprint: `codex_cli_rs` originator/UA pairing plus session/thread correlation headers and the `x-codex-*` metadata family captured from real Codex outbound requests, not only the minimal UA/originator pair.
 
 ## [v1.0.0-rc.40] - 2026-07-20
 
