@@ -2,12 +2,15 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 )
 
@@ -52,25 +55,28 @@ type ChannelMonitorStats struct {
 }
 
 type ChannelMonitorInfo struct {
-	Enabled                    bool     `json:"enabled"`
-	IntervalMinutes            int      `json:"interval_minutes"`
-	LatestStatus               string   `json:"latest_status,omitempty"`
-	LatestModel                string   `json:"latest_model,omitempty"`
-	LatestCheckedAt            int64    `json:"latest_checked_at,omitempty"`
-	LatestLatencyMS            int64    `json:"latest_latency_ms,omitempty"`
-	LatestEndpointLatencyMS    int64    `json:"latest_endpoint_latency_ms,omitempty"`
-	LatestFirstTokenLatencyMS  int64    `json:"latest_first_token_latency_ms,omitempty"`
-	LatestPromptTokens         int      `json:"latest_prompt_tokens,omitempty"`
-	LatestCompletionTokens     int      `json:"latest_completion_tokens,omitempty"`
-	LatestMessage              string   `json:"latest_message,omitempty"`
-	NextCheckAt                int64    `json:"next_check_at,omitempty"`
-	SecondsUntilNextCheck      int64    `json:"seconds_until_next_check,omitempty"`
-	SevenDayChecks             int64    `json:"seven_day_checks"`
-	SevenDaySuccesses          int64    `json:"seven_day_successes"`
-	SevenDayAvailability       *float64 `json:"seven_day_availability,omitempty"`
-	AverageLatencyMS           int64    `json:"average_latency_ms,omitempty"`
-	AverageEndpointLatencyMS   int64    `json:"average_endpoint_latency_ms,omitempty"`
-	AverageFirstTokenLatencyMS int64    `json:"average_first_token_latency_ms,omitempty"`
+	Enabled                           bool     `json:"enabled"`
+	IntervalMinutes                   int      `json:"interval_minutes"`
+	LatestStatus                      string   `json:"latest_status,omitempty"`
+	LatestModel                       string   `json:"latest_model,omitempty"`
+	LatestCheckedAt                   int64    `json:"latest_checked_at,omitempty"`
+	LatestLatencyMS                   int64    `json:"latest_latency_ms,omitempty"`
+	LatestEndpointLatencyMS           int64    `json:"latest_endpoint_latency_ms,omitempty"`
+	LatestFirstTokenLatencyMS         int64    `json:"latest_first_token_latency_ms,omitempty"`
+	LatestPromptTokens                int      `json:"latest_prompt_tokens,omitempty"`
+	LatestCompletionTokens            int      `json:"latest_completion_tokens,omitempty"`
+	LatestMessage                     string   `json:"latest_message,omitempty"`
+	NextCheckAt                       int64    `json:"next_check_at,omitempty"`
+	SecondsUntilNextCheck             int64    `json:"seconds_until_next_check,omitempty"`
+	DeadRecoveryEligible              bool     `json:"dead_recovery_eligible"`
+	DeadRecoveryNextCheckAt           int64    `json:"dead_recovery_next_check_at,omitempty"`
+	DeadRecoverySecondsUntilNextCheck int64    `json:"dead_recovery_seconds_until_next_check,omitempty"`
+	SevenDayChecks                    int64    `json:"seven_day_checks"`
+	SevenDaySuccesses                 int64    `json:"seven_day_successes"`
+	SevenDayAvailability              *float64 `json:"seven_day_availability,omitempty"`
+	AverageLatencyMS                  int64    `json:"average_latency_ms,omitempty"`
+	AverageEndpointLatencyMS          int64    `json:"average_endpoint_latency_ms,omitempty"`
+	AverageFirstTokenLatencyMS        int64    `json:"average_first_token_latency_ms,omitempty"`
 }
 
 type ChannelMonitorDetail struct {
@@ -479,6 +485,71 @@ func GetChannelMonitorSettingsReadOnly(channel *Channel) dto.ChannelOtherSetting
 	return settings
 }
 
+func channelStatusTime(channel *Channel) int64 {
+	if channel == nil {
+		return 0
+	}
+	raw, ok := channel.GetOtherInfo()["status_time"]
+	if !ok || raw == nil {
+		return 0
+	}
+	switch value := raw.(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	case float32:
+		return int64(value)
+	case json.Number:
+		parsed, _ := value.Int64()
+		return parsed
+	default:
+		trimmed := strings.TrimSpace(fmt.Sprint(value))
+		if trimmed == "" {
+			return 0
+		}
+		parsed, err := strconv.ParseInt(trimmed, 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	}
+}
+
+func DeadChannelRecoveryDelaySeconds(channel *Channel, settings operation_setting.DeadChannelRecoverySettings) int64 {
+	settings = operation_setting.NormalizeDeadChannelRecoverySettings(settings)
+	minSeconds := int64(settings.MinMinutes) * 60
+	maxSeconds := int64(settings.MaxMinutes) * 60
+	span := maxSeconds - minSeconds
+	if span <= 0 {
+		return minSeconds
+	}
+	channelID := 0
+	if channel != nil {
+		channelID = channel.Id
+	}
+	statusTime := channelStatusTime(channel)
+	seed := uint64(channelID)*2654435761 ^ uint64(statusTime)*1597334677
+	seed ^= seed << 13
+	seed ^= seed >> 7
+	seed ^= seed << 17
+	return minSeconds + int64(seed%uint64(span+1))
+}
+
+func DeadChannelRecoveryNextCheckAt(channel *Channel, settings operation_setting.DeadChannelRecoverySettings) int64 {
+	return channelStatusTime(channel) + DeadChannelRecoveryDelaySeconds(channel, settings)
+}
+
+func IsDeadChannelRecoveryEligible(channel *Channel) bool {
+	if channel == nil || channel.Status != common.ChannelStatusAutoDisabled {
+		return false
+	}
+	settings := NormalizeChannelMonitorSettings(GetChannelMonitorSettingsReadOnly(channel))
+	return !settings.ChannelMonitorEnabled
+}
+
 func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 	channelIDs := make([]int, 0, len(channels))
 	for _, channel := range channels {
@@ -495,6 +566,7 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 	if err != nil {
 		return err
 	}
+	recoverySettings := operation_setting.GetDeadChannelRecoverySettings()
 
 	for _, channel := range channels {
 		if channel == nil {
@@ -504,6 +576,13 @@ func AttachChannelMonitorInfo(channels []*Channel, now int64) error {
 		info := &ChannelMonitorInfo{
 			Enabled:         settings.ChannelMonitorEnabled,
 			IntervalMinutes: settings.ChannelMonitorIntervalMinutes,
+		}
+		if IsDeadChannelRecoveryEligible(channel) {
+			info.DeadRecoveryEligible = true
+			info.DeadRecoveryNextCheckAt = DeadChannelRecoveryNextCheckAt(channel, recoverySettings)
+			if info.DeadRecoveryNextCheckAt > now {
+				info.DeadRecoverySecondsUntilNextCheck = info.DeadRecoveryNextCheckAt - now
+			}
 		}
 		if log, ok := latest[channel.Id]; ok {
 			info.LatestStatus = log.Status

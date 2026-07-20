@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { buildMonitorHistoryBars, monitorStatusText } from './channel-monitor'
+
 import { channelMonitorInfoSchema } from '../types'
+import {
+  buildMonitorHistoryBars,
+  monitorRefreshText,
+  monitorStatusText,
+} from './channel-monitor'
 
 describe('channel monitor history helpers', () => {
   test('builds fixed-width visual bars from newest detail records', () => {
@@ -71,6 +76,57 @@ describe('channel monitor history helpers', () => {
     }) as any
 
     assert.equal(parsed.latest_model, 'gpt-4o-mini')
+  })
+
+  test('parses post-mortem recovery schedule fields in monitor info', () => {
+    const parsed = channelMonitorInfoSchema.parse({
+      enabled: false,
+      interval_minutes: 0,
+      dead_recovery_eligible: true,
+      dead_recovery_next_check_at: 1_700_000_900,
+      dead_recovery_seconds_until_next_check: 900,
+    })
+
+    assert.equal(parsed.dead_recovery_eligible, true)
+    assert.equal(parsed.dead_recovery_next_check_at, 1_700_000_900)
+    assert.equal(parsed.dead_recovery_seconds_until_next_check, 900)
+  })
+
+  test('labels the next post-mortem recovery only for eligible channels', () => {
+    const t = (key: string, options?: { value?: number | string }) =>
+      options?.value === undefined ? key : `${key} ${options.value}`
+    const formatTime = (timestamp: number) => `at:${timestamp}`
+
+    assert.equal(
+      monitorRefreshText(
+        {
+          enabled: false,
+          interval_minutes: 0,
+          dead_recovery_eligible: true,
+          dead_recovery_next_check_at: 1_700_000_900,
+          dead_recovery_seconds_until_next_check: 900,
+          seven_day_checks: 0,
+          seven_day_successes: 0,
+        },
+        t,
+        formatTime
+      ),
+      'Next post-mortem recovery: {{value}} at:1700000900'
+    )
+    assert.equal(
+      monitorRefreshText(
+        {
+          enabled: false,
+          interval_minutes: 0,
+          dead_recovery_eligible: false,
+          seven_day_checks: 0,
+          seven_day_successes: 0,
+        },
+        t,
+        formatTime
+      ),
+      'Disabled'
+    )
   })
 
   test('translates monitor statuses through the provided translator', () => {

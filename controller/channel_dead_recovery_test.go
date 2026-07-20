@@ -6,12 +6,18 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestFilterDueDeadChannelRecoveryCandidates(t *testing.T) {
 	now := int64(1_700_000_000)
+	recoverySettings := operation_setting.DeadChannelRecoverySettings{
+		MinMinutes: 30,
+		MaxMinutes: 30,
+		MaxPerTick: 10,
+	}
 
 	mk := func(id int, status int, monitor bool, statusTime int64) *model.Channel {
 		ch := &model.Channel{Id: id, Status: status}
@@ -32,12 +38,12 @@ func TestFilterDueDeadChannelRecoveryCandidates(t *testing.T) {
 	monitored := mk(1, common.ChannelStatusAutoDisabled, true, now-3600)
 	manual := mk(2, common.ChannelStatusManuallyDisabled, false, now-3600)
 	enabled := mk(3, common.ChannelStatusEnabled, false, now-3600)
-	freshDead := mk(4, common.ChannelStatusAutoDisabled, false, now)
-	oldDead := mk(5, common.ChannelStatusAutoDisabled, false, now-int64(defaultDeadChannelRecoveryMaxMinutes+1)*60)
+	freshDead := mk(4, common.ChannelStatusAutoDisabled, false, now-29*60)
+	oldDead := mk(5, common.ChannelStatusAutoDisabled, false, now-30*60)
 
 	got := filterDueDeadChannelRecoveryCandidates([]*model.Channel{
 		monitored, manual, enabled, freshDead, oldDead,
-	}, now, 10)
+	}, now, recoverySettings)
 
 	ids := make([]int, 0, len(got))
 	for _, ch := range got {
@@ -50,26 +56,14 @@ func TestFilterDueDeadChannelRecoveryCandidates(t *testing.T) {
 	assert.Contains(t, ids, 5)
 }
 
-func TestDeadChannelRecoveryDelaySecondsBoundedAndStable(t *testing.T) {
-	ch := &model.Channel{Id: 42, Status: common.ChannelStatusAutoDisabled}
-	ch.SetOtherInfo(map[string]interface{}{"status_time": int64(1_700_000_000)})
-	d1 := deadChannelRecoveryDelaySeconds(ch)
-	d2 := deadChannelRecoveryDelaySeconds(ch)
-	require.Equal(t, d1, d2, "delay must be stable for same channel+status_time")
-	minSec := int64(defaultDeadChannelRecoveryMinMinutes * 60)
-	maxSec := int64(defaultDeadChannelRecoveryMaxMinutes * 60)
-	assert.GreaterOrEqual(t, d1, minSec)
-	assert.LessOrEqual(t, d1, maxSec)
-
-	ch2 := &model.Channel{Id: 42, Status: common.ChannelStatusAutoDisabled}
-	ch2.SetOtherInfo(map[string]interface{}{"status_time": int64(1_700_000_001)})
-	d3 := deadChannelRecoveryDelaySeconds(ch2)
-	assert.NotEqual(t, d1, d3)
-}
-
 func TestFilterDueDeadChannelRecoveryCandidatesCapsAndShuffles(t *testing.T) {
 	now := int64(1_700_000_000)
-	old := now - int64(defaultDeadChannelRecoveryMaxMinutes+5)*60
+	recoverySettings := operation_setting.DeadChannelRecoverySettings{
+		MinMinutes: 15,
+		MaxMinutes: 120,
+		MaxPerTick: 3,
+	}
+	old := now - int64(recoverySettings.MaxMinutes+5)*60
 	channels := make([]*model.Channel, 0, 10)
 	for i := 1; i <= 10; i++ {
 		ch := &model.Channel{Id: i, Status: common.ChannelStatusAutoDisabled}
@@ -77,6 +71,6 @@ func TestFilterDueDeadChannelRecoveryCandidatesCapsAndShuffles(t *testing.T) {
 		ch.SetOtherInfo(map[string]interface{}{"status_time": old + int64(i)})
 		channels = append(channels, ch)
 	}
-	got := filterDueDeadChannelRecoveryCandidates(channels, now, 3)
+	got := filterDueDeadChannelRecoveryCandidates(channels, now, recoverySettings)
 	require.Len(t, got, 3)
 }

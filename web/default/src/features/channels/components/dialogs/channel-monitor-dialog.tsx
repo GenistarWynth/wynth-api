@@ -84,6 +84,7 @@ import {
 import {
   buildChannelMonitorSettingsPayload,
   buildMonitorHistoryBars,
+  monitorRefreshText,
   monitorStatusText,
   normalizeMonitorInterval,
   readChannelMonitorSettings,
@@ -91,11 +92,7 @@ import {
   type MonitorHistoryBar,
   type MonitorVisualStatus,
 } from '../../lib/channel-monitor'
-import type {
-  Channel,
-  ChannelMonitorInfo,
-  ChannelMonitorRecord,
-} from '../../types'
+import type { Channel, ChannelMonitorRecord } from '../../types'
 
 interface ChannelMonitorDialogProps {
   open: boolean
@@ -168,20 +165,6 @@ function tokenText(input?: number, output?: number) {
   const prompt = input && input > 0 ? String(input) : '-'
   const completion = output && output > 0 ? String(output) : '-'
   return `${prompt} / ${completion}`
-}
-
-function refreshText(info: ChannelMonitorInfo | undefined, t: TFn) {
-  if (!info?.enabled) return t('Disabled')
-  if (!info.latest_checked_at) return t('No data')
-  if (info.seconds_until_next_check && info.seconds_until_next_check > 0) {
-    const seconds = info.seconds_until_next_check
-    const value =
-      seconds >= 60
-        ? `${Math.ceil(seconds / 60)} ${t('minutes')}`
-        : `${seconds} ${t('seconds')}`
-    return t('Refresh in {{value}}', { value })
-  }
-  return t('Due now')
 }
 
 function historyAriaLabel(bar: MonitorHistoryBar, t: TFn) {
@@ -792,7 +775,7 @@ export function ChannelMonitorDialog({
               <div className='text-muted-foreground flex shrink-0 flex-col items-end gap-1 text-xs'>
                 <div className='flex items-center gap-1.5'>
                   <RefreshCw className='size-3.5' />
-                  {refreshText(info, t)}
+                  {monitorRefreshText(info, t, formatRelativeTime)}
                 </div>
                 <div>{latestTime}</div>
               </div>

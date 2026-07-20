@@ -93,4 +93,12 @@ describe('channel monitor dialog theme contract', () => {
       /<Input\s+id=\{`channel-monitor-test-model-\$\{channelId\}`\}/
     )
   })
+
+  test('renders the shared post-mortem recovery schedule text', () => {
+    assert.match(dialogSource, /monitorRefreshText/)
+    assert.match(
+      dialogSource,
+      /monitorRefreshText\(info, t, formatRelativeTime\)/
+    )
+  })
 })

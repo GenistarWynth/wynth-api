@@ -17,7 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo, useRef } from 'react'
-import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
@@ -54,64 +53,12 @@ import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
-
-const numericString = z.string().refine((value) => {
-  const trimmed = value.trim()
-  if (!trimmed) return true
-  return !Number.isNaN(Number(trimmed)) && Number(trimmed) >= 0
-}, 'Enter a non-negative number or leave empty')
-
-const channelTestModes = ['scheduled_all', 'passive_recovery'] as const
-type ChannelTestMode = (typeof channelTestModes)[number]
-
-const routingReliabilitySchema = z
-  .object({
-    RetryTimes: z.coerce.number().min(0).max(10),
-    ChannelDisableThreshold: numericString,
-    AutomaticDisableChannelEnabled: z.boolean(),
-    AutomaticEnableChannelEnabled: z.boolean(),
-    AutomaticDisableKeywords: z.string(),
-    AutomaticDisableStatusCodes: z.string(),
-    AutomaticRetryStatusCodes: z.string(),
-    monitor_setting: z.object({
-      auto_test_channel_enabled: z.boolean(),
-      auto_test_channel_minutes: z.coerce
-        .number()
-        .int()
-        .min(1, 'Interval must be at least 1 minute'),
-      channel_test_mode: z.enum(channelTestModes),
-    }),
-  })
-  .superRefine((values, ctx) => {
-    const disableParsed = parseHttpStatusCodeRules(
-      values.AutomaticDisableStatusCodes
-    )
-    if (!disableParsed.ok) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['AutomaticDisableStatusCodes'],
-        message: `Invalid status code rules: ${disableParsed.invalidTokens.join(
-          ', '
-        )}`,
-      })
-    }
-
-    const retryParsed = parseHttpStatusCodeRules(
-      values.AutomaticRetryStatusCodes
-    )
-    if (!retryParsed.ok) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['AutomaticRetryStatusCodes'],
-        message: `Invalid status code rules: ${retryParsed.invalidTokens.join(
-          ', '
-        )}`,
-      })
-    }
-  })
-
-type RoutingReliabilityFormValues = z.output<typeof routingReliabilitySchema>
-type RoutingReliabilityFormInput = z.input<typeof routingReliabilitySchema>
+import {
+  routingReliabilitySchema,
+  type ChannelTestMode,
+  type RoutingReliabilityFormInput,
+  type RoutingReliabilityFormValues,
+} from './routing-reliability-schema'
 
 type RoutingReliabilitySectionProps = {
   defaultValues: {
@@ -125,6 +72,9 @@ type RoutingReliabilitySectionProps = {
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
     'monitor_setting.channel_test_mode': ChannelTestMode
+    'monitor_setting.dead_channel_recovery_min_minutes': number
+    'monitor_setting.dead_channel_recovery_max_minutes': number
+    'monitor_setting.dead_channel_recovery_max_per_tick': number
   }
 }
 
@@ -143,6 +93,9 @@ type NormalizedRoutingReliabilityValues = {
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_mode': ChannelTestMode
+  'monitor_setting.dead_channel_recovery_min_minutes': number
+  'monitor_setting.dead_channel_recovery_max_minutes': number
+  'monitor_setting.dead_channel_recovery_max_per_tick': number
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
@@ -169,6 +122,12 @@ const buildFormDefaults = (
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
+    dead_channel_recovery_min_minutes:
+      defaults['monitor_setting.dead_channel_recovery_min_minutes'],
+    dead_channel_recovery_max_minutes:
+      defaults['monitor_setting.dead_channel_recovery_max_minutes'],
+    dead_channel_recovery_max_per_tick:
+      defaults['monitor_setting.dead_channel_recovery_max_per_tick'],
   },
 })
 
@@ -195,6 +154,12 @@ const normalizeDefaults = (
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
+  'monitor_setting.dead_channel_recovery_min_minutes':
+    defaults['monitor_setting.dead_channel_recovery_min_minutes'],
+  'monitor_setting.dead_channel_recovery_max_minutes':
+    defaults['monitor_setting.dead_channel_recovery_max_minutes'],
+  'monitor_setting.dead_channel_recovery_max_per_tick':
+    defaults['monitor_setting.dead_channel_recovery_max_per_tick'],
 })
 
 const normalizeFormValues = (
@@ -218,6 +183,12 @@ const normalizeFormValues = (
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
+  'monitor_setting.dead_channel_recovery_min_minutes':
+    values.monitor_setting.dead_channel_recovery_min_minutes,
+  'monitor_setting.dead_channel_recovery_max_minutes':
+    values.monitor_setting.dead_channel_recovery_max_minutes,
+  'monitor_setting.dead_channel_recovery_max_per_tick':
+    values.monitor_setting.dead_channel_recovery_max_per_tick,
 })
 
 export function RoutingReliabilitySection({
@@ -364,7 +335,9 @@ export function RoutingReliabilitySection({
                     <SettingsSwitchContent>
                       <FormLabel>{t('Scheduled channel tests')}</FormLabel>
                       <FormDescription>
-                        {t('Automatically probe all channels in the background')}
+                        {t(
+                          'Automatically probe all channels in the background'
+                        )}
                       </FormDescription>
                     </SettingsSwitchContent>
                     <FormControl>
@@ -457,7 +430,9 @@ export function RoutingReliabilitySection({
                     <SettingsSwitchContent>
                       <FormLabel>{t('Re-enable on success')}</FormLabel>
                       <FormDescription>
-                        {t('Bring channels back online after successful checks')}
+                        {t(
+                          'Bring channels back online after successful checks'
+                        )}
                       </FormDescription>
                     </SettingsSwitchContent>
                     <FormControl>
@@ -469,6 +444,85 @@ export function RoutingReliabilitySection({
                   </SettingsSwitchItem>
                 )}
               />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.dead_channel_recovery_min_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Post-mortem recovery minimum (minutes)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Earliest randomized delay before retrying an auto-disabled channel without per-channel monitoring.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.dead_channel_recovery_max_minutes'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Post-mortem recovery maximum (minutes)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Latest randomized delay before retrying an auto-disabled channel without per-channel monitoring.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='monitor_setting.dead_channel_recovery_max_per_tick'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Maximum recovery probes per minute')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={50}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Maximum post-mortem recovery probes started by each one-minute worker tick.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
           </div>
 
@@ -476,9 +530,7 @@ export function RoutingReliabilitySection({
 
           <div className='flex min-w-0 flex-col gap-4'>
             <div className='flex flex-col gap-1'>
-              <h4 className='text-sm font-medium'>
-                {t('Auto-disable rules')}
-              </h4>
+              <h4 className='text-sm font-medium'>{t('Auto-disable rules')}</h4>
             </div>
             <div className='grid min-w-0 gap-6 lg:grid-cols-2'>
               <FormField

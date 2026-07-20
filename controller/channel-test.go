@@ -972,98 +972,14 @@ func testAccountPoolChannelMonitorSchedulability(channel *model.Channel, now int
 	return result, true
 }
 
-
-// Post-mortem recovery for auto-disabled channels that did NOT enable per-channel
-// monitor. After death we wait a randomized interval, then probe once to try
-// auto-enable. This is intentionally sparse and random so many dead channels do
-// not stampede the upstream at the same minute.
-const (
-	defaultDeadChannelRecoveryMinMinutes = 15
-	defaultDeadChannelRecoveryMaxMinutes = 120
-	defaultDeadChannelRecoveryMaxPerTick = 5
-)
-
-func channelStatusTime(channel *model.Channel) int64 {
-	if channel == nil {
-		return 0
-	}
-	info := channel.GetOtherInfo()
-	raw, ok := info["status_time"]
-	if !ok || raw == nil {
-		return 0
-	}
-	switch v := raw.(type) {
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case float64:
-		return int64(v)
-	case float32:
-		return int64(v)
-	case json.Number:
-		i, _ := v.Int64()
-		return i
-	default:
-		s := strings.TrimSpace(fmt.Sprint(v))
-		if s == "" {
-			return 0
-		}
-		i, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			return 0
-		}
-		return i
-	}
-}
-
-// deadChannelRecoveryDelaySeconds returns a deterministic-but-scattered delay for
-// a given channel so restarts do not reshuffle every dead channel into the same
-// minute. The delay sits in [min,max] minutes and is derived from channel id +
-// status_time.
-func deadChannelRecoveryDelaySeconds(channel *model.Channel) int64 {
-	minSec := int64(defaultDeadChannelRecoveryMinMinutes * 60)
-	maxSec := int64(defaultDeadChannelRecoveryMaxMinutes * 60)
-	if maxSec < minSec {
-		maxSec = minSec
-	}
-	span := maxSec - minSec
-	if span <= 0 {
-		return minSec
-	}
-	statusTime := channelStatusTime(channel)
-	seed := uint64(channel.Id)*2654435761 ^ uint64(statusTime)*1597334677
-	seed ^= seed << 13
-	seed ^= seed >> 7
-	seed ^= seed << 17
-	return minSec + int64(seed%uint64(span+1))
-}
-
-func channelDeadRecoveryNextCheckAt(channel *model.Channel) int64 {
-	statusTime := channelStatusTime(channel)
-	return statusTime + deadChannelRecoveryDelaySeconds(channel)
-}
-
-func filterDueDeadChannelRecoveryCandidates(channels []*model.Channel, now int64, maxPerTick int) []*model.Channel {
-	if maxPerTick <= 0 {
-		maxPerTick = defaultDeadChannelRecoveryMaxPerTick
-	}
+func filterDueDeadChannelRecoveryCandidates(channels []*model.Channel, now int64, recoverySettings operation_setting.DeadChannelRecoverySettings) []*model.Channel {
+	recoverySettings = operation_setting.NormalizeDeadChannelRecoverySettings(recoverySettings)
 	due := make([]*model.Channel, 0)
 	for _, channel := range channels {
-		if channel == nil {
+		if !model.IsDeadChannelRecoveryEligible(channel) {
 			continue
 		}
-		// Only auto-disabled ("dead") channels. Manual disable stays untouched.
-		if channel.Status != common.ChannelStatusAutoDisabled {
-			continue
-		}
-		// Skip channels that already have explicit monitor enabled — they already
-		// have their own recovery path via the regular monitor batch.
-		settings := model.NormalizeChannelMonitorSettings(model.GetChannelMonitorSettingsReadOnly(channel))
-		if settings.ChannelMonitorEnabled {
-			continue
-		}
-		nextAt := channelDeadRecoveryNextCheckAt(channel)
+		nextAt := model.DeadChannelRecoveryNextCheckAt(channel, recoverySettings)
 		if now < nextAt {
 			continue
 		}
@@ -1074,8 +990,8 @@ func filterDueDeadChannelRecoveryCandidates(channels []*model.Channel, now int64
 	}
 	// Randomize order each tick so no fixed channel always goes first.
 	rand.Shuffle(len(due), func(i, j int) { due[i], due[j] = due[j], due[i] })
-	if len(due) > maxPerTick {
-		due = due[:maxPerTick]
+	if len(due) > recoverySettings.MaxPerTick {
+		due = due[:recoverySettings.MaxPerTick]
 	}
 	return due
 }
@@ -1087,7 +1003,8 @@ func runDueDeadChannelRecoveryBatch(testUserID int) {
 		return
 	}
 	now := common.GetTimestamp()
-	candidates := filterDueDeadChannelRecoveryCandidates(channels, now, defaultDeadChannelRecoveryMaxPerTick)
+	recoverySettings := operation_setting.GetDeadChannelRecoverySettings()
+	candidates := filterDueDeadChannelRecoveryCandidates(channels, now, recoverySettings)
 	if len(candidates) == 0 {
 		return
 	}

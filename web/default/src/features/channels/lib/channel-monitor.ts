@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { Channel, ChannelMonitorRecord } from '../types'
+import type {
+  Channel,
+  ChannelMonitorInfo,
+  ChannelMonitorRecord,
+} from '../types'
 
 export type MonitorVisualStatus = ChannelMonitorRecord['status'] | 'empty'
 
@@ -46,6 +50,34 @@ export function monitorStatusText(
   if (status === 'failed') return t('Failed')
   if (status === 'error') return t('Error')
   return t('No data')
+}
+
+export function monitorRefreshText(
+  info: ChannelMonitorInfo | undefined,
+  t: (key: string, options?: { value?: number | string }) => string,
+  formatTime: (timestamp: number) => string
+) {
+  if (info?.dead_recovery_eligible) {
+    const nextCheckAt = info.dead_recovery_next_check_at
+    const secondsUntilNextCheck =
+      info.dead_recovery_seconds_until_next_check ?? 0
+    const value =
+      nextCheckAt && secondsUntilNextCheck > 0
+        ? formatTime(nextCheckAt)
+        : t('Due now')
+    return t('Next post-mortem recovery: {{value}}', { value })
+  }
+  if (!info?.enabled) return t('Disabled')
+  if (!info.latest_checked_at) return t('No data')
+  if (info.seconds_until_next_check && info.seconds_until_next_check > 0) {
+    const seconds = info.seconds_until_next_check
+    const value =
+      seconds >= 60
+        ? `${Math.ceil(seconds / 60)} ${t('minutes')}`
+        : `${seconds} ${t('seconds')}`
+    return t('Refresh in {{value}}', { value })
+  }
+  return t('Due now')
 }
 
 export function monitorHistoryTone(
