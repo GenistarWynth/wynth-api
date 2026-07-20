@@ -10,6 +10,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - Client identity simulation for Codex CLI now emits a full interactive Codex fingerprint: `codex_cli_rs` originator/UA pairing plus session/thread correlation headers and the `x-codex-*` metadata family captured from real Codex outbound requests, not only the minimal UA/originator pair.
 - Client identity simulation for Claude Code now emits the full official Claude Code fingerprint (`claude-cli` UA, Stainless headers, `X-App`, `anthropic-version`, Claude Code beta flags) and forces channel Test/Monitor onto Anthropic Messages (`/v1/messages`) with stream enabled.
 
+### Added
+- Auto-disabled channels that do **not** enable per-channel monitor now receive sparse randomized post-mortem recovery probes (15–120 minutes after death/last failed recovery, up to 5 per minute tick) so they can auto-recover without a fixed stampede schedule. Manually disabled channels and monitor-enabled channels are left to their existing paths.
+
 ## [v1.0.0-rc.40] - 2026-07-20
 
 ### Fixed
