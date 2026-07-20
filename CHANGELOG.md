@@ -6,6 +6,8 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.45] - 2026-07-20
+
 ### Fixed
 - Channel affinity no longer overrides higher-priority channels; stickiness now applies only within the current highest priority tier.
 
