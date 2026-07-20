@@ -59,6 +59,13 @@ func defaultChannelTestOptions() channelTestOptions {
 	}
 }
 
+func channelUsesCodexCLIIdentity(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return dto.NormalizeClientIdentityPreset(channel.GetOtherSettings().ClientIdentityPreset) == dto.ClientIdentityPresetCodexCLI
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -67,7 +74,13 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
+	// Native Codex channel type, and any channel simulating Codex CLI identity,
+	// must probe the OpenAI Responses protocol. Upstream policy for codex_cli
+	// fingerprints rejects /v1/chat/completions with codex_requires_responses_protocol.
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
+		return string(constant.EndpointTypeOpenAIResponse)
+	}
+	if channelUsesCodexCLIIdentity(channel) {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
 	return normalized
@@ -843,11 +856,33 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	if channel == nil {
 		return false
 	}
+	// Channels that simulate Codex CLI identity must stream-probe. Strict
+	// codex-only upstreams reject non-stream chat/completions probes and often
+	// expect streaming Responses traffic from real Codex clients.
+	if channelUsesCodexCLIIdentity(channel) {
+		return true
+	}
 	// Generated upstream-source channels also stream-probe (when their type
 	// supports stream options) so first-token latency gets recorded like any
 	// other channel. Upstreams that ignore stream=true and return a plain JSON
 	// body are still treated as healthy — see validateStreamTestResponseBody.
 	return relaycommon.SupportsStreamOptions(channel.Type)
+}
+
+// resolveChannelTestStream decides whether a manual channel test should stream.
+// Explicit ?stream= query wins; otherwise codex_cli identity channels default to
+// stream=true so the admin "Test" button matches monitor/automatic probes.
+func resolveChannelTestStream(c *gin.Context, channel *model.Channel) bool {
+	if c != nil {
+		if raw, ok := c.GetQuery("stream"); ok {
+			isStream, _ := strconv.ParseBool(raw)
+			return isStream
+		}
+	}
+	if channelUsesCodexCLIIdentity(channel) {
+		return true
+	}
+	return false
 }
 
 func resolveChannelMonitorUpstreamModel(channel *model.Channel, testModel string) (string, error) {
@@ -1288,7 +1323,7 @@ func TestChannel(c *gin.Context) {
 	//}()
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
-	isStream, _ := strconv.ParseBool(c.Query("stream"))
+	isStream := resolveChannelTestStream(c, channel)
 	testUserID, err := resolveChannelTestUserID(c)
 	if err != nil {
 		common.ApiError(c, err)

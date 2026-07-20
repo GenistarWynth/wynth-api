@@ -34,6 +34,9 @@ func Apply(header http.Header, preset string) {
 	case dto.ClientIdentityPresetCodexCLI:
 		header.Set("originator", codexidentity.CodexCLIOriginator)
 		header.Set("User-Agent", codexidentity.CodexCLIUserAgent)
+		if header.Get("OpenAI-Beta") == "" {
+			header.Set("OpenAI-Beta", "responses=experimental")
+		}
 		codexidentity.NormalizeIdentityHeaders(header)
 	case dto.ClientIdentityPresetClaudeCode:
 		for name, value := range ClaudeCodeMimicryHeaders() {

@@ -38,8 +38,9 @@ func TestApplyClientIdentityPresetExactHeaders(t *testing.T) {
 			name:   "codex cli",
 			preset: dto.ClientIdentityPresetCodexCLI,
 			want: http.Header{
-				"Originator": {codexidentity.CodexCLIOriginator},
-				"User-Agent": {codexidentity.CodexCLIUserAgent},
+				"Openai-Beta": {"responses=experimental"},
+				"Originator":  {codexidentity.CodexCLIOriginator},
+				"User-Agent":  {codexidentity.CodexCLIUserAgent},
 			},
 		},
 		{

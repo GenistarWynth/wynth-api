@@ -6,8 +6,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
-### Notes
-- No additional unreleased changes after v1.0.0-rc.39.
+### Fixed
+- Channel Test and Channel Monitor force OpenAI Responses + stream for channels with Client identity simulation = Codex CLI, matching strict codex-only upstream policy (`codex_requires_responses_protocol`).
+- Codex CLI identity preset now also sets the built-in `OpenAI-Beta: responses=experimental` default when empty, matching the native Codex channel adaptor.
 
 ## [v1.0.0-rc.39] - 2026-07-20
 
