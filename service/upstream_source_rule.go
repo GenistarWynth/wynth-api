@@ -102,10 +102,11 @@ func parseUpstreamSourceSyncConfig(raw string) (upstreamSourceSyncConfig, error)
 // per-group rules for blobs written before the fold-down (version 0),
 // including a wholly empty/never-configured blob. Each existing rule
 // inherits the source-level channel_type/priority/weight and any unset
-// monitor/auto-sync/auto-priority/model settings; a source with no rules
-// gets a single catch-all rule (empty matchers = match all), preserving the
-// legacy "no rules = sync everything with these defaults" behavior. Version
-// is bumped to 1 so the migration runs at most once per stored blob.
+// monitor/auto-sync/auto-priority/model settings, except for the availability
+// window, which remains owned by the channel group. A source with no rules gets
+// a single catch-all rule (empty matchers = match all), preserving the legacy
+// "no rules = sync everything with these defaults" behavior. Version is bumped
+// to 1 so the migration runs at most once per stored blob.
 func migrateLegacyUpstreamSourceConfig(config upstreamSourceSyncConfig) upstreamSourceSyncConfig {
 	if config.SyncConfigVersion >= 1 {
 		return config
@@ -122,8 +123,9 @@ func migrateLegacyUpstreamSourceConfig(config upstreamSourceSyncConfig) upstream
 	return config
 }
 
-// legacySourceRuleFromConfig builds a match-all rule carrying every source-level
-// default so pre-fold behavior is preserved exactly.
+// legacySourceRuleFromConfig builds a match-all rule carrying the source-level
+// defaults that still belong to rules. Availability window is intentionally
+// excluded because it is channel/group-owned.
 func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSourceLocalGroupRule {
 	priority := config.DefaultPriority
 	weight := config.DefaultWeight
@@ -131,7 +133,6 @@ func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSou
 	autoSyncEnabled := config.AutoSyncEnabled
 	autoPriorityEnabled := config.AutoPriorityEnabled
 	autoPriorityWindow := config.AutoPriorityWindowHours
-	autoPriorityAvailabilityWindow := config.AutoPriorityAvailabilityWindowHours
 	localGroup := strings.TrimSpace(config.DefaultLocalGroup)
 	if localGroup == "" {
 		localGroup = strings.TrimSpace(config.LocalGroup)
@@ -145,7 +146,7 @@ func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSou
 		Weight:                           &weight,
 		Monitor:                          &dto.UpstreamSourceRuleMonitor{Enabled: &monitorEnabled, IntervalMinutes: config.MonitorIntervalMinutes},
 		AutoSync:                         &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: config.AutoSyncIntervalMinutes},
-		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, WindowHours: &autoPriorityWindow, AvailabilityWindowHours: &autoPriorityAvailabilityWindow},
+		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, WindowHours: &autoPriorityWindow},
 		CodexImageGenerationBridgePolicy: config.CodexImageGenerationBridgePolicy,
 		ModelStrategy:                    modelStrategy,
 		FixedModels:                      config.FixedModels,
@@ -354,10 +355,6 @@ func normalizeUpstreamSourceRuleAutoPriority(autoPriority *dto.UpstreamSourceRul
 	if autoPriority.WindowHours != nil {
 		value := normalizeUpstreamSourceAutoPriorityWindow(*autoPriority.WindowHours)
 		normalized.WindowHours = &value
-	}
-	if autoPriority.AvailabilityWindowHours != nil {
-		value := normalizeUpstreamSourceAutoPriorityWindow(*autoPriority.AvailabilityWindowHours)
-		normalized.AvailabilityWindowHours = &value
 	}
 	return normalized
 }
@@ -575,9 +572,6 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		}
 		if rule.AutoPriority.WindowHours != nil {
 			resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.WindowHours)
-		}
-		if rule.AutoPriority.AvailabilityWindowHours != nil {
-			resolution.AutoPriorityAvailabilityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.AvailabilityWindowHours)
 		}
 	}
 	if strings.TrimSpace(rule.CodexImageGenerationBridgePolicy) != "" {

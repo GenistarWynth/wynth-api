@@ -66,6 +66,7 @@ export type UpstreamSourceRuleAutoSync = {
 export type UpstreamSourceRuleAutoPriority = {
   enabled?: boolean
   window_hours?: number
+  /** Legacy input only; rule normalization deliberately omits this field. */
   availability_window_hours?: number
 }
 

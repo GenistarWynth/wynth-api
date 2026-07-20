@@ -191,7 +191,6 @@ import {
 } from './types'
 
 const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
-const DEFAULT_AUTO_PRIORITY_AVAILABILITY_WINDOW_HOURS = 24
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
 const UPSTREAM_SOURCE_PLATFORM_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
@@ -278,9 +277,6 @@ function autoPriorityFormValue(
   return {
     enabled: rule.auto_priority?.enabled ?? defaults.enabled,
     window_hours: rule.auto_priority?.window_hours ?? defaults.window_hours,
-    availability_window_hours:
-      rule.auto_priority?.availability_window_hours ??
-      defaults.availability_window_hours,
   }
 }
 
@@ -319,6 +315,16 @@ function normalizeRuleForForm(
       ...rule.monitor,
       model: rule.monitor?.model ?? '',
     },
+    auto_priority: rule.auto_priority
+      ? {
+          ...(typeof rule.auto_priority.enabled === 'boolean'
+            ? { enabled: rule.auto_priority.enabled }
+            : {}),
+          ...(typeof rule.auto_priority.window_hours === 'number'
+            ? { window_hours: rule.auto_priority.window_hours }
+            : {}),
+        }
+      : undefined,
     codex_image_generation_bridge_policy:
       rule.codex_image_generation_bridge_policy
         ? normalizeCodexImageGenerationBridgePolicy(
@@ -984,7 +990,7 @@ function CheckboxList(props: {
   const toggle = (value: string, checked: boolean) => {
     props.onChange(
       checked
-        ? Array.from(new Set([...props.values, value]))
+        ? [...new Set([...props.values, value])]
         : props.values.filter((item) => item !== value)
     )
   }
@@ -1633,6 +1639,8 @@ function SourceFormSheet(props: {
             <div className='space-y-3'>
               {form.local_group_rules.map((rule, index) => (
                 <div
+                  // Rules are ordered drafts without stable IDs and mutations address them by index.
+                  // eslint-disable-next-line react/no-array-index-key
                   key={index}
                   className='border-border grid gap-3 rounded-lg border p-3'
                 >
@@ -2037,7 +2045,7 @@ function SourceFormSheet(props: {
                               })
                             }
                           />
-                          <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-1'>
+                          <div className='grid gap-3'>
                             <FieldBlock
                               label={t('Metrics Window Hours')}
                               htmlFor={`source-rule-auto-priority-window-${index}`}
@@ -2064,40 +2072,6 @@ function SourceFormSheet(props: {
                                         ruleStrategyDefaults.autoPriority
                                           .window_hours
                                       ),
-                                    },
-                                  })
-                                }
-                              />
-                            </FieldBlock>
-                            <FieldBlock
-                              label={t('Availability Window Hours')}
-                              htmlFor={`source-rule-auto-priority-availability-window-${index}`}
-                            >
-                              <Input
-                                id={`source-rule-auto-priority-availability-window-${index}`}
-                                type='number'
-                                min={1}
-                                max={168}
-                                value={
-                                  rule.auto_priority
-                                    ?.availability_window_hours ??
-                                  ruleStrategyDefaults.autoPriority
-                                    .availability_window_hours
-                                }
-                                onChange={(event) =>
-                                  setLocalGroupRule(index, {
-                                    ...rule,
-                                    auto_priority: {
-                                      ...autoPriorityFormValue(
-                                        rule,
-                                        ruleStrategyDefaults.autoPriority
-                                      ),
-                                      availability_window_hours:
-                                        parseIntegerInput(
-                                          event.target.value,
-                                          ruleStrategyDefaults.autoPriority
-                                            .availability_window_hours
-                                        ),
                                     },
                                   })
                                 }
@@ -2696,9 +2670,7 @@ function MappingRow(props: {
       ? t('Fixed models')
       : t('All upstream models')
   const autoPriorityLabel = mapping.resolved_auto_priority_enabled
-    ? `${t('Auto priority')}: ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h / ${t(
-        'Availability'
-      )} ${mapping.resolved_auto_priority_availability_window_hours || DEFAULT_AUTO_PRIORITY_AVAILABILITY_WINDOW_HOURS}h`
+    ? `${t('Auto priority')}: ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h`
     : `${t('Auto priority')}: ${t('Disabled')}`
   const codexImageBridgePolicy = normalizeCodexImageGenerationBridgePolicy(
     mapping.resolved_codex_image_generation_bridge_policy
@@ -3124,13 +3096,12 @@ export function UpstreamSources() {
                 },
               ],
             }}
-            getRowClassName={(row, { isMobile }) =>
-              row.original.status === 'disabled'
-                ? isMobile
-                  ? DISABLED_ROW_MOBILE
-                  : DISABLED_ROW_DESKTOP
-                : undefined
-            }
+            getRowClassName={(row, { isMobile }) => {
+              if (row.original.status !== 'disabled') {
+                return undefined
+              }
+              return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
+            }}
           />
         </SectionPageLayout.Content>
       </SectionPageLayout>

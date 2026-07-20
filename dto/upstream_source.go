@@ -96,9 +96,11 @@ type UpstreamSourceRuleAutoSync struct {
 }
 
 type UpstreamSourceRuleAutoPriority struct {
-	Enabled                 *bool `json:"enabled,omitempty"`
-	WindowHours             *int  `json:"window_hours,omitempty"`
-	AvailabilityWindowHours *int  `json:"availability_window_hours,omitempty"`
+	Enabled     *bool `json:"enabled,omitempty"`
+	WindowHours *int  `json:"window_hours,omitempty"`
+	// AvailabilityWindowHours remains decode-compatible for legacy rule JSON.
+	// Rule normalization intentionally drops it before storage or resolution.
+	AvailabilityWindowHours *int `json:"availability_window_hours,omitempty"`
 }
 
 type UpstreamSourceMappingResponse struct {

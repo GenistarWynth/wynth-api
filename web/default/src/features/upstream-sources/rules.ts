@@ -48,7 +48,6 @@ export type LocalGroupRuleStrategyDefaults = {
   autoPriority: {
     enabled: boolean
     window_hours: number
-    availability_window_hours: number
   }
   codexImageGenerationBridgePolicy: CodexImageGenerationBridgePolicy
   modelStrategy: UpstreamSourceModelStrategy
@@ -71,7 +70,6 @@ export const DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS: LocalGroupRuleStrategyD
     autoPriority: {
       enabled: false,
       window_hours: 24,
-      availability_window_hours: 24,
     },
     codexImageGenerationBridgePolicy: 'follow',
     modelStrategy: UPSTREAM_SOURCE_MODEL_STRATEGY_ALL,
@@ -94,7 +92,6 @@ type ResolvedAutoPriorityStrategy = {
   origin: LocalGroupRuleStrategyOrigin
   enabled: boolean
   window_hours: number
-  availability_window_hours: number
 }
 
 type ResolvedCodexImageGenerationBridgeStrategy = {
@@ -171,19 +168,18 @@ export function hasLocalGroupRuleMatcher(
 }
 
 function toStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.map((item) => String(item))
-    : typeof value === 'string'
-      ? [value]
-      : []
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item))
+  }
+  return typeof value === 'string' ? [value] : []
 }
 
 function normalizeTemplateID(value: string, createdAt: number) {
   const normalized = value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replaceAll(/[^a-z0-9]+/g, '-')
+    .replaceAll(/^-+|-+$/g, '')
   return normalized || `template-${createdAt}`
 }
 
@@ -265,10 +261,6 @@ export function resolveLocalGroupRuleStrategy(
     typeof rule.auto_priority?.window_hours === 'number'
       ? rule.auto_priority.window_hours
       : defaults.autoPriority.window_hours
-  const autoPriorityAvailabilityWindow =
-    typeof rule.auto_priority?.availability_window_hours === 'number'
-      ? rule.auto_priority.availability_window_hours
-      : defaults.autoPriority.availability_window_hours
   const defaultBridgePolicy = normalizeCodexImageGenerationBridgePolicy(
     defaults.codexImageGenerationBridgePolicy
   )
@@ -298,9 +290,7 @@ export function resolveLocalGroupRuleStrategy(
     autoSyncInterval !== defaults.autoSync.interval_minutes
   const autoPriorityOverride =
     autoPriorityEnabled !== defaults.autoPriority.enabled ||
-    autoPriorityWindow !== defaults.autoPriority.window_hours ||
-    autoPriorityAvailabilityWindow !==
-      defaults.autoPriority.availability_window_hours
+    autoPriorityWindow !== defaults.autoPriority.window_hours
   const bridgeOverride = hasBridgePolicy && bridgePolicy !== defaultBridgePolicy
   const modelOverride =
     modelStrategy !== defaultModelStrategy ||
@@ -340,7 +330,6 @@ export function resolveLocalGroupRuleStrategy(
       origin: strategyOrigin(autoPriorityOverride),
       enabled: autoPriorityEnabled,
       window_hours: autoPriorityWindow,
-      availability_window_hours: autoPriorityAvailabilityWindow,
     },
     codex_image_generation_bridge_policy: {
       origin: strategyOrigin(bridgeOverride),
@@ -359,6 +348,7 @@ export function buildLocalGroupRuleTemplate(
   defaults: LocalGroupRuleTemplateDefaults
 ): UpstreamSourceLocalGroupRule {
   const modelStrategy = normalizeModelStrategy(defaults.modelStrategy)
+  const autoPriority = normalizeRuleAutoPriority(defaults.autoPriority)
   const channelType = normalizeRuleChannelType(defaults.channelType)
   const priority = normalizeRulePriority(defaults.priority)
   const weight = normalizeRuleWeight(defaults.weight)
@@ -377,7 +367,7 @@ export function buildLocalGroupRuleTemplate(
     ...(weight !== undefined ? { weight } : {}),
     ...(defaults.monitor ? { monitor: defaults.monitor } : {}),
     ...(defaults.autoSync ? { auto_sync: defaults.autoSync } : {}),
-    ...(defaults.autoPriority ? { auto_priority: defaults.autoPriority } : {}),
+    ...(autoPriority ? { auto_priority: autoPriority } : {}),
     ...(defaults.codexImageGenerationBridgePolicy &&
     normalizeCodexImageGenerationBridgePolicy(
       defaults.codexImageGenerationBridgePolicy
@@ -488,15 +478,6 @@ function normalizeRuleAutoPriority(
     Number.isFinite(value.window_hours)
   ) {
     normalized.window_hours = Math.max(1, Math.trunc(value.window_hours))
-  }
-  if (
-    typeof value.availability_window_hours === 'number' &&
-    Number.isFinite(value.availability_window_hours)
-  ) {
-    normalized.availability_window_hours = Math.max(
-      1,
-      Math.trunc(value.availability_window_hours)
-    )
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }

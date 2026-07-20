@@ -110,12 +110,11 @@ func TestParseUpstreamSourceSyncConfigSupportsAutoPriority(t *testing.T) {
 	require.NotNil(t, rule.AutoPriority.Enabled)
 	assert.False(t, *rule.AutoPriority.Enabled)
 	require.NotNil(t, rule.AutoPriority.WindowHours)
-	require.NotNil(t, rule.AutoPriority.AvailabilityWindowHours)
 	assert.Equal(t, 48, *rule.AutoPriority.WindowHours)
-	assert.Equal(t, 1, *rule.AutoPriority.AvailabilityWindowHours)
+	assert.Nil(t, rule.AutoPriority.AvailabilityWindowHours)
 }
 
-func TestMigrateAndNormalizeUpstreamSourceSyncConfigDropsRuleAutoPriorityInterval(t *testing.T) {
+func TestMigrateAndNormalizeUpstreamSourceSyncConfigDropsRuleAutoPriorityIntervalAndAvailability(t *testing.T) {
 	raw, err := common.Marshal(map[string]any{
 		"sync_config_version": 1,
 		"local_group_rules": []map[string]any{
@@ -123,9 +122,10 @@ func TestMigrateAndNormalizeUpstreamSourceSyncConfigDropsRuleAutoPriorityInterva
 				"name":        "OpenAI",
 				"local_group": "default",
 				"auto_priority": map[string]any{
-					"enabled":          true,
-					"interval_minutes": 5,
-					"window_hours":     48,
+					"enabled":                   true,
+					"interval_minutes":          5,
+					"window_hours":              48,
+					"availability_window_hours": 1,
 				},
 			},
 		},
@@ -146,6 +146,8 @@ func TestMigrateAndNormalizeUpstreamSourceSyncConfigDropsRuleAutoPriorityInterva
 	require.True(t, ok)
 	_, intervalExists := autoPriority["interval_minutes"]
 	assert.False(t, intervalExists)
+	_, availabilityWindowExists := autoPriority["availability_window_hours"]
+	assert.False(t, availabilityWindowExists)
 	assert.Equal(t, float64(48), autoPriority["window_hours"])
 }
 
@@ -217,7 +219,7 @@ func TestResolveUpstreamSourceRuleAutoPriorityIgnoresLegacyIntervalOverride(t *t
 	assert.Equal(t, 48, resolution.AutoPriorityWindowHours)
 }
 
-func TestResolveUpstreamSourceRuleAutoPrioritySupportsAvailabilityWindowOverride(t *testing.T) {
+func TestResolveUpstreamSourceRuleAutoPriorityIgnoresLegacyAvailabilityWindowOverride(t *testing.T) {
 	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
 		"sync_config_version": 1,
 		"local_group_rules": []map[string]any{
@@ -247,7 +249,7 @@ func TestResolveUpstreamSourceRuleAutoPrioritySupportsAvailabilityWindowOverride
 	assert.True(t, resolution.AutoPriorityEnabled)
 	assert.Equal(t, upstreamSourceAutoPriorityDefaultIntervalMinutes, resolution.AutoPriorityIntervalMinutes)
 	assert.Equal(t, 24, resolution.AutoPriorityWindowHours)
-	assert.Equal(t, 1, resolution.AutoPriorityAvailabilityWindowHours)
+	assert.Equal(t, upstreamSourceAutoPriorityDefaultWindowHours, resolution.AutoPriorityAvailabilityWindowHours)
 }
 
 func TestResolveUpstreamSourceRuleImageBridgePolicyOverridesFallback(t *testing.T) {

@@ -6,6 +6,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+### Changed
+- Upstream-source rule auto-priority overrides no longer expose or apply availability window hours; availability remains a channel/group-level setting, while metrics window hours remain configurable per rule.
+
 ## [v1.0.0-rc.45] - 2026-07-20
 
 ### Fixed

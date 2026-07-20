@@ -16,11 +16,12 @@ import {
 } from './rules'
 
 describe('upstream source rule normalization', () => {
-  test('drops legacy per-rule auto-priority interval overrides', () => {
+  test('drops legacy per-rule auto-priority interval and availability overrides', () => {
     const legacyAutoPriority = {
       enabled: true,
       interval_minutes: 5,
       window_hours: 48,
+      availability_window_hours: 1,
     }
     const rules = normalizeSyncRules([
       {
@@ -38,6 +39,10 @@ describe('upstream source rule normalization', () => {
 
     assert.equal(
       Object.hasOwn(rules[0].auto_priority ?? {}, 'interval_minutes'),
+      false
+    )
+    assert.equal(
+      Object.hasOwn(rules[0].auto_priority ?? {}, 'availability_window_hours'),
       false
     )
     assert.equal(rules[0].auto_priority?.window_hours, 48)
@@ -236,7 +241,6 @@ describe('upstream source rule normalization', () => {
         auto_priority: {
           enabled: true,
           window_hours: 48,
-          availability_window_hours: 1,
         },
         codex_image_generation_bridge_policy: 'disabled',
         model_strategy: 'fixed',
@@ -285,7 +289,6 @@ describe('upstream source rule normalization', () => {
         auto_priority: {
           enabled: false,
           window_hours: 24,
-          availability_window_hours: 1,
         },
         codex_image_generation_bridge_policy: 'enabled',
         model_strategy: 'fixed',
@@ -402,11 +405,28 @@ describe('upstream source rule normalization', () => {
     assert.equal(customized.auto_sync.origin, 'override')
     assert.equal(customized.auto_sync.enabled, false)
     assert.equal(customized.auto_priority.window_hours, 48)
-    assert.equal(customized.auto_priority.availability_window_hours, 1)
     assert.equal(
       customized.codex_image_generation_bridge_policy.value,
       'disabled'
     )
     assert.deepEqual(customized.model.fixed_models, ['gpt-5', 'gpt-4o'])
+
+    const legacyAvailabilityOnly = resolveLocalGroupRuleStrategy(
+      {
+        name: 'Legacy availability',
+        local_group: 'default',
+        platforms: ['openai'],
+        name_contains: [],
+        description_contains: [],
+        exclude_keywords: [],
+        auto_priority: { availability_window_hours: 1 },
+        model_strategy: 'all_upstream',
+        fixed_models: [],
+      },
+      DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS
+    )
+
+    assert.equal(legacyAvailabilityOnly.auto_priority.origin, 'inherit')
+    assert.deepEqual(legacyAvailabilityOnly.override_keys, [])
   })
 })

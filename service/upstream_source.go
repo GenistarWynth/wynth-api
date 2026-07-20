@@ -942,7 +942,7 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 		ChannelAutoPriorityEnabled:                 resolution.AutoPriorityEnabled,
 		ChannelAutoPriorityIntervalMinutes:         resolution.AutoPriorityIntervalMinutes,
 		ChannelAutoPriorityWindowHours:             resolution.AutoPriorityWindowHours,
-		ChannelAutoPriorityAvailabilityWindowHours: resolution.AutoPriorityAvailabilityWindowHours,
+		ChannelAutoPriorityAvailabilityWindowHours: dto.ChannelAutoPriorityDefaultWindowHours,
 		CodexImageGenerationBridgePolicy:           upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution),
 		GeneratedByUpstreamSourceID:                source.Id,
 		GeneratedByUpstreamMappingID:               mapping.Id,
@@ -976,8 +976,8 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 	if localGroupChanged {
 		settings.ChannelAutoPriorityIntervalMinutes = resolution.AutoPriorityIntervalMinutes
 	}
-	if localGroupChanged || settings.ChannelAutoPriorityAvailabilityWindowHours == 0 {
-		settings.ChannelAutoPriorityAvailabilityWindowHours = resolution.AutoPriorityAvailabilityWindowHours
+	if settings.ChannelAutoPriorityAvailabilityWindowHours == 0 {
+		settings.ChannelAutoPriorityAvailabilityWindowHours = dto.ChannelAutoPriorityDefaultWindowHours
 	}
 	settings.CodexImageGenerationBridgePolicy = upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution)
 	if source != nil {
