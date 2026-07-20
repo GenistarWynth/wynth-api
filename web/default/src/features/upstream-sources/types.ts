@@ -65,7 +65,6 @@ export type UpstreamSourceRuleAutoSync = {
 
 export type UpstreamSourceRuleAutoPriority = {
   enabled?: boolean
-  interval_minutes?: number
   window_hours?: number
   availability_window_hours?: number
 }
@@ -142,7 +141,6 @@ export type UpstreamSourceMapping = {
   resolved_auto_sync_enabled: boolean
   resolved_auto_sync_interval_minutes: number
   resolved_auto_priority_enabled: boolean
-  resolved_auto_priority_interval_minutes: number
   resolved_auto_priority_window_hours: number
   resolved_auto_priority_availability_window_hours: number
   resolved_codex_image_generation_bridge_policy: CodexImageGenerationBridgePolicy

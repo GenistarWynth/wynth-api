@@ -47,7 +47,6 @@ export type LocalGroupRuleStrategyDefaults = {
   }
   autoPriority: {
     enabled: boolean
-    interval_minutes: number
     window_hours: number
     availability_window_hours: number
   }
@@ -71,7 +70,6 @@ export const DEFAULT_LOCAL_GROUP_RULE_STRATEGY_DEFAULTS: LocalGroupRuleStrategyD
     },
     autoPriority: {
       enabled: false,
-      interval_minutes: 30,
       window_hours: 24,
       availability_window_hours: 24,
     },
@@ -95,7 +93,6 @@ type ResolvedAutoSyncStrategy = {
 type ResolvedAutoPriorityStrategy = {
   origin: LocalGroupRuleStrategyOrigin
   enabled: boolean
-  interval_minutes: number
   window_hours: number
   availability_window_hours: number
 }
@@ -264,10 +261,6 @@ export function resolveLocalGroupRuleStrategy(
       : defaults.autoSync.interval_minutes
   const autoPriorityEnabled =
     rule.auto_priority?.enabled ?? defaults.autoPriority.enabled
-  const autoPriorityInterval =
-    typeof rule.auto_priority?.interval_minutes === 'number'
-      ? rule.auto_priority.interval_minutes
-      : defaults.autoPriority.interval_minutes
   const autoPriorityWindow =
     typeof rule.auto_priority?.window_hours === 'number'
       ? rule.auto_priority.window_hours
@@ -305,7 +298,6 @@ export function resolveLocalGroupRuleStrategy(
     autoSyncInterval !== defaults.autoSync.interval_minutes
   const autoPriorityOverride =
     autoPriorityEnabled !== defaults.autoPriority.enabled ||
-    autoPriorityInterval !== defaults.autoPriority.interval_minutes ||
     autoPriorityWindow !== defaults.autoPriority.window_hours ||
     autoPriorityAvailabilityWindow !==
       defaults.autoPriority.availability_window_hours
@@ -347,7 +339,6 @@ export function resolveLocalGroupRuleStrategy(
     auto_priority: {
       origin: strategyOrigin(autoPriorityOverride),
       enabled: autoPriorityEnabled,
-      interval_minutes: autoPriorityInterval,
       window_hours: autoPriorityWindow,
       availability_window_hours: autoPriorityAvailabilityWindow,
     },
@@ -491,15 +482,6 @@ function normalizeRuleAutoPriority(
   const normalized: UpstreamSourceLocalGroupRule['auto_priority'] = {}
   if (typeof value.enabled === 'boolean') {
     normalized.enabled = value.enabled
-  }
-  if (
-    typeof value.interval_minutes === 'number' &&
-    Number.isFinite(value.interval_minutes)
-  ) {
-    normalized.interval_minutes = Math.max(
-      0,
-      Math.trunc(value.interval_minutes)
-    )
   }
   if (
     typeof value.window_hours === 'number' &&

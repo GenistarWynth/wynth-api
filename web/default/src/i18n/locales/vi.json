@@ -5555,7 +5555,12 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Auto priority recomputed for this group": "Đã tính lại ưu tiên tự động cho nhóm này",
+    "Failed to recompute auto priority for this group": "Không thể tính lại ưu tiên tự động cho nhóm này",
+    "Recompute auto priority for this group now": "Tính lại ưu tiên tự động cho nhóm này ngay",
+    "Recomputing...": "Đang tính lại...",
+    "The interval applies to all auto-priority channels in the current group, including upstream-generated channels.": "Khoảng thời gian này áp dụng cho mọi kênh bật ưu tiên tự động trong nhóm hiện tại, kể cả kênh được tạo từ nguồn upstream."
   },
   "Batch Operations": "Thao tac hang loat",
   "Repair Channel Consistency": "Sua tinh nhat quan kenh",

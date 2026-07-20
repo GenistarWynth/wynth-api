@@ -946,9 +946,11 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 	settings.ChannelMonitorIntervalMinutes = resolution.MonitorIntervalMinutes
 	settings.ChannelMonitorModel = resolution.MonitorModel
 	settings.ChannelAutoPriorityEnabled = resolution.AutoPriorityEnabled
-	settings.ChannelAutoPriorityIntervalMinutes = resolution.AutoPriorityIntervalMinutes
 	settings.ChannelAutoPriorityWindowHours = resolution.AutoPriorityWindowHours
 	localGroupChanged := strings.TrimSpace(existingChannel.Group) != strings.TrimSpace(channel.Group)
+	if localGroupChanged {
+		settings.ChannelAutoPriorityIntervalMinutes = resolution.AutoPriorityIntervalMinutes
+	}
 	if localGroupChanged || settings.ChannelAutoPriorityAvailabilityWindowHours == 0 {
 		settings.ChannelAutoPriorityAvailabilityWindowHours = resolution.AutoPriorityAvailabilityWindowHours
 	}
@@ -1326,34 +1328,33 @@ func buildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMappi
 	eligibilityMapping.SyncEnabled = true
 	resolution := resolveUpstreamSourceRule(config, &eligibilityMapping)
 	return dto.UpstreamSourceMappingResponse{
-		Id:                                  mapping.Id,
-		SourceID:                            mapping.SourceID,
-		SyncEnabled:                         mapping.SyncEnabled,
-		UpstreamGroupID:                     mapping.UpstreamGroupID,
-		UpstreamGroupName:                   mapping.UpstreamGroupName,
-		UpstreamGroupDescription:            mapping.UpstreamGroupDescription,
-		UpstreamPlatform:                    mapping.UpstreamPlatform,
-		DiscoveryStatus:                     mapping.DiscoveryStatus,
-		UpstreamStatus:                      mapping.UpstreamStatus,
-		UpstreamRateMultiplier:              mapping.UpstreamRateMultiplier,
-		EffectiveRateMultiplier:             mapping.EffectiveRateMultiplier,
-		HasUpstreamKey:                      mapping.UpstreamKeyID != "",
-		LocalChannelID:                      mapping.LocalChannelID,
-		SyncStatus:                          mapping.SyncStatus,
-		LastError:                           sanitizeUpstreamSourceStoredError(mapping.LastError),
-		LastDiscoveredAt:                    mapping.LastDiscoveredAt,
-		LastSyncedAt:                        mapping.LastSyncedAt,
-		SyncEligible:                        resolution.SyncEligible,
-		MatchedRuleName:                     resolution.RuleName,
-		MatchReason:                         resolution.Reason,
-		ResolvedLocalGroup:                  resolution.LocalGroup,
-		ResolvedMonitorEnabled:              resolution.MonitorEnabled,
-		ResolvedMonitorIntervalMinutes:      resolution.MonitorIntervalMinutes,
-		ResolvedAutoSyncEnabled:             resolution.AutoSyncEnabled,
-		ResolvedAutoSyncIntervalMinutes:     resolution.AutoSyncIntervalMinutes,
-		ResolvedAutoPriorityEnabled:         resolution.AutoPriorityEnabled,
-		ResolvedAutoPriorityIntervalMinutes: resolution.AutoPriorityIntervalMinutes,
-		ResolvedAutoPriorityWindowHours:     resolution.AutoPriorityWindowHours,
+		Id:                              mapping.Id,
+		SourceID:                        mapping.SourceID,
+		SyncEnabled:                     mapping.SyncEnabled,
+		UpstreamGroupID:                 mapping.UpstreamGroupID,
+		UpstreamGroupName:               mapping.UpstreamGroupName,
+		UpstreamGroupDescription:        mapping.UpstreamGroupDescription,
+		UpstreamPlatform:                mapping.UpstreamPlatform,
+		DiscoveryStatus:                 mapping.DiscoveryStatus,
+		UpstreamStatus:                  mapping.UpstreamStatus,
+		UpstreamRateMultiplier:          mapping.UpstreamRateMultiplier,
+		EffectiveRateMultiplier:         mapping.EffectiveRateMultiplier,
+		HasUpstreamKey:                  mapping.UpstreamKeyID != "",
+		LocalChannelID:                  mapping.LocalChannelID,
+		SyncStatus:                      mapping.SyncStatus,
+		LastError:                       sanitizeUpstreamSourceStoredError(mapping.LastError),
+		LastDiscoveredAt:                mapping.LastDiscoveredAt,
+		LastSyncedAt:                    mapping.LastSyncedAt,
+		SyncEligible:                    resolution.SyncEligible,
+		MatchedRuleName:                 resolution.RuleName,
+		MatchReason:                     resolution.Reason,
+		ResolvedLocalGroup:              resolution.LocalGroup,
+		ResolvedMonitorEnabled:          resolution.MonitorEnabled,
+		ResolvedMonitorIntervalMinutes:  resolution.MonitorIntervalMinutes,
+		ResolvedAutoSyncEnabled:         resolution.AutoSyncEnabled,
+		ResolvedAutoSyncIntervalMinutes: resolution.AutoSyncIntervalMinutes,
+		ResolvedAutoPriorityEnabled:     resolution.AutoPriorityEnabled,
+		ResolvedAutoPriorityWindowHours: resolution.AutoPriorityWindowHours,
 		ResolvedAutoPriorityAvailabilityWindowHours: resolution.AutoPriorityAvailabilityWindowHours,
 		ResolvedCodexImageGenerationBridgePolicy:    resolution.CodexImageGenerationBridgePolicy,
 		ResolvedModelStrategy:                       resolution.ModelStrategy,

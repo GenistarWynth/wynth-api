@@ -5555,7 +5555,12 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Auto priority recomputed for this group": "このグループの自動優先度を再計算しました",
+    "Failed to recompute auto priority for this group": "このグループの自動優先度を再計算できませんでした",
+    "Recompute auto priority for this group now": "このグループの自動優先度を今すぐ再計算",
+    "Recomputing...": "再計算中...",
+    "The interval applies to all auto-priority channels in the current group, including upstream-generated channels.": "この間隔は、上流から生成されたものを含む、現在のグループ内の自動優先度が有効な全チャネルに適用されます。"
   },
   "Batch Operations": "一括操作",
   "Repair Channel Consistency": "チャネル整合性を修復",

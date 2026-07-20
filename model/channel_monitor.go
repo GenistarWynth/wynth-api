@@ -26,6 +26,7 @@ const (
 	ChannelSettingsUpdateScopeMonitor      = "monitor"
 	ChannelSettingsUpdateScopeAutoPriority = "auto-priority"
 
+	channelAutoPriorityIntervalKey           = "channel_auto_priority_interval_minutes"
 	channelAutoPriorityAvailabilityWindowKey = "channel_auto_priority_availability_window_hours"
 )
 
@@ -134,8 +135,8 @@ func parseChannelSettingsObject(raw string) (map[string]any, dto.ChannelOtherSet
 // without overwriting the other settings domain, worker-owned snapshots, or
 // unrelated JSON keys. An empty scope retains the legacy combined-update
 // behavior. Generated channels retain rule ownership of their per-channel
-// auto-priority settings, but the availability window is group-scoped and
-// remains editable from any channel in the group.
+// auto-priority settings, but the schedule interval and availability window
+// are group-scoped and remain editable from any channel in the group.
 func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedRaw, scope string) (*Channel, error) {
 	requestedObject, requestedSettings, err := parseChannelSettingsObject(requestedRaw)
 	if err != nil {
@@ -148,6 +149,8 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 	}
 	_, availabilityWindowRequested := requestedObject[channelAutoPriorityAvailabilityWindowKey]
 	availabilityWindowRequested = updateAutoPrioritySettings && availabilityWindowRequested
+	_, intervalRequested := requestedObject[channelAutoPriorityIntervalKey]
+	intervalRequested = updateAutoPrioritySettings && intervalRequested
 
 	var updatedChannel Channel
 	err = DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -202,10 +205,12 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 						delete(currentObject, key)
 					}
 				}
-			} else if value, exists := requestedObject[channelAutoPriorityAvailabilityWindowKey]; exists {
-				currentObject[channelAutoPriorityAvailabilityWindowKey] = value
 			} else {
-				delete(currentObject, channelAutoPriorityAvailabilityWindowKey)
+				for _, key := range []string{channelAutoPriorityIntervalKey, channelAutoPriorityAvailabilityWindowKey} {
+					if value, exists := requestedObject[key]; exists {
+						currentObject[key] = value
+					}
+				}
 			}
 		}
 
@@ -227,6 +232,9 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 				dto.ChannelAutoPriorityMaxWindowHours,
 			)
 		}
+		if intervalRequested && requestedSettings.ChannelAutoPriorityIntervalMinutes < 0 {
+			return fmt.Errorf("settings.channel_auto_priority_interval_minutes must be >= 0")
+		}
 		if err := current.ValidateSettings(); err != nil {
 			return err
 		}
@@ -243,10 +251,11 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 		current.UpdatedTime = now
 		updatedChannel = current
 
-		if !availabilityWindowRequested {
+		if !availabilityWindowRequested && !intervalRequested {
 			return nil
 		}
 		availabilityWindowHours := requestedSettings.ChannelAutoPriorityAvailabilityWindowHours
+		intervalMinutes := requestedSettings.ChannelAutoPriorityIntervalMinutes
 		for i := range groupChannels {
 			if groupChannels[i].Id == current.Id {
 				continue
@@ -258,7 +267,12 @@ func UpdateChannelMonitorSettings(ctx context.Context, channelID int, requestedR
 			if !memberSettings.ChannelAutoPriorityEnabled {
 				continue
 			}
-			memberObject[channelAutoPriorityAvailabilityWindowKey] = availabilityWindowHours
+			if availabilityWindowRequested {
+				memberObject[channelAutoPriorityAvailabilityWindowKey] = availabilityWindowHours
+			}
+			if intervalRequested {
+				memberObject[channelAutoPriorityIntervalKey] = intervalMinutes
+			}
 			memberBytes, err := common.Marshal(memberObject)
 			if err != nil {
 				return err

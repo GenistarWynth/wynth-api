@@ -44,6 +44,7 @@ var channelPermissionRoutes = []permissionRoute{
 	{method: http.MethodGet, path: "/ops", permission: authz.ChannelRead, handler: controller.GetChannelOps},
 	{method: http.MethodGet, path: "/:id/monitor", permission: authz.ChannelRead, handler: controller.GetChannelMonitorDetail},
 	{method: http.MethodPut, path: "/:id/monitor", permission: authz.ChannelWrite, handler: controller.UpdateChannelMonitorSettings},
+	{method: http.MethodPost, path: "/:id/auto_priority/run", permission: authz.ChannelOperate, handler: controller.RunChannelAutoPriorityGroup},
 	{method: http.MethodGet, path: "/:id", permission: authz.ChannelRead, handler: controller.GetChannel},
 	{method: http.MethodGet, path: "/test", permission: authz.ChannelOperate, handler: controller.TestAllChannels},
 	{method: http.MethodGet, path: "/test/:id", permission: authz.ChannelOperate, handler: controller.TestChannel},

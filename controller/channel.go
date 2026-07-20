@@ -456,6 +456,26 @@ func UpdateChannelMonitorSettings(c *gin.Context) {
 	})
 }
 
+func RunChannelAutoPriorityGroup(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	results, err := service.RunChannelAutoPriorityGroup(c.Request.Context(), id, common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InitChannelCache()
+	recordManageAudit(c, "channel.auto_priority_group_run", map[string]interface{}{
+		"id":           id,
+		"member_count": len(results),
+	})
+	common.ApiSuccess(c, results)
+}
+
 // GetChannelKey 获取渠道密钥（需要通过安全验证中间件）
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {

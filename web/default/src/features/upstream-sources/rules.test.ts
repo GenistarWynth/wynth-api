@@ -16,6 +16,33 @@ import {
 } from './rules'
 
 describe('upstream source rule normalization', () => {
+  test('drops legacy per-rule auto-priority interval overrides', () => {
+    const legacyAutoPriority = {
+      enabled: true,
+      interval_minutes: 5,
+      window_hours: 48,
+    }
+    const rules = normalizeSyncRules([
+      {
+        name: 'OpenAI',
+        local_group: 'default',
+        platforms: ['openai'],
+        name_contains: [],
+        description_contains: [],
+        exclude_keywords: [],
+        auto_priority: legacyAutoPriority,
+        model_strategy: 'all_upstream' as const,
+        fixed_models: [],
+      },
+    ])
+
+    assert.equal(
+      Object.hasOwn(rules[0].auto_priority ?? {}, 'interval_minutes'),
+      false
+    )
+    assert.equal(rules[0].auto_priority?.window_hours, 48)
+  })
+
   test('model discovery signature changes only for matching or channel type', () => {
     const baseRules = normalizeSyncRules([
       {
@@ -190,7 +217,6 @@ describe('upstream source rule normalization', () => {
         autoSync: { enabled: true, interval_minutes: 0 },
         autoPriority: {
           enabled: true,
-          interval_minutes: 0,
           window_hours: 48,
           availability_window_hours: 1,
         },
@@ -209,7 +235,6 @@ describe('upstream source rule normalization', () => {
         auto_sync: { enabled: true, interval_minutes: 0 },
         auto_priority: {
           enabled: true,
-          interval_minutes: 0,
           window_hours: 48,
           availability_window_hours: 1,
         },
@@ -234,7 +259,6 @@ describe('upstream source rule normalization', () => {
         auto_sync: { enabled: true, interval_minutes: 0 },
         auto_priority: {
           enabled: false,
-          interval_minutes: 15,
           window_hours: 24,
           availability_window_hours: 1,
         },
@@ -260,7 +284,6 @@ describe('upstream source rule normalization', () => {
         auto_sync: { enabled: true, interval_minutes: 0 },
         auto_priority: {
           enabled: false,
-          interval_minutes: 15,
           window_hours: 24,
           availability_window_hours: 1,
         },
@@ -359,7 +382,6 @@ describe('upstream source rule normalization', () => {
         auto_sync: { enabled: false, interval_minutes: 5 },
         auto_priority: {
           enabled: true,
-          interval_minutes: 15,
           window_hours: 48,
           availability_window_hours: 1,
         },

@@ -126,6 +126,25 @@ export async function updateChannelMonitorSettings(
   return res.data
 }
 
+export type ChannelAutoPriorityRunResult = {
+  channel_id: number
+  applied: boolean
+  reason?: string
+}
+
+export async function runChannelAutoPriorityGroup(id: number): Promise<{
+  success: boolean
+  message?: string
+  data?: ChannelAutoPriorityRunResult[]
+}> {
+  const res = await api.post(
+    `/api/channel/${id}/auto_priority/run`,
+    undefined,
+    channelActionConfig()
+  )
+  return res.data
+}
+
 /**
  * Get channel operations summary for administrators
  */

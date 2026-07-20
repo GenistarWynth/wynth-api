@@ -294,7 +294,7 @@ func RunUpstreamSourceAutoPriority(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := (&service.UpstreamSourceService{}).RunAutoPriority(c.Request.Context(), source.Id, common.GetTimestamp())
+	result, err := service.RunChannelAutoPriorityGroupsForSource(c.Request.Context(), source.Id, common.GetTimestamp())
 	if err != nil {
 		common.ApiError(c, err)
 		return

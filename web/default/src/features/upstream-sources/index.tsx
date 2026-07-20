@@ -190,7 +190,6 @@ import {
   type UpstreamSyncStatus,
 } from './types'
 
-const DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES = 30
 const DEFAULT_AUTO_PRIORITY_WINDOW_HOURS = 24
 const DEFAULT_AUTO_PRIORITY_AVAILABILITY_WINDOW_HOURS = 24
 const EMPTY_UPSTREAM_SOURCE_MAPPINGS: UpstreamSourceMapping[] = []
@@ -278,19 +277,11 @@ function autoPriorityFormValue(
 ): NonNullable<UpstreamSourceLocalGroupRule['auto_priority']> {
   return {
     enabled: rule.auto_priority?.enabled ?? defaults.enabled,
-    interval_minutes: intervalDisplayValue(
-      rule.auto_priority?.interval_minutes,
-      defaults.interval_minutes
-    ),
     window_hours: rule.auto_priority?.window_hours ?? defaults.window_hours,
     availability_window_hours:
       rule.auto_priority?.availability_window_hours ??
       defaults.availability_window_hours,
   }
-}
-
-function intervalDisplayValue(value: number | undefined, fallback: number) {
-  return value !== undefined && value >= 0 ? value : fallback
 }
 
 function monitorIntervalDisplayValue(
@@ -627,9 +618,7 @@ function RuleStrategySummary(props: {
         <StatusBadge
           label={`${t('Auto Priority')}: ${
             resolution.auto_priority.enabled ? t('Enabled') : t('Disabled')
-          } / ${resolution.auto_priority.interval_minutes}m / ${
-            resolution.auto_priority.window_hours
-          }h`}
+          } / ${resolution.auto_priority.window_hours}h`}
           variant={resolution.auto_priority.enabled ? 'success' : 'neutral'}
           copyable={false}
         />
@@ -2050,37 +2039,6 @@ function SourceFormSheet(props: {
                           />
                           <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-1'>
                             <FieldBlock
-                              label={t('Auto Priority Interval Minutes')}
-                              htmlFor={`source-rule-auto-priority-interval-${index}`}
-                            >
-                              <Input
-                                id={`source-rule-auto-priority-interval-${index}`}
-                                type='number'
-                                min={0}
-                                value={intervalDisplayValue(
-                                  rule.auto_priority?.interval_minutes,
-                                  ruleStrategyDefaults.autoPriority
-                                    .interval_minutes
-                                )}
-                                onChange={(event) =>
-                                  setLocalGroupRule(index, {
-                                    ...rule,
-                                    auto_priority: {
-                                      ...autoPriorityFormValue(
-                                        rule,
-                                        ruleStrategyDefaults.autoPriority
-                                      ),
-                                      interval_minutes: parseIntegerInput(
-                                        event.target.value,
-                                        ruleStrategyDefaults.autoPriority
-                                          .interval_minutes
-                                      ),
-                                    },
-                                  })
-                                }
-                              />
-                            </FieldBlock>
-                            <FieldBlock
                               label={t('Metrics Window Hours')}
                               htmlFor={`source-rule-auto-priority-window-${index}`}
                             >
@@ -2738,10 +2696,7 @@ function MappingRow(props: {
       ? t('Fixed models')
       : t('All upstream models')
   const autoPriorityLabel = mapping.resolved_auto_priority_enabled
-    ? `${t('Auto priority')}: ${intervalDisplayValue(
-        mapping.resolved_auto_priority_interval_minutes,
-        DEFAULT_AUTO_PRIORITY_INTERVAL_MINUTES
-      )}m / ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h / ${t(
+    ? `${t('Auto priority')}: ${mapping.resolved_auto_priority_window_hours || DEFAULT_AUTO_PRIORITY_WINDOW_HOURS}h / ${t(
         'Availability'
       )} ${mapping.resolved_auto_priority_availability_window_hours || DEFAULT_AUTO_PRIORITY_AVAILABILITY_WINDOW_HOURS}h`
     : `${t('Auto priority')}: ${t('Disabled')}`

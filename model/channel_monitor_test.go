@@ -220,6 +220,7 @@ func TestUpdateChannelMonitorSettingsPropagatesAvailabilityWindowFromGeneratedCh
 			Group: "alpha",
 			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
 				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_interval_minutes":          10,
 				"channel_auto_priority_availability_window_hours": 2,
 			}),
 		},
@@ -228,6 +229,7 @@ func TestUpdateChannelMonitorSettingsPropagatesAvailabilityWindowFromGeneratedCh
 			Group: "beta",
 			OtherSettings: marshalChannelSettingsMap(t, map[string]any{
 				"channel_auto_priority_enabled":                   true,
+				"channel_auto_priority_interval_minutes":          20,
 				"channel_auto_priority_availability_window_hours": 3,
 			}),
 		},
@@ -255,7 +257,7 @@ func TestUpdateChannelMonitorSettingsPropagatesAvailabilityWindowFromGeneratedCh
 
 	selectedSettings := updated.GetOtherSettings()
 	assert.True(t, selectedSettings.ChannelAutoPriorityEnabled)
-	assert.Equal(t, 15, selectedSettings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 60, selectedSettings.ChannelAutoPriorityIntervalMinutes)
 	assert.Equal(t, 24, selectedSettings.ChannelAutoPriorityWindowHours)
 	assert.Equal(t, 96, selectedSettings.ChannelAutoPriorityAvailabilityWindowHours)
 	assert.Equal(t, 0.5, selectedSettings.ChannelAutoPriorityRateMultiplier)
@@ -263,10 +265,12 @@ func TestUpdateChannelMonitorSettingsPropagatesAvailabilityWindowFromGeneratedCh
 
 	var manualPeer Channel
 	require.NoError(t, DB.First(&manualPeer, channels[1].Id).Error)
+	assert.Equal(t, 60, manualPeer.GetOtherSettings().ChannelAutoPriorityIntervalMinutes)
 	assert.Equal(t, 96, manualPeer.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
 
 	var otherGroup Channel
 	require.NoError(t, DB.First(&otherGroup, channels[2].Id).Error)
+	assert.Equal(t, 20, otherGroup.GetOtherSettings().ChannelAutoPriorityIntervalMinutes)
 	assert.Equal(t, 3, otherGroup.GetOtherSettings().ChannelAutoPriorityAvailabilityWindowHours)
 }
 

@@ -5555,7 +5555,12 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Auto priority recomputed for this group": "已重新计算本组自动优先级",
+    "Failed to recompute auto priority for this group": "重新计算本组自动优先级失败",
+    "Recompute auto priority for this group now": "立即重新计算本组自动优先级",
+    "Recomputing...": "正在重新计算...",
+    "The interval applies to all auto-priority channels in the current group, including upstream-generated channels.": "此间隔适用于当前组中所有启用自动优先级的渠道，包括上游生成的渠道。"
   },
   "Batch Operations": "批量操作",
   "Repair Channel Consistency": "修复渠道一致性",

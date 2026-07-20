@@ -130,7 +130,6 @@ func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSou
 	monitorEnabled := config.EnableMonitor
 	autoSyncEnabled := config.AutoSyncEnabled
 	autoPriorityEnabled := config.AutoPriorityEnabled
-	autoPriorityInterval := config.AutoPriorityIntervalMinutes
 	autoPriorityWindow := config.AutoPriorityWindowHours
 	autoPriorityAvailabilityWindow := config.AutoPriorityAvailabilityWindowHours
 	localGroup := strings.TrimSpace(config.DefaultLocalGroup)
@@ -146,7 +145,7 @@ func legacySourceRuleFromConfig(config upstreamSourceSyncConfig) dto.UpstreamSou
 		Weight:                           &weight,
 		Monitor:                          &dto.UpstreamSourceRuleMonitor{Enabled: &monitorEnabled, IntervalMinutes: config.MonitorIntervalMinutes},
 		AutoSync:                         &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: config.AutoSyncIntervalMinutes},
-		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, IntervalMinutes: &autoPriorityInterval, WindowHours: &autoPriorityWindow, AvailabilityWindowHours: &autoPriorityAvailabilityWindow},
+		AutoPriority:                     &dto.UpstreamSourceRuleAutoPriority{Enabled: &autoPriorityEnabled, WindowHours: &autoPriorityWindow, AvailabilityWindowHours: &autoPriorityAvailabilityWindow},
 		CodexImageGenerationBridgePolicy: config.CodexImageGenerationBridgePolicy,
 		ModelStrategy:                    modelStrategy,
 		FixedModels:                      config.FixedModels,
@@ -351,10 +350,6 @@ func normalizeUpstreamSourceRuleAutoPriority(autoPriority *dto.UpstreamSourceRul
 	}
 	normalized := &dto.UpstreamSourceRuleAutoPriority{
 		Enabled: cloneUpstreamSourceRuleBool(autoPriority.Enabled),
-	}
-	if autoPriority.IntervalMinutes != nil {
-		value := normalizeUpstreamSourceAutoPriorityInterval(*autoPriority.IntervalMinutes)
-		normalized.IntervalMinutes = &value
 	}
 	if autoPriority.WindowHours != nil {
 		value := normalizeUpstreamSourceAutoPriorityWindow(*autoPriority.WindowHours)
@@ -577,9 +572,6 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 	if rule.AutoPriority != nil {
 		if rule.AutoPriority.Enabled != nil {
 			resolution.AutoPriorityEnabled = *rule.AutoPriority.Enabled
-		}
-		if rule.AutoPriority.IntervalMinutes != nil {
-			resolution.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(*rule.AutoPriority.IntervalMinutes)
 		}
 		if rule.AutoPriority.WindowHours != nil {
 			resolution.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(*rule.AutoPriority.WindowHours)

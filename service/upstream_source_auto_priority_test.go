@@ -586,7 +586,7 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.Equal(t, int64(1000), reloadedChannel.GetPriority())
 	reloadedSettings := reloadedChannel.GetOtherSettings()
 	assert.True(t, reloadedSettings.ChannelAutoPriorityEnabled)
-	assert.Equal(t, 15, reloadedSettings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, upstreamSourceAutoPriorityDefaultIntervalMinutes, reloadedSettings.ChannelAutoPriorityIntervalMinutes)
 	assert.Equal(t, 24, reloadedSettings.ChannelAutoPriorityWindowHours)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastRunAt)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastAppliedAt)

@@ -12,6 +12,7 @@ const dialogSource = readSource('./channel-auto-priority-dialog.tsx')
 const rowActionsSource = readSource('../data-table-row-actions.tsx')
 const providerSource = readSource('../channels-provider.tsx')
 const dialogsSource = readSource('../channels-dialogs.tsx')
+const apiSource = readSource('../../api.ts')
 
 describe('channel auto priority dialog contract', () => {
   test('adds Auto Priority as a sibling row menu item beside Channel Monitor', () => {
@@ -78,6 +79,31 @@ describe('channel auto priority dialog contract', () => {
     assert.doesNotMatch(
       dialogSource,
       /This group window comes from the upstream source rule\./
+    )
+  })
+
+  test('forces one immediate recompute for the current group', () => {
+    assert.match(
+      apiSource,
+      /post\(\s*`\/api\/channel\/\$\{id\}\/auto_priority\/run`/
+    )
+    assert.match(dialogSource, /runChannelAutoPriorityGroup/)
+    assert.match(
+      dialogSource,
+      /runChannelAutoPriorityGroup\(props\.channel\.id\)/
+    )
+    assert.match(dialogSource, /Recompute auto priority for this group now/)
+    assert.match(dialogSource, /Auto priority recomputed for this group/)
+  })
+
+  test('treats the scheduling interval as a generated-inclusive group setting', () => {
+    assert.match(
+      dialogSource,
+      /The interval applies to all auto-priority channels in the current group, including upstream-generated channels\./
+    )
+    assert.doesNotMatch(
+      dialogSource,
+      /id=\{`channel-auto-priority-interval-\$\{channelId\}`\}[\s\S]{0,250}disabled=\{!perChannelSettingsEditable\}/
     )
   })
 })

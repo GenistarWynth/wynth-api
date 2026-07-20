@@ -620,6 +620,19 @@ func fillAutoPriorityScoreInputsForWindows(ctx context.Context, pending []upstre
 }
 
 func persistAutoPriorityCandidate(ctx context.Context, candidate upstreamSourceAutoPriorityCandidate, score AutoPriorityScoreResult, now int64) (string, error) {
+	err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return updateAutoPriorityCandidate(tx, candidate, score, now)
+	})
+	if err != nil {
+		if errors.Is(err, errAutoPriorityGeneratedChannelChanged) {
+			return "generated_channel_changed", nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
+func updateAutoPriorityCandidate(tx *gorm.DB, candidate upstreamSourceAutoPriorityCandidate, score AutoPriorityScoreResult, now int64) error {
 	settings := candidate.settings
 	settings.ChannelAutoPriorityEnabled = candidate.resolution.AutoPriorityEnabled
 	settings.ChannelAutoPriorityIntervalMinutes = candidate.resolution.AutoPriorityIntervalMinutes
@@ -634,16 +647,16 @@ func persistAutoPriorityCandidate(ctx context.Context, candidate upstreamSourceA
 	settingsObject := make(map[string]any)
 	if strings.TrimSpace(candidate.channel.OtherSettings) != "" {
 		if err := common.UnmarshalJsonStr(candidate.channel.OtherSettings, &settingsObject); err != nil {
-			return "", err
+			return err
 		}
 	}
 	encodedSettings, err := common.Marshal(settings)
 	if err != nil {
-		return "", err
+		return err
 	}
 	workerSettings := make(map[string]any)
 	if err := common.Unmarshal(encodedSettings, &workerSettings); err != nil {
-		return "", err
+		return err
 	}
 	workerSettingKeys := []string{
 		"channel_auto_priority_enabled",
@@ -663,45 +676,36 @@ func persistAutoPriorityCandidate(ctx context.Context, candidate upstreamSourceA
 	}
 	mergedSettings, err := common.Marshal(settingsObject)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	err = model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		updates := map[string]any{
-			"settings": string(mergedSettings),
-		}
-		if score.Applied {
-			updates["priority"] = score.NewPriority
-		}
-		res := tx.Model(&model.Channel{}).
-			Where("id = ? AND settings = ?", candidate.channel.Id, candidate.channel.OtherSettings).
-			Updates(updates)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected != 1 {
-			return errAutoPriorityGeneratedChannelChanged
-		}
-		if score.Applied {
-			abilityRes := tx.Model(&model.Ability{}).Where("channel_id = ?", candidate.channel.Id).Update("priority", score.NewPriority)
-			if abilityRes.Error != nil {
-				return abilityRes.Error
-			}
-			if err := resolveAutoPriorityAbilityUpdateResult(candidate.channel.Id, abilityRes.RowsAffected, func(channelID int) (bool, error) {
-				return autoPriorityAbilityExists(tx, channelID)
-			}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		if errors.Is(err, errAutoPriorityGeneratedChannelChanged) {
-			return "generated_channel_changed", nil
-		}
-		return "", err
+	updates := map[string]any{
+		"settings": string(mergedSettings),
 	}
-	return "", nil
+	if score.Applied {
+		updates["priority"] = score.NewPriority
+	}
+	res := tx.Model(&model.Channel{}).
+		Where("id = ? AND settings = ?", candidate.channel.Id, candidate.channel.OtherSettings).
+		Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected != 1 {
+		return errAutoPriorityGeneratedChannelChanged
+	}
+	if score.Applied {
+		abilityRes := tx.Model(&model.Ability{}).Where("channel_id = ?", candidate.channel.Id).Update("priority", score.NewPriority)
+		if abilityRes.Error != nil {
+			return abilityRes.Error
+		}
+		if err := resolveAutoPriorityAbilityUpdateResult(candidate.channel.Id, abilityRes.RowsAffected, func(channelID int) (bool, error) {
+			return autoPriorityAbilityExists(tx, channelID)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func markAutoPriorityGroupFailure(result *dto.UpstreamSourceAutoPriorityResult, resultSlots []*dto.UpstreamSourceAutoPriorityChannelResult, pending []upstreamSourceAutoPriorityCandidate, indexes []int, reason string, err error) {

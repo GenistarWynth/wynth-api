@@ -34,6 +34,7 @@ func setupControllerChannelMonitorTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	model.DB = db
 	model.LOG_DB = db
+	model.InitCommonColumnsForTest()
 	common.RedisEnabled = false
 	common.CryptoSecret = "controller-channel-monitor-test-secret"
 	common.CryptoSecretStable = true
@@ -520,6 +521,79 @@ func TestUpdateChannelMonitorSettingsAutoPriorityScopePreservesMonitorFields(t *
 	assert.Equal(t, 9, settings.ChannelMonitorIntervalMinutes)
 	assert.Equal(t, "existing-monitor-model", settings.ChannelMonitorModel)
 	assert.Equal(t, 48, settings.ChannelAutoPriorityAvailabilityWindowHours)
+}
+
+func TestRunChannelAutoPriorityGroupForcesCurrentGroup(t *testing.T) {
+	db := setupControllerChannelMonitorTestDB(t)
+	lastRunAt := common.GetTimestamp()
+	channels := []model.Channel{
+		{
+			Type:     constant.ChannelTypeOpenAI,
+			Name:     "force selected",
+			Status:   common.ChannelStatusEnabled,
+			Group:    "alpha",
+			Priority: common.GetPointer(int64(100)),
+			OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+				ChannelAutoPriorityEnabled:         true,
+				ChannelAutoPriorityIntervalMinutes: 30,
+				ChannelAutoPriorityWindowHours:     24,
+				ChannelAutoPriorityLastRunAt:       lastRunAt,
+				ChannelAutoPriorityRateMultiplier:  1,
+			}),
+		},
+		{
+			Type:     constant.ChannelTypeOpenAI,
+			Name:     "force peer",
+			Status:   common.ChannelStatusEnabled,
+			Group:    "alpha",
+			Priority: common.GetPointer(int64(100)),
+			OtherSettings: monitorSettingsJSON(t, dto.ChannelOtherSettings{
+				ChannelAutoPriorityEnabled:         true,
+				ChannelAutoPriorityIntervalMinutes: 30,
+				ChannelAutoPriorityWindowHours:     24,
+				ChannelAutoPriorityLastRunAt:       lastRunAt,
+				ChannelAutoPriorityRateMultiplier:  2,
+			}),
+		},
+	}
+	require.NoError(t, db.Create(&channels).Error)
+	for _, channel := range channels {
+		require.NoError(t, db.Create(&model.Ability{
+			Group:     channel.Group,
+			Model:     "gpt-4o",
+			ChannelId: channel.Id,
+			Enabled:   true,
+			Priority:  common.GetPointer(int64(100)),
+		}).Error)
+	}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(channels[0].Id)}}
+	ctx.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/channel/"+strconv.Itoa(channels[0].Id)+"/auto_priority/run",
+		nil,
+	)
+
+	RunChannelAutoPriorityGroup(ctx)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			ChannelID int `json:"channel_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data, 2)
+	var reloaded []model.Channel
+	require.NoError(t, db.Order("id ASC").Find(&reloaded).Error)
+	require.Len(t, reloaded, 2)
+	firstRunAt := reloaded[0].GetOtherSettings().ChannelAutoPriorityLastRunAt
+	assert.GreaterOrEqual(t, firstRunAt, lastRunAt)
+	assert.Equal(t, firstRunAt, reloaded[1].GetOtherSettings().ChannelAutoPriorityLastRunAt)
 }
 
 func TestFilterDueChannelMonitorCandidates(t *testing.T) {

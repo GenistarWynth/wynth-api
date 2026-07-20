@@ -97,7 +97,6 @@ type UpstreamSourceRuleAutoSync struct {
 
 type UpstreamSourceRuleAutoPriority struct {
 	Enabled                 *bool `json:"enabled,omitempty"`
-	IntervalMinutes         *int  `json:"interval_minutes,omitempty"`
 	WindowHours             *int  `json:"window_hours,omitempty"`
 	AvailabilityWindowHours *int  `json:"availability_window_hours,omitempty"`
 }
@@ -130,7 +129,6 @@ type UpstreamSourceMappingResponse struct {
 	ResolvedAutoSyncEnabled                     bool     `json:"resolved_auto_sync_enabled"`
 	ResolvedAutoSyncIntervalMinutes             int      `json:"resolved_auto_sync_interval_minutes"`
 	ResolvedAutoPriorityEnabled                 bool     `json:"resolved_auto_priority_enabled"`
-	ResolvedAutoPriorityIntervalMinutes         int      `json:"resolved_auto_priority_interval_minutes"`
 	ResolvedAutoPriorityWindowHours             int      `json:"resolved_auto_priority_window_hours"`
 	ResolvedAutoPriorityAvailabilityWindowHours int      `json:"resolved_auto_priority_availability_window_hours"`
 	ResolvedCodexImageGenerationBridgePolicy    string   `json:"resolved_codex_image_generation_bridge_policy"`

@@ -43,6 +43,7 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	model.DB = db
 	model.LOG_DB = db
+	model.InitCommonColumnsForTest()
 	common.RedisEnabled = false
 	common.TranslateMessage = func(c *gin.Context, key string, args ...map[string]any) string {
 		return key
@@ -311,9 +312,8 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 				LocalGroup: "paid",
 				Platforms:  []string{"openai"},
 				AutoPriority: &dto.UpstreamSourceRuleAutoPriority{
-					Enabled:         common.GetPointer(false),
-					IntervalMinutes: common.GetPointer(0),
-					WindowHours:     common.GetPointer(48),
+					Enabled:     common.GetPointer(false),
+					WindowHours: common.GetPointer(48),
 				},
 			},
 		},
@@ -326,9 +326,7 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority)
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.Enabled)
 	assert.False(t, *response.Data.LocalGroupRules[0].AutoPriority.Enabled)
-	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
-	assert.Equal(t, 0, *response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
 	assert.Equal(t, 48, *response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 
 	var reloaded model.UpstreamSource
@@ -344,36 +342,34 @@ func TestUpstreamSourceAPICreateRoundTripsAutoPriorityConfig(t *testing.T) {
 	autoPriority, ok := rule["auto_priority"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, false, autoPriority["enabled"])
-	assert.Equal(t, float64(0), autoPriority["interval_minutes"])
+	assert.NotContains(t, autoPriority, "interval_minutes")
 	assert.Equal(t, float64(48), autoPriority["window_hours"])
 }
 
-func TestUpstreamSourceAPICreatePersistsExplicitZeroAutoPriorityInterval(t *testing.T) {
+func TestUpstreamSourceAPICreateDropsLegacyAutoPriorityInterval(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
-	rule := dto.UpstreamSourceLocalGroupRule{
-		Name:       "OpenAI pro",
-		LocalGroup: "paid",
-		AutoPriority: &dto.UpstreamSourceRuleAutoPriority{
-			Enabled:         common.GetPointer(true),
-			IntervalMinutes: common.GetPointer(0),
-			WindowHours:     common.GetPointer(999),
+	rule := map[string]any{
+		"name":        "OpenAI pro",
+		"local_group": "paid",
+		"auto_priority": map[string]any{
+			"enabled":          true,
+			"interval_minutes": 0,
+			"window_hours":     999,
 		},
 	}
-	request := dto.UpstreamSourceCreateRequest{
-		Name:            "auto-priority-zero-source",
-		Type:            model.UpstreamSourceTypeSub2API,
-		BaseURL:         "https://admin.example.com",
-		LocalGroup:      "paid",
-		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{rule},
+	request := map[string]any{
+		"name":              "auto-priority-zero-source",
+		"type":              model.UpstreamSourceTypeSub2API,
+		"base_url":          "https://admin.example.com",
+		"local_group":       "paid",
+		"local_group_rules": []map[string]any{rule},
 	}
 
 	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPost, "/api/upstream_sources", request, true)
 
 	require.True(t, response.Success, response.Message)
 	require.Len(t, response.Data.LocalGroupRules, 1)
-	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
-	assert.Equal(t, 0, *response.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
 	require.NotNil(t, response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 	assert.Equal(t, 168, *response.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 
@@ -388,19 +384,17 @@ func TestUpstreamSourceAPICreatePersistsExplicitZeroAutoPriorityInterval(t *test
 	require.True(t, ok)
 	autoPriority, ok := rawRule["auto_priority"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, float64(0), autoPriority["interval_minutes"])
+	assert.NotContains(t, autoPriority, "interval_minutes")
 	assert.Equal(t, float64(168), autoPriority["window_hours"])
 
-	updateRequest := dto.UpstreamSourceUpdateRequest{
-		Status:          model.UpstreamSourceStatusEnabled,
-		LocalGroup:      "paid",
-		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{rule},
+	updateRequest := map[string]any{
+		"status":            model.UpstreamSourceStatusEnabled,
+		"local_group":       "paid",
+		"local_group_rules": []map[string]any{rule},
 	}
 	updateResponse := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(response.Data.Id), updateRequest, true)
 	require.True(t, updateResponse.Success, updateResponse.Message)
 	require.Len(t, updateResponse.Data.LocalGroupRules, 1)
-	require.NotNil(t, updateResponse.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
-	assert.Equal(t, 0, *updateResponse.Data.LocalGroupRules[0].AutoPriority.IntervalMinutes)
 	require.NotNil(t, updateResponse.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 	assert.Equal(t, 168, *updateResponse.Data.LocalGroupRules[0].AutoPriority.WindowHours)
 }
@@ -704,6 +698,7 @@ func TestUpstreamSourceAPIRunAutoPriorityReturnsResults(t *testing.T) {
 		OtherSettings: "{}",
 	}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:   true,
 		GeneratedByUpstreamSourceID:  source.Id,
 		GeneratedByUpstreamMappingID: mapping.Id,
 	})
@@ -717,14 +712,40 @@ func TestUpstreamSourceAPIRunAutoPriorityReturnsResults(t *testing.T) {
 		Priority:  common.GetPointer(int64(100)),
 		Weight:    0,
 	}).Error)
+	manualChannel := model.Channel{
+		Type:          constant.ChannelTypeOpenAI,
+		Key:           "sk-manual",
+		Status:        common.ChannelStatusEnabled,
+		Name:          "manual peer",
+		Weight:        common.GetPointer(uint(0)),
+		Models:        "gpt-4o",
+		Group:         channel.Group,
+		Priority:      common.GetPointer(int64(100)),
+		Other:         "{}",
+		OtherInfo:     "{}",
+		OtherSettings: "{}",
+	}
+	manualChannel.SetOtherSettings(dto.ChannelOtherSettings{ChannelAutoPriorityEnabled: true})
+	require.NoError(t, model.DB.Create(&manualChannel).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     manualChannel.Group,
+		Model:     "gpt-4o",
+		ChannelId: manualChannel.Id,
+		Enabled:   true,
+		Priority:  common.GetPointer(int64(100)),
+		Weight:    0,
+	}).Error)
 
 	response := upstreamSourceAPIRequest[dto.UpstreamSourceAutoPriorityResult](t, router, http.MethodPost, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/auto_priority/run", nil, true)
 
 	require.True(t, response.Success, response.Message)
 	assert.Equal(t, source.Id, response.Data.SourceID)
-	require.Len(t, response.Data.Results, 1)
+	require.Len(t, response.Data.Results, 2)
+	assert.ElementsMatch(t, []int{channel.Id, manualChannel.Id}, []int{
+		response.Data.Results[0].LocalChannelID,
+		response.Data.Results[1].LocalChannelID,
+	})
 	assert.Equal(t, mapping.Id, response.Data.Results[0].MappingID)
-	assert.Equal(t, channel.Id, response.Data.Results[0].LocalChannelID)
 }
 
 func TestUpstreamSourceAPISyncResultReturnsLastMappingStatuses(t *testing.T) {

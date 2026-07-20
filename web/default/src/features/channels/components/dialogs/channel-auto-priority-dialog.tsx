@@ -40,7 +40,10 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 
-import { updateChannelMonitorSettings } from '../../api'
+import {
+  runChannelAutoPriorityGroup,
+  updateChannelMonitorSettings,
+} from '../../api'
 import { channelsQueryKeys } from '../../lib'
 import {
   buildChannelAutoPrioritySettingsPayload,
@@ -89,6 +92,7 @@ export function ChannelAutoPriorityDialog(
   const [savedSettings, setSavedSettings] =
     useState<ChannelAutoPrioritySettingsDraft>(defaults)
   const [isSaving, setIsSaving] = useState(false)
+  const [isRecomputing, setIsRecomputing] = useState(false)
 
   useEffect(() => {
     if (!props.open) return
@@ -111,9 +115,7 @@ export function ChannelAutoPriorityDialog(
   )
   const perChannelSettingsEditable = autoPriorityEnabled && !managedByUpstream
   const intervalValue = Number(intervalInput)
-  const isIntervalValid =
-    !perChannelSettingsEditable ||
-    (Number.isInteger(intervalValue) && intervalValue >= 0)
+  const isIntervalValid = Number.isInteger(intervalValue) && intervalValue >= 0
   const metricsWindowValue = Number(metricsWindowInput)
   const isMetricsWindowValid =
     !perChannelSettingsEditable ||
@@ -205,6 +207,32 @@ export function ChannelAutoPriorityDialog(
     }
   }
 
+  const handleForceRecompute = async () => {
+    if (!props.channel) return
+
+    setIsRecomputing(true)
+    try {
+      const response = await runChannelAutoPriorityGroup(props.channel.id)
+      if (response.success) {
+        toast.success(t('Auto priority recomputed for this group'))
+        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      } else {
+        toast.error(
+          response.message ||
+            t('Failed to recompute auto priority for this group')
+        )
+      }
+    } catch (error: unknown) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Failed to recompute auto priority for this group')
+      )
+    } finally {
+      setIsRecomputing(false)
+    }
+  }
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className='max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-[520px]'>
@@ -246,10 +274,7 @@ export function ChannelAutoPriorityDialog(
           </Field>
 
           <FieldGroup className='gap-4 sm:grid sm:grid-cols-2'>
-            <Field
-              data-invalid={!isIntervalValid || undefined}
-              data-disabled={!perChannelSettingsEditable || undefined}
-            >
+            <Field data-invalid={!isIntervalValid || undefined}>
               <FieldLabel
                 htmlFor={`channel-auto-priority-interval-${channelId}`}
               >
@@ -261,12 +286,16 @@ export function ChannelAutoPriorityDialog(
                 min={0}
                 step={1}
                 value={intervalInput}
-                disabled={!perChannelSettingsEditable}
                 aria-invalid={!isIntervalValid}
                 onChange={(event) => setIntervalInput(event.target.value)}
               />
               <FieldDescription>
                 {t('Set to 0 to score on every worker tick.')}
+              </FieldDescription>
+              <FieldDescription>
+                {t(
+                  'The interval applies to all auto-priority channels in the current group, including upstream-generated channels.'
+                )}
               </FieldDescription>
             </Field>
 
@@ -345,7 +374,18 @@ export function ChannelAutoPriorityDialog(
             </Field>
           </FieldGroup>
 
-          <div className='flex justify-end'>
+          <div className='flex flex-col-reverse gap-2 sm:flex-row sm:justify-between'>
+            <Button
+              type='button'
+              variant='outline'
+              onClick={handleForceRecompute}
+              disabled={!props.channel || isSaving || isRecomputing}
+            >
+              {isRecomputing && <Spinner data-icon='inline-start' />}
+              {isRecomputing
+                ? t('Recomputing...')
+                : t('Recompute auto priority for this group now')}
+            </Button>
             <Button
               type='button'
               onClick={handleSave}
@@ -356,7 +396,8 @@ export function ChannelAutoPriorityDialog(
                 !isMetricsWindowValid ||
                 !isAvailabilityWindowValid ||
                 !isRateMultiplierValid ||
-                isSaving
+                isSaving ||
+                isRecomputing
               }
             >
               {isSaving && <Spinner data-icon='inline-start' />}

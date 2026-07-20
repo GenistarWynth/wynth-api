@@ -5555,7 +5555,12 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Auto priority recomputed for this group": "Priorité automatique recalculée pour ce groupe",
+    "Failed to recompute auto priority for this group": "Échec du recalcul de la priorité automatique pour ce groupe",
+    "Recompute auto priority for this group now": "Recalculer maintenant la priorité automatique du groupe",
+    "Recomputing...": "Recalcul en cours...",
+    "The interval applies to all auto-priority channels in the current group, including upstream-generated channels.": "Cet intervalle s’applique à tous les canaux avec priorité automatique du groupe actuel, y compris ceux générés en amont."
   },
   "Batch Operations": "Operations par lots",
   "Repair Channel Consistency": "Reparer la coherence des canaux",

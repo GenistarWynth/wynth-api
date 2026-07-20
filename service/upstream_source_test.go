@@ -352,7 +352,6 @@ func TestBuildUpstreamSourceMappingResponseIncludesResolvedAutoPriority(t *testi
 	response := BuildUpstreamSourceMappingResponse(mapping, string(rawConfig))
 
 	assert.True(t, response.ResolvedAutoPriorityEnabled)
-	assert.Equal(t, 0, response.ResolvedAutoPriorityIntervalMinutes)
 	assert.Equal(t, 48, response.ResolvedAutoPriorityWindowHours)
 }
 
@@ -1205,11 +1204,11 @@ func TestBuildGeneratedChannelSeedsAutoPrioritySettingsFromRule(t *testing.T) {
 	assert.Equal(t, 6, settings.ChannelAutoPriorityAvailabilityWindowHours)
 }
 
-func TestMergeGeneratedChannelSettingsPreservesGroupAvailabilityWindow(t *testing.T) {
+func TestMergeGeneratedChannelSettingsPreservesGroupSchedule(t *testing.T) {
 	existing := &model.Channel{Group: "alpha"}
 	existing.SetOtherSettings(dto.ChannelOtherSettings{
 		ChannelAutoPriorityEnabled:                 true,
-		ChannelAutoPriorityIntervalMinutes:         30,
+		ChannelAutoPriorityIntervalMinutes:         0,
 		ChannelAutoPriorityWindowHours:             24,
 		ChannelAutoPriorityAvailabilityWindowHours: 96,
 	})
@@ -1225,7 +1224,7 @@ func TestMergeGeneratedChannelSettingsPreservesGroupAvailabilityWindow(t *testin
 
 	settings := channel.GetOtherSettings()
 	assert.True(t, settings.ChannelAutoPriorityEnabled)
-	assert.Equal(t, 5, settings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 0, settings.ChannelAutoPriorityIntervalMinutes)
 	assert.Equal(t, 12, settings.ChannelAutoPriorityWindowHours)
 	assert.Equal(t, 96, settings.ChannelAutoPriorityAvailabilityWindowHours)
 }
