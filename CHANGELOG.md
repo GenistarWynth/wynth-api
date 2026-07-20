@@ -13,6 +13,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 ### Changed
 - Auto-priority intervals are now group-scoped channel settings; upstream source rules retain only the auto-priority enable switch and no longer override or display an interval.
 
+### Fixed
+- Manually disabled channels are excluded from competitive auto-priority ranking and forced to the bottom of their group; auto-disabled channels are unchanged by this sink rule.
+
 ## [v1.0.0-rc.41] - 2026-07-20
 
 ### Fixed

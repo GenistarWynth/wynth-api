@@ -404,21 +404,177 @@ func TestRunDueChannelAutoPriorityUpdatesAbilityPriority(t *testing.T) {
 	assert.Equal(t, int64(1000), *reloadedAbility.Priority)
 }
 
-func TestRunDueChannelAutoPriorityTreatsDisabledChannelsAsNotDue(t *testing.T) {
+func TestRunDueChannelAutoPrioritySinksManuallyDisabledMembers(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_500_000)
 
-	channel := createAutoPriorityTestChannel(t, "manual disabled", 100, dto.ChannelOtherSettings{
+	cheaperEnabled := createAutoPriorityTestChannel(t, "cheaper enabled", 100, dto.ChannelOtherSettings{
 		ChannelAutoPriorityEnabled:         true,
 		ChannelAutoPriorityIntervalMinutes: 0,
 		ChannelAutoPriorityWindowHours:     24,
 		ChannelAutoPriorityRateMultiplier:  1,
 	})
-	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("status", common.ChannelStatusManuallyDisabled).Error)
+	dearerEnabled := createAutoPriorityTestChannel(t, "dearer enabled", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  2,
+	})
+	manuallyDisabled := createAutoPriorityTestChannel(t, "manually disabled", 5_000, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.01,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", manuallyDisabled.Id).
+		Update("status", common.ChannelStatusManuallyDisabled).Error)
+	for _, channel := range []model.Channel{cheaperEnabled, dearerEnabled} {
+		createAutoPriorityTestUsageLog(t, channel.Id, now-60)
+		createAutoPriorityTestMonitorLog(t, channel.Id, now-60)
+	}
 
 	results := RunDueChannelAutoPriority(context.Background(), now)
 
-	assert.Empty(t, results)
+	require.Len(t, results, 3)
+	var sinkResult *ChannelAutoPriorityRunResult
+	for i := range results {
+		if results[i].ChannelID == manuallyDisabled.Id {
+			sinkResult = &results[i]
+			break
+		}
+	}
+	require.NotNil(t, sinkResult)
+	assert.True(t, sinkResult.Applied)
+	assert.Equal(t, "manually_disabled_sunk", sinkResult.Reason)
+
+	var reloadedDisabled model.Channel
+	require.NoError(t, model.DB.First(&reloadedDisabled, manuallyDisabled.Id).Error)
+	assert.Equal(t, int64(-1), reloadedDisabled.GetPriority())
+	disabledSettings := reloadedDisabled.GetOtherSettings()
+	assert.Zero(t, disabledSettings.ChannelAutoPriorityLastRunAt)
+	assert.Nil(t, disabledSettings.ChannelAutoPriorityLastScore)
+
+	var disabledAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", manuallyDisabled.Id).First(&disabledAbility).Error)
+	require.NotNil(t, disabledAbility.Priority)
+	assert.Equal(t, int64(-1), *disabledAbility.Priority)
+
+	var reloadedCheaper, reloadedDearer model.Channel
+	require.NoError(t, model.DB.First(&reloadedCheaper, cheaperEnabled.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedDearer, dearerEnabled.Id).Error)
+	assert.Greater(t, reloadedCheaper.GetPriority(), reloadedDearer.GetPriority())
+	assert.Greater(t, reloadedDearer.GetPriority(), reloadedDisabled.GetPriority())
+}
+
+func TestRunDueChannelAutoPriorityDoesNotSinkAutoDisabledMembers(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_550_000)
+
+	enabled := createAutoPriorityTestChannel(t, "enabled peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  1,
+	})
+	autoDisabled := createAutoPriorityTestChannel(t, "auto disabled extreme cheap", 5_000, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.01,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", autoDisabled.Id).
+		Update("status", common.ChannelStatusAutoDisabled).Error)
+	createAutoPriorityTestUsageLog(t, enabled.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, enabled.Id, now-60)
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, enabled.Id, results[0].ChannelID)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, autoDisabled.Id).Error)
+	assert.Equal(t, int64(5_000), reloaded.GetPriority())
+	var reloadedAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", autoDisabled.Id).First(&reloadedAbility).Error)
+	require.NotNil(t, reloadedAbility.Priority)
+	assert.Equal(t, int64(5_000), *reloadedAbility.Priority)
+	settings := reloaded.GetOtherSettings()
+	assert.Zero(t, settings.ChannelAutoPriorityLastRunAt)
+	assert.Nil(t, settings.ChannelAutoPriorityLastScore)
+}
+
+func TestRunDueChannelAutoPrioritySinksBelowNegativeEnabledPriority(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_575_000)
+
+	enabled := createAutoPriorityTestChannel(t, "negative enabled peer", -5, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  1,
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			EffectiveCostMultiplier: 1,
+		},
+	})
+	manuallyDisabled := createAutoPriorityTestChannel(t, "disabled above negative peer", 5_000, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  1,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", manuallyDisabled.Id).
+		Update("status", common.ChannelStatusManuallyDisabled).Error)
+	for i := int64(1); i <= 3; i++ {
+		checkedAt := now - i*60
+		require.NoError(t, model.DB.Create(&model.ChannelMonitorLog{
+			ChannelID: enabled.Id,
+			Status:    model.ChannelMonitorStatusFailed,
+			CheckedAt: checkedAt,
+			CreatedAt: checkedAt,
+		}).Error)
+	}
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 2)
+	var reloadedEnabled, reloadedDisabled model.Channel
+	require.NoError(t, model.DB.First(&reloadedEnabled, enabled.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedDisabled, manuallyDisabled.Id).Error)
+	assert.Equal(t, int64(-5), reloadedEnabled.GetPriority())
+	assert.Less(t, reloadedDisabled.GetPriority(), reloadedEnabled.GetPriority())
+}
+
+func TestRunChannelAutoPriorityGroupSinksManuallyDisabledOnlyGroup(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_590_000)
+
+	manuallyDisabled := createAutoPriorityTestChannel(t, "disabled only group", 5_000, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  1,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", manuallyDisabled.Id).
+		Update("status", common.ChannelStatusManuallyDisabled).Error)
+
+	results, err := RunChannelAutoPriorityGroup(context.Background(), manuallyDisabled.Id, now)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, manuallyDisabled.Id, results[0].ChannelID)
+	assert.True(t, results[0].Applied)
+	assert.Equal(t, "manually_disabled_sunk", results[0].Reason)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, manuallyDisabled.Id).Error)
+	assert.Equal(t, int64(-1), reloaded.GetPriority())
+	var reloadedAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", manuallyDisabled.Id).First(&reloadedAbility).Error)
+	require.NotNil(t, reloadedAbility.Priority)
+	assert.Equal(t, int64(-1), *reloadedAbility.Priority)
 }
 
 func TestRunDueChannelAutoPriorityGroupEarliestLastRunIncludesManualAndGeneratedMembers(t *testing.T) {
@@ -629,6 +785,8 @@ func TestPersistChannelAutoPriorityGroupRollsBackEveryMemberOnConflict(t *testin
 		candidates,
 		scores,
 		[]int{0, 1},
+		nil,
+		channelAutoPriorityDefaultSinkPriority,
 		now,
 	)
 

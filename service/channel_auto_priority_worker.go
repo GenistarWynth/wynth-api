@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -19,7 +20,12 @@ import (
 	"gorm.io/gorm"
 )
 
-const channelAutoPriorityTickInterval = time.Minute
+const (
+	channelAutoPriorityTickInterval = time.Minute
+	// Enabled auto-priority scores normally start at 0; recompute lowers this further
+	// when hysteresis preserves a user-entered negative priority.
+	channelAutoPriorityDefaultSinkPriority = int64(-1)
+)
 
 var (
 	channelAutoPriorityOnce    sync.Once
@@ -265,7 +271,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 	var channels []model.Channel
 	if err := model.DB.WithContext(ctx).
-		Where("status = ?", common.ChannelStatusEnabled).
+		Where("status IN ?", []int{common.ChannelStatusEnabled, common.ChannelStatusManuallyDisabled}).
 		Order("id").
 		Find(&channels).Error; err != nil {
 		return nil, err
@@ -355,6 +361,22 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 	if len(configuredChannels) == 0 {
 		return nil, nil
 	}
+	manuallyDisabledByGroup := make(map[string][]model.Channel)
+	enabledConfiguredChannels := configuredChannels[:0]
+	for _, configuredChannel := range configuredChannels {
+		if configuredChannel.channel.Status == common.ChannelStatusManuallyDisabled {
+			manuallyDisabledByGroup[configuredChannel.localGroup] = append(
+				manuallyDisabledByGroup[configuredChannel.localGroup],
+				configuredChannel.channel,
+			)
+			continue
+		}
+		enabledConfiguredChannels = append(enabledConfiguredChannels, configuredChannel)
+	}
+	configuredChannels = enabledConfiguredChannels
+	if len(configuredChannels) == 0 && (!force || len(manuallyDisabledByGroup) == 0) {
+		return nil, nil
+	}
 
 	groupSchedules := make(map[string]*autoPriorityGroupSchedule)
 	for _, configuredChannel := range configuredChannels {
@@ -376,7 +398,8 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		schedule.members = append(schedule.members, configuredChannel)
 	}
 
-	selectedGroups := make([]string, 0, len(groupSchedules))
+	selectedGroups := make([]string, 0, len(groupSchedules)+len(manuallyDisabledByGroup))
+	selectedGroupSet := make(map[string]struct{}, cap(selectedGroups))
 	for localGroup, schedule := range groupSchedules {
 		// The group keeps the earliest legacy timestamp; a never-run member
 		// therefore makes the whole group due even if every peer is recent.
@@ -387,6 +410,15 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 			continue
 		}
 		selectedGroups = append(selectedGroups, localGroup)
+		selectedGroupSet[localGroup] = struct{}{}
+	}
+	if force {
+		for localGroup := range manuallyDisabledByGroup {
+			if _, selected := selectedGroupSet[localGroup]; selected {
+				continue
+			}
+			selectedGroups = append(selectedGroups, localGroup)
+		}
 	}
 	if len(selectedGroups) == 0 {
 		return nil, nil
@@ -409,6 +441,9 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 	invalidGroups := make(map[string]string)
 	for _, localGroup := range selectedGroups {
 		schedule := groupSchedules[localGroup]
+		if schedule == nil {
+			continue
+		}
 		for _, configuredChannel := range schedule.members {
 			channel := configuredChannel.channel
 			settings := configuredChannel.settings
@@ -524,21 +559,36 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 	for _, localGroup := range selectedGroups {
 		indexes := pendingIndexesByGroup[localGroup]
-		if len(indexes) == 0 {
+		manuallyDisabled := manuallyDisabledByGroup[localGroup]
+		if len(indexes) == 0 && len(manuallyDisabled) == 0 {
 			continue
 		}
-		if reason, failed := failedReasons[indexes[0]]; failed {
-			for _, idx := range indexes {
-				results = append(results, ChannelAutoPriorityRunResult{
-					ChannelID: pending[idx].channel.Id,
-					Applied:   false,
-					Reason:    reason,
-				})
+		if len(indexes) > 0 {
+			if reason, failed := failedReasons[indexes[0]]; failed {
+				for _, idx := range indexes {
+					results = append(results, ChannelAutoPriorityRunResult{
+						ChannelID: pending[idx].channel.Id,
+						Applied:   false,
+						Reason:    reason,
+					})
+				}
+				continue
 			}
-			continue
 		}
 
-		reason, err := persistChannelAutoPriorityGroup(ctx, pending, scoreResults, indexes, now)
+		sinkPriority := channelAutoPriorityDefaultSinkPriority
+		for _, idx := range indexes {
+			enabledPriority := scoreResults[idx].NewPriority
+			if enabledPriority > sinkPriority {
+				continue
+			}
+			if enabledPriority == math.MinInt64 {
+				sinkPriority = math.MinInt64
+				continue
+			}
+			sinkPriority = enabledPriority - 1
+		}
+		reason, err := persistChannelAutoPriorityGroup(ctx, pending, scoreResults, indexes, manuallyDisabled, sinkPriority, now)
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("channel auto-priority: persist group=%q failed: %v", localGroup, err))
 			reason = "update_failed"
@@ -552,6 +602,21 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 					score:     scoreResults[idx],
 				})
 			}
+			for _, channel := range manuallyDisabled {
+				results = append(results, ChannelAutoPriorityRunResult{
+					ChannelID: channel.Id,
+					Applied:   false,
+					Reason:    reason,
+					score: AutoPriorityScoreResult{
+						ChannelID:        channel.Id,
+						OldPriority:      channel.GetPriority(),
+						ComputedPriority: sinkPriority,
+						NewPriority:      channel.GetPriority(),
+						Applied:          false,
+						Reason:           reason,
+					},
+				})
+			}
 			continue
 		}
 		for _, idx := range indexes {
@@ -563,6 +628,27 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 				ChannelID: pending[idx].channel.Id,
 				Applied:   score.Applied,
 				score:     score,
+			})
+		}
+		for _, channel := range manuallyDisabled {
+			applied := channel.GetPriority() != sinkPriority
+			resultReason := "manually_disabled_at_bottom"
+			if applied {
+				appliedAny = true
+				resultReason = "manually_disabled_sunk"
+			}
+			results = append(results, ChannelAutoPriorityRunResult{
+				ChannelID: channel.Id,
+				Applied:   applied,
+				Reason:    resultReason,
+				score: AutoPriorityScoreResult{
+					ChannelID:        channel.Id,
+					OldPriority:      channel.GetPriority(),
+					ComputedPriority: sinkPriority,
+					NewPriority:      sinkPriority,
+					Applied:          applied,
+					Reason:           resultReason,
+				},
 			})
 		}
 	}
@@ -579,11 +665,32 @@ func persistChannelAutoPriorityGroup(
 	candidates []upstreamSourceAutoPriorityCandidate,
 	scores []AutoPriorityScoreResult,
 	indexes []int,
+	manuallyDisabled []model.Channel,
+	sinkPriority int64,
 	now int64,
 ) (string, error) {
 	err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, idx := range indexes {
 			if err := updateAutoPriorityCandidate(tx, candidates[idx], scores[idx], now); err != nil {
+				return err
+			}
+		}
+		if len(manuallyDisabled) > 0 {
+			channelIDs := make([]int, 0, len(manuallyDisabled))
+			for _, channel := range manuallyDisabled {
+				channelIDs = append(channelIDs, channel.Id)
+			}
+			if err := tx.Model(&model.Channel{}).
+				Where("id IN ? AND status = ?", channelIDs, common.ChannelStatusManuallyDisabled).
+				Update("priority", sinkPriority).Error; err != nil {
+				return err
+			}
+			manuallyDisabledIDs := tx.Model(&model.Channel{}).
+				Select("id").
+				Where("id IN ? AND status = ?", channelIDs, common.ChannelStatusManuallyDisabled)
+			if err := tx.Model(&model.Ability{}).
+				Where("channel_id IN (?)", manuallyDisabledIDs).
+				Update("priority", sinkPriority).Error; err != nil {
 				return err
 			}
 		}
