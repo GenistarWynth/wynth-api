@@ -70,6 +70,29 @@ func attemptedChannelIDSetFromContext(ctx *gin.Context) map[int]struct{} {
 	return attempted
 }
 
+// IsChannelAtHighestPriorityTier reports whether channelID belongs to the same
+// highest remaining priority tier used by strict channel selection. Attempted
+// channels and channels that cannot serve requestPath are excluded before the
+// tier comparison.
+func IsChannelAtHighestPriorityTier(ctx *gin.Context, group string, modelName string, requestPath string, channelID int) bool {
+	if channelID <= 0 {
+		return false
+	}
+	attemptedChannelIDs := attemptedChannelIDSetFromContext(ctx)
+	if _, attempted := attemptedChannelIDs[channelID]; attempted {
+		return false
+	}
+	preferred, err := model.CacheGetChannel(channelID)
+	if err != nil || preferred == nil {
+		return false
+	}
+	highestTierChannel, err := model.GetRandomSatisfiedChannel(group, modelName, 0, requestPath, attemptedChannelIDs)
+	if err != nil || highestTierChannel == nil {
+		return false
+	}
+	return preferred.GetPriority() == highestTierChannel.GetPriority()
+}
+
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
 // 尝试获取一个满足要求的随机渠道。
 //

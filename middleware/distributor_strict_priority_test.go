@@ -40,9 +40,12 @@ func withDistributorStrictPriorityDB(t *testing.T) {
 	})
 }
 
-func insertDistributorStrictPriorityCandidate(t *testing.T, id int, group string) {
+func insertDistributorStrictPriorityCandidate(t *testing.T, id int, group string, priorities ...int64) {
 	t.Helper()
 	priority := int64(100)
+	if len(priorities) > 0 {
+		priority = priorities[0]
+	}
 	weight := uint(100)
 	require.NoError(t, model.DB.Create(&model.Channel{
 		Id:       id,
@@ -77,7 +80,7 @@ func withDistributorStrictPriorityAutoGroups(t *testing.T) {
 	})
 }
 
-func withDistributorStrictPriorityAffinityRule(t *testing.T, affinityValue string) {
+func withDistributorStrictPriorityAffinityRule(t *testing.T, affinityValue, usingGroup string, channelID int) {
 	t.Helper()
 	setting := operation_setting.GetChannelAffinitySetting()
 	previousEnabled := setting.Enabled
@@ -105,32 +108,96 @@ func withDistributorStrictPriorityAffinityRule(t *testing.T, affinityValue strin
 	seedCtx, _ := gin.CreateTestContext(seedRecorder)
 	seedCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	seedCtx.Request.Header.Set("X-Affinity-Key", affinityValue)
-	_, found := service.GetPreferredChannelByAffinity(seedCtx, "gpt-test", "auto")
+	_, found := service.GetPreferredChannelByAffinity(seedCtx, "gpt-test", usingGroup)
 	require.False(t, found)
-	service.RecordChannelAffinity(seedCtx, 2)
+	service.RecordChannelAffinity(seedCtx, channelID)
 	t.Cleanup(func() {
 		service.ClearCurrentChannelAffinityCache(seedCtx)
 	})
+}
+
+func newDistributorStrictPriorityContext(affinityValue, usingGroup string) *gin.Context {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("X-Affinity-Key", affinityValue)
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, usingGroup)
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	return ctx
+}
+
+func uniqueDistributorStrictPriorityAffinityValue(t *testing.T) string {
+	t.Helper()
+	return "tenant-" + strings.ReplaceAll(t.Name(), "/", "-") + "-" + time.Now().Format("150405.000000000")
+}
+
+func TestDistributeRejectsLowerPriorityAffinityChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withDistributorStrictPriorityDB(t)
+	insertDistributorStrictPriorityCandidate(t, 1, "default", 200)
+	insertDistributorStrictPriorityCandidate(t, 2, "default", 100)
+	model.InitChannelCache()
+
+	affinityValue := uniqueDistributorStrictPriorityAffinityValue(t)
+	withDistributorStrictPriorityAffinityRule(t, affinityValue, "default", 2)
+	ctx := newDistributorStrictPriorityContext(affinityValue, "default")
+
+	Distribute()(ctx)
+
+	require.False(t, ctx.IsAborted())
+	require.Equal(t, 1, common.GetContextKeyInt(ctx, constant.ContextKeyChannelId))
+}
+
+func TestDistributeKeepsHighestTierAffinityChannel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withDistributorStrictPriorityDB(t)
+	insertDistributorStrictPriorityCandidate(t, 1, "default", 200)
+	insertDistributorStrictPriorityCandidate(t, 2, "default", 200)
+	model.InitChannelCache()
+
+	affinityValue := uniqueDistributorStrictPriorityAffinityValue(t)
+	withDistributorStrictPriorityAffinityRule(t, affinityValue, "default", 2)
+	ctx := newDistributorStrictPriorityContext(affinityValue, "default")
+
+	Distribute()(ctx)
+
+	require.False(t, ctx.IsAborted())
+	require.Equal(t, 2, common.GetContextKeyInt(ctx, constant.ContextKeyChannelId))
+}
+
+func TestDistributeRejectsLowerPriorityAffinityChannelInAutoGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withDistributorStrictPriorityDB(t)
+	withDistributorStrictPriorityAutoGroups(t)
+	insertDistributorStrictPriorityCandidate(t, 1, "vip", 200)
+	insertDistributorStrictPriorityCandidate(t, 2, "vip", 100)
+	model.InitChannelCache()
+
+	affinityValue := uniqueDistributorStrictPriorityAffinityValue(t)
+	withDistributorStrictPriorityAffinityRule(t, affinityValue, "auto", 2)
+	ctx := newDistributorStrictPriorityContext(affinityValue, "auto")
+
+	Distribute()(ctx)
+
+	require.False(t, ctx.IsAborted())
+	require.Equal(t, 1, common.GetContextKeyInt(ctx, constant.ContextKeyChannelId))
+	autoGroup, exists := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
+	require.True(t, exists)
+	require.Equal(t, "vip", autoGroup)
 }
 
 func TestDistributeSetsAutoGroupIndexForAffinityHit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withDistributorStrictPriorityDB(t)
 	withDistributorStrictPriorityAutoGroups(t)
-	insertDistributorStrictPriorityCandidate(t, 1, "default")
-	insertDistributorStrictPriorityCandidate(t, 2, "vip")
+	insertDistributorStrictPriorityCandidate(t, 1, "default", 100)
+	insertDistributorStrictPriorityCandidate(t, 2, "vip", 100)
 	model.InitChannelCache()
 
-	affinityValue := "tenant-" + strings.ReplaceAll(t.Name(), "/", "-") + "-" + time.Now().Format("150405.000000000")
-	withDistributorStrictPriorityAffinityRule(t, affinityValue)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test"}`))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-	ctx.Request.Header.Set("X-Affinity-Key", affinityValue)
-	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "auto")
-	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	affinityValue := uniqueDistributorStrictPriorityAffinityValue(t)
+	withDistributorStrictPriorityAffinityRule(t, affinityValue, "auto", 2)
+	ctx := newDistributorStrictPriorityContext(affinityValue, "auto")
 
 	Distribute()(ctx)
 
