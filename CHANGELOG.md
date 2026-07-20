@@ -6,6 +6,8 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.44] - 2026-07-20
+
 ### Fixed
 - Manually disabled channels now fully exit auto-priority: channel and ability priorities are sunk immediately and on every worker tick, while auto-priority score metadata is cleared so stale competitive scores are no longer displayed; auto-disabled channels remain unchanged.
 
