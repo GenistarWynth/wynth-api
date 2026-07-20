@@ -971,6 +971,50 @@ func TestPersistAutoPriorityCandidateRejectsChangedChannel(t *testing.T) {
 	assert.Equal(t, int64(100), *reloadedAbility.Priority)
 }
 
+func TestPersistAutoPriorityCandidateRejectsManuallyDisabledChannel(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(7_100_000)
+	channel := createAutoPriorityTestChannel(t, "manual disable race", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+	})
+	candidate := upstreamSourceAutoPriorityCandidate{
+		channel:  channel,
+		settings: channel.GetOtherSettings(),
+		resolution: upstreamSourceRuleResolution{
+			AutoPriorityEnabled:         true,
+			AutoPriorityIntervalMinutes: 15,
+			AutoPriorityWindowHours:     24,
+		},
+		windowStart: now - 24*3600,
+		windowEnd:   now,
+	}
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", channel.Id).
+		Update("status", common.ChannelStatusManuallyDisabled).Error)
+
+	reason, err := persistAutoPriorityCandidate(context.Background(), candidate, AutoPriorityScoreResult{
+		ChannelID:        channel.Id,
+		OldPriority:      100,
+		ComputedPriority: 200,
+		NewPriority:      200,
+		Applied:          true,
+	}, now)
+
+	require.NoError(t, err)
+	assert.Equal(t, "generated_channel_changed", reason)
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
+	assert.Equal(t, int64(100), reloadedChannel.GetPriority())
+	assert.Equal(t, channel.OtherSettings, reloadedChannel.OtherSettings)
+	var reloadedAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
+	require.NotNil(t, reloadedAbility.Priority)
+	assert.Equal(t, int64(100), *reloadedAbility.Priority)
+}
+
 func TestFillAutoPriorityScoreInputsForWindowMarksStatsFailure(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	candidate := upstreamSourceAutoPriorityCandidate{

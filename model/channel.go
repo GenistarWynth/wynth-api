@@ -798,14 +798,6 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	}
 
 	shouldUpdateAbilities := false
-	defer func() {
-		if shouldUpdateAbilities {
-			err := UpdateAbilityStatus(channelId, status == common.ChannelStatusEnabled)
-			if err != nil {
-				common.SysLog(fmt.Sprintf("failed to update ability status: channel_id=%d, error=%v", channelId, err))
-			}
-		}
-	}()
 	channel, err := GetChannelById(channelId, true)
 	if err != nil {
 		return false
@@ -832,10 +824,35 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.Status = status
 			shouldUpdateAbilities = true
 		}
-		err = channel.SaveWithoutKey()
+		channel.UpdatedTime = common.GetTimestamp()
+		err = DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Omit("key").Save(channel).Error; err != nil {
+				return err
+			}
+			if channel.Status == common.ChannelStatusManuallyDisabled {
+				if _, err := SinkManuallyDisabledChannels(tx, []int{channel.Id}, nil); err != nil {
+					return err
+				}
+			}
+			if shouldUpdateAbilities {
+				if err := tx.Model(&Ability{}).
+					Where("channel_id = ?", channelId).
+					Select("enabled").
+					Update("enabled", status == common.ChannelStatusEnabled).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
+			if common.MemoryCacheEnabled {
+				InitChannelCache()
+			}
 			return false
+		}
+		if common.MemoryCacheEnabled {
+			InitChannelCache()
 		}
 	}
 	return true
@@ -859,12 +876,24 @@ func EnableChannelByTag(tag string) error {
 }
 
 func DisableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
-	if err != nil {
-		return err
-	}
-	err = UpdateAbilityStatusByTag(tag, false)
-	return err
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var channelIDs []int
+		if err := tx.Model(&Channel{}).Where("tag = ?", tag).Pluck("id", &channelIDs).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Channel{}).
+			Where("id IN ?", channelIDs).
+			Update("status", common.ChannelStatusManuallyDisabled).Error; err != nil {
+			return err
+		}
+		if _, err := SinkManuallyDisabledChannels(tx, channelIDs, nil); err != nil {
+			return err
+		}
+		return tx.Model(&Ability{}).
+			Where("tag = ?", tag).
+			Select("enabled").
+			Update("enabled", false).Error
+	})
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {

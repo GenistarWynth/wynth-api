@@ -686,6 +686,7 @@ func updateAutoPriorityCandidate(tx *gorm.DB, candidate upstreamSourceAutoPriori
 		updates["priority"] = score.NewPriority
 	}
 	res := tx.Model(&model.Channel{}).
+		Where("status = ?", common.ChannelStatusEnabled).
 		Where("id = ? AND settings = ?", candidate.channel.Id, candidate.channel.OtherSettings).
 		Updates(updates)
 	if res.Error != nil {

@@ -557,14 +557,24 @@ func TestDiscoverUpstreamSourceDisablesGeneratedChannelForMissingGroup(t *testin
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)
 	rate := 1.0
+	stalePriority := int64(158)
 	channel := model.Channel{
-		Name:   "source-a / 1.000x",
-		Type:   constant.ChannelTypeOpenAI,
-		Key:    "sk-local",
-		Status: common.ChannelStatusEnabled,
-		Group:  "default",
+		Name:     "source-a / 1.000x",
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-local",
+		Status:   common.ChannelStatusEnabled,
+		Models:   "gpt-4o",
+		Group:    "default",
+		Priority: &stalePriority,
 	}
 	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     "default",
+		Model:     "gpt-4o",
+		ChannelId: channel.Id,
+		Enabled:   true,
+		Priority:  &stalePriority,
+	}).Error)
 	mapping := model.UpstreamSourceChannelMapping{
 		SourceID:                source.Id,
 		SyncEnabled:             true,
@@ -580,6 +590,14 @@ func TestDiscoverUpstreamSourceDisablesGeneratedChannelForMissingGroup(t *testin
 	settings := channel.GetOtherSettings()
 	settings.GeneratedByUpstreamSourceID = source.Id
 	settings.GeneratedByUpstreamMappingID = mapping.Id
+	settings.ChannelAutoPriorityEnabled = true
+	settings.ChannelAutoPriorityLastRunAt = 300
+	settings.ChannelAutoPriorityLastAppliedAt = 290
+	settings.ChannelAutoPriorityLastScore = &dto.ChannelAutoPriorityScore{
+		ComputedAt:  300,
+		FinalScore:  81.3,
+		NewPriority: stalePriority,
+	}
 	channel.SetOtherSettings(settings)
 	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error)
 	service := UpstreamSourceService{
@@ -601,6 +619,16 @@ func TestDiscoverUpstreamSourceDisablesGeneratedChannelForMissingGroup(t *testin
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
+	assert.Equal(t, int64(-1), reloadedChannel.GetPriority())
+	reloadedSettings := reloadedChannel.GetOtherSettings()
+	assert.Zero(t, reloadedSettings.ChannelAutoPriorityLastRunAt)
+	assert.Zero(t, reloadedSettings.ChannelAutoPriorityLastAppliedAt)
+	assert.Nil(t, reloadedSettings.ChannelAutoPriorityLastScore)
+	var reloadedAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
+	assert.False(t, reloadedAbility.Enabled)
+	require.NotNil(t, reloadedAbility.Priority)
+	assert.Equal(t, int64(-1), *reloadedAbility.Priority)
 }
 
 func TestDiscoverUpstreamSourceRollsBackMappingsWhenStatusUpdateFails(t *testing.T) {
@@ -1363,7 +1391,7 @@ func TestSyncNewAPIUpstreamSourceDisablesExistingGeneratedChannelWithoutModels(t
 	rate := 1.0
 	mapping := createSyncTestMapping(t, source.Id, "10", "ChatGPT Pro", &rate)
 	baseURL := "https://relay.example.com"
-	priority := int64(0)
+	priority := int64(813)
 	weight := uint(0)
 	channel := model.Channel{
 		Name:     "source-a / 1.000x",
@@ -1378,10 +1406,25 @@ func TestSyncNewAPIUpstreamSourceDisablesExistingGeneratedChannelWithoutModels(t
 		Tag:      common.GetPointer("source-a"),
 	}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		GeneratedByUpstreamSourceID:  source.Id,
-		GeneratedByUpstreamMappingID: mapping.Id,
+		GeneratedByUpstreamSourceID:      source.Id,
+		GeneratedByUpstreamMappingID:     mapping.Id,
+		ChannelAutoPriorityEnabled:       true,
+		ChannelAutoPriorityLastRunAt:     1900,
+		ChannelAutoPriorityLastAppliedAt: 1800,
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			ComputedAt:  1900,
+			FinalScore:  81.3,
+			NewPriority: priority,
+		},
 	})
 	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     channel.Group,
+		Model:     "gpt-4o",
+		ChannelId: channel.Id,
+		Enabled:   true,
+		Priority:  &priority,
+	}).Error)
 	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Updates(map[string]any{
 		"upstream_key_id":  "key-10",
 		"local_channel_id": channel.Id,
@@ -1414,13 +1457,157 @@ func TestSyncNewAPIUpstreamSourceDisablesExistingGeneratedChannelWithoutModels(t
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, reloadedChannel.Status)
+	assert.Equal(t, int64(-1), reloadedChannel.GetPriority())
 	assert.Equal(t, "gpt-4o", reloadedChannel.Models)
+	reloadedSettings := reloadedChannel.GetOtherSettings()
+	assert.Zero(t, reloadedSettings.ChannelAutoPriorityLastRunAt)
+	assert.Zero(t, reloadedSettings.ChannelAutoPriorityLastAppliedAt)
+	assert.Nil(t, reloadedSettings.ChannelAutoPriorityLastScore)
+	var reloadedAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
+	assert.False(t, reloadedAbility.Enabled)
+	require.NotNil(t, reloadedAbility.Priority)
+	assert.Equal(t, int64(-1), *reloadedAbility.Priority)
 	var reloadedMapping model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
 	assert.Equal(t, model.UpstreamMappingSyncStatusSkipped, reloadedMapping.SyncStatus)
 	assert.Contains(t, reloadedMapping.LastError, "models")
 	assert.Equal(t, channel.Id, reloadedMapping.LocalChannelID)
 	assert.Equal(t, int64(2007), reloadedMapping.LastSyncedAt)
+}
+
+func TestDisableGeneratedChannelForSkippedMappingReloadsAutoPriorityExitState(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	enabledPriority := int64(-5)
+	enabled := model.Channel{
+		Name:     "enabled negative peer",
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-enabled",
+		Status:   common.ChannelStatusEnabled,
+		Models:   "gpt-4o",
+		Group:    "default",
+		Priority: &enabledPriority,
+	}
+	require.NoError(t, model.DB.Create(&enabled).Error)
+	stalePriority := int64(813)
+	disabled := model.Channel{
+		Name:     "generated stale score",
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-disabled",
+		Status:   common.ChannelStatusEnabled,
+		Models:   "gpt-4o",
+		Group:    "default",
+		Priority: &stalePriority,
+	}
+	disabled.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:       true,
+		ChannelAutoPriorityLastRunAt:     1900,
+		ChannelAutoPriorityLastAppliedAt: 1800,
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			ComputedAt:  1900,
+			FinalScore:  81.3,
+			NewPriority: stalePriority,
+		},
+	})
+	require.NoError(t, model.DB.Create(&disabled).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     disabled.Group,
+		Model:     "gpt-4o",
+		ChannelId: disabled.Id,
+		Enabled:   true,
+		Priority:  &stalePriority,
+	}).Error)
+
+	require.NoError(t, disableGeneratedChannelForSkippedMapping(context.Background(), &disabled, 2007))
+
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, disabled.Status)
+	assert.Equal(t, int64(-6), disabled.GetPriority())
+	settings := disabled.GetOtherSettings()
+	assert.Zero(t, settings.ChannelAutoPriorityLastRunAt)
+	assert.Zero(t, settings.ChannelAutoPriorityLastAppliedAt)
+	assert.Nil(t, settings.ChannelAutoPriorityLastScore)
+	var ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", disabled.Id).First(&ability).Error)
+	assert.False(t, ability.Enabled)
+	require.NotNil(t, ability.Priority)
+	assert.Equal(t, int64(-6), *ability.Priority)
+}
+
+func TestSyncUpstreamSourceRollsBackManualDisableWhenAbilityRebuildFails(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createSyncTestSource(t, nil)
+	rate := 1.0
+	mapping := createSyncTestMapping(t, source.Id, "10", "primary", &rate)
+	priority := int64(813)
+	channel := model.Channel{
+		Name:     "source-a / 1.000x",
+		Type:     constant.ChannelTypeOpenAI,
+		Key:      "sk-old",
+		Status:   common.ChannelStatusEnabled,
+		Models:   "gpt-4o",
+		Group:    "default",
+		Priority: &priority,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+		ChannelAutoPriorityEnabled:   true,
+		ChannelAutoPriorityLastRunAt: 1900,
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			ComputedAt:  1900,
+			FinalScore:  81.3,
+			NewPriority: priority,
+		},
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group:     channel.Group,
+		Model:     "gpt-4o",
+		ChannelId: channel.Id,
+		Enabled:   true,
+		Priority:  &priority,
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).
+		Where("id = ?", mapping.Id).
+		Updates(map[string]any{
+			"upstream_key_id":  "key-10",
+			"local_channel_id": channel.Id,
+		}).Error)
+	callbackName := fmt.Sprintf("fail_generated_ability_rebuild_%s", t.Name())
+	require.NoError(t, model.DB.Callback().Delete().Before("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "Ability" {
+			tx.AddError(errors.New("forced generated ability rebuild failure"))
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Delete().Remove(callbackName))
+	})
+	service := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{updateKey: UpstreamKey{ID: "key-10", Key: "sk-old"}}, nil
+		},
+		FetchModels: func(channel *model.Channel) ([]string, error) {
+			return nil, errors.New("model fetch failed")
+		},
+		Now: func() int64 { return 2007 },
+	}
+
+	result, err := service.Sync(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, model.UpstreamSyncStatusFailed, result.Status)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	assert.Equal(t, common.ChannelStatusEnabled, reloaded.Status)
+	assert.Equal(t, "gpt-4o", reloaded.Models)
+	assert.Equal(t, int64(813), reloaded.GetPriority())
+	require.NotNil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+	var ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+	assert.True(t, ability.Enabled)
+	require.NotNil(t, ability.Priority)
+	assert.Equal(t, int64(813), *ability.Priority)
 }
 
 func TestSyncUpstreamSourceFixedModelsIntersectsFetchedModels(t *testing.T) {
@@ -2422,6 +2609,7 @@ func TestSyncUpstreamSourceDoesNotEnableChannelWithoutModels(t *testing.T) {
 	var channel model.Channel
 	require.NoError(t, model.DB.First(&channel).Error)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, channel.Status)
+	assert.Equal(t, int64(-1), channel.GetPriority())
 	assert.Empty(t, channel.Models)
 	var abilityCount int64
 	require.NoError(t, model.DB.Model(&model.Ability{}).Count(&abilityCount).Error)

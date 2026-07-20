@@ -588,7 +588,7 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	if shouldSkipNewAPIEmptyModelMapping(source, modelErr) {
 		errText := SanitizeUpstreamSourceError(modelErr)
 		if existingChannel != nil {
-			if err := disableGeneratedChannelForSkippedMapping(existingChannel, now); err != nil {
+			if err := disableGeneratedChannelForSkippedMapping(ctx, existingChannel, now); err != nil {
 				localErrText := SanitizeUpstreamSourceError(err)
 				_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, localErrText, now)
 				result.Status = model.UpstreamMappingSyncStatusFailed
@@ -611,27 +611,42 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	}
 
 	created := mapping.LocalChannelID == 0
-	savedChannel, err := saveGeneratedChannel(channel, created, autoPriorityOwnsGeneratedChannelPriority(existingChannel, resolution), now)
+	if !created {
+		if err := model.RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
+			errText := SanitizeUpstreamSourceError(err)
+			_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
+			result.Status = model.UpstreamMappingSyncStatusFailed
+			result.Error = errText
+			return result, nil
+		}
+	}
+	var savedChannel *model.Channel
+	err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		savedChannel, err = saveGeneratedChannelTx(tx, channel, created, autoPriorityOwnsGeneratedChannelPriority(existingChannel, resolution), now)
+		if err != nil {
+			return err
+		}
+		if savedChannel.Status == common.ChannelStatusManuallyDisabled {
+			if _, err = sinkManuallyDisabledChannels(ctx, tx, []int{savedChannel.Id}, nil); err != nil {
+				return err
+			}
+			if err = tx.First(savedChannel, savedChannel.Id).Error; err != nil {
+				return err
+			}
+		}
+		if created {
+			return savedChannel.AddAbilities(tx)
+		}
+		return savedChannel.UpdateAbilities(tx)
+	})
 	if err != nil {
 		errText := SanitizeUpstreamSourceError(err)
 		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, mapping.LocalChannelID, model.UpstreamMappingSyncStatusFailed, errText, now)
 		result.Status = model.UpstreamMappingSyncStatusFailed
 		result.Error = errText
+		result.LocalChannelID = mapping.LocalChannelID
 		return result, nil
-	}
-
-	if created {
-		err = savedChannel.AddAbilities(nil)
-	} else {
-		err = savedChannel.UpdateAbilities(nil)
-	}
-	if err != nil {
-		errText := SanitizeUpstreamSourceError(err)
-		_ = updateUpstreamSourceMappingSync(mapping.Id, upstreamKeyID, savedChannel.Id, model.UpstreamMappingSyncStatusFailed, errText, now)
-		result.Status = model.UpstreamMappingSyncStatusFailed
-		result.Error = errText
-		result.LocalChannelID = savedChannel.Id
-		return result, savedChannel
 	}
 
 	status := model.UpstreamMappingSyncStatusSynced
@@ -658,19 +673,29 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	return result, savedChannel
 }
 
-func disableGeneratedChannelForSkippedMapping(channel *model.Channel, now int64) error {
+func disableGeneratedChannelForSkippedMapping(ctx context.Context, channel *model.Channel, now int64) error {
 	if channel == nil {
 		return nil
 	}
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{
-		"status":       common.ChannelStatusManuallyDisabled,
-		"updated_time": now,
-	}).Error; err != nil {
+	err := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{
+			"status":       common.ChannelStatusManuallyDisabled,
+			"updated_time": now,
+		}).Error; err != nil {
+			return err
+		}
+		if _, err := sinkManuallyDisabledChannels(ctx, tx, []int{channel.Id}, nil); err != nil {
+			return err
+		}
+		return tx.Model(&model.Ability{}).
+			Where("channel_id = ?", channel.Id).
+			Select("enabled").
+			Update("enabled", false).Error
+	})
+	if err != nil {
 		return err
 	}
-	channel.Status = common.ChannelStatusManuallyDisabled
-	channel.UpdatedTime = now
-	return nil
+	return model.DB.WithContext(ctx).First(channel, channel.Id).Error
 }
 
 func shouldSkipNewAPIEmptyModelMapping(source *model.UpstreamSource, modelErr error) bool {
@@ -1005,28 +1030,32 @@ func intersectFetchedModelsWithFixedModels(fetchedModels []string, fixedModels [
 }
 
 func saveGeneratedChannel(channel *model.Channel, create bool, autoPriorityManaged bool, now int64) (*model.Channel, error) {
+	if !create {
+		if err := model.RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
+			return nil, err
+		}
+	}
+	return saveGeneratedChannelTx(model.DB, channel, create, autoPriorityManaged, now)
+}
+
+// saveGeneratedChannelTx assumes account-pool type compatibility was checked
+// before opening tx, because that guard uses the primary DB connection.
+func saveGeneratedChannelTx(db *gorm.DB, channel *model.Channel, create bool, autoPriorityManaged bool, now int64) (*model.Channel, error) {
 	channel.LastSyncTime = now
 	channel.UpdatedTime = now
 	if create {
 		channel.CreatedTime = now
-		if err := model.DB.Create(channel).Error; err != nil {
+		if err := db.Create(channel).Error; err != nil {
 			return nil, err
 		}
 		return channel, nil
 	}
-	// This direct map update bypasses model.Channel.Update/Save, so it must enforce the
-	// pool-bound channel-type guard itself: a channel generated by an upstream source can be
-	// account-pool bound while disabled, and a later sync must not repoint its provider type
-	// into something incompatible with the pool platform.
-	if err := model.RejectAccountPoolBoundChannelTypeChange(channel.Id, channel.Type); err != nil {
-		return nil, err
-	}
 	updates := generatedChannelUpdateMap(channel, autoPriorityManaged)
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+	if err := db.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
 		return nil, err
 	}
 	var reloaded model.Channel
-	if err := model.DB.First(&reloaded, channel.Id).Error; err != nil {
+	if err := db.First(&reloaded, channel.Id).Error; err != nil {
 		return nil, err
 	}
 	return &reloaded, nil
@@ -1229,6 +1258,15 @@ func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredI
 			"status":       common.ChannelStatusManuallyDisabled,
 			"updated_time": now,
 		}).Error; err != nil {
+			return 0, err
+		}
+		if _, err := sinkManuallyDisabledChannels(tx.Statement.Context, tx, disableChannelIDs, nil); err != nil {
+			return 0, err
+		}
+		if err := tx.Model(&model.Ability{}).
+			Where("channel_id IN ?", disableChannelIDs).
+			Select("enabled").
+			Update("enabled", false).Error; err != nil {
 			return 0, err
 		}
 	}

@@ -24,7 +24,7 @@ const (
 	channelAutoPriorityTickInterval = time.Minute
 	// Enabled auto-priority scores normally start at 0; recompute lowers this further
 	// when hysteresis preserves a user-entered negative priority.
-	channelAutoPriorityDefaultSinkPriority = int64(-1)
+	channelAutoPriorityDefaultSinkPriority = model.ManuallyDisabledChannelDefaultPriority
 )
 
 var (
@@ -268,6 +268,32 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 	if now == 0 {
 		now = common.GetTimestamp()
 	}
+	allSweepResults, err := sinkManuallyDisabledChannels(ctx, nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	appliedAny := false
+	for _, result := range allSweepResults {
+		appliedAny = appliedAny || result.Applied
+	}
+	sweepResults := allSweepResults
+	if localGroupFilter != nil {
+		sweepResults = make([]model.ManuallyDisabledChannelSinkResult, 0, len(allSweepResults))
+		for _, result := range allSweepResults {
+			if _, selected := localGroupFilter[result.LocalGroup]; selected {
+				sweepResults = append(sweepResults, result)
+			}
+		}
+	}
+	sweepByChannelID := make(map[int]model.ManuallyDisabledChannelSinkResult, len(sweepResults))
+	for _, result := range sweepResults {
+		sweepByChannelID[result.ChannelID] = result
+	}
+	defer func() {
+		if appliedAny {
+			initChannelCacheAfterAutoPriority(ctx)
+		}
+	}()
 
 	var channels []model.Channel
 	if err := model.DB.WithContext(ctx).
@@ -306,7 +332,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		}
 	}
 	if len(channelsWithSettings) == 0 {
-		return nil, nil
+		return manuallyDisabledSinkRunResults(sweepResults), nil
 	}
 
 	generatedStates, err := loadGeneratedAutoPriorityStates(ctx, mappingIDs)
@@ -359,7 +385,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		})
 	}
 	if len(configuredChannels) == 0 {
-		return nil, nil
+		return manuallyDisabledSinkRunResults(sweepResults), nil
 	}
 	manuallyDisabledByGroup := make(map[string][]model.Channel)
 	enabledConfiguredChannels := configuredChannels[:0]
@@ -375,7 +401,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 	}
 	configuredChannels = enabledConfiguredChannels
 	if len(configuredChannels) == 0 && (!force || len(manuallyDisabledByGroup) == 0) {
-		return nil, nil
+		return manuallyDisabledSinkRunResults(sweepResults), nil
 	}
 
 	groupSchedules := make(map[string]*autoPriorityGroupSchedule)
@@ -421,7 +447,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		}
 	}
 	if len(selectedGroups) == 0 {
-		return nil, nil
+		return manuallyDisabledSinkRunResults(sweepResults), nil
 	}
 	sort.Strings(selectedGroups)
 
@@ -555,7 +581,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 	scoreResults := ScoreAutoPriorityCandidates(scoreInputs, 1000)
 	results := make([]ChannelAutoPriorityRunResult, 0, len(scoreResults))
-	appliedAny := false
+	processedManuallyDisabled := make(map[int]struct{}, len(sweepResults))
 
 	for _, localGroup := range selectedGroups {
 		indexes := pendingIndexesByGroup[localGroup]
@@ -588,6 +614,11 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 			}
 			sinkPriority = enabledPriority - 1
 		}
+		for _, channel := range manuallyDisabled {
+			if sweepResult, ok := sweepByChannelID[channel.Id]; ok && sweepResult.NewPriority < sinkPriority {
+				sinkPriority = sweepResult.NewPriority
+			}
+		}
 		reason, err := persistChannelAutoPriorityGroup(ctx, pending, scoreResults, indexes, manuallyDisabled, sinkPriority, now)
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("channel auto-priority: persist group=%q failed: %v", localGroup, err))
@@ -603,6 +634,11 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 				})
 			}
 			for _, channel := range manuallyDisabled {
+				processedManuallyDisabled[channel.Id] = struct{}{}
+				if sweepResult := sweepByChannelID[channel.Id]; sweepResult.Applied {
+					results = append(results, manuallyDisabledSinkRunResult(sweepResult))
+					continue
+				}
 				results = append(results, ChannelAutoPriorityRunResult{
 					ChannelID: channel.Id,
 					Applied:   false,
@@ -631,11 +667,17 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 			})
 		}
 		for _, channel := range manuallyDisabled {
-			applied := channel.GetPriority() != sinkPriority
+			processedManuallyDisabled[channel.Id] = struct{}{}
+			sweepResult := sweepByChannelID[channel.Id]
+			applied := sweepResult.Applied || channel.GetPriority() != sinkPriority
 			resultReason := "manually_disabled_at_bottom"
 			if applied {
 				appliedAny = true
 				resultReason = "manually_disabled_sunk"
+			}
+			oldPriority := channel.GetPriority()
+			if sweepResult.Applied {
+				oldPriority = sweepResult.OldPriority
 			}
 			results = append(results, ChannelAutoPriorityRunResult{
 				ChannelID: channel.Id,
@@ -643,7 +685,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 				Reason:    resultReason,
 				score: AutoPriorityScoreResult{
 					ChannelID:        channel.Id,
-					OldPriority:      channel.GetPriority(),
+					OldPriority:      oldPriority,
 					ComputedPriority: sinkPriority,
 					NewPriority:      sinkPriority,
 					Applied:          applied,
@@ -653,11 +695,43 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		}
 	}
 
-	if appliedAny {
-		initChannelCacheAfterAutoPriority(ctx)
+	for _, sinkResult := range sweepResults {
+		if !sinkResult.Applied {
+			continue
+		}
+		if _, processed := processedManuallyDisabled[sinkResult.ChannelID]; processed {
+			continue
+		}
+		results = append(results, manuallyDisabledSinkRunResult(sinkResult))
 	}
 
 	return results, nil
+}
+
+func manuallyDisabledSinkRunResults(sinkResults []model.ManuallyDisabledChannelSinkResult) []ChannelAutoPriorityRunResult {
+	results := make([]ChannelAutoPriorityRunResult, 0, len(sinkResults))
+	for _, sinkResult := range sinkResults {
+		if sinkResult.Applied {
+			results = append(results, manuallyDisabledSinkRunResult(sinkResult))
+		}
+	}
+	return results
+}
+
+func manuallyDisabledSinkRunResult(sinkResult model.ManuallyDisabledChannelSinkResult) ChannelAutoPriorityRunResult {
+	return ChannelAutoPriorityRunResult{
+		ChannelID: sinkResult.ChannelID,
+		Applied:   true,
+		Reason:    "manually_disabled_sunk",
+		score: AutoPriorityScoreResult{
+			ChannelID:        sinkResult.ChannelID,
+			OldPriority:      sinkResult.OldPriority,
+			ComputedPriority: sinkResult.NewPriority,
+			NewPriority:      sinkResult.NewPriority,
+			Applied:          true,
+			Reason:           "manually_disabled_sunk",
+		},
+	}
 }
 
 func persistChannelAutoPriorityGroup(
@@ -680,17 +754,9 @@ func persistChannelAutoPriorityGroup(
 			for _, channel := range manuallyDisabled {
 				channelIDs = append(channelIDs, channel.Id)
 			}
-			if err := tx.Model(&model.Channel{}).
-				Where("id IN ? AND status = ?", channelIDs, common.ChannelStatusManuallyDisabled).
-				Update("priority", sinkPriority).Error; err != nil {
-				return err
-			}
-			manuallyDisabledIDs := tx.Model(&model.Channel{}).
-				Select("id").
-				Where("id IN ? AND status = ?", channelIDs, common.ChannelStatusManuallyDisabled)
-			if err := tx.Model(&model.Ability{}).
-				Where("channel_id IN (?)", manuallyDisabledIDs).
-				Update("priority", sinkPriority).Error; err != nil {
+			if _, err := sinkManuallyDisabledChannels(ctx, tx, channelIDs, map[string]int64{
+				strings.TrimSpace(manuallyDisabled[0].Group): sinkPriority,
+			}); err != nil {
 				return err
 			}
 		}
