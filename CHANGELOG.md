@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.47] - 2026-07-21
+
+### Fixed
+- Sub2API upstream re-sync no longer fails when customized upstreams (e.g. lcodex) require `config_version` for API key updates: matching existing keys skip no-op UpdateKey, empty upstream secrets no longer wipe local channel keys, and UpdateKey retries with fetched/default `config_version` when required.
+
 ## [v1.0.0-rc.46] - 2026-07-20
 
 ### Changed
