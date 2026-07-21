@@ -392,13 +392,26 @@ func (a NewAPIAdapter) tokenToUpstreamKey(ctx context.Context, source *model.Ups
 	if token.ID <= 0 {
 		return UpstreamKey{}, errors.New("new-api token ID is missing")
 	}
-	fullKey, err := newAPIManagementRequest[newAPITokenKeyData](ctx, &a, source, http.MethodPost, "/token/"+strconv.Itoa(token.ID)+"/key", nil, nil)
-	if err != nil {
-		return UpstreamKey{}, err
+	key := strings.TrimSpace(token.Key)
+	if strings.Contains(key, "*") {
+		key = ""
+	}
+	if key == "" {
+		fullKey, err := newAPIManagementRequest[newAPITokenKeyData](ctx, &a, source, http.MethodPost, "/token/"+strconv.Itoa(token.ID)+"/key", nil, nil)
+		if err != nil {
+			return UpstreamKey{}, err
+		}
+		key = strings.TrimSpace(fullKey.Key)
+	}
+	if key == "" {
+		return UpstreamKey{}, fmt.Errorf("new-api token %d key is missing", token.ID)
+	}
+	if !strings.HasPrefix(key, "sk-") {
+		key = "sk-" + key
 	}
 	return UpstreamKey{
 		ID:      strconv.Itoa(token.ID),
-		Key:     strings.TrimSpace(fullKey.Key),
+		Key:     key,
 		Name:    strings.TrimSpace(token.Name),
 		GroupID: strings.TrimSpace(token.Group),
 	}, nil

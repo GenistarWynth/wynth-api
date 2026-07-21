@@ -170,6 +170,86 @@ func TestNewAPIAdapterCreateKeyCreatesTokenAndReadsFullKey(t *testing.T) {
 	assert.Equal(t, "pro", key.GroupID)
 }
 
+func TestNewAPIAdapterCreateKeyUsesSearchKeyWhenSecretEndpointIsMissing(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	var secretEndpointRequested bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "existing-management-token", r.Header.Get("Authorization"))
+		require.Equal(t, "7", r.Header.Get("New-Api-User"))
+		switch r.URL.Path {
+		case "/api/token/":
+			require.Equal(t, http.MethodPost, r.Method)
+			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": ""})
+		case "/api/token/search":
+			require.Equal(t, http.MethodGet, r.Method)
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"id": 123, "key": "4router-generated", "name": "generated channel", "group": "pro"},
+					},
+					"total":     1,
+					"page":      1,
+					"page_size": 100,
+				},
+			})
+		case "/api/token/123/key":
+			secretEndpointRequested = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newNewAPITestSource(t, server.URL, map[string]any{
+		"access_token": "existing-management-token",
+		"user_id":      7,
+	})
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	key, err := adapter.CreateKey(context.Background(), source, "pro", "generated channel")
+
+	require.NoError(t, err)
+	assert.Equal(t, "123", key.ID)
+	assert.Equal(t, "sk-4router-generated", key.Key)
+	assert.Equal(t, "generated channel", key.Name)
+	assert.Equal(t, "pro", key.GroupID)
+	assert.False(t, secretEndpointRequested)
+}
+
+func TestNewAPIAdapterTokenToUpstreamKeyErrorsWhenNoSecretIsAvailable(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/token/123/key", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		writeNewAPITestJSON(t, w, map[string]any{
+			"success": true,
+			"message": "",
+			"data":    map[string]any{"key": ""},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	source := newNewAPITestSource(t, server.URL, map[string]any{
+		"access_token": "existing-management-token",
+		"user_id":      7,
+	})
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	_, err := adapter.tokenToUpstreamKey(context.Background(), source, newAPIToken{
+		ID:    123,
+		Name:  "missing key",
+		Group: "pro",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "new-api token 123 key is missing")
+}
+
 func TestNewAPIAdapterCreateKeyUsesNewestExactNameAndGroupMatch(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 
