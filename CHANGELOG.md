@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.48] - 2026-07-21
+
+### Fixed
+- New API upstream token creation now supports customized deployments such as 4Router by preferring usable list/search `token.key` secrets, rejecting masked values, restoring a missing `sk-` prefix, and retaining the stock `/token/{id}/key` fallback.
+
 ## [v1.0.0-rc.47] - 2026-07-21
 
 ### Fixed
