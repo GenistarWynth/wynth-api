@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const upstreamSourceAutoPriorityScoreVersion = "v1"
+const upstreamSourceAutoPriorityScoreVersion = "v2"
 
 var errAutoPriorityGeneratedChannelChanged = errors.New("generated channel changed")
 
@@ -785,26 +785,29 @@ func isGeneratedChannelMetadataMatching(settings *dto.ChannelOtherSettings, sour
 
 func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, windowStart int64, windowEnd int64) *dto.ChannelAutoPriorityScore {
 	return &dto.ChannelAutoPriorityScore{
-		Version:                 upstreamSourceAutoPriorityScoreVersion,
-		ComputedAt:              windowEnd,
-		WindowStart:             windowStart,
-		WindowEnd:               windowEnd,
-		Cohort:                  score.Cohort,
-		EffectiveRateMultiplier: score.EffectiveRateMultiplier,
-		CacheAdjustedCostFactor: score.CacheAdjustedCostFactor,
-		EffectiveCostMultiplier: score.EffectiveCostMultiplier,
-		EffectivePriceScore:     score.EffectivePriceScore,
-		AvailabilityScore:       score.AvailabilityScore,
-		FirstTokenScore:         score.FirstTokenScore,
-		ThroughputScore:         score.ThroughputScore,
-		FinalScore:              score.FinalScore,
-		OldPriority:             score.OldPriority,
-		NewPriority:             score.NewPriority,
-		Applied:                 score.Applied,
-		Reason:                  score.Reason,
-		UsageLogCount:           score.UsageLogCount,
-		MonitorCheckCount:       score.MonitorCheckCount,
-		FirstTokenSampleCount:   score.FirstTokenSampleCount,
-		ThroughputSampleCount:   score.ThroughputSampleCount,
+		Version:                  upstreamSourceAutoPriorityScoreVersion,
+		ComputedAt:               windowEnd,
+		WindowStart:              windowStart,
+		WindowEnd:                windowEnd,
+		Cohort:                   score.Cohort,
+		EffectiveRateMultiplier:  score.EffectiveRateMultiplier,
+		CacheAdjustedCostFactor:  score.CacheAdjustedCostFactor,
+		EffectiveCostMultiplier:  score.EffectiveCostMultiplier,
+		EffectivePriceScore:      score.EffectivePriceScore,
+		AvailabilityScore:        score.AvailabilityScore,
+		FirstTokenScore:          score.FirstTokenScore,
+		ThroughputScore:          score.ThroughputScore,
+		FinalScore:               score.FinalScore,
+		OldPriority:              score.OldPriority,
+		NewPriority:              score.NewPriority,
+		Applied:                  score.Applied,
+		Reason:                   score.Reason,
+		UsageLogCount:            score.UsageLogCount,
+		MonitorCheckCount:        score.MonitorCheckCount,
+		FirstTokenSampleCount:    score.FirstTokenSampleCount,
+		ThroughputSampleCount:    score.ThroughputSampleCount,
+		CacheFactorSource:        score.CacheFactorSource,
+		CacheFactorPrior:         score.CacheFactorPrior,
+		CacheFactorOwnConfidence: score.CacheFactorOwnConfidence,
 	}
 }

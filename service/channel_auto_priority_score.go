@@ -33,37 +33,42 @@ type AutoPriorityScoreInput struct {
 }
 
 type AutoPriorityScoreResult struct {
-	ChannelID               int
-	Cohort                  string
-	EffectiveRateMultiplier float64
-	CacheAdjustedCostFactor float64
-	EffectiveCostMultiplier float64
-	EffectivePriceScore     float64
-	AvailabilityScore       float64
-	FirstTokenScore         float64
-	ThroughputScore         float64
-	FinalScore              float64
-	OldPriority             int64
-	ComputedPriority        int64
-	NewPriority             int64
-	Applied                 bool
-	Reason                  string
-	UsageLogCount           int64
-	MonitorCheckCount       int64
-	FirstTokenSampleCount   int64
-	ThroughputSampleCount   int64
+	ChannelID                int
+	Cohort                   string
+	EffectiveRateMultiplier  float64
+	CacheAdjustedCostFactor  float64
+	EffectiveCostMultiplier  float64
+	EffectivePriceScore      float64
+	AvailabilityScore        float64
+	FirstTokenScore          float64
+	ThroughputScore          float64
+	FinalScore               float64
+	OldPriority              int64
+	ComputedPriority         int64
+	NewPriority              int64
+	Applied                  bool
+	Reason                   string
+	UsageLogCount            int64
+	MonitorCheckCount        int64
+	FirstTokenSampleCount    int64
+	ThroughputSampleCount    int64
+	CacheFactorSource        string
+	CacheFactorPrior         float64
+	CacheFactorOwnConfidence float64
 }
 
 const (
-	autoPriorityMinCacheSampleCount  int64   = 5
 	autoPriorityFullCacheSampleCount int64   = 20
 	autoPriorityMinCacheCostFactor   float64 = 0.35
-	autoPriorityCurrentCostWeight    float64 = 0.65
-	autoPriorityPreviousCostWeight   float64 = 0.35
-	autoPriorityPriceWeight          float64 = 0.75
-	autoPriorityAvailabilityWeight   float64 = 0.12
-	autoPriorityFirstTokenWeight     float64 = 0.05
-	autoPriorityThroughputWeight     float64 = 0.08
+	// A mature same-cohort median is useful cold-start evidence, but a new channel
+	// receives only half of that estimated saving until it builds its own history.
+	autoPriorityCohortPriorWeight  float64 = 0.5
+	autoPriorityCurrentCostWeight  float64 = 0.65
+	autoPriorityPreviousCostWeight float64 = 0.35
+	autoPriorityPriceWeight        float64 = 0.75
+	autoPriorityAvailabilityWeight float64 = 0.12
+	autoPriorityFirstTokenWeight   float64 = 0.05
+	autoPriorityThroughputWeight   float64 = 0.08
 
 	autoPriorityExtremeCostRatio        float64 = 8
 	autoPriorityDominanceScoreMargin    float64 = 1
@@ -103,23 +108,58 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 	priceCohorts := make(map[string][]int)
 	cohortCostFloors := make(map[string]float64)
 	availabilityGates := make([]float64, len(inputs))
+	cacheSamplesByCohort := make(map[string][]float64)
+	for _, input := range inputs {
+		if input.UsageLogCount < autoPriorityFullCacheSampleCount {
+			continue
+		}
+		cohort := autoPriorityCohortKey(input.LocalGroup, input.ChannelType)
+		factor := normalizedAutoPriorityCacheFactor(input.CacheAdjustedCostFactor)
+		if factor < autoPriorityMinCacheCostFactor {
+			factor = autoPriorityMinCacheCostFactor
+		}
+		// The cohort prior estimates potential cache savings only. A peer with
+		// exceptional cache-write overhead must not make an unmeasured channel
+		// look worse than the safe neutral factor.
+		if factor > 1 {
+			factor = 1
+		}
+		cacheSamplesByCohort[cohort] = append(cacheSamplesByCohort[cohort], factor)
+	}
+	cachePriorByCohort := make(map[string]float64, len(cacheSamplesByCohort))
+	for cohort, samples := range cacheSamplesByCohort {
+		sort.Float64s(samples)
+		middle := len(samples) / 2
+		median := samples[middle]
+		if len(samples)%2 == 0 {
+			median = (samples[middle-1] + samples[middle]) / 2
+		}
+		cachePriorByCohort[cohort] = 1 + (median-1)*autoPriorityCohortPriorWeight
+	}
 
 	for i, input := range inputs {
 		cohort := autoPriorityCohortKey(input.LocalGroup, input.ChannelType)
-		cacheFactor := autoPriorityGuardedCacheFactor(input.CacheAdjustedCostFactor, input.UsageLogCount)
+		cacheFactor, cachePrior, ownConfidence, cacheSource := autoPriorityGuardedCacheFactor(
+			input.CacheAdjustedCostFactor,
+			input.UsageLogCount,
+			cachePriorByCohort[cohort],
+		)
 		result := AutoPriorityScoreResult{
-			ChannelID:               input.ChannelID,
-			Cohort:                  cohort,
-			EffectiveRateMultiplier: input.EffectiveRateMultiplier,
-			CacheAdjustedCostFactor: cacheFactor,
-			OldPriority:             input.CurrentPriority,
-			AvailabilityScore:       autoPriorityAvailabilityScore(input.Availability),
-			FirstTokenScore:         autoPriorityNeutralPerfScore,
-			ThroughputScore:         autoPriorityNeutralPerfScore,
-			UsageLogCount:           input.UsageLogCount,
-			MonitorCheckCount:       input.MonitorCheckCount,
-			FirstTokenSampleCount:   input.FirstTokenSampleCount,
-			ThroughputSampleCount:   input.ThroughputSampleCount,
+			ChannelID:                input.ChannelID,
+			Cohort:                   cohort,
+			EffectiveRateMultiplier:  input.EffectiveRateMultiplier,
+			CacheAdjustedCostFactor:  cacheFactor,
+			OldPriority:              input.CurrentPriority,
+			AvailabilityScore:        autoPriorityAvailabilityScore(input.Availability),
+			FirstTokenScore:          autoPriorityNeutralPerfScore,
+			ThroughputScore:          autoPriorityNeutralPerfScore,
+			UsageLogCount:            input.UsageLogCount,
+			MonitorCheckCount:        input.MonitorCheckCount,
+			FirstTokenSampleCount:    input.FirstTokenSampleCount,
+			ThroughputSampleCount:    input.ThroughputSampleCount,
+			CacheFactorSource:        cacheSource,
+			CacheFactorPrior:         cachePrior,
+			CacheFactorOwnConfidence: ownConfidence,
 		}
 
 		if !isValidAutoPriorityMultiplier(input.EffectiveRateMultiplier) {
@@ -384,20 +424,24 @@ func normalizedAutoPriorityCacheFactor(v float64) float64 {
 	return v
 }
 
-func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64) float64 {
+func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64, cohortPrior float64) (float64, float64, float64, string) {
 	cacheFactor := normalizedAutoPriorityCacheFactor(v)
 	if cacheFactor < autoPriorityMinCacheCostFactor {
 		cacheFactor = autoPriorityMinCacheCostFactor
 	}
-
-	if usageLogCount < autoPriorityMinCacheSampleCount {
-		return 1
+	source := "cohort_prior"
+	if !isValidAutoPriorityMultiplier(cohortPrior) {
+		cohortPrior = 1
+		source = "neutral"
+	}
+	if usageLogCount <= 0 {
+		return cohortPrior, cohortPrior, 0, source
 	}
 	if usageLogCount < autoPriorityFullCacheSampleCount {
 		confidence := float64(usageLogCount) / float64(autoPriorityFullCacheSampleCount)
-		return 1 + (cacheFactor-1)*confidence
+		return cohortPrior + (cacheFactor-cohortPrior)*confidence, cohortPrior, confidence, "own_blend"
 	}
-	return cacheFactor
+	return cacheFactor, cohortPrior, 1, "own"
 }
 
 // autoPriorityAvailabilityGate returns the multiplicative factor availability

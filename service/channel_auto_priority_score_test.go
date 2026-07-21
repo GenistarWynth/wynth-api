@@ -4,7 +4,9 @@ import (
 	"math"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -210,7 +212,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.Greater(t, r302.ComputedPriority, r301.ComputedPriority)
 	})
 
-	t.Run("low usage sample ignores cache benefit", func(t *testing.T) {
+	t.Run("low usage samples continuously blend cache benefit", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
 				ChannelID:               311,
@@ -228,8 +230,8 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		}, 1000)
 
 		require.Len(t, results, 1)
-		assert.InDelta(t, 1.0, results[0].CacheAdjustedCostFactor, 0.0001)
-		assert.InDelta(t, 1.0, results[0].EffectiveCostMultiplier, 0.0001)
+		assert.InDelta(t, 0.87, results[0].CacheAdjustedCostFactor, 0.0001)
+		assert.InDelta(t, 0.87, results[0].EffectiveCostMultiplier, 0.0001)
 	})
 
 	t.Run("partial usage sample blends cache benefit toward neutral", func(t *testing.T) {
@@ -561,6 +563,100 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		require.Len(t, results, 1)
 		assert.InDelta(t, 70, results[0].FirstTokenScore, 0.0001)
 	})
+}
+
+func TestScoreAutoPriorityCandidatesColdStartCachePrior(t *testing.T) {
+	base := []AutoPriorityScoreInput{
+		{ChannelID: 1, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.02, CacheAdjustedCostFactor: 0.35, UsageLogCount: 421},
+		{ChannelID: 2, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.05, CacheAdjustedCostFactor: 0.35, UsageLogCount: 200},
+	}
+
+	t.Run("zero samples use a conservative mature peer prior", func(t *testing.T) {
+		inputs := append(append([]AutoPriorityScoreInput{}, base...), AutoPriorityScoreInput{
+			ChannelID: 3, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 0.02, UsageLogCount: 0,
+		})
+		results := ScoreAutoPriorityCandidates(inputs, 1000)
+		fresh := resultByChannelID(results, 3)
+		mature := resultByChannelID(results, 1)
+		require.NotNil(t, fresh)
+		require.NotNil(t, mature)
+		assert.Greater(t, fresh.CacheAdjustedCostFactor, mature.CacheAdjustedCostFactor)
+		assert.Less(t, fresh.CacheAdjustedCostFactor, 1.0)
+		assert.Greater(t, fresh.EffectivePriceScore, 35.0)
+		assert.Less(t, fresh.EffectivePriceScore, mature.EffectivePriceScore)
+	})
+
+	t.Run("no trustworthy same cohort peer stays neutral", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{ChannelID: 10, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.02},
+			{ChannelID: 11, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.03, CacheAdjustedCostFactor: 0.35, UsageLogCount: 19},
+			{ChannelID: 12, LocalGroup: "other", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.03, CacheAdjustedCostFactor: 0.35, UsageLogCount: 200},
+			{ChannelID: 13, LocalGroup: "shared", ChannelType: constant.ChannelTypeAnthropic, EffectiveRateMultiplier: 0.03, CacheAdjustedCostFactor: 0.35, UsageLogCount: 200},
+		}, 1000)
+		fresh := resultByChannelID(results, 10)
+		require.NotNil(t, fresh)
+		assert.Equal(t, 1.0, fresh.CacheAdjustedCostFactor)
+	})
+
+	t.Run("median resists one pathological peer", func(t *testing.T) {
+		inputs := append(append([]AutoPriorityScoreInput{}, base...),
+			AutoPriorityScoreInput{ChannelID: 4, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.04, CacheAdjustedCostFactor: 50, UsageLogCount: 200},
+			AutoPriorityScoreInput{ChannelID: 5, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.02},
+		)
+		fresh := resultByChannelID(ScoreAutoPriorityCandidates(inputs, 1000), 5)
+		require.NotNil(t, fresh)
+		assert.InDelta(t, 0.675, fresh.CacheAdjustedCostFactor, 1e-9)
+	})
+
+	t.Run("a lone pathological peer cannot make cold start worse than neutral", func(t *testing.T) {
+		fresh := resultByChannelID(ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{ChannelID: 20, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.04, CacheAdjustedCostFactor: 50, UsageLogCount: 200},
+			{ChannelID: 21, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.02},
+		}, 1000), 21)
+		require.NotNil(t, fresh)
+		assert.Equal(t, 1.0, fresh.CacheAdjustedCostFactor)
+	})
+
+	t.Run("own samples continuously replace the prior", func(t *testing.T) {
+		factors := make([]float64, 0, 4)
+		for _, count := range []int64{0, 1, 10, 20} {
+			inputs := append(append([]AutoPriorityScoreInput{}, base...), AutoPriorityScoreInput{
+				ChannelID: 6, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 0.02, CacheAdjustedCostFactor: 0.5, UsageLogCount: count,
+			})
+			fresh := resultByChannelID(ScoreAutoPriorityCandidates(inputs, 1000), 6)
+			require.NotNil(t, fresh)
+			factors = append(factors, fresh.CacheAdjustedCostFactor)
+		}
+		assert.Equal(t, []float64{0.675, 0.66625, 0.5875, 0.5}, factors)
+	})
+}
+
+func TestAutoPriorityColdStartDiagnosticsRoundTrip(t *testing.T) {
+	results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+		{ChannelID: 1, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.02, CacheAdjustedCostFactor: 0.35, UsageLogCount: 100},
+		{ChannelID: 2, LocalGroup: "shared", ChannelType: constant.ChannelTypeOpenAI, EffectiveRateMultiplier: 0.02},
+	}, 1000)
+	fresh := resultByChannelID(results, 2)
+	require.NotNil(t, fresh)
+	assert.Equal(t, "cohort_prior", fresh.CacheFactorSource)
+	assert.Equal(t, 0.675, fresh.CacheFactorPrior)
+	assert.Equal(t, 0.0, fresh.CacheFactorOwnConfidence)
+
+	snapshot := buildChannelAutoPriorityScoreSnapshot(*fresh, 100, 200)
+	encoded, err := common.Marshal(snapshot)
+	require.NoError(t, err)
+	var decoded dto.ChannelAutoPriorityScore
+	require.NoError(t, common.Unmarshal(encoded, &decoded))
+	assert.Equal(t, "cohort_prior", decoded.CacheFactorSource)
+	assert.Equal(t, 0.675, decoded.CacheFactorPrior)
+	assert.Equal(t, 0.0, decoded.CacheFactorOwnConfidence)
+
+	// New fields remain optional so snapshots written by older versions still decode.
+	var legacy dto.ChannelAutoPriorityScore
+	require.NoError(t, common.Unmarshal([]byte(`{"effective_rate_multiplier":0.02,"cache_adjusted_cost_factor":1}`), &legacy))
+	assert.Empty(t, legacy.CacheFactorSource)
 }
 
 func floatPtr(v float64) *float64 {
