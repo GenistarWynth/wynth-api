@@ -6,6 +6,12 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.51] - 2026-07-21
+
+### Changed
+- Auto-priority cold starts now derive a conservative cache-cost prior from the robust median of trustworthy exact-cohort peers with at least 20 usage samples, cap peer evidence at neutral, shrink it halfway toward neutral, and continuously blend toward the channel's own bounded factor across its first 20 samples; channels without trustworthy peers retain the neutral fallback.
+- Auto-priority snapshot v2 now records cache-factor source, prior, and own-sample confidence diagnostics while preserving existing scoring weights, dominance and usability gates, smoothing, hysteresis, and group scheduling behavior.
+
 ## [v1.0.0-rc.50] - 2026-07-21
 
 ### Added
