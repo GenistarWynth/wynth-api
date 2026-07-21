@@ -182,6 +182,9 @@ export interface ChannelOtherSettings {
   generated_by_upstream_mapping_id?: number
   codex_image_generation_bridge_policy?: 'follow' | 'enabled' | 'disabled'
   auto_retry_times?: number
+  channel_retry_status_codes?: string
+  channel_auto_disable_status_codes?: string
+  channel_failure_keywords?: string
   advanced_custom?: AdvancedCustomConfig
 }
 

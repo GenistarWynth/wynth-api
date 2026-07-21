@@ -53,6 +53,33 @@ function baseChannel(overrides: Partial<Channel> = {}): Channel {
 }
 
 describe('channel form auto retry settings', () => {
+  test('round trips additive channel reliability rules in settings json', () => {
+    const source = baseChannel({
+      settings: JSON.stringify({
+        channel_retry_status_codes: '404,502-504',
+        channel_auto_disable_status_codes: '401,403',
+        channel_failure_keywords: 'model not found\naccount suspended',
+      }),
+    })
+    const defaults = transformChannelToFormDefaults(source)
+
+    assert.equal(defaults.channel_retry_status_codes, '404,502-504')
+    assert.equal(defaults.channel_auto_disable_status_codes, '401,403')
+    assert.equal(
+      defaults.channel_failure_keywords,
+      'model not found\naccount suspended'
+    )
+
+    const payload = transformFormDataToUpdatePayload(defaults, source.id)
+    const settings = JSON.parse(String(payload.settings))
+    assert.equal(settings.channel_retry_status_codes, '404,502-504')
+    assert.equal(settings.channel_auto_disable_status_codes, '401,403')
+    assert.equal(
+      settings.channel_failure_keywords,
+      'model not found\naccount suspended'
+    )
+  })
+
   test('reads channel auto retry override from settings json', () => {
     const defaults = transformChannelToFormDefaults(
       baseChannel({ settings: '{"auto_retry_times":2}' })

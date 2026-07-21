@@ -43,6 +43,10 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 }
 
 func ShouldDisableChannel(err *types.NewAPIError) bool {
+	return ShouldDisableChannelWithSettings(err, dto.ChannelOtherSettings{})
+}
+
+func ShouldDisableChannelWithSettings(err *types.NewAPIError, settings dto.ChannelOtherSettings) bool {
 	if !common.AutomaticDisableChannelEnabled {
 		return false
 	}
@@ -55,12 +59,32 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if types.IsSkipRetryError(err) {
 		return false
 	}
-	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
+	matched, parseErr := operation_setting.ShouldMatchStatusCodeWithAdditional(
+		operation_setting.AutomaticDisableStatusCodeRanges,
+		settings.ChannelAutoDisableStatusCodes,
+		err.StatusCode,
+	)
+	if parseErr != nil {
+		common.SysError(fmt.Sprintf("invalid channel auto-disable status codes: %v", parseErr))
+		matched = operation_setting.ShouldDisableByStatusCode(err.StatusCode)
+	}
+	if matched {
 		return true
 	}
 
 	lowerMessage := strings.ToLower(err.Error())
 	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
+	if search {
+		return true
+	}
+	channelKeywords := make([]string, 0)
+	for _, keyword := range strings.Split(settings.ChannelFailureKeywords, "\n") {
+		keyword = strings.ToLower(strings.TrimSpace(keyword))
+		if keyword != "" {
+			channelKeywords = append(channelKeywords, keyword)
+		}
+	}
+	search, _ = AcSearch(lowerMessage, channelKeywords, true)
 	return search
 }
 

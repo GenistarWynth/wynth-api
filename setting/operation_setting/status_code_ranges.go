@@ -84,6 +84,17 @@ func ShouldRetryByStatusCode(code int) bool {
 	return shouldMatchStatusCodeRanges(AutomaticRetryStatusCodeRanges, code)
 }
 
+func ShouldMatchStatusCodeWithAdditional(global []StatusCodeRange, additional string, code int) (bool, error) {
+	additionalRanges, err := ParseHTTPStatusCodeRanges(additional)
+	if err != nil {
+		return false, err
+	}
+	if shouldMatchStatusCodeRanges(global, code) {
+		return true, nil
+	}
+	return shouldMatchStatusCodeRanges(additionalRanges, code), nil
+}
+
 func statusCodeRangesToString(ranges []StatusCodeRange) string {
 	if len(ranges) == 0 {
 		return ""

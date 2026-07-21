@@ -353,14 +353,25 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
 		return false
 	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	channelSettings, _ := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
+	matched, err := operation_setting.ShouldMatchStatusCodeWithAdditional(
+		operation_setting.AutomaticRetryStatusCodeRanges,
+		channelSettings.ChannelRetryStatusCodes,
+		code,
+	)
+	if err != nil {
+		logger.LogWarn(c, fmt.Sprintf("invalid channel retry status codes: %v", err))
+		return operation_setting.ShouldRetryByStatusCode(code)
+	}
+	return matched && !operation_setting.IsAlwaysSkipRetryStatusCode(code)
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if service.ShouldDisableChannel(err) && channelError.AutoBan {
+	channelSettings, _ := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
+	if service.ShouldDisableChannelWithSettings(err, channelSettings) && channelError.AutoBan {
 		gopool.Go(func() {
 			service.DisableChannel(channelError, err.ErrorWithStatusCode())
 		})

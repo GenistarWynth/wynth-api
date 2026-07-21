@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
@@ -1056,6 +1057,14 @@ func (channel *Channel) ValidateSettings() error {
 		autoRetryTimes := *channelOtherSettings.AutoRetryTimes
 		if autoRetryTimes < 0 || autoRetryTimes > dto.ChannelAutoRetryTimesMax {
 			return fmt.Errorf("settings.auto_retry_times must be between 0 and %d", dto.ChannelAutoRetryTimesMax)
+		}
+	}
+	for field, value := range map[string]string{
+		"channel_retry_status_codes":        channelOtherSettings.ChannelRetryStatusCodes,
+		"channel_auto_disable_status_codes": channelOtherSettings.ChannelAutoDisableStatusCodes,
+	} {
+		if _, err := operation_setting.ParseHTTPStatusCodeRanges(value); err != nil {
+			return fmt.Errorf("settings.%s is invalid: %w", field, err)
 		}
 	}
 	if channelOtherSettings.ChannelAutoPriorityEnabled {

@@ -85,3 +85,24 @@ func TestIsAlwaysSkipRetryStatusCode(t *testing.T) {
 	require.True(t, IsAlwaysSkipRetryStatusCode(524))
 	require.False(t, IsAlwaysSkipRetryStatusCode(500))
 }
+
+func TestShouldMatchStatusCodeWithAdditionalUsesNormalizedUnion(t *testing.T) {
+	global := []StatusCodeRange{{Start: 500, End: 503}}
+
+	matched, err := ShouldMatchStatusCodeWithAdditional(global, "404, 502-504", 404)
+	require.NoError(t, err)
+	require.True(t, matched)
+
+	matched, err = ShouldMatchStatusCodeWithAdditional(global, "404, 502-504", 503)
+	require.NoError(t, err)
+	require.True(t, matched)
+
+	matched, err = ShouldMatchStatusCodeWithAdditional(global, "", 404)
+	require.NoError(t, err)
+	require.False(t, matched)
+}
+
+func TestShouldMatchStatusCodeWithAdditionalRejectsInvalidChannelRules(t *testing.T) {
+	_, err := ShouldMatchStatusCodeWithAdditional(nil, "99,invalid", 500)
+	require.Error(t, err)
+}

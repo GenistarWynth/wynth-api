@@ -1181,7 +1181,7 @@ func applyChannelMonitorStatusMutation(channel *model.Channel, result testResult
 	shouldBanChannel := false
 	newAPIError := result.newAPIError
 	if newAPIError != nil && result.upstreamAttempted {
-		shouldBanChannel = service.ShouldDisableChannel(newAPIError)
+		shouldBanChannel = service.ShouldDisableChannelWithSettings(newAPIError, channel.GetOtherSettings())
 	}
 	if common.AutomaticDisableChannelEnabled && result.upstreamAttempted && !shouldBanChannel && milliseconds > disableThreshold {
 		err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
@@ -1484,7 +1484,7 @@ func performChannelTests(ctx context.Context, channels []*model.Channel, testUse
 		newAPIError := result.newAPIError
 		// request error disables the channel
 		if newAPIError != nil {
-			shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
+			shouldBanChannel = service.ShouldDisableChannelWithSettings(result.newAPIError, channel.GetOtherSettings())
 		}
 
 		// 当错误检查通过，才检查响应时间

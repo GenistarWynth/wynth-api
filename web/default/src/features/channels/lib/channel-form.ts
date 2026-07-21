@@ -220,6 +220,9 @@ export const channelFormSchema = z
       .enum(['follow', 'enabled', 'disabled'])
       .optional(),
     auto_retry_times: z.number().int().min(0).max(10).optional(),
+    channel_retry_status_codes: z.string().optional(),
+    channel_auto_disable_status_codes: z.string().optional(),
+    channel_failure_keywords: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     if ([3, 8, 36, 45].includes(data.type) && !data.base_url?.trim()) {
@@ -379,6 +382,9 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   channel_monitor_interval_minutes: 10,
   codex_image_generation_bridge_policy: 'follow',
   auto_retry_times: undefined,
+  channel_retry_status_codes: '',
+  channel_auto_disable_status_codes: '',
+  channel_failure_keywords: '',
   advanced_custom: '',
 }
 
@@ -441,6 +447,9 @@ export function transformChannelToFormDefaults(
   let codexImageGenerationBridgePolicy: 'follow' | 'enabled' | 'disabled' =
     'follow'
   let autoRetryTimes: number | undefined
+  let channelRetryStatusCodes = ''
+  let channelAutoDisableStatusCodes = ''
+  let channelFailureKeywords = ''
   let advancedCustom = ''
 
   if (channel.settings) {
@@ -478,6 +487,11 @@ export function transformChannelToFormDefaults(
       codexImageGenerationBridgePolicy =
         normalizeCodexImageGenerationBridgePolicy(parsed)
       autoRetryTimes = normalizeAutoRetryTimes(parsed.auto_retry_times)
+      channelRetryStatusCodes = String(parsed.channel_retry_status_codes || '')
+      channelAutoDisableStatusCodes = String(
+        parsed.channel_auto_disable_status_codes || ''
+      )
+      channelFailureKeywords = String(parsed.channel_failure_keywords || '')
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -536,6 +550,9 @@ export function transformChannelToFormDefaults(
     channel_monitor_interval_minutes: channelMonitorIntervalMinutes,
     codex_image_generation_bridge_policy: codexImageGenerationBridgePolicy,
     auto_retry_times: autoRetryTimes,
+    channel_retry_status_codes: channelRetryStatusCodes,
+    channel_auto_disable_status_codes: channelAutoDisableStatusCodes,
+    channel_failure_keywords: channelFailureKeywords,
     advanced_custom: advancedCustom,
   }
 }
@@ -757,6 +774,20 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.auto_retry_times = autoRetryTimes
   } else {
     delete settingsObj.auto_retry_times
+  }
+
+  for (const [key, value] of Object.entries({
+    channel_retry_status_codes: formData.channel_retry_status_codes,
+    channel_auto_disable_status_codes:
+      formData.channel_auto_disable_status_codes,
+    channel_failure_keywords: formData.channel_failure_keywords,
+  })) {
+    const normalized = value?.trim()
+    if (normalized) {
+      settingsObj[key] = normalized
+    } else {
+      delete settingsObj[key]
+    }
   }
 
   return JSON.stringify(settingsObj)

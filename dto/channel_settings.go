@@ -67,6 +67,9 @@ type ChannelOtherSettings struct {
 	GeneratedByUpstreamMappingID               int                       `json:"generated_by_upstream_mapping_id,omitempty"`
 	CodexImageGenerationBridgePolicy           string                    `json:"codex_image_generation_bridge_policy,omitempty"`
 	AutoRetryTimes                             *int                      `json:"auto_retry_times,omitempty"`
+	ChannelRetryStatusCodes                    string                    `json:"channel_retry_status_codes,omitempty"`
+	ChannelAutoDisableStatusCodes              string                    `json:"channel_auto_disable_status_codes,omitempty"`
+	ChannelFailureKeywords                     string                    `json:"channel_failure_keywords,omitempty"`
 	AdvancedCustom                             *AdvancedCustomConfig     `json:"advanced_custom,omitempty"`
 }
 

@@ -290,6 +290,9 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.priority ||
     values.weight ||
     values.auto_retry_times !== undefined ||
+    values.channel_retry_status_codes?.trim() ||
+    values.channel_auto_disable_status_codes?.trim() ||
+    values.channel_failure_keywords?.trim() ||
     values.proxy?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
@@ -3387,6 +3390,79 @@ export function ChannelMutateDrawer({
                             )}
                           />
                         </div>
+
+                        <div className='grid gap-4 sm:grid-cols-2'>
+                          <FormField
+                            control={form.control}
+                            name='channel_retry_status_codes'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>
+                                  {t('Additional retry status codes')}
+                                </FormLabel>
+                                <FormControl>
+                                  <Input placeholder='404, 502-504' {...field} />
+                                </FormControl>
+                                <FormDescription>
+                                  {t(
+                                    'Added to the global retry status codes. Use commas and ranges.'
+                                  )}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={form.control}
+                            name='channel_auto_disable_status_codes'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>
+                                  {t(
+                                    'Additional auto-disable status codes'
+                                  )}
+                                </FormLabel>
+                                <FormControl>
+                                  <Input
+                                    placeholder='401, 403, 500-503'
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  {t(
+                                    'Added to the global auto-disable status codes. Use commas and ranges.'
+                                  )}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        </div>
+
+                        <FormField
+                          control={form.control}
+                          name='channel_failure_keywords'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('Additional failure keywords')}
+                              </FormLabel>
+                              <FormControl>
+                                <Textarea
+                                  rows={3}
+                                  placeholder={t('One keyword per line')}
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Added to the global failure keywords for automatic channel disabling. Matching is case-insensitive.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
 
                         <FormField
                           control={form.control}
