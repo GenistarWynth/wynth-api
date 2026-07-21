@@ -528,7 +528,9 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 		ensuredKeyCreated = created
 		ensuredKeyLoaded = true
 		upstreamKeyID = strings.TrimSpace(key.ID)
-		rawKey = strings.TrimSpace(key.Key)
+		if ensuredRawKey := strings.TrimSpace(key.Key); ensuredRawKey != "" {
+			rawKey = ensuredRawKey
+		}
 	}
 	if rawKey == "" {
 		if !ensuredKeyLoaded {
@@ -740,6 +742,22 @@ func ensureUpstreamSourceMappingKey(ctx context.Context, adapter UpstreamSourceA
 		}
 		key, err := adapter.CreateKey(ctx, source, mapping.UpstreamGroupID, name)
 		return key, true, err
+	}
+	keys, listErr := adapter.ListKeys(ctx, source, mapping.UpstreamGroupID)
+	if listErr == nil {
+		keyID := strings.TrimSpace(mapping.UpstreamKeyID)
+		groupID := strings.TrimSpace(mapping.UpstreamGroupID)
+		for _, key := range keys {
+			if strings.TrimSpace(key.ID) != keyID {
+				continue
+			}
+			listedName := strings.TrimSpace(key.Name)
+			listedGroupID := strings.TrimSpace(key.GroupID)
+			if (listedName == "" || listedName == name) && (listedGroupID == "" || listedGroupID == groupID) {
+				return key, false, nil
+			}
+			break
+		}
 	}
 	key, err := adapter.UpdateKey(ctx, source, mapping.UpstreamKeyID, mapping.UpstreamGroupID, name)
 	if err == nil {

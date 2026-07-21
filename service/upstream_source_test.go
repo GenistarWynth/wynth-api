@@ -1838,11 +1838,17 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	createSyncTestMapping(t, source.Id, "10", "primary", &rate)
 	createCalls := make([]fakeUpstreamSourceCreateKeyCall, 0)
 	updateCalls := make([]fakeUpstreamSourceUpdateKeyCall, 0)
+	adapterFactoryCalls := 0
 	service := UpstreamSourceService{
 		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			adapterFactoryCalls++
+			var listKeys []UpstreamKey
+			if adapterFactoryCalls > 1 {
+				listKeys = []UpstreamKey{{ID: "key-10", Name: "Wynth API / source-a / primary", GroupID: "10"}}
+			}
 			return fakeUpstreamSourceAdapter{
 				createKeys:  []UpstreamKey{{ID: "key-10", Key: "sk-created-10"}},
-				updateKey:   UpstreamKey{ID: "key-10", Key: "sk-updated-10"},
+				listKeys:    listKeys,
 				createCalls: &createCalls,
 				updateCalls: &updateCalls,
 			}, nil
@@ -1868,8 +1874,7 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	assert.Equal(t, 0, second.Created)
 	assert.Equal(t, 1, second.Updated)
 	require.Len(t, createCalls, 1)
-	require.Len(t, updateCalls, 1)
-	assert.Equal(t, fakeUpstreamSourceUpdateKeyCall{KeyID: "key-10", GroupID: "10", Name: "Wynth API / source-a / primary"}, updateCalls[0])
+	assert.Empty(t, updateCalls)
 	var channelCount int64
 	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&channelCount).Error)
 	assert.Equal(t, int64(1), channelCount)
@@ -1879,7 +1884,30 @@ func TestSyncUpstreamSourceIsIdempotentByMappingID(t *testing.T) {
 	assert.Equal(t, "key-10", reloadedMapping.UpstreamKeyID)
 	var channel model.Channel
 	require.NoError(t, model.DB.First(&channel, firstChannelID).Error)
-	assert.Equal(t, "sk-updated-10", channel.Key)
+	assert.Equal(t, "sk-created-10", channel.Key)
+}
+
+func TestEnsureOrSyncSkipsUpdateKeyWhenRemoteKeyAlreadyMatches(t *testing.T) {
+	updateCalls := make([]fakeUpstreamSourceUpdateKeyCall, 0)
+	adapter := fakeUpstreamSourceAdapter{
+		listKeys: []UpstreamKey{{
+			ID: "key-10",
+		}},
+		updateCalls: &updateCalls,
+	}
+	source := &model.UpstreamSource{Name: "source-a"}
+	mapping := &model.UpstreamSourceChannelMapping{
+		UpstreamKeyID:     "key-10",
+		UpstreamGroupID:   "10",
+		UpstreamGroupName: "primary",
+	}
+
+	key, created, err := ensureUpstreamSourceMappingKey(context.Background(), adapter, source, mapping)
+
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, "key-10", key.ID)
+	assert.Empty(t, updateCalls)
 }
 
 func TestSyncUpstreamSourceRefreshesDeletedRemoteKeyForExistingChannel(t *testing.T) {
@@ -1951,7 +1979,7 @@ func TestSyncUpstreamSourceRefreshesDeletedRemoteKeyForExistingChannel(t *testin
 	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, reloadedMapping.SyncStatus)
 }
 
-func TestSyncUpstreamSourceRecreatesKeyWhenExistingKeyDisappearsFromUpstreamList(t *testing.T) {
+func TestSyncUpstreamSourcePreservesLocalKeyWhenUpdateReturnsEmptySecret(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createSyncTestSource(t, nil)
 	rate := 1.0
@@ -1996,7 +2024,7 @@ func TestSyncUpstreamSourceRecreatesKeyWhenExistingKeyDisappearsFromUpstreamList
 			}, nil
 		},
 		FetchModels: func(channel *model.Channel) ([]string, error) {
-			assert.Equal(t, "sk-recreated", channel.Key)
+			assert.Equal(t, "sk-deleted-upstream", channel.Key)
 			return []string{"gpt-4o"}, nil
 		},
 		Now: func() int64 { return 1015 },
@@ -2012,14 +2040,13 @@ func TestSyncUpstreamSourceRecreatesKeyWhenExistingKeyDisappearsFromUpstreamList
 	require.Len(t, updateCalls, 1)
 	assert.Equal(t, fakeUpstreamSourceUpdateKeyCall{KeyID: "key-deleted", GroupID: "10", Name: "Wynth API / source-a / primary"}, updateCalls[0])
 	assert.Equal(t, []string{"10"}, listCalls)
-	require.Len(t, createCalls, 1)
-	assert.Equal(t, fakeUpstreamSourceCreateKeyCall{GroupID: "10", Name: "Wynth API / source-a / primary"}, createCalls[0])
+	assert.Empty(t, createCalls)
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
-	assert.Equal(t, "sk-recreated", reloaded.Key)
+	assert.Equal(t, "sk-deleted-upstream", reloaded.Key)
 	var reloadedMapping model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
-	assert.Equal(t, "key-recreated", reloadedMapping.UpstreamKeyID)
+	assert.Equal(t, "key-deleted", reloadedMapping.UpstreamKeyID)
 	assert.Equal(t, channel.Id, reloadedMapping.LocalChannelID)
 	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, reloadedMapping.SyncStatus)
 }
@@ -2253,7 +2280,7 @@ func TestSyncUpstreamSourceReplacesExistingKeyWhenListConfirmsItIsMissing(t *tes
 	assert.Equal(t, 1, result.Created)
 	require.Len(t, createCalls, 1)
 	assert.Equal(t, fakeUpstreamSourceCreateKeyCall{GroupID: "10", Name: "Wynth API / source-a / primary"}, createCalls[0])
-	assert.Equal(t, []string{"10"}, listCalls)
+	assert.Equal(t, []string{"10", "10"}, listCalls)
 	var reloadedMapping model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
 	assert.Equal(t, "key-recreated", reloadedMapping.UpstreamKeyID)

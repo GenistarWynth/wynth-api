@@ -273,6 +273,74 @@ func TestSub2APIAdapterUpdateKeySendsPutAndNormalizesResponse(t *testing.T) {
 	assert.Equal(t, "20", key.GroupID)
 }
 
+func TestSub2APIAdapterUpdateKeyRetriesWithConfigVersion(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	putCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/keys/123", r.URL.Path)
+		switch r.Method {
+		case http.MethodPut:
+			putCalls++
+			var payload map[string]any
+			require.NoError(t, common.DecodeJson(r.Body, &payload))
+			if putCalls == 1 {
+				assert.NotContains(t, payload, "config_version")
+				w.WriteHeader(http.StatusBadRequest)
+				writeSub2APITestJSON(t, w, map[string]any{"code": 400, "message": "config_version is required"})
+				return
+			}
+			assert.Equal(t, float64(7), payload["config_version"])
+			writeSub2APITestJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"id": 123}})
+		case http.MethodGet:
+			writeSub2APITestJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"id": 123, "config_version": 7}})
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	key, err := (Sub2APIAdapter{Client: server.Client()}).UpdateKey(context.Background(), source, "123", "20", "updated channel")
+
+	require.NoError(t, err)
+	assert.Equal(t, "123", key.ID)
+	assert.Equal(t, 2, putCalls)
+}
+
+func TestSub2APIAdapterUpdateKeyRetriesWithZeroConfigVersionWhenMissing(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	putCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/keys/123", r.URL.Path)
+		switch r.Method {
+		case http.MethodPut:
+			putCalls++
+			var payload map[string]any
+			require.NoError(t, common.DecodeJson(r.Body, &payload))
+			if putCalls == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				writeSub2APITestJSON(t, w, map[string]any{"code": 400, "message": "CONFIG_VERSION is REQUIRED"})
+				return
+			}
+			assert.Equal(t, float64(0), payload["config_version"])
+			writeSub2APITestJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"id": 123}})
+		case http.MethodGet:
+			writeSub2APITestJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"id": 123}})
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	_, err := (Sub2APIAdapter{Client: server.Client()}).UpdateKey(context.Background(), source, "123", "20", "updated channel")
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, putCalls)
+}
+
 func TestSub2APIAdapterListKeysReadsPaginatedItems(t *testing.T) {
 	withSub2APIFetchSetting(t, true)
 

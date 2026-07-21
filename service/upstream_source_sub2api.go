@@ -103,10 +103,11 @@ type sub2APIGroup struct {
 }
 
 type sub2APIKey struct {
-	ID      *int64 `json:"id"`
-	Key     string `json:"key"`
-	Name    string `json:"name"`
-	GroupID *int64 `json:"group_id"`
+	ID            *int64 `json:"id"`
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	GroupID       *int64 `json:"group_id"`
+	ConfigVersion *int64 `json:"config_version"`
 }
 
 type sub2APIListKeysData struct {
@@ -190,7 +191,23 @@ func (a Sub2APIAdapter) UpdateKey(ctx context.Context, source *model.UpstreamSou
 	}
 	key, err := sub2APIRequest[sub2APIKey](ctx, &a, source, http.MethodPut, "/keys/"+url.PathEscape(keyID), nil, payload, token)
 	if err != nil {
-		return UpstreamKey{}, err
+		errorText := strings.ToLower(err.Error())
+		if !strings.Contains(errorText, "config_version") || !strings.Contains(errorText, "required") {
+			return UpstreamKey{}, err
+		}
+		current, getErr := sub2APIRequest[sub2APIKey](ctx, &a, source, http.MethodGet, "/keys/"+url.PathEscape(keyID), nil, nil, token)
+		if getErr != nil {
+			return UpstreamKey{}, getErr
+		}
+		configVersion := int64(0)
+		if current.ConfigVersion != nil {
+			configVersion = *current.ConfigVersion
+		}
+		payload["config_version"] = configVersion
+		key, err = sub2APIRequest[sub2APIKey](ctx, &a, source, http.MethodPut, "/keys/"+url.PathEscape(keyID), nil, payload, token)
+		if err != nil {
+			return UpstreamKey{}, err
+		}
 	}
 	normalized := normalizeSub2APIKey(key)
 	if normalized.ID == "" {
