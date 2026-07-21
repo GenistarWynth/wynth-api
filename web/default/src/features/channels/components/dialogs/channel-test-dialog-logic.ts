@@ -36,6 +36,27 @@ export type BatchProgress = {
 export const BATCH_TEST_CONCURRENCY = 5
 const BATCH_TEST_DELAY_MS = 100
 
+const STREAM_INCOMPATIBLE_ENDPOINTS = new Set([
+  'embeddings',
+  'image-generation',
+  'jina-rerank',
+  'openai-response-compact',
+])
+
+export function resolveNonStreamTestMode(
+  endpointType: string,
+  nonStream: boolean
+) {
+  const disabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
+  const effectiveNonStream = disabled || nonStream
+
+  return {
+    nonStream: effectiveNonStream,
+    stream: !effectiveNonStream,
+    disabled,
+  }
+}
+
 function waitForNextBatch(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 }

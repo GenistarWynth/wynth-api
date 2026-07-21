@@ -96,6 +96,7 @@ import { useChannels } from '../channels-provider'
 import {
   createBatchRunManager,
   getModelTestActionLabels,
+  resolveNonStreamTestMode,
   type BatchRunSession,
   type TestResult,
 } from './channel-test-dialog-logic'
@@ -185,13 +186,6 @@ const endpointTypeOptions: Array<{ value: string; label: string }> = [
 const endpointSelectContentClass = 'w-[460px] max-w-[calc(100vw-2rem)]'
 const endpointSelectItemClass =
   'items-start py-2 [&_[data-slot=select-item-text]]:min-w-0 [&_[data-slot=select-item-text]]:shrink [&_[data-slot=select-item-text]]:whitespace-normal'
-
-const STREAM_INCOMPATIBLE_ENDPOINTS = new Set([
-  'embeddings',
-  'image-generation',
-  'jina-rerank',
-  'openai-response-compact',
-])
 
 const MODEL_PRICE_ERROR_CODE = 'model_price_error'
 const FAILURE_SUMMARY_MAX_LENGTH = 96
@@ -350,7 +344,7 @@ function ChannelTestDialogContent({
   const [batchRunManager] = useState(createBatchRunManager)
   const activeBatchSessionRef = useRef<BatchRunSession | null>(null)
   const [endpointType, setEndpointType] = useState('auto')
-  const [isStreamTest, setIsStreamTest] = useState(true)
+  const [nonStream, setNonStream] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
@@ -392,7 +386,7 @@ function ChannelTestDialogContent({
     batchRunManager.cancelCurrent()
     activeBatchSessionRef.current = null
     setEndpointType('auto')
-    setIsStreamTest(true)
+    setNonStream(false)
     setSearchTerm('')
     setTestResults({})
     setRowSelection({})
@@ -406,16 +400,12 @@ function ChannelTestDialogContent({
     setPagination({ pageIndex: 0, pageSize: 30 })
   }, [batchRunManager])
 
-  const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
-  const effectiveStreamTest = !streamDisabled && isStreamTest
+  const nonStreamMode = resolveNonStreamTestMode(endpointType, nonStream)
 
   const handleEndpointTypeChange = useCallback((value: string | null) => {
     if (value === null) return
 
     setEndpointType(value)
-    if (STREAM_INCOMPATIBLE_ENDPOINTS.has(value)) {
-      setIsStreamTest(false)
-    }
   }, [])
 
   const handleSearchTermChange = useCallback(
@@ -562,7 +552,7 @@ function ChannelTestDialogContent({
             channelName: currentRow.name,
             testModel: model,
             endpointType: endpointType === 'auto' ? undefined : endpointType,
-            stream: effectiveStreamTest,
+            stream: nonStreamMode.stream,
             silent,
           },
           (success, responseTime, error, errorCode) => {
@@ -632,7 +622,7 @@ function ChannelTestDialogContent({
     [
       currentRow,
       endpointType,
-      effectiveStreamTest,
+      nonStreamMode.stream,
       markModelTesting,
       refreshChannelLists,
       t,
@@ -996,20 +986,22 @@ function ChannelTestDialogContent({
               </p>
             </div>
             <div className='grid gap-2'>
-              <Label htmlFor='stream-toggle'>{t('Stream Mode')}</Label>
+              <Label htmlFor='non-stream-toggle'>{t('Non-stream Mode')}</Label>
               <div className='flex items-center gap-2'>
                 <Switch
-                  id='stream-toggle'
-                  checked={effectiveStreamTest}
-                  onCheckedChange={setIsStreamTest}
-                  disabled={streamDisabled}
+                  id='non-stream-toggle'
+                  checked={nonStreamMode.nonStream}
+                  onCheckedChange={setNonStream}
+                  disabled={nonStreamMode.disabled}
                 />
                 <span className='text-sm'>
-                  {effectiveStreamTest ? t('Enabled') : t('Disabled')}
+                  {nonStreamMode.nonStream ? t('Enabled') : t('Disabled')}
                 </span>
               </div>
               <p className='text-muted-foreground text-xs'>
-                {t('Enable streaming mode for the test request.')}
+                {t(
+                  'When enabled, the test request is non-streaming. When disabled, it streams by default.'
+                )}
               </p>
             </div>
           </div>

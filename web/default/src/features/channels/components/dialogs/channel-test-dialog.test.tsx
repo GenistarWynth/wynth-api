@@ -33,6 +33,7 @@ import {
   BATCH_TEST_CONCURRENCY,
   createBatchRunManager,
   getModelTestActionLabels,
+  resolveNonStreamTestMode,
   type TestResult,
 } from './channel-test-dialog-logic'
 
@@ -66,6 +67,39 @@ before(async () => {
 function renderWithI18n(element: ReactElement) {
   return renderToStaticMarkup(createElement(I18nextProvider, { i18n }, element))
 }
+
+describe('channel test non-stream mode', () => {
+  test('defaults the displayed non-stream toggle to off while sending stream=true', () => {
+    assert.deepEqual(resolveNonStreamTestMode('auto', false), {
+      nonStream: false,
+      stream: true,
+      disabled: false,
+    })
+  })
+
+  test('sends stream=false when the user turns non-stream mode on', () => {
+    assert.deepEqual(resolveNonStreamTestMode('auto', true), {
+      nonStream: true,
+      stream: false,
+      disabled: false,
+    })
+  })
+
+  test('forces non-stream mode on and stream=false for incompatible endpoints', () => {
+    for (const endpointType of [
+      'embeddings',
+      'image-generation',
+      'jina-rerank',
+      'openai-response-compact',
+    ]) {
+      assert.deepEqual(resolveNonStreamTestMode(endpointType, false), {
+        nonStream: true,
+        stream: false,
+        disabled: true,
+      })
+    }
+  })
+})
 
 describe('channel test batch progress lifecycle', () => {
   test('updates one stable toast ID as controlled model promises resolve and dismisses it on completion', async () => {
