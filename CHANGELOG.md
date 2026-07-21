@@ -6,6 +6,14 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.49] - 2026-07-21
+
+### Changed
+- Ordinary and manual channel tests now default to streaming; the localized **Non-stream Mode** toggle provides an explicit opt-in to `stream=false`, which remains supported through the backend query parameter.
+
+### Fixed
+- Stream-incompatible endpoints now force non-stream testing and show the toggle in the semantically correct enabled-state/disabled-control presentation.
+
 ## [v1.0.0-rc.48] - 2026-07-21
 
 ### Fixed
