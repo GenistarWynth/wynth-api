@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/ai360"
+	"github.com/QuantumNous/new-api/relay/channel/clientidentity"
 	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
 
 	//"github.com/QuantumNous/new-api/relay/channel/minimax"
@@ -596,6 +597,9 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	if info != nil && info.ChannelMeta != nil && dto.NormalizeClientIdentityPreset(info.ChannelOtherSettings.ClientIdentityPreset) == dto.ClientIdentityPresetCodexCLI {
+		clientidentity.NormalizeCodexCLIResponsesRequest(&request)
+	}
 	request.Model = resolveOpenAIModelAlias(request.Model)
 	if info != nil && info.UpstreamModelName == "gpt-5.6" {
 		info.UpstreamModelName = request.Model

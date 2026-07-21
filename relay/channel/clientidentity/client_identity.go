@@ -23,6 +23,41 @@ const AnthropicOAuthBetaFeatures = "oauth-2025-04-20,claude-code-20250219,interl
 // ClaudeCodeAnthropicVersion is the anthropic-version header used by Claude Code.
 const ClaudeCodeAnthropicVersion = "2023-06-01"
 
+// NormalizeCodexCLIResponsesRequest fills the body fields emitted by Codex CLI
+// that strict Codex-compatible Responses upstreams use to distinguish Codex
+// traffic. Explicit caller choices are preserved, except store is always false
+// to match Codex's stateless Responses requests.
+func NormalizeCodexCLIResponsesRequest(request *dto.OpenAIResponsesRequest) {
+	if request == nil {
+		return
+	}
+	if len(request.Instructions) == 0 {
+		request.Instructions = json.RawMessage(`"You are Codex CLI. Complete the user's request concisely."`)
+	}
+	request.Store = json.RawMessage("false")
+	if len(request.Tools) == 0 {
+		request.Tools = json.RawMessage("[]")
+	}
+	if len(request.ToolChoice) == 0 {
+		request.ToolChoice = json.RawMessage(`"auto"`)
+	}
+	if len(request.ParallelToolCalls) == 0 {
+		request.ParallelToolCalls = json.RawMessage("true")
+	}
+	if request.Reasoning == nil {
+		request.Reasoning = &dto.Reasoning{Effort: "medium", Summary: "auto"}
+	}
+	if len(request.Include) == 0 {
+		request.Include = json.RawMessage(`["reasoning.encrypted_content"]`)
+	}
+	if len(request.Text) == 0 {
+		request.Text = json.RawMessage(`{"verbosity":"low"}`)
+	}
+	if len(request.PromptCacheKey) == 0 {
+		request.PromptCacheKey = json.RawMessage(`"` + uuid.NewString() + `"`)
+	}
+}
+
 // ClaudeCodeMimicryHeaders returns the exact built-in Claude Code CLI identity
 // header bundle (without protocol version / beta). Callers receive a new map so
 // they cannot mutate the bundle.

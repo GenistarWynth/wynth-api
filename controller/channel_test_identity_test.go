@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeChannelTestEndpointUsesResponsesForCodexCLIIdentity(t *testing.T) {
@@ -25,6 +26,42 @@ func TestNormalizeChannelTestEndpointUsesResponsesForCodexCLIIdentity(t *testing
 	// Native Codex channel type still maps to responses.
 	codex := &model.Channel{Type: constant.ChannelTypeCodex}
 	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(codex, "gpt-5.4", ""))
+}
+
+func TestBuildTestRequestUsesCodexCLIResponsesShape(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ClientIdentityPreset: dto.ClientIdentityPresetCodexCLI,
+	})
+
+	request, ok := buildTestRequest("gpt-5.6-sol", string(constant.EndpointTypeOpenAIResponse), channel, true).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	assert.True(t, *request.Stream)
+	assert.JSONEq(t, `[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]`, string(request.Input))
+	assert.NotEmpty(t, request.Instructions)
+	assert.JSONEq(t, `false`, string(request.Store))
+	assert.JSONEq(t, `[]`, string(request.Tools))
+	assert.JSONEq(t, `"auto"`, string(request.ToolChoice))
+	assert.JSONEq(t, `true`, string(request.ParallelToolCalls))
+	assert.JSONEq(t, `["reasoning.encrypted_content"]`, string(request.Include))
+	assert.JSONEq(t, `{"verbosity":"low"}`, string(request.Text))
+	assert.NotEmpty(t, request.PromptCacheKey)
+	require.NotNil(t, request.Reasoning)
+	assert.Equal(t, "medium", request.Reasoning.Effort)
+	assert.Equal(t, "auto", request.Reasoning.Summary)
+}
+
+func TestBuildTestRequestKeepsSimpleResponsesShapeWithoutCodexCLIIdentity(t *testing.T) {
+	request, ok := buildTestRequest("gpt-5.6-sol", string(constant.EndpointTypeOpenAIResponse), &model.Channel{Type: constant.ChannelTypeOpenAI}, true).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+
+	assert.True(t, *request.Stream)
+	assert.JSONEq(t, `[{"role":"user","content":"hi"}]`, string(request.Input))
+	assert.Empty(t, request.Instructions)
+	assert.Empty(t, request.Store)
+	assert.Empty(t, request.Tools)
+	assert.Empty(t, request.PromptCacheKey)
+	assert.Nil(t, request.Reasoning)
 }
 
 func TestShouldUseStreamForAutomaticChannelTestForcesCodexCLIIdentity(t *testing.T) {
