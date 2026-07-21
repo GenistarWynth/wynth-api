@@ -885,8 +885,7 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 }
 
 // resolveChannelTestStream decides whether a manual channel test should stream.
-// Explicit ?stream= query wins; otherwise codex_cli identity channels default to
-// stream=true so the admin "Test" button matches monitor/automatic probes.
+// Explicit ?stream= query wins; otherwise manual channel tests stream by default.
 func resolveChannelTestStream(c *gin.Context, channel *model.Channel) bool {
 	if c != nil {
 		if raw, ok := c.GetQuery("stream"); ok {
@@ -894,13 +893,7 @@ func resolveChannelTestStream(c *gin.Context, channel *model.Channel) bool {
 			return isStream
 		}
 	}
-	if channelUsesCodexCLIIdentity(channel) {
-		return true
-	}
-	if channelUsesClaudeCodeIdentity(channel) {
-		return true
-	}
-	return false
+	return true
 }
 
 func resolveChannelMonitorUpstreamModel(channel *model.Channel, testModel string) (string, error) {

@@ -35,7 +35,7 @@ func TestShouldUseStreamForAutomaticChannelTestForcesCodexCLIIdentity(t *testing
 	assert.True(t, shouldUseStreamForAutomaticChannelTest(channel))
 }
 
-func TestResolveChannelTestStreamDefaultsCodexCLIIdentityToStream(t *testing.T) {
+func TestResolveChannelTestStreamDefaultsToStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 	channel.SetOtherSettings(dto.ChannelOtherSettings{
@@ -53,7 +53,7 @@ func TestResolveChannelTestStreamDefaultsCodexCLIIdentityToStream(t *testing.T) 
 	assert.False(t, resolveChannelTestStream(cFalse, channel))
 
 	normal := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	assert.False(t, resolveChannelTestStream(c, normal))
+	assert.True(t, resolveChannelTestStream(c, normal))
 }
 
 func TestNormalizeChannelTestEndpointUsesMessagesForClaudeCodeIdentity(t *testing.T) {
@@ -83,4 +83,3 @@ func TestResolveChannelTestStreamDefaultsClaudeCodeIdentityToStream(t *testing.T
 	c.Request = req
 	assert.True(t, resolveChannelTestStream(c, channel))
 }
-

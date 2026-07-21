@@ -350,7 +350,7 @@ function ChannelTestDialogContent({
   const [batchRunManager] = useState(createBatchRunManager)
   const activeBatchSessionRef = useRef<BatchRunSession | null>(null)
   const [endpointType, setEndpointType] = useState('auto')
-  const [isStreamTest, setIsStreamTest] = useState(false)
+  const [isStreamTest, setIsStreamTest] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
@@ -392,7 +392,7 @@ function ChannelTestDialogContent({
     batchRunManager.cancelCurrent()
     activeBatchSessionRef.current = null
     setEndpointType('auto')
-    setIsStreamTest(false)
+    setIsStreamTest(true)
     setSearchTerm('')
     setTestResults({})
     setRowSelection({})
@@ -562,7 +562,7 @@ function ChannelTestDialogContent({
             channelName: currentRow.name,
             testModel: model,
             endpointType: endpointType === 'auto' ? undefined : endpointType,
-            stream: effectiveStreamTest || undefined,
+            stream: effectiveStreamTest,
             silent,
           },
           (success, responseTime, error, errorCode) => {
