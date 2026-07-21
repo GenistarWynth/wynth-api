@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.52] - 2026-07-21
+
+### Fixed
+- OpenAI-type channels using `client_identity_preset=codex_cli` now send strict Codex-compatible Responses upstreams complete Codex CLI request semantics, including typed `input_text` channel tests and missing Codex defaults, while preserving non-Codex behavior and explicit caller choices except enforcing `store=false`.
+
 ## [v1.0.0-rc.51] - 2026-07-21
 
 ### Changed
