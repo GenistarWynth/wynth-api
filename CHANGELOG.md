@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.53] - 2026-07-22
+
+### Fixed
+- Upstream-source edits now persist provider type changes and transactionally refresh generated channels and their runtime cache with source-owned connection fields; refresh failures roll back the source update and unknown source types return an explicit validation error, while channel- and mapping-owned fields remain unchanged.
+
 ## [v1.0.0-rc.52] - 2026-07-21
 
 ### Fixed
