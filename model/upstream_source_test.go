@@ -25,7 +25,14 @@ func setupUpstreamSourceTestDB(t *testing.T) {
 		DB = oldDB
 	})
 
-	require.NoError(t, DB.AutoMigrate(&UpstreamSource{}, &UpstreamSourceChannelMapping{}, &Channel{}, &Ability{}))
+	require.NoError(t, DB.AutoMigrate(
+		&UpstreamSource{},
+		&UpstreamSourceChannelMapping{},
+		&UpstreamSourceScan{},
+		&UpstreamSourceGroupChange{},
+		&Channel{},
+		&Ability{},
+	))
 }
 
 func TestUpstreamSourceRedactedResponseOmitsAuthConfig(t *testing.T) {
@@ -167,4 +174,60 @@ func TestUpstreamSourceAutoMigrateCreatesUniqueMapping(t *testing.T) {
 		SourceID:        sourceB.Id,
 		UpstreamGroupID: "10",
 	}).Error)
+}
+
+func TestUpstreamSourceRecentHistoryQueriesAreScopedAndBounded(t *testing.T) {
+	setupUpstreamSourceTestDB(t)
+	sourceA := UpstreamSource{Name: "source-a", Type: UpstreamSourceTypeSub2API, BaseURL: "https://a.example.com"}
+	sourceB := UpstreamSource{Name: "source-b", Type: UpstreamSourceTypeSub2API, BaseURL: "https://b.example.com"}
+	require.NoError(t, DB.Create(&sourceA).Error)
+	require.NoError(t, DB.Create(&sourceB).Error)
+
+	scans := []UpstreamSourceScan{
+		{SourceID: sourceA.Id, ScanType: UpstreamSourceScanTypeDiscover, Status: UpstreamSourceScanStatusSuccess, StartedAt: 100, FinishedAt: 101},
+		{SourceID: sourceA.Id, ScanType: UpstreamSourceScanTypeDiscover, Status: UpstreamSourceScanStatusSuccess, StartedAt: 200, FinishedAt: 201},
+		{SourceID: sourceA.Id, ScanType: UpstreamSourceScanTypeDiscover, Status: UpstreamSourceScanStatusFailed, StartedAt: 300, FinishedAt: 301},
+		{SourceID: sourceB.Id, ScanType: UpstreamSourceScanTypeDiscover, Status: UpstreamSourceScanStatusSuccess, StartedAt: 400, FinishedAt: 401},
+	}
+	require.NoError(t, DB.Create(&scans).Error)
+	changes := []UpstreamSourceGroupChange{
+		{SourceID: sourceA.Id, ScanID: scans[0].Id, ChangeType: UpstreamSourceGroupChangeAdded, UpstreamGroupID: "10", CreatedAt: 100},
+		{SourceID: sourceA.Id, ScanID: scans[1].Id, ChangeType: UpstreamSourceGroupChangeRateChanged, UpstreamGroupID: "10", CreatedAt: 200},
+		{SourceID: sourceB.Id, ScanID: scans[3].Id, ChangeType: UpstreamSourceGroupChangeAdded, UpstreamGroupID: "other", CreatedAt: 400},
+	}
+	require.NoError(t, DB.Create(&changes).Error)
+
+	recentScans, err := ListRecentUpstreamSourceScans(sourceA.Id, 2)
+	require.NoError(t, err)
+	require.Len(t, recentScans, 2)
+	assert.Equal(t, scans[2].Id, recentScans[0].Id)
+	assert.Equal(t, scans[1].Id, recentScans[1].Id)
+	for _, scan := range recentScans {
+		assert.Equal(t, sourceA.Id, scan.SourceID)
+	}
+
+	recentChanges, err := ListRecentUpstreamSourceGroupChanges(sourceA.Id, 1)
+	require.NoError(t, err)
+	require.Len(t, recentChanges, 1)
+	assert.Equal(t, changes[1].Id, recentChanges[0].Id)
+	assert.Equal(t, sourceA.Id, recentChanges[0].SourceID)
+}
+
+func TestFinishUpstreamSourceScanRejectsNonRunningScan(t *testing.T) {
+	setupUpstreamSourceTestDB(t)
+	source := UpstreamSource{Name: "source-a", Type: UpstreamSourceTypeSub2API, BaseURL: "https://a.example.com"}
+	require.NoError(t, DB.Create(&source).Error)
+	scan := UpstreamSourceScan{
+		SourceID:   source.Id,
+		ScanType:   UpstreamSourceScanTypeDiscover,
+		Status:     UpstreamSourceScanStatusSuccess,
+		StartedAt:  100,
+		FinishedAt: 101,
+	}
+	require.NoError(t, DB.Create(&scan).Error)
+
+	err := FinishUpstreamSourceScanTx(DB, scan.Id, UpstreamSourceScanStatusFailed, false, 200, "late failure")
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not running")
 }

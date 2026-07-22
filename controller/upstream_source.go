@@ -259,6 +259,40 @@ func ListUpstreamSourceMappings(c *gin.Context) {
 	common.ApiSuccess(c, mappings)
 }
 
+func ListUpstreamSourceScans(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	scans, err := model.ListRecentUpstreamSourceScans(source.Id, upstreamSourceHistoryLimit(c))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, scans)
+}
+
+func ListUpstreamSourceGroupChanges(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	changes, err := model.ListRecentUpstreamSourceGroupChanges(source.Id, upstreamSourceHistoryLimit(c))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, changes)
+}
+
+func upstreamSourceHistoryLimit(c *gin.Context) int {
+	limit, err := strconv.Atoi(strings.TrimSpace(c.Query("limit")))
+	if err != nil {
+		return 0
+	}
+	return limit
+}
+
 func UpdateUpstreamSourceMappings(c *gin.Context) {
 	source, ok := loadUpstreamSourceForController(c)
 	if !ok {

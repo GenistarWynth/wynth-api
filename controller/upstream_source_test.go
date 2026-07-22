@@ -55,7 +55,17 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		common.TranslateMessage = oldTranslateMessage
 	})
 
-	require.NoError(t, db.AutoMigrate(&model.UpstreamSource{}, &model.UpstreamSourceChannelMapping{}, &model.Channel{}, &model.Ability{}, &model.User{}, &model.Log{}, &model.ChannelMonitorLog{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.UpstreamSource{},
+		&model.UpstreamSourceChannelMapping{},
+		&model.UpstreamSourceScan{},
+		&model.UpstreamSourceGroupChange{},
+		&model.Channel{},
+		&model.Ability{},
+		&model.User{},
+		&model.Log{},
+		&model.ChannelMonitorLog{},
+	))
 	require.NoError(t, db.Create(&model.User{
 		Id:       1,
 		Username: "admin",
@@ -95,6 +105,8 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.POST("/:id/discover", DiscoverUpstreamSource)
 		group.GET("/:id/mappings", ListUpstreamSourceMappings)
 		group.PUT("/:id/mappings", UpdateUpstreamSourceMappings)
+		group.GET("/:id/scans", ListUpstreamSourceScans)
+		group.GET("/:id/changes", ListUpstreamSourceGroupChanges)
 		group.POST("/:id/sync", SyncUpstreamSource)
 		group.GET("/:id/sync_result", GetUpstreamSourceSyncResult)
 		group.POST("/:id/auto_priority/run", RunUpstreamSourceAutoPriority)
@@ -741,6 +753,37 @@ func TestUpstreamSourceAPIListMappingsRedactsStoredErrors(t *testing.T) {
 	raw := string(mustMarshalUpstreamSourceAPITest(t, response))
 	assert.NotContains(t, raw, "sk-mapping-secret-token-value")
 	assert.Contains(t, raw, "[redacted]")
+}
+
+func TestUpstreamSourceAPIHistoryIsScopedAndBounded(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	sourceA := createUpstreamSourceAPITestSource(t, `{}`)
+	sourceB := createUpstreamSourceAPITestSource(t, `{}`)
+	scans := []model.UpstreamSourceScan{
+		{SourceID: sourceA.Id, ScanType: model.UpstreamSourceScanTypeDiscover, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 100, FinishedAt: 101},
+		{SourceID: sourceA.Id, ScanType: model.UpstreamSourceScanTypeDiscover, Status: model.UpstreamSourceScanStatusFailed, StartedAt: 200, FinishedAt: 201},
+		{SourceID: sourceB.Id, ScanType: model.UpstreamSourceScanTypeDiscover, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 300, FinishedAt: 301},
+	}
+	require.NoError(t, model.DB.Create(&scans).Error)
+	changes := []model.UpstreamSourceGroupChange{
+		{SourceID: sourceA.Id, ScanID: scans[0].Id, ChangeType: model.UpstreamSourceGroupChangeAdded, UpstreamGroupID: "10", CreatedAt: 100},
+		{SourceID: sourceA.Id, ScanID: scans[1].Id, ChangeType: model.UpstreamSourceGroupChangeRemoved, UpstreamGroupID: "20", CreatedAt: 200},
+		{SourceID: sourceB.Id, ScanID: scans[2].Id, ChangeType: model.UpstreamSourceGroupChangeAdded, UpstreamGroupID: "other", CreatedAt: 300},
+	}
+	require.NoError(t, model.DB.Create(&changes).Error)
+
+	scanResponse := upstreamSourceAPIRequest[[]model.UpstreamSourceScan](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(sourceA.Id)+"/scans?limit=1", nil, true)
+	require.True(t, scanResponse.Success, scanResponse.Message)
+	require.Len(t, scanResponse.Data, 1)
+	assert.Equal(t, scans[1].Id, scanResponse.Data[0].Id)
+	assert.Equal(t, sourceA.Id, scanResponse.Data[0].SourceID)
+
+	changeResponse := upstreamSourceAPIRequest[[]model.UpstreamSourceGroupChange](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(sourceA.Id)+"/changes?limit=1", nil, true)
+	require.True(t, changeResponse.Success, changeResponse.Message)
+	require.Len(t, changeResponse.Data, 1)
+	assert.Equal(t, changes[1].Id, changeResponse.Data[0].Id)
+	assert.Equal(t, sourceA.Id, changeResponse.Data[0].SourceID)
 }
 
 func TestUpstreamSourceAPISyncReturnsMappingResults(t *testing.T) {

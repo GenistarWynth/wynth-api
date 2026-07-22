@@ -139,7 +139,14 @@ func setupUpstreamSourceServiceTestDB(t *testing.T) {
 		model.DB = oldDB
 	})
 
-	require.NoError(t, model.DB.AutoMigrate(&model.UpstreamSource{}, &model.UpstreamSourceChannelMapping{}, &model.Channel{}, &model.Ability{}))
+	require.NoError(t, model.DB.AutoMigrate(
+		&model.UpstreamSource{},
+		&model.UpstreamSourceChannelMapping{},
+		&model.UpstreamSourceScan{},
+		&model.UpstreamSourceGroupChange{},
+		&model.Channel{},
+		&model.Ability{},
+	))
 }
 
 func createDiscoveryTestSource(t *testing.T) model.UpstreamSource {
@@ -199,6 +206,229 @@ func TestDiscoverUpstreamSourceUpsertsMappings(t *testing.T) {
 	assert.Equal(t, model.UpstreamDiscoveryStatusSucceeded, reloaded.LastDiscoveryStatus)
 	assert.Equal(t, int64(12345), reloaded.LastDiscoveryTime)
 	assert.Empty(t, reloaded.LastDiscoveryError)
+}
+
+func TestDiscoverUpstreamSourceFirstSuccessCreatesBaselineWithoutChanges(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 0.75
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{
+				{ID: "10", Name: "standard", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+			}}, nil
+		},
+		Now: func() int64 { return 12345 },
+	}
+
+	_, err := upstreamSourceService.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	var scans []model.UpstreamSourceScan
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Find(&scans).Error)
+	require.Len(t, scans, 1)
+	assert.Equal(t, model.UpstreamSourceScanTypeDiscover, scans[0].ScanType)
+	assert.Equal(t, model.UpstreamSourceScanStatusSuccess, scans[0].Status)
+	assert.True(t, scans[0].Baseline)
+	assert.Equal(t, int64(12345), scans[0].StartedAt)
+	assert.Equal(t, int64(12345), scans[0].FinishedAt)
+	assert.Empty(t, scans[0].ErrorSummary)
+
+	var changeCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceGroupChange{}).Where("source_id = ?", source.Id).Count(&changeCount).Error)
+	assert.Zero(t, changeCount)
+}
+
+func TestDiscoverUpstreamSourceRecordsAddedChange(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 1.0
+	groups := []UpstreamGroup{
+		{ID: "10", Name: "existing", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	now := int64(100)
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
+		},
+		Now: func() int64 { return now },
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	now = 200
+	groups = append(groups, UpstreamGroup{
+		ID: "20", Name: "new", Description: "new group", Platform: "claude", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate,
+	})
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	var changes []model.UpstreamSourceGroupChange
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Order("id").Find(&changes).Error)
+	require.Len(t, changes, 1)
+	var scans []model.UpstreamSourceScan
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Order("id").Find(&scans).Error)
+	require.Len(t, scans, 2)
+	assert.False(t, scans[1].Baseline)
+	assert.Equal(t, scans[1].Id, changes[0].ScanID)
+	assert.Equal(t, model.UpstreamSourceGroupChangeAdded, changes[0].ChangeType)
+	assert.Equal(t, "20", changes[0].UpstreamGroupID)
+	assert.Equal(t, "new", changes[0].UpstreamGroupName)
+	assert.Equal(t, "new group", changes[0].UpstreamGroupDescription)
+	assert.Equal(t, "claude", changes[0].UpstreamPlatform)
+	assert.Nil(t, changes[0].OldRateMultiplier)
+	require.NotNil(t, changes[0].NewRateMultiplier)
+	assert.Equal(t, rate, *changes[0].NewRateMultiplier)
+	assert.Equal(t, int64(200), changes[0].CreatedAt)
+}
+
+func TestDiscoverUpstreamSourceRecordsRemovedChange(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 1.25
+	groups := []UpstreamGroup{
+		{ID: "10", Name: "kept", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+		{ID: "20", Name: "removed", Platform: "claude", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	now := int64(100)
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
+		},
+		Now: func() int64 { return now },
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	now = 200
+	groups = groups[:1]
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	var mapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&mapping).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, mapping.DiscoveryStatus)
+	var changes []model.UpstreamSourceGroupChange
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Order("id").Find(&changes).Error)
+	require.Len(t, changes, 1)
+	assert.Equal(t, model.UpstreamSourceGroupChangeRemoved, changes[0].ChangeType)
+	assert.Equal(t, "20", changes[0].UpstreamGroupID)
+	require.NotNil(t, changes[0].OldEffectiveRateMultiplier)
+	assert.Equal(t, rate, *changes[0].OldEffectiveRateMultiplier)
+	assert.Nil(t, changes[0].NewEffectiveRateMultiplier)
+
+	now = 300
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+	var removedCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceGroupChange{}).
+		Where("source_id = ? AND change_type = ?", source.Id, model.UpstreamSourceGroupChangeRemoved).
+		Count(&removedCount).Error)
+	assert.Equal(t, int64(1), removedCount)
+}
+
+func TestDiscoverUpstreamSourceRecordsRestoredChange(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 0.8
+	groups := []UpstreamGroup{
+		{ID: "10", Name: "returning", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	now := int64(100)
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
+		},
+		Now: func() int64 { return now },
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	now = 200
+	groups = nil
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+	now = 300
+	groups = []UpstreamGroup{
+		{ID: "10", Name: "returning", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	var restored model.UpstreamSourceGroupChange
+	require.NoError(t, model.DB.Where("source_id = ? AND change_type = ?", source.Id, model.UpstreamSourceGroupChangeRestored).First(&restored).Error)
+	assert.Equal(t, "10", restored.UpstreamGroupID)
+	assert.Equal(t, int64(300), restored.CreatedAt)
+	var mapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").First(&mapping).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, mapping.DiscoveryStatus)
+}
+
+func TestDiscoverUpstreamSourcePreservesSelectionWhenMappingIsRestored(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
+		SourceID:        source.Id,
+		SyncEnabled:     true,
+		UpstreamGroupID: "10",
+		DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+	}).Error)
+	rate := 1.0
+	var groups []UpstreamGroup
+	now := int64(100)
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
+		},
+		Now: func() int64 { return now },
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	now = 200
+	groups = []UpstreamGroup{
+		{ID: "10", Name: "restored", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	var restored model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").First(&restored).Error)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, restored.DiscoveryStatus)
+	assert.True(t, restored.SyncEnabled)
+}
+
+func TestDiscoverUpstreamSourceRecordsRateChangedChange(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	oldRate := 0.5
+	oldEffectiveRate := 0.6
+	groups := []UpstreamGroup{
+		{ID: "10", Name: "standard", Platform: "openai", Status: "enabled", RateMultiplier: &oldRate, EffectiveRateMultiplier: &oldEffectiveRate},
+	}
+	now := int64(100)
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
+		},
+		Now: func() int64 { return now },
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	newRate := 0.75
+	newEffectiveRate := 0.9
+	now = 200
+	groups = []UpstreamGroup{
+		{ID: "10", Name: "standard", Platform: "openai", Status: "enabled", RateMultiplier: &newRate, EffectiveRateMultiplier: &newEffectiveRate},
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	var change model.UpstreamSourceGroupChange
+	require.NoError(t, model.DB.Where("source_id = ? AND change_type = ?", source.Id, model.UpstreamSourceGroupChangeRateChanged).First(&change).Error)
+	require.NotNil(t, change.OldRateMultiplier)
+	require.NotNil(t, change.NewRateMultiplier)
+	require.NotNil(t, change.OldEffectiveRateMultiplier)
+	require.NotNil(t, change.NewEffectiveRateMultiplier)
+	assert.Equal(t, oldRate, *change.OldRateMultiplier)
+	assert.Equal(t, newRate, *change.NewRateMultiplier)
+	assert.Equal(t, oldEffectiveRate, *change.OldEffectiveRateMultiplier)
+	assert.Equal(t, newEffectiveRate, *change.NewEffectiveRateMultiplier)
+	assert.Equal(t, int64(200), change.CreatedAt)
+}
+
+func discoverUpstreamSourceForTest(upstreamSourceService UpstreamSourceService, sourceID int) error {
+	_, err := upstreamSourceService.Discover(context.Background(), sourceID)
+	return err
 }
 
 func TestDiscoverUpstreamSourcePersistsRefreshedAuthConfig(t *testing.T) {
@@ -422,6 +652,10 @@ func TestDiscoverUpstreamSourcePreservesSyncOwnedMappingFields(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)
 	rate := 0.75
+	groups := []UpstreamGroup{
+		{ID: "10", Name: "renamed", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	now := int64(222)
 	existing := model.UpstreamSourceChannelMapping{
 		SourceID:        source.Id,
 		SyncEnabled:     true,
@@ -435,16 +669,22 @@ func TestDiscoverUpstreamSourcePreservesSyncOwnedMappingFields(t *testing.T) {
 	require.NoError(t, model.DB.Create(&existing).Error)
 	service := UpstreamSourceService{
 		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
-			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{
-				{ID: "10", Name: "renamed", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
-			}}, nil
+			return fakeUpstreamSourceAdapter{groups: groups}, nil
 		},
-		Now: func() int64 { return 222 },
+		Now: func() int64 { return now },
 	}
 
 	_, err := service.Discover(context.Background(), source.Id)
 
 	require.NoError(t, err)
+	newRate := 0.9
+	groups = []UpstreamGroup{
+		{ID: "10", Name: "renamed again", Platform: "openai", Status: "enabled", RateMultiplier: &newRate, EffectiveRateMultiplier: &newRate},
+	}
+	now = 333
+	_, err = service.Discover(context.Background(), source.Id)
+	require.NoError(t, err)
+
 	var reloaded model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "10").First(&reloaded).Error)
 	assert.True(t, reloaded.SyncEnabled)
@@ -453,8 +693,15 @@ func TestDiscoverUpstreamSourcePreservesSyncOwnedMappingFields(t *testing.T) {
 	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, reloaded.SyncStatus)
 	assert.Equal(t, "keep me", reloaded.LastError)
 	assert.Equal(t, int64(111), reloaded.LastSyncedAt)
-	assert.Equal(t, "renamed", reloaded.UpstreamGroupName)
-	assert.Equal(t, int64(222), reloaded.LastDiscoveredAt)
+	assert.Equal(t, "renamed again", reloaded.UpstreamGroupName)
+	assert.Equal(t, int64(333), reloaded.LastDiscoveredAt)
+
+	var change model.UpstreamSourceGroupChange
+	require.NoError(t, model.DB.Where("source_id = ? AND change_type = ?", source.Id, model.UpstreamSourceGroupChangeRateChanged).First(&change).Error)
+	require.NotNil(t, change.OldEffectiveRateMultiplier)
+	require.NotNil(t, change.NewEffectiveRateMultiplier)
+	assert.Equal(t, rate, *change.OldEffectiveRateMultiplier)
+	assert.Equal(t, newRate, *change.NewEffectiveRateMultiplier)
 }
 
 func TestDiscoverUpstreamSourceDoesNotReenableDeselectedMapping(t *testing.T) {
@@ -538,7 +785,7 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "20").First(&stale).Error)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, stale.DiscoveryStatus)
 	assert.Equal(t, int64(333), stale.LastDiscoveredAt)
-	assert.False(t, stale.SyncEnabled)
+	assert.True(t, stale.SyncEnabled)
 	assert.Equal(t, "key-20", stale.UpstreamKeyID)
 	assert.Equal(t, 88, stale.LocalChannelID)
 	assert.Equal(t, model.UpstreamMappingSyncStatusSynced, stale.SyncStatus)
@@ -547,7 +794,7 @@ func TestDiscoverUpstreamSourceMarksMissingMappingsStale(t *testing.T) {
 	require.NoError(t, model.DB.Where("source_id = ? AND upstream_group_id = ?", source.Id, "30").First(&staleFromInvalid).Error)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, staleFromInvalid.DiscoveryStatus)
 	assert.Equal(t, int64(333), staleFromInvalid.LastDiscoveredAt)
-	assert.False(t, staleFromInvalid.SyncEnabled)
+	assert.True(t, staleFromInvalid.SyncEnabled)
 	assert.Equal(t, "key-30", staleFromInvalid.UpstreamKeyID)
 	assert.Equal(t, 99, staleFromInvalid.LocalChannelID)
 	assert.Equal(t, model.UpstreamMappingSyncStatusFailed, staleFromInvalid.SyncStatus)
@@ -614,7 +861,7 @@ func TestDiscoverUpstreamSourceDisablesGeneratedChannelForMissingGroup(t *testin
 	var reloadedMapping model.UpstreamSourceChannelMapping
 	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
 	assert.Equal(t, model.UpstreamMappingDiscoveryStatusStale, reloadedMapping.DiscoveryStatus)
-	assert.False(t, reloadedMapping.SyncEnabled)
+	assert.True(t, reloadedMapping.SyncEnabled)
 	assert.Equal(t, channel.Id, reloadedMapping.LocalChannelID)
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
@@ -678,6 +925,16 @@ func TestDiscoverUpstreamSourceRollsBackMappingsWhenStatusUpdateFails(t *testing
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
 	assert.NotEqual(t, model.UpstreamDiscoveryStatusSucceeded, reloaded.LastDiscoveryStatus)
 	assert.Zero(t, reloaded.LastDiscoveryTime)
+
+	var scans []model.UpstreamSourceScan
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Find(&scans).Error)
+	require.Len(t, scans, 1)
+	assert.Equal(t, model.UpstreamSourceScanStatusRunning, scans[0].Status)
+	assert.False(t, scans[0].Baseline)
+	assert.Contains(t, err.Error(), "record discovery failure")
+	var changeCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceGroupChange{}).Where("source_id = ?", source.Id).Count(&changeCount).Error)
+	assert.Zero(t, changeCount)
 }
 
 func TestDiscoverUpstreamSourceFailureDoesNotMutateChannels(t *testing.T) {
@@ -725,6 +982,50 @@ func TestDiscoverUpstreamSourceFailureDoesNotMutateChannels(t *testing.T) {
 	assert.Equal(t, model.UpstreamDiscoveryStatusFailed, reloaded.LastDiscoveryStatus)
 	assert.Equal(t, int64(444), reloaded.LastDiscoveryTime)
 	assert.Contains(t, reloaded.LastDiscoveryError, "upstream failed")
+}
+
+func TestDiscoverUpstreamSourceFailedScanPreservesBaselineAndMappings(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	rate := 1.0
+	groups := []UpstreamGroup{
+		{ID: "10", Name: "stable", Platform: "openai", Status: "enabled", RateMultiplier: &rate, EffectiveRateMultiplier: &rate},
+	}
+	var discoverErr error
+	now := int64(100)
+	upstreamSourceService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: groups, err: discoverErr}, nil
+		},
+		Now: func() int64 { return now },
+	}
+	require.NoError(t, discoverUpstreamSourceForTest(upstreamSourceService, source.Id))
+
+	discoverErr = errors.New("upstream failed with bearer sk-secret-value")
+	now = 200
+	err := discoverUpstreamSourceForTest(upstreamSourceService, source.Id)
+
+	require.Error(t, err)
+	var scans []model.UpstreamSourceScan
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Order("id").Find(&scans).Error)
+	require.Len(t, scans, 2)
+	assert.Equal(t, model.UpstreamSourceScanStatusSuccess, scans[0].Status)
+	assert.True(t, scans[0].Baseline)
+	assert.Equal(t, model.UpstreamSourceScanStatusFailed, scans[1].Status)
+	assert.False(t, scans[1].Baseline)
+	assert.Equal(t, int64(200), scans[1].FinishedAt)
+	assert.NotContains(t, scans[1].ErrorSummary, "sk-secret-value")
+	assert.Contains(t, scans[1].ErrorSummary, "[redacted]")
+
+	var mappings []model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).Find(&mappings).Error)
+	require.Len(t, mappings, 1)
+	assert.Equal(t, "10", mappings[0].UpstreamGroupID)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, mappings[0].DiscoveryStatus)
+	assert.Equal(t, int64(100), mappings[0].LastDiscoveredAt)
+	var changeCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceGroupChange{}).Where("source_id = ?", source.Id).Count(&changeCount).Error)
+	assert.Zero(t, changeCount)
 }
 
 func TestDiscoverUpstreamSourceNilAdapterFactoryFailsWithoutPanic(t *testing.T) {

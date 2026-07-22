@@ -44,33 +44,54 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	originalAuth := source.AuthConfig
 
 	now := s.now()
+	scan, err := model.CreateUpstreamSourceScan(source.Id, model.UpstreamSourceScanTypeDiscover, now)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateUpstreamSourceDiscoveryConfig(&source); err != nil {
-		return s.recordDiscoveryFailure(source.Id, now, err), err
+		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
 
 	adapter, err := s.adapterFactory()(source.Type)
 	if err != nil {
-		return s.recordDiscoveryFailure(source.Id, now, err), err
+		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
 	if adapter == nil {
 		err := errors.New("upstream source adapter is unavailable")
-		return s.recordDiscoveryFailure(source.Id, now, err), err
+		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
 
 	groups, err := adapter.DiscoverGroups(ctx, &source)
 	if err != nil {
-		return s.recordDiscoveryFailure(source.Id, now, err), err
+		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
 	persistUpstreamSourceAuthConfigIfChanged(source.Id, originalAuth, source.AuthConfig)
 
 	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	if err != nil {
-		return s.recordDiscoveryFailure(source.Id, now, err), err
+		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
 
 	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now, config)
+	finishedAt := s.now()
 	var result dto.UpstreamSourceDiscoveryResult
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.LockUpstreamSourceForScanTx(tx, source.Id); err != nil {
+			return err
+		}
+		var previousMappings []model.UpstreamSourceChannelMapping
+		if err := tx.Where("source_id = ?", source.Id).Find(&previousMappings).Error; err != nil {
+			return err
+		}
+		hasSuccessfulScan, err := model.HasSuccessfulUpstreamSourceScanTx(tx, source.Id, model.UpstreamSourceScanTypeDiscover)
+		if err != nil {
+			return err
+		}
+		baseline := !hasSuccessfulScan
+		var changes []model.UpstreamSourceGroupChange
+		if !baseline {
+			changes = buildUpstreamSourceGroupChanges(source.Id, scan.Id, previousMappings, mappings, now)
+		}
 		if err := model.UpsertDiscoveredMappingsTx(tx, source.Id, mappings, now); err != nil {
 			return err
 		}
@@ -78,7 +99,15 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 		if err != nil {
 			return err
 		}
+		if len(changes) > 0 {
+			if err := tx.Create(&changes).Error; err != nil {
+				return err
+			}
+		}
 		if err := updateUpstreamSourceDiscoveryStatusTx(tx, source.Id, model.UpstreamDiscoveryStatusSucceeded, "", now); err != nil {
+			return err
+		}
+		if err := model.FinishUpstreamSourceScanTx(tx, scan.Id, model.UpstreamSourceScanStatusSuccess, baseline, finishedAt, ""); err != nil {
 			return err
 		}
 
@@ -89,7 +118,7 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 		result = built
 		return nil
 	}); err != nil {
-		return nil, err
+		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
 	if result.Stale > 0 {
 		model.InitChannelCache()
@@ -1268,7 +1297,7 @@ func markMissingDiscoveredMappingsStale(sourceID int, discoveredIDs []string, no
 }
 
 func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredIDs []string, now int64) (int, error) {
-	query := tx.Where("source_id = ?", sourceID)
+	query := tx.Where("source_id = ? AND discovery_status <> ?", sourceID, model.UpstreamMappingDiscoveryStatusStale)
 	if len(discoveredIDs) > 0 {
 		query = query.Where("upstream_group_id NOT IN ?", discoveredIDs)
 	}
@@ -1285,7 +1314,6 @@ func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredI
 	}
 	result := tx.Model(&model.UpstreamSourceChannelMapping{}).Where("id IN ?", staleIDs).Updates(map[string]interface{}{
 		"discovery_status":   model.UpstreamMappingDiscoveryStatusStale,
-		"sync_enabled":       false,
 		"last_discovered_at": now,
 		"updated_time":       now,
 	})
@@ -1333,10 +1361,6 @@ func markMissingDiscoveredMappingsStaleTx(tx *gorm.DB, sourceID int, discoveredI
 	return int(result.RowsAffected), nil
 }
 
-func updateUpstreamSourceDiscoveryStatus(sourceID int, status string, errText string, now int64) error {
-	return updateUpstreamSourceDiscoveryStatusTx(model.DB, sourceID, status, errText, now)
-}
-
 func updateUpstreamSourceDiscoveryStatusTx(tx *gorm.DB, sourceID int, status string, errText string, now int64) error {
 	return tx.Model(&model.UpstreamSource{}).
 		Where("id = ?", sourceID).
@@ -1348,13 +1372,25 @@ func updateUpstreamSourceDiscoveryStatusTx(tx *gorm.DB, sourceID int, status str
 		}).Error
 }
 
-func (s *UpstreamSourceService) recordDiscoveryFailure(sourceID int, now int64, err error) *dto.UpstreamSourceDiscoveryResult {
-	sanitized := upstreamSourceFailureMessage(err)
-	_ = updateUpstreamSourceDiscoveryStatus(sourceID, model.UpstreamDiscoveryStatusFailed, sanitized, now)
-	return &dto.UpstreamSourceDiscoveryResult{
+func (s *UpstreamSourceService) recordDiscoveryFailure(sourceID int, scanID int, now int64, discoveryErr error) (*dto.UpstreamSourceDiscoveryResult, error) {
+	sanitized := upstreamSourceFailureMessage(discoveryErr)
+	result := &dto.UpstreamSourceDiscoveryResult{
 		SourceID: sourceID,
 		Error:    sanitized,
 	}
+	persistErr := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.FinishUpstreamSourceScanTx(tx, scanID, model.UpstreamSourceScanStatusFailed, false, now, sanitized); err != nil {
+			return fmt.Errorf("finish failed upstream source scan: %w", err)
+		}
+		if err := updateUpstreamSourceDiscoveryStatusTx(tx, sourceID, model.UpstreamDiscoveryStatusFailed, sanitized, now); err != nil {
+			return fmt.Errorf("update failed upstream source discovery status: %w", err)
+		}
+		return nil
+	})
+	if persistErr != nil {
+		return result, errors.Join(discoveryErr, fmt.Errorf("record discovery failure: %w", persistErr))
+	}
+	return result, discoveryErr
 }
 
 func (s *UpstreamSourceService) recordSyncFailure(sourceID int, now int64, err error) *dto.UpstreamSourceSyncResult {
