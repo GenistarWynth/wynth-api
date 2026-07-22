@@ -31,6 +31,12 @@ func setupUpstreamSourceTestDB(t *testing.T) {
 		&UpstreamSourceChannelMapping{},
 		&UpstreamSourceScan{},
 		&UpstreamSourceGroupChange{},
+		&UpstreamSourceBalanceSnapshot{},
+		&UpstreamSourceCostSnapshot{},
+		&UpstreamSourceAnnouncement{},
+		&UpstreamSourceAnnouncementState{},
+		&UpstreamSourceSubscriptionUsageSnapshot{},
+		&UpstreamSourceCapabilityOutcome{},
 		&Channel{},
 		&Ability{},
 	))
@@ -254,4 +260,80 @@ func TestFinishUpstreamSourceScanRejectsNonRunningScan(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not running")
+}
+
+func TestUpstreamSourceCollectionMigrationPreservesLegacyRows(t *testing.T) {
+	oldDB := DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	DB = db
+	t.Cleanup(func() { DB = oldDB })
+
+	require.NoError(t, DB.AutoMigrate(
+		&UpstreamSource{},
+		&UpstreamSourceSession{},
+		&UpstreamSourceChannelMapping{},
+		&UpstreamSourceScan{},
+		&UpstreamSourceGroupChange{},
+	))
+	source := UpstreamSource{
+		Name:    "legacy-source",
+		Type:    UpstreamSourceTypeSub2API,
+		Status:  UpstreamSourceStatusEnabled,
+		BaseURL: "https://legacy.example.com",
+	}
+	require.NoError(t, DB.Create(&source).Error)
+	legacyScan := UpstreamSourceScan{
+		SourceID:   source.Id,
+		ScanType:   UpstreamSourceScanTypeMonitor,
+		Status:     UpstreamSourceScanStatusSuccess,
+		StartedAt:  100,
+		FinishedAt: 101,
+	}
+	require.NoError(t, DB.Create(&legacyScan).Error)
+
+	require.NoError(t, DB.AutoMigrate(
+		&UpstreamSourceBalanceSnapshot{},
+		&UpstreamSourceCostSnapshot{},
+		&UpstreamSourceAnnouncement{},
+		&UpstreamSourceAnnouncementState{},
+		&UpstreamSourceSubscriptionUsageSnapshot{},
+		&UpstreamSourceCapabilityOutcome{},
+	))
+
+	for _, table := range []any{
+		&UpstreamSourceBalanceSnapshot{},
+		&UpstreamSourceCostSnapshot{},
+		&UpstreamSourceAnnouncement{},
+		&UpstreamSourceAnnouncementState{},
+		&UpstreamSourceSubscriptionUsageSnapshot{},
+		&UpstreamSourceCapabilityOutcome{},
+	} {
+		assert.True(t, DB.Migrator().HasTable(table))
+	}
+	var reloaded UpstreamSource
+	require.NoError(t, DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, source.Name, reloaded.Name)
+	var reloadedScan UpstreamSourceScan
+	require.NoError(t, DB.First(&reloadedScan, legacyScan.Id).Error)
+	assert.Equal(t, legacyScan.Status, reloadedScan.Status)
+}
+
+func TestUpstreamSourceCollectionUniqueKeysAreSourceScoped(t *testing.T) {
+	setupUpstreamSourceTestDB(t)
+	source := UpstreamSource{Name: "source-a", Type: UpstreamSourceTypeSub2API, BaseURL: "https://a.example.com"}
+	require.NoError(t, DB.Create(&source).Error)
+	scan := UpstreamSourceScan{SourceID: source.Id, ScanType: UpstreamSourceScanTypeMonitor, Status: UpstreamSourceScanStatusSuccess, StartedAt: 100, FinishedAt: 101}
+	require.NoError(t, DB.Create(&scan).Error)
+
+	announcement := UpstreamSourceAnnouncement{SourceID: source.Id, ScanID: scan.Id, SourceKey: "remote-1", Title: "first", FirstSeenAt: 100, LastSeenAt: 100}
+	require.NoError(t, DB.Create(&announcement).Error)
+	assert.Error(t, DB.Create(&UpstreamSourceAnnouncement{SourceID: source.Id, ScanID: scan.Id, SourceKey: "remote-1", Title: "duplicate", FirstSeenAt: 101, LastSeenAt: 101}).Error)
+
+	outcome := UpstreamSourceCapabilityOutcome{SourceID: source.Id, ScanID: scan.Id, Capability: UpstreamSourceCapabilityBalance, Status: UpstreamSourceCapabilityStatusSuccess, StartedAt: 100, FinishedAt: 101}
+	require.NoError(t, DB.Create(&outcome).Error)
+	assert.Error(t, DB.Create(&UpstreamSourceCapabilityOutcome{SourceID: source.Id, ScanID: scan.Id, Capability: UpstreamSourceCapabilityBalance, Status: UpstreamSourceCapabilityStatusFailed, StartedAt: 100, FinishedAt: 101}).Error)
 }

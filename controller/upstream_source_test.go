@@ -61,6 +61,12 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		&model.UpstreamSourceChannelMapping{},
 		&model.UpstreamSourceScan{},
 		&model.UpstreamSourceGroupChange{},
+		&model.UpstreamSourceBalanceSnapshot{},
+		&model.UpstreamSourceCostSnapshot{},
+		&model.UpstreamSourceAnnouncement{},
+		&model.UpstreamSourceAnnouncementState{},
+		&model.UpstreamSourceSubscriptionUsageSnapshot{},
+		&model.UpstreamSourceCapabilityOutcome{},
 		&model.Channel{},
 		&model.Ability{},
 		&model.User{},
@@ -110,6 +116,9 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.PUT("/:id/mappings", UpdateUpstreamSourceMappings)
 		group.GET("/:id/scans", ListUpstreamSourceScans)
 		group.GET("/:id/monitor/runs", ListUpstreamSourceMonitorRuns)
+		group.GET("/:id/monitor/snapshots", GetUpstreamSourceMonitorSnapshots)
+		group.GET("/:id/monitor/outcomes", ListUpstreamSourceCapabilityOutcomes)
+		group.GET("/:id/announcements", ListUpstreamSourceAnnouncements)
 		group.GET("/:id/changes", ListUpstreamSourceGroupChanges)
 		group.POST("/:id/sync", SyncUpstreamSource)
 		group.GET("/:id/sync_result", GetUpstreamSourceSyncResult)
@@ -222,6 +231,63 @@ func TestUpstreamSourceAPIMonitorRunsFiltersOtherScanTypes(t *testing.T) {
 	assert.Equal(t, scans[1].Id, response.Data[1].Id)
 	for _, scan := range response.Data {
 		assert.Equal(t, model.UpstreamSourceScanTypeMonitor, scan.ScanType)
+	}
+}
+
+func TestUpstreamSourceAPIReadsCollectedMonitorData(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	other := createUpstreamSourceAPITestSource(t, `{}`)
+	scans := []model.UpstreamSourceScan{
+		{SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeMonitor, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 100, FinishedAt: 101},
+		{SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeMonitor, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 200, FinishedAt: 201},
+	}
+	require.NoError(t, model.DB.Create(&scans).Error)
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceBalanceSnapshot{
+		SourceID: source.Id, ScanID: scans[1].Id, Available: 25.5, Currency: "USD", CollectedAt: 201,
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.UpstreamSourceCostSnapshot{
+		{SourceID: source.Id, ScanID: scans[0].Id, Amount: 1.5, Currency: "USD", PeriodStart: 90, PeriodEnd: 100, CollectedAt: 101},
+		{SourceID: source.Id, ScanID: scans[1].Id, Amount: 2.5, Currency: "USD", PeriodStart: 190, PeriodEnd: 200, CollectedAt: 201},
+		{SourceID: other.Id, ScanID: scans[1].Id, Amount: 99, Currency: "USD", PeriodStart: 190, PeriodEnd: 200, CollectedAt: 201},
+	}).Error)
+	limit, remaining, percent := 10.0, 8.0, 80.0
+	require.NoError(t, model.DB.Create(&[]model.UpstreamSourceSubscriptionUsageSnapshot{
+		{SourceID: source.Id, ScanID: scans[1].Id, SubscriptionKey: "sub-1", Window: "daily", Unit: "USD", Used: 2, Limit: &limit, Remaining: &remaining, RemainingPercent: &percent, CollectedAt: 201},
+		{SourceID: source.Id, ScanID: scans[1].Id, SubscriptionKey: "sub-1", Window: "weekly", Unit: "USD", Used: 4, Limit: &limit, Remaining: &remaining, RemainingPercent: &percent, CollectedAt: 201},
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.UpstreamSourceAnnouncement{
+		{SourceID: source.Id, ScanID: scans[0].Id, SourceKey: "old", Title: "Old", FirstSeenAt: 101, LastSeenAt: 101},
+		{SourceID: source.Id, ScanID: scans[1].Id, SourceKey: "new", Title: "New", FirstSeenAt: 201, LastSeenAt: 201, IsNew: true},
+		{SourceID: other.Id, ScanID: scans[1].Id, SourceKey: "other", Title: "Other", FirstSeenAt: 201, LastSeenAt: 201},
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.UpstreamSourceCapabilityOutcome{
+		{SourceID: source.Id, ScanID: scans[1].Id, Capability: model.UpstreamSourceCapabilityBalance, Status: model.UpstreamSourceCapabilityStatusSuccess, StartedAt: 200, FinishedAt: 201},
+		{SourceID: source.Id, ScanID: scans[1].Id, Capability: model.UpstreamSourceCapabilitySubscriptionUsage, Status: model.UpstreamSourceCapabilityStatusSuccess, ItemCount: 1, StartedAt: 200, FinishedAt: 201},
+	}).Error)
+
+	snapshotResponse := upstreamSourceAPIRequest[service.UpstreamSourceLatestMonitorSnapshots](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/monitor/snapshots", nil, true)
+	require.True(t, snapshotResponse.Success, snapshotResponse.Message)
+	require.NotNil(t, snapshotResponse.Data.Balance)
+	assert.Equal(t, 25.5, snapshotResponse.Data.Balance.Available)
+	require.NotNil(t, snapshotResponse.Data.Cost)
+	assert.Equal(t, 2.5, snapshotResponse.Data.Cost.Amount)
+	require.Len(t, snapshotResponse.Data.SubscriptionUsage, 2)
+	for _, window := range snapshotResponse.Data.SubscriptionUsage {
+		assert.Equal(t, scans[1].Id, window.ScanID)
+	}
+
+	announcementResponse := upstreamSourceAPIRequest[[]model.UpstreamSourceAnnouncement](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/announcements?limit=1", nil, true)
+	require.True(t, announcementResponse.Success, announcementResponse.Message)
+	require.Len(t, announcementResponse.Data, 1)
+	assert.Equal(t, "new", announcementResponse.Data[0].SourceKey)
+
+	outcomeResponse := upstreamSourceAPIRequest[[]model.UpstreamSourceCapabilityOutcome](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/monitor/outcomes?limit=10", nil, true)
+	require.True(t, outcomeResponse.Success, outcomeResponse.Message)
+	require.Len(t, outcomeResponse.Data, 2)
+	for _, outcome := range outcomeResponse.Data {
+		assert.Equal(t, source.Id, outcome.SourceID)
 	}
 }
 

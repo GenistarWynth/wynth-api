@@ -31,12 +31,14 @@ var (
 )
 
 type UpstreamSourceMonitorResult struct {
-	SourceID  int    `json:"source_id"`
-	ScanID    int    `json:"scan_id"`
-	Status    string `json:"status"`
-	Collected int    `json:"collected"`
-	Failed    int    `json:"failed"`
-	Error     string `json:"error,omitempty"`
+	SourceID    int    `json:"source_id"`
+	ScanID      int    `json:"scan_id"`
+	Status      string `json:"status"`
+	Collected   int    `json:"collected"`
+	Failed      int    `json:"failed"`
+	Unsupported int    `json:"unsupported"`
+	Skipped     int    `json:"skipped"`
+	Error       string `json:"error,omitempty"`
 }
 
 type UpstreamSourceMonitorRunner struct {
@@ -50,8 +52,9 @@ type UpstreamSourceMonitorRunner struct {
 }
 
 type upstreamSourceMonitorCollector struct {
-	name string
-	run  func(context.Context, *model.UpstreamSource) error
+	name      string
+	supported bool
+	run       func(context.Context, *model.UpstreamSource, int, int64) (bool, int, error)
 }
 
 func (r UpstreamSourceMonitorRunner) RunDue(ctx context.Context, now int64) []UpstreamSourceMonitorResult {
@@ -137,13 +140,14 @@ func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model
 	}
 	result.ScanID = scan.Id
 	result.Status = model.UpstreamSourceScanStatusFailed
+	scanBaseline := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.Status = model.UpstreamSourceScanStatusFailed
 			result.Error = SanitizeUpstreamSourceError(fmt.Errorf("monitor collector panic: %v", recovered))
 		}
 		finishedAt := r.now()
-		if finishErr := model.FinishUpstreamSourceScanTx(model.DB, scan.Id, result.Status, false, finishedAt, result.Error); finishErr != nil {
+		if finishErr := model.FinishUpstreamSourceScanTx(model.DB, scan.Id, result.Status, scanBaseline, finishedAt, result.Error); finishErr != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: finalize source_id=%d scan_id=%d failed: %s", source.Id, scan.Id, SanitizeUpstreamSourceError(finishErr)))
 		}
 		if releaseErr := model.ReleaseUpstreamSourceMonitor(source.Id, token, finishedAt); releaseErr != nil {
@@ -170,21 +174,91 @@ func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model
 
 	collectors := monitorCollectorsForAdapter(adapter)
 	errorsFound := make([]string, 0)
+	authUnsafe := false
+	contextUnsafe := false
 	for _, collector := range collectors {
-		if err := sourceCtx.Err(); err != nil {
-			result.Failed++
-			errorsFound = append(errorsFound, SanitizeUpstreamSourceError(err))
-			break
+		startedAt := r.now()
+		outcome := model.UpstreamSourceCapabilityOutcome{
+			SourceID:   source.Id,
+			ScanID:     scan.Id,
+			Capability: collector.name,
+			StartedAt:  startedAt,
 		}
-		if err := collector.run(sourceCtx, &source); err != nil {
-			result.Failed++
-			recordUpstreamSourceAuthFailure(&source, err, r.now())
-			errorsFound = append(errorsFound, collector.name+": "+SanitizeUpstreamSourceError(err))
+		if !collector.supported {
+			result.Unsupported++
+			outcome.Status = model.UpstreamSourceCapabilityStatusUnsupported
+			outcome.FinishedAt = r.now()
+			if err := model.DB.Create(&outcome).Error; err != nil {
+				result.Failed++
+				errorsFound = append(errorsFound, collector.name+" outcome: "+SanitizeUpstreamSourceError(err))
+			}
 			continue
 		}
-		result.Collected++
+		if authUnsafe || contextUnsafe {
+			result.Skipped++
+			outcome.Status = model.UpstreamSourceCapabilityStatusSkipped
+			if authUnsafe {
+				outcome.ErrorSummary = "skipped after authentication failure"
+			} else {
+				outcome.ErrorSummary = SanitizeUpstreamSourceError(sourceCtx.Err())
+			}
+			outcome.FinishedAt = r.now()
+			if err := model.DB.Create(&outcome).Error; err != nil {
+				result.Failed++
+				errorsFound = append(errorsFound, collector.name+" outcome: "+SanitizeUpstreamSourceError(err))
+			}
+			continue
+		}
+		if err := sourceCtx.Err(); err != nil {
+			result.Failed++
+			contextUnsafe = true
+			sanitized := SanitizeUpstreamSourceError(err)
+			outcome.Status = model.UpstreamSourceCapabilityStatusFailed
+			outcome.ErrorSummary = sanitized
+			outcome.FinishedAt = r.now()
+			errorsFound = append(errorsFound, collector.name+": "+sanitized)
+			if createErr := model.DB.Create(&outcome).Error; createErr != nil {
+				errorsFound = append(errorsFound, collector.name+" outcome: "+SanitizeUpstreamSourceError(createErr))
+			}
+			continue
+		}
+		baseline, itemCount, collectErr := collector.run(sourceCtx, &source, scan.Id, r.now())
+		outcome.FinishedAt = r.now()
+		outcome.Baseline = baseline
+		outcome.ItemCount = itemCount
+		if collectErr != nil {
+			result.Failed++
+			sanitized := SanitizeUpstreamSourceError(collectErr)
+			outcome.Status = model.UpstreamSourceCapabilityStatusFailed
+			outcome.ErrorSummary = sanitized
+			errorsFound = append(errorsFound, collector.name+": "+sanitized)
+			_, authFailure := classifyUpstreamSourceAuthError(collectErr)
+			if authFailure {
+				authUnsafe = true
+				recordUpstreamSourceAuthFailure(&source, collectErr, r.now())
+			}
+			if errors.Is(collectErr, context.Canceled) || errors.Is(collectErr, context.DeadlineExceeded) {
+				contextUnsafe = true
+			}
+		} else {
+			result.Collected++
+			outcome.Status = model.UpstreamSourceCapabilityStatusSuccess
+			if baseline {
+				scanBaseline = true
+			}
+		}
+		if err := model.DB.Create(&outcome).Error; err != nil {
+			result.Failed++
+			errorsFound = append(errorsFound, collector.name+" outcome: "+SanitizeUpstreamSourceError(err))
+		}
 	}
-	persistUpstreamSourceAuthState(&source, originalAuth, r.now(), result.Collected > 0)
+	// A later authentication failure is authoritative for the shared session,
+	// even when an earlier capability succeeded. Do not let the normal
+	// successful-validation write overwrite the failed auth health recorded
+	// above.
+	if !authUnsafe {
+		persistUpstreamSourceAuthState(&source, originalAuth, r.now(), result.Collected > 0)
+	}
 	if len(errorsFound) > 0 {
 		result.Error = SanitizeUpstreamSourceError(errors.New(strings.Join(errorsFound, "; ")))
 	}
@@ -262,36 +336,65 @@ func UpdateUpstreamSourceMonitorSettings(sourceID int, enabled bool, intervalMin
 }
 
 func monitorCollectorsForAdapter(adapter UpstreamSourceAdapter) []upstreamSourceMonitorCollector {
-	collectors := make([]upstreamSourceMonitorCollector, 0, 5)
+	collectors := []upstreamSourceMonitorCollector{
+		{name: model.UpstreamSourceCapabilityBalance},
+		{name: model.UpstreamSourceCapabilityCost},
+		{name: model.UpstreamSourceCapabilityRateGroup},
+		{name: model.UpstreamSourceCapabilityAnnouncement},
+		{name: model.UpstreamSourceCapabilitySubscriptionUsage},
+	}
 	if collector, ok := adapter.(UpstreamBalanceCollector); ok {
-		collectors = append(collectors, upstreamSourceMonitorCollector{name: "balance", run: func(ctx context.Context, source *model.UpstreamSource) error {
-			_, err := collector.CollectBalance(ctx, source)
-			return err
-		}})
+		collectors[0].supported = true
+		collectors[0].run = func(ctx context.Context, source *model.UpstreamSource, scanID int, now int64) (bool, int, error) {
+			snapshot, err := collector.CollectBalance(ctx, source)
+			if err != nil {
+				return false, 0, err
+			}
+			return false, 1, persistUpstreamSourceBalance(source.Id, scanID, snapshot, now)
+		}
 	}
 	if collector, ok := adapter.(UpstreamCostCollector); ok {
-		collectors = append(collectors, upstreamSourceMonitorCollector{name: "cost", run: func(ctx context.Context, source *model.UpstreamSource) error {
-			_, err := collector.CollectCost(ctx, source)
-			return err
-		}})
+		collectors[1].supported = true
+		collectors[1].run = func(ctx context.Context, source *model.UpstreamSource, scanID int, now int64) (bool, int, error) {
+			snapshot, err := collector.CollectCost(ctx, source)
+			if err != nil {
+				return false, 0, err
+			}
+			return false, 1, persistUpstreamSourceCost(source.Id, scanID, snapshot, now)
+		}
 	}
 	if collector, ok := adapter.(UpstreamRateGroupCollector); ok {
-		collectors = append(collectors, upstreamSourceMonitorCollector{name: "rate_group", run: func(ctx context.Context, source *model.UpstreamSource) error {
-			_, err := collector.CollectRateGroups(ctx, source)
-			return err
-		}})
+		collectors[2].supported = true
+		collectors[2].run = func(ctx context.Context, source *model.UpstreamSource, scanID int, now int64) (bool, int, error) {
+			snapshot, err := collector.CollectRateGroups(ctx, source)
+			if err != nil {
+				return false, 0, err
+			}
+			baseline, _, err := applyUpstreamSourceRateGroupSnapshot(source, scanID, snapshot, now)
+			return baseline, len(snapshot.Groups), err
+		}
 	}
 	if collector, ok := adapter.(UpstreamAnnouncementCollector); ok {
-		collectors = append(collectors, upstreamSourceMonitorCollector{name: "announcement", run: func(ctx context.Context, source *model.UpstreamSource) error {
-			_, err := collector.CollectAnnouncements(ctx, source)
-			return err
-		}})
+		collectors[3].supported = true
+		collectors[3].run = func(ctx context.Context, source *model.UpstreamSource, scanID int, now int64) (bool, int, error) {
+			snapshot, err := collector.CollectAnnouncements(ctx, source)
+			if err != nil {
+				return false, 0, err
+			}
+			baseline, _, err := persistUpstreamSourceAnnouncements(source.Id, scanID, snapshot, now)
+			return baseline, len(snapshot.Items), err
+		}
 	}
 	if collector, ok := adapter.(UpstreamSubscriptionUsageCollector); ok {
-		collectors = append(collectors, upstreamSourceMonitorCollector{name: "subscription_usage", run: func(ctx context.Context, source *model.UpstreamSource) error {
-			_, err := collector.CollectSubscriptionUsage(ctx, source)
-			return err
-		}})
+		collectors[4].supported = true
+		collectors[4].run = func(ctx context.Context, source *model.UpstreamSource, scanID int, now int64) (bool, int, error) {
+			snapshot, err := collector.CollectSubscriptionUsage(ctx, source)
+			if err != nil {
+				return false, 0, err
+			}
+			_, err = persistUpstreamSourceSubscriptionUsage(source.Id, scanID, snapshot, now)
+			return false, len(snapshot.Subscriptions), err
+		}
 	}
 	return collectors
 }

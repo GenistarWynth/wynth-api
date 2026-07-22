@@ -74,6 +74,7 @@ type UpstreamRateGroupSnapshot struct {
 type UpstreamAnnouncement struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
+	Content     string `json:"content"`
 	URL         string `json:"url"`
 	PublishedAt int64  `json:"published_at"`
 }
@@ -84,11 +85,26 @@ type UpstreamAnnouncementSnapshot struct {
 }
 
 type UpstreamSubscriptionUsageSnapshot struct {
-	Used        float64 `json:"used"`
-	Limit       float64 `json:"limit"`
-	Unit        string  `json:"unit"`
-	PeriodStart int64   `json:"period_start"`
-	PeriodEnd   int64   `json:"period_end"`
-	ExpiresAt   int64   `json:"expires_at"`
-	CollectedAt int64   `json:"collected_at"`
+	Subscriptions []UpstreamSubscriptionUsage `json:"subscriptions"`
+	CollectedAt   int64                       `json:"collected_at"`
+}
+
+type UpstreamSubscriptionUsage struct {
+	SourceKey string                           `json:"source_key"`
+	Name      string                           `json:"name"`
+	ExpiresAt int64                            `json:"expires_at"`
+	Daily     *UpstreamSubscriptionUsageWindow `json:"daily,omitempty"`
+	Weekly    *UpstreamSubscriptionUsageWindow `json:"weekly,omitempty"`
+	Monthly   *UpstreamSubscriptionUsageWindow `json:"monthly,omitempty"`
+	RawData   string                           `json:"raw_data,omitempty"`
+}
+
+type UpstreamSubscriptionUsageWindow struct {
+	Used             float64  `json:"used"`
+	Limit            *float64 `json:"limit,omitempty"`
+	Remaining        *float64 `json:"remaining,omitempty"`
+	RemainingPercent *float64 `json:"remaining_percent,omitempty"`
+	Unit             string   `json:"unit"`
+	PeriodStart      int64    `json:"period_start"`
+	PeriodEnd        int64    `json:"period_end"`
 }

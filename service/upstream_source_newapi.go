@@ -73,6 +73,90 @@ type newAPITokenKeyData struct {
 	Key string `json:"key"`
 }
 
+type newAPIUserSnapshot struct {
+	Quota     int64 `json:"quota"`
+	UsedQuota int64 `json:"used_quota"`
+}
+
+type newAPICostPoint struct {
+	CreatedAt int64 `json:"created_at"`
+	Quota     int64 `json:"quota"`
+}
+
+func (a NewAPIAdapter) CollectBalance(ctx context.Context, source *model.UpstreamSource) (UpstreamBalanceSnapshot, error) {
+	user, err := newAPIManagementRequest[newAPIUserSnapshot](ctx, &a, source, http.MethodGet, "/user/self", nil, nil)
+	if err != nil {
+		return UpstreamBalanceSnapshot{}, err
+	}
+	return UpstreamBalanceSnapshot{
+		Available:   float64(user.Quota),
+		Currency:    "quota",
+		CollectedAt: time.Now().Unix(),
+	}, nil
+}
+
+func (a NewAPIAdapter) CollectCost(ctx context.Context, source *model.UpstreamSource) (UpstreamCostSnapshot, error) {
+	periodEnd := time.Now().Unix()
+	periodStart := periodEnd - 24*60*60
+	query := url.Values{}
+	query.Set("start_timestamp", strconv.FormatInt(periodStart, 10))
+	query.Set("end_timestamp", strconv.FormatInt(periodEnd, 10))
+	points, err := newAPIManagementRequest[[]newAPICostPoint](ctx, &a, source, http.MethodGet, "/data/self", query, nil)
+	if err != nil {
+		return UpstreamCostSnapshot{}, err
+	}
+	amount := float64(0)
+	for _, point := range points {
+		amount += float64(point.Quota)
+	}
+	return UpstreamCostSnapshot{
+		Amount:      amount,
+		Currency:    "quota",
+		PeriodStart: periodStart,
+		PeriodEnd:   periodEnd,
+		CollectedAt: periodEnd,
+	}, nil
+}
+
+func (a NewAPIAdapter) CollectRateGroups(ctx context.Context, source *model.UpstreamSource) (UpstreamRateGroupSnapshot, error) {
+	groups, err := a.DiscoverGroups(ctx, source)
+	if err != nil {
+		return UpstreamRateGroupSnapshot{}, err
+	}
+	return UpstreamRateGroupSnapshot{Groups: groups, CollectedAt: time.Now().Unix()}, nil
+}
+
+func (a NewAPIAdapter) CollectAnnouncements(ctx context.Context, source *model.UpstreamSource) (UpstreamAnnouncementSnapshot, error) {
+	content, err := newAPIManagementRequest[string](ctx, &a, source, http.MethodGet, "/notice", nil, nil)
+	if err != nil {
+		return UpstreamAnnouncementSnapshot{}, err
+	}
+	collectedAt := time.Now().Unix()
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return UpstreamAnnouncementSnapshot{Items: []UpstreamAnnouncement{}, CollectedAt: collectedAt}, nil
+	}
+	title := "Notice"
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		trimmed = strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+		if trimmed != "" {
+			title = trimmed
+		}
+		break
+	}
+	return UpstreamAnnouncementSnapshot{
+		Items: []UpstreamAnnouncement{{
+			Title:   title,
+			Content: content,
+		}},
+		CollectedAt: collectedAt,
+	}, nil
+}
+
 func (a NewAPIAdapter) DiscoverGroups(ctx context.Context, source *model.UpstreamSource) ([]UpstreamGroup, error) {
 	groupMap, err := newAPIManagementRequest[map[string]newAPIUserGroup](ctx, &a, source, http.MethodGet, "/user/self/groups", nil, nil)
 	if err != nil {

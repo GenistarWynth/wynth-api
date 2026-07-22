@@ -71,51 +71,20 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	}
 	persistUpstreamSourceAuthState(&source, originalAuth, s.now(), true)
 
-	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
-	if err != nil {
-		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
-	}
-
-	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now, config)
 	finishedAt := s.now()
 	var result dto.UpstreamSourceDiscoveryResult
+	var application upstreamSourceGroupApplication
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := model.LockUpstreamSourceForScanTx(tx, source.Id); err != nil {
-			return err
+		var applyErr error
+		application, applyErr = applyUpstreamSourceGroupsTx(tx, &source, scan.Id, groups, now)
+		if applyErr != nil {
+			return applyErr
 		}
-		var previousMappings []model.UpstreamSourceChannelMapping
-		if err := tx.Where("source_id = ?", source.Id).Find(&previousMappings).Error; err != nil {
-			return err
-		}
-		hasSuccessfulScan, err := model.HasSuccessfulUpstreamSourceScanTx(tx, source.Id, model.UpstreamSourceScanTypeDiscover)
-		if err != nil {
-			return err
-		}
-		baseline := !hasSuccessfulScan
-		var changes []model.UpstreamSourceGroupChange
-		if !baseline {
-			changes = buildUpstreamSourceGroupChanges(source.Id, scan.Id, previousMappings, mappings, now)
-		}
-		if err := model.UpsertDiscoveredMappingsTx(tx, source.Id, mappings, now); err != nil {
-			return err
-		}
-		staleCount, err := markMissingDiscoveredMappingsStaleTx(tx, source.Id, discoveredIDs, now)
-		if err != nil {
-			return err
-		}
-		if len(changes) > 0 {
-			if err := tx.Create(&changes).Error; err != nil {
-				return err
-			}
-		}
-		if err := updateUpstreamSourceDiscoveryStatusTx(tx, source.Id, model.UpstreamDiscoveryStatusSucceeded, "", now); err != nil {
-			return err
-		}
-		if err := model.FinishUpstreamSourceScanTx(tx, scan.Id, model.UpstreamSourceScanStatusSuccess, baseline, finishedAt, ""); err != nil {
+		if err := model.FinishUpstreamSourceScanTx(tx, scan.Id, model.UpstreamSourceScanStatusSuccess, application.Baseline, finishedAt, ""); err != nil {
 			return err
 		}
 
-		built, err := buildDiscoveryResultTx(tx, source.Id, source.SyncConfig, len(groups), staleCount, invalidCount)
+		built, err := buildDiscoveryResultTx(tx, source.Id, source.SyncConfig, len(groups), application.StaleCount, application.InvalidCount)
 		if err != nil {
 			return err
 		}
@@ -124,7 +93,7 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	}); err != nil {
 		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
-	if result.Stale > 0 {
+	if application.StaleCount > 0 {
 		model.InitChannelCache()
 	}
 	return &result, nil
@@ -1217,6 +1186,72 @@ func isSupportedUpstreamSourceType(sourceType string) bool {
 	default:
 		return false
 	}
+}
+
+type upstreamSourceGroupApplication struct {
+	Baseline     bool
+	ChangeCount  int
+	StaleCount   int
+	InvalidCount int
+}
+
+// applyUpstreamSourceGroupsTx is the single current-state and change-ledger
+// implementation shared by manual discovery and monitor rate collection.
+func applyUpstreamSourceGroupsTx(tx *gorm.DB, source *model.UpstreamSource, scanID int, groups []UpstreamGroup, now int64) (upstreamSourceGroupApplication, error) {
+	if tx == nil {
+		return upstreamSourceGroupApplication{}, errors.New("database transaction is required")
+	}
+	if source == nil || source.Id == 0 {
+		return upstreamSourceGroupApplication{}, errors.New("persisted upstream source is required")
+	}
+	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
+	if err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now, config)
+	if err := model.LockUpstreamSourceForScanTx(tx, source.Id); err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	var previousMappings []model.UpstreamSourceChannelMapping
+	if err := tx.Where("source_id = ?", source.Id).Find(&previousMappings).Error; err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	hasSuccessfulDiscovery, err := model.HasSuccessfulUpstreamSourceScanTx(tx, source.Id, model.UpstreamSourceScanTypeDiscover)
+	if err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	var successfulRateOutcomes int64
+	if err := tx.Model(&model.UpstreamSourceCapabilityOutcome{}).
+		Where("source_id = ? AND capability = ? AND status = ?", source.Id, model.UpstreamSourceCapabilityRateGroup, model.UpstreamSourceCapabilityStatusSuccess).
+		Count(&successfulRateOutcomes).Error; err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	baseline := !hasSuccessfulDiscovery && successfulRateOutcomes == 0
+	changes := make([]model.UpstreamSourceGroupChange, 0)
+	if !baseline {
+		changes = buildUpstreamSourceGroupChanges(source.Id, scanID, previousMappings, mappings, now)
+	}
+	if err := model.UpsertDiscoveredMappingsTx(tx, source.Id, mappings, now); err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	staleCount, err := markMissingDiscoveredMappingsStaleTx(tx, source.Id, discoveredIDs, now)
+	if err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	if len(changes) > 0 {
+		if err := tx.Create(&changes).Error; err != nil {
+			return upstreamSourceGroupApplication{}, err
+		}
+	}
+	if err := updateUpstreamSourceDiscoveryStatusTx(tx, source.Id, model.UpstreamDiscoveryStatusSucceeded, "", now); err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
+	return upstreamSourceGroupApplication{
+		Baseline:     baseline,
+		ChangeCount:  len(changes),
+		StaleCount:   staleCount,
+		InvalidCount: invalidCount,
+	}, nil
 }
 
 func validateAbsoluteHTTPURL(name string, value string) error {

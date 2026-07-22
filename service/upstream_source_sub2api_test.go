@@ -843,3 +843,126 @@ func TestSub2APIAdapterDiscoverGroupsSurfacesStatusOnEmptyBody(t *testing.T) {
 	assert.Contains(t, err.Error(), "status 401")
 	assert.NotContains(t, err.Error(), "unexpected end of JSON input")
 }
+
+func TestSub2APIAdapterCollectBalanceCostAndSubscriptionUsage(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	expiresAt := time.Date(2026, time.August, 31, 12, 0, 0, 0, time.UTC)
+	windowStart := time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer existing-token", r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/api/v1/user/profile":
+			writeSub2APITestJSON(t, w, map[string]any{
+				"code": 0,
+				"data": map[string]any{"balance": 42.75},
+			})
+		case "/api/v1/usage/stats":
+			assert.Equal(t, "today", r.URL.Query().Get("period"))
+			writeSub2APITestJSON(t, w, map[string]any{
+				"code": 0,
+				"data": map[string]any{"total_actual_cost": 3.5},
+			})
+		case "/api/v1/subscriptions/progress":
+			window := func(used, limit, remaining, percentage float64, end time.Time) map[string]any {
+				return map[string]any{
+					"used_usd":      used,
+					"limit_usd":     limit,
+					"remaining_usd": remaining,
+					"percentage":    percentage,
+					"window_start":  windowStart.Format(time.RFC3339),
+					"resets_at":     end.Format(time.RFC3339),
+				}
+			}
+			writeSub2APITestJSON(t, w, map[string]any{
+				"code": 0,
+				"data": []map[string]any{{
+					"subscription": map[string]any{"id": 99},
+					"progress": map[string]any{
+						"id":         99,
+						"group_name": "Pro",
+						"expires_at": expiresAt.Format(time.RFC3339),
+						"daily":      window(2, 10, 8, 20, windowStart.Add(24*time.Hour)),
+						"weekly":     window(25, 100, 75, 25, windowStart.Add(7*24*time.Hour)),
+						"monthly":    window(50, 200, 150, 25, windowStart.AddDate(0, 1, 0)),
+					},
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+	adapter := Sub2APIAdapter{Client: server.Client()}
+
+	balance, err := adapter.CollectBalance(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, 42.75, balance.Available)
+	assert.Equal(t, "USD", balance.Currency)
+
+	cost, err := adapter.CollectCost(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, 3.5, cost.Amount)
+	assert.Equal(t, "USD", cost.Currency)
+	assert.Greater(t, cost.PeriodEnd, cost.PeriodStart)
+
+	usage, err := adapter.CollectSubscriptionUsage(context.Background(), source)
+	require.NoError(t, err)
+	require.Len(t, usage.Subscriptions, 1)
+	subscription := usage.Subscriptions[0]
+	assert.Equal(t, "99", subscription.SourceKey)
+	assert.Equal(t, "Pro", subscription.Name)
+	assert.Equal(t, expiresAt.Unix(), subscription.ExpiresAt)
+	require.NotNil(t, subscription.Daily)
+	assert.Equal(t, 2.0, subscription.Daily.Used)
+	require.NotNil(t, subscription.Daily.RemainingPercent)
+	assert.Equal(t, 80.0, *subscription.Daily.RemainingPercent)
+	require.NotNil(t, subscription.Weekly)
+	require.NotNil(t, subscription.Monthly)
+	assert.NotEmpty(t, subscription.RawData)
+}
+
+func TestSub2APIAdapterCollectRateGroupsAndAnnouncements(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	publishedAt := time.Date(2026, time.July, 21, 10, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			writeSub2APITestJSON(t, w, map[string]any{"code": 0, "data": []map[string]any{{"id": 7, "name": "Claude", "rate_multiplier": 2.0}}})
+		case "/api/v1/groups/rates":
+			writeSub2APITestJSON(t, w, map[string]any{"code": 0, "data": map[string]float64{"7": 0.5}})
+		case "/api/v1/announcements":
+			writeSub2APITestJSON(t, w, map[string]any{
+				"code": 0,
+				"data": []map[string]any{{
+					"id":         123,
+					"title":      "Upgrade",
+					"content":    "New models are available.",
+					"created_at": publishedAt.Format(time.RFC3339),
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	adapter := Sub2APIAdapter{Client: server.Client()}
+	source := newSub2APITestSource(t, server.URL, validTokenAuthConfig())
+
+	rates, err := adapter.CollectRateGroups(context.Background(), source)
+	require.NoError(t, err)
+	require.Len(t, rates.Groups, 1)
+	require.NotNil(t, rates.Groups[0].EffectiveRateMultiplier)
+	assert.Equal(t, 0.5, *rates.Groups[0].EffectiveRateMultiplier)
+
+	announcements, err := adapter.CollectAnnouncements(context.Background(), source)
+	require.NoError(t, err)
+	require.Len(t, announcements.Items, 1)
+	assert.Equal(t, "123", announcements.Items[0].ID)
+	assert.Equal(t, "New models are available.", announcements.Items[0].Content)
+	assert.Equal(t, publishedAt.Unix(), announcements.Items[0].PublishedAt)
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -719,6 +720,111 @@ func TestDefaultUpstreamSourceAdapterFactorySupportsNewAPI(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.IsType(t, NewAPIAdapter{}, adapter)
+}
+
+func TestNewAPIAdapterCollectBalanceAndCost(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "existing-management-token", r.Header.Get("Authorization"))
+		require.Equal(t, "42", r.Header.Get("New-Api-User"))
+		switch r.URL.Path {
+		case "/api/user/self":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"data": map[string]any{
+					"quota":      1250000,
+					"used_quota": 750000,
+				},
+			})
+		case "/api/data/self":
+			start, err := strconv.ParseInt(r.URL.Query().Get("start_timestamp"), 10, 64)
+			require.NoError(t, err)
+			end, err := strconv.ParseInt(r.URL.Query().Get("end_timestamp"), 10, 64)
+			require.NoError(t, err)
+			assert.Positive(t, start)
+			assert.Greater(t, end, start)
+			assert.LessOrEqual(t, end-start, int64(31*24*60*60))
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"data": []map[string]any{
+					{"created_at": start, "quota": 200000},
+					{"created_at": end, "quota": 300000},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newNewAPITestSource(t, server.URL, map[string]any{
+		"access_token": "existing-management-token",
+		"user_id":      42,
+	})
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	balance, err := adapter.CollectBalance(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, float64(1250000), balance.Available)
+	assert.Equal(t, "quota", balance.Currency)
+	assert.Positive(t, balance.CollectedAt)
+
+	cost, err := adapter.CollectCost(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, float64(500000), cost.Amount)
+	assert.Equal(t, "quota", cost.Currency)
+	assert.Greater(t, cost.PeriodEnd, cost.PeriodStart)
+	assert.Positive(t, cost.CollectedAt)
+}
+
+func TestNewAPIAdapterCollectRateGroupsAndAnnouncement(t *testing.T) {
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/self/groups":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"data": map[string]any{
+					"Claude": map[string]any{"ratio": 0.25, "desc": "Anthropic"},
+				},
+			})
+		case "/api/notice":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"data":    "# Maintenance\nWindow starts at midnight.",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := newNewAPITestSource(t, server.URL, map[string]any{
+		"access_token": "existing-management-token",
+		"user_id":      42,
+	})
+	adapter := NewAPIAdapter{Client: server.Client()}
+
+	rateSnapshot, err := adapter.CollectRateGroups(context.Background(), source)
+	require.NoError(t, err)
+	require.Len(t, rateSnapshot.Groups, 1)
+	assert.Equal(t, "Claude", rateSnapshot.Groups[0].ID)
+	assert.Positive(t, rateSnapshot.CollectedAt)
+
+	announcementSnapshot, err := adapter.CollectAnnouncements(context.Background(), source)
+	require.NoError(t, err)
+	require.Len(t, announcementSnapshot.Items, 1)
+	assert.Empty(t, announcementSnapshot.Items[0].ID, "NewAPI notice has no remote ID and must use the persistence hash fallback")
+	assert.Equal(t, "Maintenance", announcementSnapshot.Items[0].Title)
+	assert.Equal(t, "# Maintenance\nWindow starts at midnight.", announcementSnapshot.Items[0].Content)
+	assert.Positive(t, announcementSnapshot.CollectedAt)
+}
+
+func TestNewAPIAdapterDoesNotAdvertiseSubscriptionUsage(t *testing.T) {
+	_, supported := any(NewAPIAdapter{}).(UpstreamSubscriptionUsageCollector)
+	assert.False(t, supported)
 }
 
 func TestParseNewAPIGroupRatioAcceptsJSONNumber(t *testing.T) {

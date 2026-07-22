@@ -117,6 +117,189 @@ type sub2APIListKeysData struct {
 	PageSize int          `json:"page_size"`
 }
 
+type sub2APIUserProfile struct {
+	Balance float64 `json:"balance"`
+}
+
+type sub2APIUsageStats struct {
+	TotalActualCost float64 `json:"total_actual_cost"`
+}
+
+type sub2APIAnnouncement struct {
+	ID        int64     `json:"id"`
+	Title     string    `json:"title"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type sub2APISubscriptionReference struct {
+	ID int64 `json:"id"`
+}
+
+type sub2APISubscriptionWindow struct {
+	LimitUSD     float64   `json:"limit_usd"`
+	UsedUSD      float64   `json:"used_usd"`
+	RemainingUSD float64   `json:"remaining_usd"`
+	Percentage   float64   `json:"percentage"`
+	WindowStart  time.Time `json:"window_start"`
+	ResetsAt     time.Time `json:"resets_at"`
+}
+
+type sub2APISubscriptionProgress struct {
+	ID        int64                      `json:"id"`
+	GroupName string                     `json:"group_name"`
+	ExpiresAt *time.Time                 `json:"expires_at"`
+	Daily     *sub2APISubscriptionWindow `json:"daily"`
+	Weekly    *sub2APISubscriptionWindow `json:"weekly"`
+	Monthly   *sub2APISubscriptionWindow `json:"monthly"`
+}
+
+type sub2APISubscriptionProgressItem struct {
+	Subscription sub2APISubscriptionReference `json:"subscription"`
+	Progress     sub2APISubscriptionProgress  `json:"progress"`
+}
+
+func (a Sub2APIAdapter) CollectBalance(ctx context.Context, source *model.UpstreamSource) (UpstreamBalanceSnapshot, error) {
+	token, err := a.ensureAccessToken(ctx, source)
+	if err != nil {
+		return UpstreamBalanceSnapshot{}, err
+	}
+	profile, err := sub2APIRequest[sub2APIUserProfile](ctx, &a, source, http.MethodGet, "/user/profile", nil, nil, token)
+	if err != nil {
+		return UpstreamBalanceSnapshot{}, err
+	}
+	return UpstreamBalanceSnapshot{
+		Available:   profile.Balance,
+		Currency:    "USD",
+		CollectedAt: time.Now().Unix(),
+	}, nil
+}
+
+func (a Sub2APIAdapter) CollectCost(ctx context.Context, source *model.UpstreamSource) (UpstreamCostSnapshot, error) {
+	token, err := a.ensureAccessToken(ctx, source)
+	if err != nil {
+		return UpstreamCostSnapshot{}, err
+	}
+	query := url.Values{}
+	query.Set("period", "today")
+	stats, err := sub2APIRequest[sub2APIUsageStats](ctx, &a, source, http.MethodGet, "/usage/stats", query, nil, token)
+	if err != nil {
+		return UpstreamCostSnapshot{}, err
+	}
+	now := time.Now().UTC()
+	periodStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Unix()
+	return UpstreamCostSnapshot{
+		Amount:      stats.TotalActualCost,
+		Currency:    "USD",
+		PeriodStart: periodStart,
+		PeriodEnd:   now.Unix(),
+		CollectedAt: now.Unix(),
+	}, nil
+}
+
+func (a Sub2APIAdapter) CollectRateGroups(ctx context.Context, source *model.UpstreamSource) (UpstreamRateGroupSnapshot, error) {
+	groups, err := a.DiscoverGroups(ctx, source)
+	if err != nil {
+		return UpstreamRateGroupSnapshot{}, err
+	}
+	return UpstreamRateGroupSnapshot{Groups: groups, CollectedAt: time.Now().Unix()}, nil
+}
+
+func (a Sub2APIAdapter) CollectAnnouncements(ctx context.Context, source *model.UpstreamSource) (UpstreamAnnouncementSnapshot, error) {
+	token, err := a.ensureAccessToken(ctx, source)
+	if err != nil {
+		return UpstreamAnnouncementSnapshot{}, err
+	}
+	items, err := sub2APIRequest[[]sub2APIAnnouncement](ctx, &a, source, http.MethodGet, "/announcements", nil, nil, token)
+	if err != nil {
+		return UpstreamAnnouncementSnapshot{}, err
+	}
+	announcements := make([]UpstreamAnnouncement, 0, len(items))
+	for _, item := range items {
+		publishedAt := int64(0)
+		if !item.CreatedAt.IsZero() {
+			publishedAt = item.CreatedAt.Unix()
+		}
+		announcements = append(announcements, UpstreamAnnouncement{
+			ID:          strconv.FormatInt(item.ID, 10),
+			Title:       strings.TrimSpace(item.Title),
+			Content:     strings.TrimSpace(item.Content),
+			PublishedAt: publishedAt,
+		})
+	}
+	return UpstreamAnnouncementSnapshot{Items: announcements, CollectedAt: time.Now().Unix()}, nil
+}
+
+func (a Sub2APIAdapter) CollectSubscriptionUsage(ctx context.Context, source *model.UpstreamSource) (UpstreamSubscriptionUsageSnapshot, error) {
+	token, err := a.ensureAccessToken(ctx, source)
+	if err != nil {
+		return UpstreamSubscriptionUsageSnapshot{}, err
+	}
+	items, err := sub2APIRequest[[]sub2APISubscriptionProgressItem](ctx, &a, source, http.MethodGet, "/subscriptions/progress", nil, nil, token)
+	if err != nil {
+		return UpstreamSubscriptionUsageSnapshot{}, err
+	}
+	subscriptions := make([]UpstreamSubscriptionUsage, 0, len(items))
+	for _, item := range items {
+		id := item.Progress.ID
+		if id == 0 {
+			id = item.Subscription.ID
+		}
+		rawData, err := common.Marshal(item)
+		if err != nil {
+			return UpstreamSubscriptionUsageSnapshot{}, err
+		}
+		expiresAt := int64(0)
+		if item.Progress.ExpiresAt != nil {
+			expiresAt = item.Progress.ExpiresAt.Unix()
+		}
+		subscriptions = append(subscriptions, UpstreamSubscriptionUsage{
+			SourceKey: strconv.FormatInt(id, 10),
+			Name:      strings.TrimSpace(item.Progress.GroupName),
+			ExpiresAt: expiresAt,
+			Daily:     normalizeSub2APISubscriptionWindow(item.Progress.Daily),
+			Weekly:    normalizeSub2APISubscriptionWindow(item.Progress.Weekly),
+			Monthly:   normalizeSub2APISubscriptionWindow(item.Progress.Monthly),
+			RawData:   string(rawData),
+		})
+	}
+	return UpstreamSubscriptionUsageSnapshot{Subscriptions: subscriptions, CollectedAt: time.Now().Unix()}, nil
+}
+
+func normalizeSub2APISubscriptionWindow(window *sub2APISubscriptionWindow) *UpstreamSubscriptionUsageWindow {
+	if window == nil {
+		return nil
+	}
+	limit := window.LimitUSD
+	remaining := window.RemainingUSD
+	remainingPercent := 100 - window.Percentage
+	if limit > 0 {
+		remainingPercent = remaining / limit * 100
+	}
+	if remainingPercent < 0 {
+		remainingPercent = 0
+	} else if remainingPercent > 100 {
+		remainingPercent = 100
+	}
+	periodStart := int64(0)
+	if !window.WindowStart.IsZero() {
+		periodStart = window.WindowStart.Unix()
+	}
+	periodEnd := int64(0)
+	if !window.ResetsAt.IsZero() {
+		periodEnd = window.ResetsAt.Unix()
+	}
+	return &UpstreamSubscriptionUsageWindow{
+		Used:             window.UsedUSD,
+		Limit:            &limit,
+		Remaining:        &remaining,
+		RemainingPercent: &remainingPercent,
+		Unit:             "USD",
+		PeriodStart:      periodStart,
+		PeriodEnd:        periodEnd,
+	}
+}
+
 func (a Sub2APIAdapter) DiscoverGroups(ctx context.Context, source *model.UpstreamSource) ([]UpstreamGroup, error) {
 	token, err := a.ensureAccessToken(ctx, source)
 	if err != nil {

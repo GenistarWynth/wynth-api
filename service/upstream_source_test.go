@@ -145,6 +145,12 @@ func setupUpstreamSourceServiceTestDB(t *testing.T) {
 		&model.UpstreamSourceChannelMapping{},
 		&model.UpstreamSourceScan{},
 		&model.UpstreamSourceGroupChange{},
+		&model.UpstreamSourceBalanceSnapshot{},
+		&model.UpstreamSourceCostSnapshot{},
+		&model.UpstreamSourceAnnouncement{},
+		&model.UpstreamSourceAnnouncementState{},
+		&model.UpstreamSourceSubscriptionUsageSnapshot{},
+		&model.UpstreamSourceCapabilityOutcome{},
 		&model.Channel{},
 		&model.Ability{},
 	))

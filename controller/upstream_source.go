@@ -328,6 +328,45 @@ func ListUpstreamSourceMonitorRuns(c *gin.Context) {
 	common.ApiSuccess(c, scans)
 }
 
+func GetUpstreamSourceMonitorSnapshots(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	snapshots, err := service.GetUpstreamSourceLatestMonitorSnapshots(source.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, snapshots)
+}
+
+func ListUpstreamSourceCapabilityOutcomes(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	outcomes, err := model.ListRecentUpstreamSourceCapabilityOutcomes(source.Id, upstreamSourceHistoryLimit(c))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, outcomes)
+}
+
+func ListUpstreamSourceAnnouncements(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	announcements, err := model.ListRecentUpstreamSourceAnnouncements(source.Id, upstreamSourceHistoryLimit(c))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, announcements)
+}
+
 func ListUpstreamSourceGroupChanges(c *gin.Context) {
 	source, ok := loadUpstreamSourceForController(c)
 	if !ok {
