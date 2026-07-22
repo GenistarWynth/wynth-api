@@ -425,6 +425,85 @@ func TestUpstreamSourceMonitorRunnerPersistsCollectedBalance(t *testing.T) {
 	assert.Equal(t, int64(1100), balance.CollectedAt)
 }
 
+func TestUpstreamSourceMonitorRunnerNotifiesAfterCollectorEventsPersist(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := model.UpstreamSource{
+		Name:                   "notification-wiring",
+		Type:                   model.UpstreamSourceTypeSub2API,
+		Status:                 model.UpstreamSourceStatusEnabled,
+		BaseURL:                "https://notify.example.com",
+		MonitorEnabled:         true,
+		MonitorIntervalMinutes: 10,
+	}
+	require.NoError(t, model.DB.Create(&source).Error)
+	oldRate := 1.0
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		UpstreamGroupID:         "premium",
+		UpstreamGroupName:       "Premium",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamRateMultiplier:  &oldRate,
+		EffectiveRateMultiplier: &oldRate,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceScan{
+		SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeDiscover, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 100, FinishedAt: 101,
+	}).Error)
+
+	newRate := 1.5
+	notified := false
+	runner := UpstreamSourceMonitorRunner{
+		AdapterFactory: func(string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamCollectorsAdapter{
+				rates: func(context.Context, *model.UpstreamSource) (UpstreamRateGroupSnapshot, error) {
+					return UpstreamRateGroupSnapshot{Groups: []UpstreamGroup{{
+						ID: "premium", Name: "Premium", Status: "enabled", RateMultiplier: &newRate, EffectiveRateMultiplier: &newRate,
+					}}}, nil
+				},
+			}, nil
+		},
+		Now: func() int64 { return 2000 },
+		NotifyScan: func(ctx context.Context, persistedSource *model.UpstreamSource, scanID int) error {
+			var changeCount int64
+			require.NoError(t, model.DB.Model(&model.UpstreamSourceGroupChange{}).Where("source_id = ? AND scan_id = ?", persistedSource.Id, scanID).Count(&changeCount).Error)
+			assert.Equal(t, int64(1), changeCount)
+			notified = true
+			return nil
+		},
+	}
+
+	results := runner.RunDue(context.Background(), 1000)
+	require.Len(t, results, 1)
+	assert.True(t, notified)
+}
+
+func TestRunDueUpstreamSourceMonitorsOnceRunsRetentionCleanup(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	t.Setenv("UPSTREAM_SOURCE_SCAN_RETENTION_DAYS", "1")
+	upstreamSourceMonitorRunning.Store(false)
+	upstreamSourceRetentionLastCleanupAt.Store(0)
+	t.Cleanup(func() {
+		upstreamSourceMonitorRunning.Store(false)
+		upstreamSourceRetentionLastCleanupAt.Store(0)
+	})
+	source := model.UpstreamSource{
+		Name: "retention-worker", Type: model.UpstreamSourceTypeSub2API,
+		Status: model.UpstreamSourceStatusDisabled, BaseURL: "https://retention-worker.example.com",
+	}
+	require.NoError(t, model.DB.Create(&source).Error)
+	oldScan := model.UpstreamSourceScan{
+		SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeMonitor,
+		Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 1, FinishedAt: 2,
+	}
+	require.NoError(t, model.DB.Create(&oldScan).Error)
+
+	runDueUpstreamSourceMonitorsOnce()
+
+	var scanCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceScan{}).Where("id = ?", oldScan.Id).Count(&scanCount).Error)
+	assert.Zero(t, scanCount)
+	assert.Greater(t, upstreamSourceRetentionLastCleanupAt.Load(), int64(0))
+}
+
 func TestUpstreamSourceMonitorRunnerAuthFailureUpdatesHealthAndSkipsSharedAuthCollectors(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := model.UpstreamSource{

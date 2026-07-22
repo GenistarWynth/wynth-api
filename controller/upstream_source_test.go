@@ -64,9 +64,13 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		&model.UpstreamSourceBalanceSnapshot{},
 		&model.UpstreamSourceCostSnapshot{},
 		&model.UpstreamSourceAnnouncement{},
+		&model.UpstreamSourceAnnouncementIdentity{},
 		&model.UpstreamSourceAnnouncementState{},
 		&model.UpstreamSourceSubscriptionUsageSnapshot{},
 		&model.UpstreamSourceCapabilityOutcome{},
+		&model.UpstreamSourceNotificationSubscription{},
+		&model.UpstreamSourceNotificationCooldown{},
+		&model.UpstreamSourceNotificationDelivery{},
 		&model.Channel{},
 		&model.Ability{},
 		&model.User{},
@@ -120,6 +124,11 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.GET("/:id/monitor/outcomes", ListUpstreamSourceCapabilityOutcomes)
 		group.GET("/:id/announcements", ListUpstreamSourceAnnouncements)
 		group.GET("/:id/changes", ListUpstreamSourceGroupChanges)
+		group.GET("/:id/notification_subscriptions", ListUpstreamSourceNotificationSubscriptions)
+		group.POST("/:id/notification_subscriptions", CreateUpstreamSourceNotificationSubscription)
+		group.PUT("/:id/notification_subscriptions/:subscription_id", UpdateUpstreamSourceNotificationSubscription)
+		group.DELETE("/:id/notification_subscriptions/:subscription_id", DeleteUpstreamSourceNotificationSubscription)
+		group.GET("/:id/notification_deliveries", ListUpstreamSourceNotificationDeliveries)
 		group.POST("/:id/sync", SyncUpstreamSource)
 		group.GET("/:id/sync_result", GetUpstreamSourceSyncResult)
 		group.POST("/:id/auto_priority/run", RunUpstreamSourceAutoPriority)
@@ -151,6 +160,53 @@ func TestUpstreamSourceAPIMonitorControlsUpdateSchedule(t *testing.T) {
 	assert.True(t, reloaded.MonitorEnabled)
 	assert.Equal(t, 15, reloaded.MonitorIntervalMinutes)
 	assert.Greater(t, reloaded.NextMonitorAt, int64(0))
+}
+
+func TestUpstreamSourceAPINotificationSubscriptionCRUDAndDeliveryAudit(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	basePath := "/api/upstream_sources/" + strconv.Itoa(source.Id)
+
+	created := upstreamSourceAPIRequest[model.UpstreamSourceNotificationSubscription](t, router, http.MethodPost, basePath+"/notification_subscriptions", map[string]any{
+		"event_type":       model.UpstreamSourceNotificationEventRateChanged,
+		"group_id":         "premium",
+		"enabled":          true,
+		"cooldown_seconds": 600,
+	}, true)
+	require.True(t, created.Success, created.Message)
+	assert.Equal(t, 1, created.Data.UserID)
+	assert.Equal(t, source.Id, created.Data.SourceID)
+	assert.Equal(t, "premium", created.Data.GroupID)
+
+	listed := upstreamSourceAPIRequest[[]model.UpstreamSourceNotificationSubscription](t, router, http.MethodGet, basePath+"/notification_subscriptions", nil, true)
+	require.True(t, listed.Success, listed.Message)
+	require.Len(t, listed.Data, 1)
+	assert.Equal(t, created.Data.Id, listed.Data[0].Id)
+
+	updated := upstreamSourceAPIRequest[model.UpstreamSourceNotificationSubscription](t, router, http.MethodPut, basePath+"/notification_subscriptions/"+strconv.Itoa(created.Data.Id), map[string]any{
+		"event_type": model.UpstreamSourceNotificationEventAnnouncementNew,
+		"enabled":    false,
+	}, true)
+	require.True(t, updated.Success, updated.Message)
+	assert.False(t, updated.Data.Enabled)
+	assert.Equal(t, model.UpstreamSourceNotificationEventAnnouncementNew, updated.Data.EventType)
+
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceNotificationDelivery{
+		UserID: 1, SourceID: source.Id, ScanID: 12, EventType: model.UpstreamSourceNotificationEventAnnouncementNew,
+		EventKey: "announcement:12", Status: model.UpstreamSourceNotificationDeliveryFailed, Attempts: 3,
+		ErrorSummary: "sanitized failure", CreatedAt: 100,
+	}).Error)
+	deliveries := upstreamSourceAPIRequest[[]model.UpstreamSourceNotificationDelivery](t, router, http.MethodGet, basePath+"/notification_deliveries", nil, true)
+	require.True(t, deliveries.Success, deliveries.Message)
+	require.Len(t, deliveries.Data, 1)
+	assert.Equal(t, "sanitized failure", deliveries.Data[0].ErrorSummary)
+
+	deleted := upstreamSourceAPIRequest[any](t, router, http.MethodDelete, basePath+"/notification_subscriptions/"+strconv.Itoa(created.Data.Id), nil, true)
+	require.True(t, deleted.Success, deleted.Message)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceNotificationSubscription{}).Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func TestUpstreamSourceAPIReadsDurableAuthHealth(t *testing.T) {

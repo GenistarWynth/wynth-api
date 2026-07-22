@@ -36,6 +36,7 @@ import type {
   Row,
 } from '@tanstack/react-table'
 import {
+  Activity,
   ChevronDown,
   Cookie,
   KeyRound,
@@ -142,6 +143,7 @@ import {
   updateUpstreamSourceMappings,
   upstreamSourcesQueryKeys,
 } from './api'
+import { MonitoringSheet } from './monitoring-sheet'
 import {
   buildLocalGroupRuleTemplate,
   buildRuleModelDiscoverySignature,
@@ -652,6 +654,7 @@ function useUpstreamSourceColumns(props: {
   onCredentials: (source: UpstreamSource) => void
   onImportSession: (source: UpstreamSource) => void
   onMappings: (source: UpstreamSource) => void
+  onMonitor: (source: UpstreamSource) => void
   onDiscover: (source: UpstreamSource) => void
   onSync: (source: UpstreamSource) => void
   onAutoPriority: (source: UpstreamSource) => void
@@ -807,6 +810,7 @@ function useUpstreamSourceColumns(props: {
             onCredentials={props.onCredentials}
             onImportSession={props.onImportSession}
             onMappings={props.onMappings}
+            onMonitor={props.onMonitor}
             onDiscover={props.onDiscover}
             onSync={props.onSync}
             onAutoPriority={props.onAutoPriority}
@@ -829,6 +833,7 @@ function SourceActions(props: {
   onCredentials: (source: UpstreamSource) => void
   onImportSession: (source: UpstreamSource) => void
   onMappings: (source: UpstreamSource) => void
+  onMonitor: (source: UpstreamSource) => void
   onDiscover: (source: UpstreamSource) => void
   onSync: (source: UpstreamSource) => void
   onAutoPriority: (source: UpstreamSource) => void
@@ -878,6 +883,12 @@ function SourceActions(props: {
             {t('Mappings')}
             <DropdownMenuShortcut>
               <Settings2 size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => props.onMonitor(source)}>
+            {t('Monitoring')}
+            <DropdownMenuShortcut>
+              <Activity size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
@@ -2786,6 +2797,7 @@ export function UpstreamSources() {
   const [importSessionSource, setImportSessionSource] =
     useState<UpstreamSource>()
   const [mappingSource, setMappingSource] = useState<UpstreamSource>()
+  const [monitorSource, setMonitorSource] = useState<UpstreamSource>()
   const [deleteSource, setDeleteSource] = useState<UpstreamSource>()
 
   const sourcesQuery = useQuery({
@@ -3006,6 +3018,7 @@ export function UpstreamSources() {
     onCredentials: setCredentialSource,
     onImportSession: setImportSessionSource,
     onMappings: setMappingSource,
+    onMonitor: setMonitorSource,
     onDiscover: (source) => discoverMutation.mutate(source),
     onSync: (source) => syncMutation.mutate(source),
     onAutoPriority: (source) => autoPriorityMutation.mutate(source),
@@ -3185,6 +3198,18 @@ export function UpstreamSources() {
           syncMutation.isPending &&
           syncMutation.variables?.id === mappingSource?.id
         }
+      />
+      <MonitoringSheet
+        key={
+          monitorSource ? `monitoring-${monitorSource.id}` : 'monitoring-closed'
+        }
+        open={Boolean(monitorSource)}
+        source={monitorSource}
+        onOpenChange={(open) => !open && setMonitorSource(undefined)}
+        onSourceUpdated={(source) => {
+          setMonitorSource(source)
+          invalidateSources()
+        }}
       />
       <ConfirmDialog
         open={Boolean(deleteSource)}

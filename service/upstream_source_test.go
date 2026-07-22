@@ -148,11 +148,16 @@ func setupUpstreamSourceServiceTestDB(t *testing.T) {
 		&model.UpstreamSourceBalanceSnapshot{},
 		&model.UpstreamSourceCostSnapshot{},
 		&model.UpstreamSourceAnnouncement{},
+		&model.UpstreamSourceAnnouncementIdentity{},
 		&model.UpstreamSourceAnnouncementState{},
 		&model.UpstreamSourceSubscriptionUsageSnapshot{},
 		&model.UpstreamSourceCapabilityOutcome{},
+		&model.UpstreamSourceNotificationSubscription{},
+		&model.UpstreamSourceNotificationCooldown{},
+		&model.UpstreamSourceNotificationDelivery{},
 		&model.Channel{},
 		&model.Ability{},
+		&model.User{},
 	))
 }
 

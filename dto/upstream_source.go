@@ -35,6 +35,13 @@ type UpstreamSourceMonitorUpdateRequest struct {
 	IntervalMinutes int  `json:"interval_minutes"`
 }
 
+type UpstreamSourceNotificationSubscriptionRequest struct {
+	EventType       string `json:"event_type"`
+	GroupID         string `json:"group_id"`
+	Enabled         *bool  `json:"enabled"`
+	CooldownSeconds int64  `json:"cooldown_seconds"`
+}
+
 // UpstreamSourceSessionImportRequest carries an admin-pasted upstream session
 // so login can be short-circuited when Cloudflare Turnstile blocks automated
 // login. new-api sources accept a raw session cookie string OR an

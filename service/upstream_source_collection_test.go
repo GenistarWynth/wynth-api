@@ -105,6 +105,37 @@ func TestPersistUpstreamSourceAnnouncementsBaselinesThenMarksNewItems(t *testing
 	assert.Equal(t, 1, newRows)
 }
 
+func TestPersistUpstreamSourceAnnouncementsDoesNotResurrectAfterRetention(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	baselineScan := createUpstreamSourceCollectionTestScan(t, source.Id, 100)
+	baseline, newCount, err := persistUpstreamSourceAnnouncements(source.Id, baselineScan.Id, UpstreamAnnouncementSnapshot{
+		Items:       []UpstreamAnnouncement{{ID: "still-current", Title: "Existing notice"}},
+		CollectedAt: 100,
+	}, 100)
+	require.NoError(t, err)
+	assert.True(t, baseline)
+	assert.Zero(t, newCount)
+
+	cleanup, err := model.CleanupUpstreamSourceMonitorHistory(1000, model.UpstreamSourceRetentionPolicy{AnnouncementSeconds: 500})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), cleanup.Announcements)
+
+	resumeScan := createUpstreamSourceCollectionTestScan(t, source.Id, 1100)
+	baseline, newCount, err = persistUpstreamSourceAnnouncements(source.Id, resumeScan.Id, UpstreamAnnouncementSnapshot{
+		Items:       []UpstreamAnnouncement{{ID: "still-current", Title: "Existing notice"}},
+		CollectedAt: 1100,
+	}, 1100)
+	require.NoError(t, err)
+	assert.False(t, baseline)
+	assert.Zero(t, newCount)
+
+	var announcement model.UpstreamSourceAnnouncement
+	require.NoError(t, model.DB.Where("source_id = ? AND source_key = ?", source.Id, "still-current").First(&announcement).Error)
+	assert.False(t, announcement.IsNew)
+	assert.Equal(t, int64(100), announcement.FirstSeenAt)
+}
+
 func TestPersistUpstreamSourceSubscriptionUsageStoresRawWindows(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	source := createDiscoveryTestSource(t)

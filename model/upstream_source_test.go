@@ -34,9 +34,13 @@ func setupUpstreamSourceTestDB(t *testing.T) {
 		&UpstreamSourceBalanceSnapshot{},
 		&UpstreamSourceCostSnapshot{},
 		&UpstreamSourceAnnouncement{},
+		&UpstreamSourceAnnouncementIdentity{},
 		&UpstreamSourceAnnouncementState{},
 		&UpstreamSourceSubscriptionUsageSnapshot{},
 		&UpstreamSourceCapabilityOutcome{},
+		&UpstreamSourceNotificationSubscription{},
+		&UpstreamSourceNotificationCooldown{},
+		&UpstreamSourceNotificationDelivery{},
 		&Channel{},
 		&Ability{},
 	))

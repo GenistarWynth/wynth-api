@@ -74,6 +74,18 @@ type UpstreamSourceAnnouncement struct {
 	IsNew       bool   `json:"is_new" gorm:"not null;index"`
 }
 
+// UpstreamSourceAnnouncementIdentity is the permanent deduplication ledger for
+// announcement source keys. Retention may remove the display payload while
+// this compact identity remains to prevent historical notices from becoming
+// new again after a monitoring pause.
+type UpstreamSourceAnnouncementIdentity struct {
+	Id          int    `json:"id"`
+	SourceID    int    `json:"source_id" gorm:"not null;uniqueIndex:idx_upstream_source_announcement_identity,priority:1;index"`
+	SourceKey   string `json:"source_key" gorm:"type:varchar(191);not null;uniqueIndex:idx_upstream_source_announcement_identity,priority:2"`
+	FirstSeenAt int64  `json:"first_seen_at" gorm:"bigint;not null"`
+	LastSeenAt  int64  `json:"last_seen_at" gorm:"bigint;not null;index"`
+}
+
 type UpstreamSourceAnnouncementState struct {
 	SourceID          int   `json:"source_id" gorm:"primaryKey;autoIncrement:false"`
 	BaselineCompleted bool  `json:"baseline_completed" gorm:"not null"`

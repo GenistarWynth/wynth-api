@@ -26,6 +26,12 @@ import type {
   UpstreamSourceCredentialsUpdateRequest,
   UpstreamSourceDiscoveryResult,
   UpstreamSourceMapping,
+  UpstreamSourceMonitoringOverview,
+  UpstreamSourceMonitorScan,
+  UpstreamSourceGroupChange,
+  UpstreamSourceAnnouncement,
+  UpstreamSourceBalanceSnapshot,
+  UpstreamSourceSubscriptionSnapshot,
   UpstreamSourceRuleModelOptionsRequest,
   UpstreamSourceRuleModelOptionsResponse,
   UpstreamSourceSessionImportRequest,
@@ -50,6 +56,8 @@ export const upstreamSourcesQueryKeys = {
     [...upstreamSourcesQueryKeys.all, 'mappings', id] as const,
   syncResult: (id: number) =>
     [...upstreamSourcesQueryKeys.all, 'sync-result', id] as const,
+  monitoring: (id: number) =>
+    [...upstreamSourcesQueryKeys.all, 'monitoring', id] as const,
 }
 
 export async function listUpstreamSources(): Promise<
@@ -104,6 +112,71 @@ export async function importUpstreamSourceSession(
     upstreamSourceActionConfig()
   )
   return res.data
+}
+
+export async function clearUpstreamSourceSession(
+  id: number
+): Promise<ApiResponse<UpstreamSource>> {
+  const res = await api.delete(
+    `/api/upstream_sources/${id}/session`,
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function updateUpstreamSourceMonitor(
+  id: number,
+  enabled: boolean,
+  intervalMinutes: number
+): Promise<ApiResponse<UpstreamSource>> {
+  const res = await api.put(
+    `/api/upstream_sources/${id}/monitor`,
+    { enabled, interval_minutes: intervalMinutes },
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function getUpstreamSourceMonitoringOverview(
+  id: number
+): Promise<ApiResponse<UpstreamSourceMonitoringOverview>> {
+  const [snapshots, scans, changes, announcements] = await Promise.all([
+    api.get<
+      ApiResponse<{
+        balance?: UpstreamSourceBalanceSnapshot | null
+        subscription_usage: UpstreamSourceSubscriptionSnapshot[]
+      }>
+    >(`/api/upstream_sources/${id}/monitor/snapshots`),
+    api.get<ApiResponse<UpstreamSourceMonitorScan[]>>(
+      `/api/upstream_sources/${id}/monitor/runs?limit=10`
+    ),
+    api.get<ApiResponse<UpstreamSourceGroupChange[]>>(
+      `/api/upstream_sources/${id}/changes?limit=10`
+    ),
+    api.get<ApiResponse<UpstreamSourceAnnouncement[]>>(
+      `/api/upstream_sources/${id}/announcements?limit=10`
+    ),
+  ])
+  const responses = [
+    snapshots.data,
+    scans.data,
+    changes.data,
+    announcements.data,
+  ]
+  const failed = responses.find((response) => !response.success)
+  if (failed) {
+    return { success: false, message: failed.message }
+  }
+  return {
+    success: true,
+    data: {
+      balance: snapshots.data.data?.balance,
+      subscription_usage: snapshots.data.data?.subscription_usage ?? [],
+      scans: scans.data.data ?? [],
+      changes: changes.data.data ?? [],
+      announcements: announcements.data.data ?? [],
+    },
+  }
 }
 
 export async function deleteUpstreamSource(

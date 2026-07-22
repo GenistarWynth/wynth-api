@@ -161,24 +161,37 @@ func persistUpstreamSourceAnnouncements(sourceID int, scanID int, snapshot Upstr
 				PublishedAt: item.PublishedAt,
 				FirstSeenAt: collectedAt,
 				LastSeenAt:  collectedAt,
-				IsNew:       !baseline,
 			})
 		}
 
-		existingKeys := make(map[string]struct{}, len(keys))
+		existingKeys := make(map[string]int64, len(keys))
 		if len(keys) > 0 {
+			var identities []model.UpstreamSourceAnnouncementIdentity
+			if err := tx.Select("source_key", "first_seen_at").Where("source_id = ? AND source_key IN ?", sourceID, keys).Find(&identities).Error; err != nil {
+				return err
+			}
+			for _, identity := range identities {
+				existingKeys[identity.SourceKey] = identity.FirstSeenAt
+			}
+			// Existing display rows seed the identity ledger during upgrades from
+			// Batch B, before every source has completed a post-migration scan.
 			var existing []model.UpstreamSourceAnnouncement
-			if err := tx.Select("source_key").Where("source_id = ? AND source_key IN ?", sourceID, keys).Find(&existing).Error; err != nil {
+			if err := tx.Select("source_key", "first_seen_at").Where("source_id = ? AND source_key IN ?", sourceID, keys).Find(&existing).Error; err != nil {
 				return err
 			}
 			for _, item := range existing {
-				existingKeys[item.SourceKey] = struct{}{}
+				if _, tracked := existingKeys[item.SourceKey]; !tracked {
+					existingKeys[item.SourceKey] = item.FirstSeenAt
+				}
 			}
-			if !baseline {
-				for _, record := range records {
-					if _, exists := existingKeys[record.SourceKey]; !exists {
-						newCount++
-					}
+			for index := range records {
+				firstSeenAt, exists := existingKeys[records[index].SourceKey]
+				records[index].IsNew = !baseline && !exists
+				if exists && firstSeenAt > 0 {
+					records[index].FirstSeenAt = firstSeenAt
+				}
+				if records[index].IsNew {
+					newCount++
 				}
 			}
 			if err := tx.Clauses(clause.OnConflict{
@@ -192,6 +205,19 @@ func persistUpstreamSourceAnnouncements(sourceID int, scanID int, snapshot Upstr
 					"last_seen_at",
 				}),
 			}).Create(&records).Error; err != nil {
+				return err
+			}
+			identityRecords := make([]model.UpstreamSourceAnnouncementIdentity, 0, len(records))
+			for _, record := range records {
+				identityRecords = append(identityRecords, model.UpstreamSourceAnnouncementIdentity{
+					SourceID: sourceID, SourceKey: record.SourceKey,
+					FirstSeenAt: record.FirstSeenAt, LastSeenAt: record.LastSeenAt,
+				})
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "source_id"}, {Name: "source_key"}},
+				DoUpdates: clause.AssignmentColumns([]string{"last_seen_at"}),
+			}).Create(&identityRecords).Error; err != nil {
 				return err
 			}
 		}

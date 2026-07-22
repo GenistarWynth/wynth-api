@@ -85,6 +85,15 @@ export type UpstreamSource = {
   has_credentials: boolean
   session_source?: string
   turnstile_blocked?: boolean
+  auth_status: string
+  auth_last_validated_at: number
+  auth_last_refreshed_at: number
+  auth_expires_at: number
+  last_auth_error: string
+  monitor_enabled: boolean
+  monitor_interval_minutes: number
+  next_monitor_at: number
+  last_monitor_time: number
   last_discovery_time: number
   last_discovery_status: UpstreamDiscoveryStatus | ''
   last_discovery_error: string
@@ -93,6 +102,77 @@ export type UpstreamSource = {
   last_sync_error: string
   created_time: number
   updated_time: number
+}
+
+export type UpstreamSourceMonitorScan = {
+  id: number
+  source_id: number
+  scan_type: string
+  status: string
+  baseline: boolean
+  started_at: number
+  finished_at: number
+  error_summary?: string
+}
+
+export type UpstreamSourceGroupChange = {
+  id: number
+  source_id: number
+  scan_id: number
+  change_type: 'added' | 'removed' | 'restored' | 'rate_changed'
+  upstream_group_id: string
+  upstream_group_name: string
+  old_effective_rate_multiplier?: number | null
+  new_effective_rate_multiplier?: number | null
+  created_at: number
+}
+
+export type UpstreamSourceAnnouncement = {
+  id: number
+  source_id: number
+  scan_id: number
+  source_key: string
+  title: string
+  content: string
+  url: string
+  published_at: number
+  first_seen_at: number
+  last_seen_at: number
+  is_new: boolean
+}
+
+export type UpstreamSourceBalanceSnapshot = {
+  source_id: number
+  scan_id: number
+  available: number
+  currency: string
+  collected_at: number
+}
+
+export type UpstreamSourceSubscriptionSnapshot = {
+  id: number
+  source_id: number
+  scan_id: number
+  subscription_key: string
+  name: string
+  window: string
+  unit: string
+  used: number
+  limit?: number | null
+  remaining?: number | null
+  remaining_percent?: number | null
+  period_start: number
+  period_end: number
+  expires_at: number
+  collected_at: number
+}
+
+export type UpstreamSourceMonitoringOverview = {
+  balance?: UpstreamSourceBalanceSnapshot | null
+  subscription_usage: UpstreamSourceSubscriptionSnapshot[]
+  scans: UpstreamSourceMonitorScan[]
+  changes: UpstreamSourceGroupChange[]
+  announcements: UpstreamSourceAnnouncement[]
 }
 
 export type UpstreamSourceLocalGroupRule = {

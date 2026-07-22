@@ -23,11 +23,13 @@ const (
 	defaultUpstreamSourceMonitorBatchTimeout        = 5 * time.Minute
 	upstreamSourceMonitorTickInterval               = time.Minute
 	upstreamSourceMonitorStaleAfterSeconds    int64 = 10 * 60
+	upstreamSourceRetentionCleanupInterval    int64 = 24 * 60 * 60
 )
 
 var (
-	upstreamSourceMonitorOnce    sync.Once
-	upstreamSourceMonitorRunning atomic.Bool
+	upstreamSourceMonitorOnce            sync.Once
+	upstreamSourceMonitorRunning         atomic.Bool
+	upstreamSourceRetentionLastCleanupAt atomic.Int64
 )
 
 type UpstreamSourceMonitorResult struct {
@@ -43,6 +45,7 @@ type UpstreamSourceMonitorResult struct {
 
 type UpstreamSourceMonitorRunner struct {
 	AdapterFactory func(sourceType string) (UpstreamSourceAdapter, error)
+	NotifyScan     func(context.Context, *model.UpstreamSource, int) error
 	Now            func() int64
 	NewToken       func() string
 	MaxConcurrency int
@@ -270,6 +273,13 @@ func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model
 	default:
 		result.Status = model.UpstreamSourceScanStatusFailed
 	}
+	notifyScan := r.NotifyScan
+	if notifyScan == nil {
+		notifyScan = NotifyUpstreamSourceMonitorScan
+	}
+	if err := notifyScan(ctx, &source, scan.Id); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: notify source_id=%d scan_id=%d failed: %s", source.Id, scan.Id, SanitizeUpstreamSourceError(err)))
+	}
 	return result, true
 }
 
@@ -297,7 +307,17 @@ func runDueUpstreamSourceMonitorsOnce() {
 		return
 	}
 	defer upstreamSourceMonitorRunning.Store(false)
-	(&UpstreamSourceMonitorRunner{}).RunDue(context.Background(), common.GetTimestamp())
+	ctx := context.Background()
+	now := common.GetTimestamp()
+	lastCleanupAt := upstreamSourceRetentionLastCleanupAt.Load()
+	if lastCleanupAt == 0 || now-lastCleanupAt >= upstreamSourceRetentionCleanupInterval {
+		if _, err := model.CleanupUpstreamSourceMonitorHistory(now, model.DefaultUpstreamSourceRetentionPolicy()); err != nil {
+			logger.LogWarn(ctx, "upstream source monitor: retention cleanup failed: "+SanitizeUpstreamSourceError(err))
+		} else {
+			upstreamSourceRetentionLastCleanupAt.Store(now)
+		}
+	}
+	(&UpstreamSourceMonitorRunner{}).RunDue(ctx, now)
 }
 
 func UpdateUpstreamSourceMonitorSettings(sourceID int, enabled bool, intervalMinutes int, now int64) (*model.UpstreamSource, error) {
