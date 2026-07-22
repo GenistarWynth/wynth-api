@@ -16,6 +16,7 @@ const (
 
 	UpstreamSourceScanTypeDiscover  = "discover"
 	UpstreamSourceScanTypeGroupRate = "group_rate"
+	UpstreamSourceScanTypeMonitor   = "monitor"
 
 	UpstreamSourceScanStatusRunning = "running"
 	UpstreamSourceScanStatusSuccess = "success"
@@ -138,12 +139,20 @@ func FinishUpstreamSourceScanTx(tx *gorm.DB, scanID int, status string, baseline
 }
 
 func ListRecentUpstreamSourceScans(sourceID int, limit int) ([]UpstreamSourceScan, error) {
+	return ListRecentUpstreamSourceScansByType(sourceID, "", limit)
+}
+
+func ListRecentUpstreamSourceScansByType(sourceID int, scanType string, limit int) ([]UpstreamSourceScan, error) {
 	if sourceID == 0 {
 		return nil, errors.New("source ID is required")
 	}
 	limit = normalizeUpstreamSourceHistoryLimit(limit)
 	scans := make([]UpstreamSourceScan, 0, limit)
-	err := DB.Where("source_id = ?", sourceID).Order("id DESC").Limit(limit).Find(&scans).Error
+	query := DB.Where("source_id = ?", sourceID)
+	if strings.TrimSpace(scanType) != "" {
+		query = query.Where("scan_type = ?", scanType)
+	}
+	err := query.Order("id DESC").Limit(limit).Find(&scans).Error
 	return scans, err
 }
 

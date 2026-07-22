@@ -39,25 +39,31 @@ const (
 )
 
 type UpstreamSource struct {
-	Id                  int    `json:"id"`
-	Name                string `json:"name" gorm:"type:varchar(191);not null;index"`
-	Type                string `json:"type" gorm:"type:varchar(32);not null;index"`
-	Status              string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
-	BaseURL             string `json:"base_url" gorm:"type:varchar(512);not null"`
-	AdminAPIBasePath    string `json:"admin_api_base_path" gorm:"type:varchar(128);not null;default:'/api/v1'"`
-	RelayBaseURL        string `json:"relay_base_url" gorm:"type:varchar(512);not null"`
-	AuthConfig          string `json:"-" gorm:"type:text"`
-	SyncConfig          string `json:"sync_config" gorm:"type:text"`
-	CurrentSyncToken    string `json:"-" gorm:"type:varchar(64);index"`
-	SyncStartedAt       int64  `json:"sync_started_at" gorm:"bigint"`
-	LastDiscoveryTime   int64  `json:"last_discovery_time" gorm:"bigint"`
-	LastDiscoveryStatus string `json:"last_discovery_status" gorm:"type:varchar(32)"`
-	LastDiscoveryError  string `json:"last_discovery_error" gorm:"type:varchar(1024)"`
-	LastSyncTime        int64  `json:"last_sync_time" gorm:"bigint"`
-	LastSyncStatus      string `json:"last_sync_status" gorm:"type:varchar(32)"`
-	LastSyncError       string `json:"last_sync_error" gorm:"type:varchar(1024)"`
-	CreatedTime         int64  `json:"created_time" gorm:"bigint"`
-	UpdatedTime         int64  `json:"updated_time" gorm:"bigint"`
+	Id                     int    `json:"id"`
+	Name                   string `json:"name" gorm:"type:varchar(191);not null;index"`
+	Type                   string `json:"type" gorm:"type:varchar(32);not null;index"`
+	Status                 string `json:"status" gorm:"type:varchar(32);not null;default:'enabled';index"`
+	BaseURL                string `json:"base_url" gorm:"type:varchar(512);not null"`
+	AdminAPIBasePath       string `json:"admin_api_base_path" gorm:"type:varchar(128);not null;default:'/api/v1'"`
+	RelayBaseURL           string `json:"relay_base_url" gorm:"type:varchar(512);not null"`
+	AuthConfig             string `json:"-" gorm:"type:text"`
+	SyncConfig             string `json:"sync_config" gorm:"type:text"`
+	MonitorEnabled         bool   `json:"monitor_enabled" gorm:"index"`
+	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
+	NextMonitorAt          int64  `json:"next_monitor_at" gorm:"bigint;index"`
+	CurrentMonitorToken    string `json:"-" gorm:"type:varchar(64);index"`
+	MonitorStartedAt       int64  `json:"monitor_started_at" gorm:"bigint"`
+	LastMonitorTime        int64  `json:"last_monitor_time" gorm:"bigint"`
+	CurrentSyncToken       string `json:"-" gorm:"type:varchar(64);index"`
+	SyncStartedAt          int64  `json:"sync_started_at" gorm:"bigint"`
+	LastDiscoveryTime      int64  `json:"last_discovery_time" gorm:"bigint"`
+	LastDiscoveryStatus    string `json:"last_discovery_status" gorm:"type:varchar(32)"`
+	LastDiscoveryError     string `json:"last_discovery_error" gorm:"type:varchar(1024)"`
+	LastSyncTime           int64  `json:"last_sync_time" gorm:"bigint"`
+	LastSyncStatus         string `json:"last_sync_status" gorm:"type:varchar(32)"`
+	LastSyncError          string `json:"last_sync_error" gorm:"type:varchar(1024)"`
+	CreatedTime            int64  `json:"created_time" gorm:"bigint"`
+	UpdatedTime            int64  `json:"updated_time" gorm:"bigint"`
 }
 
 func (source *UpstreamSource) BeforeCreate(tx *gorm.DB) error {
@@ -245,22 +251,6 @@ func ReleaseUpstreamSourceSync(sourceID int, token string, status string, errTex
 			"last_sync_error":    errText,
 			"last_sync_time":     now,
 			"updated_time":       now,
-		}).Error
-}
-
-// PersistUpstreamSourceAuthConfig writes back a refreshed AuthConfig value
-// (already encrypted by the caller when applicable) without disturbing any
-// other source fields, so a login acquired during discover/sync is reused
-// on subsequent runs instead of re-authenticating every time.
-func PersistUpstreamSourceAuthConfig(sourceID int, authConfig string) error {
-	if sourceID == 0 {
-		return errors.New("source ID is required")
-	}
-	return DB.Model(&UpstreamSource{}).
-		Where("id = ?", sourceID).
-		Updates(map[string]interface{}{
-			"auth_config":  authConfig,
-			"updated_time": common.GetTimestamp(),
 		}).Error
 }
 

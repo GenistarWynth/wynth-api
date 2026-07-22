@@ -57,6 +57,7 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 
 	require.NoError(t, db.AutoMigrate(
 		&model.UpstreamSource{},
+		&model.UpstreamSourceSession{},
 		&model.UpstreamSourceChannelMapping{},
 		&model.UpstreamSourceScan{},
 		&model.UpstreamSourceGroupChange{},
@@ -101,11 +102,14 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.GET("/:id", GetUpstreamSource)
 		group.PUT("/:id", UpdateUpstreamSource)
 		group.PUT("/:id/credentials", UpdateUpstreamSourceCredentials)
+		group.PUT("/:id/monitor", UpdateUpstreamSourceMonitor)
+		group.DELETE("/:id/session", ClearUpstreamSourceSession)
 		group.DELETE("/:id", DeleteUpstreamSource)
 		group.POST("/:id/discover", DiscoverUpstreamSource)
 		group.GET("/:id/mappings", ListUpstreamSourceMappings)
 		group.PUT("/:id/mappings", UpdateUpstreamSourceMappings)
 		group.GET("/:id/scans", ListUpstreamSourceScans)
+		group.GET("/:id/monitor/runs", ListUpstreamSourceMonitorRuns)
 		group.GET("/:id/changes", ListUpstreamSourceGroupChanges)
 		group.POST("/:id/sync", SyncUpstreamSource)
 		group.GET("/:id/sync_result", GetUpstreamSourceSyncResult)
@@ -117,6 +121,108 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		router.ServeHTTP(recorder, request)
 	}
 	return router
+}
+
+func TestUpstreamSourceAPIMonitorControlsUpdateSchedule(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{"email":"admin@example.com","password":"secret"}`)
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/monitor", map[string]any{
+		"enabled":          true,
+		"interval_minutes": 15,
+	}, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.True(t, response.Data.MonitorEnabled)
+	assert.Equal(t, 15, response.Data.MonitorIntervalMinutes)
+	assert.Greater(t, response.Data.NextMonitorAt, int64(0))
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.True(t, reloaded.MonitorEnabled)
+	assert.Equal(t, 15, reloaded.MonitorIntervalMinutes)
+	assert.Greater(t, reloaded.NextMonitorAt, int64(0))
+}
+
+func TestUpstreamSourceAPIReadsDurableAuthHealth(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{"email":"admin@example.com","password":"secret"}`)
+	now := common.GetTimestamp()
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:        source.Id,
+		SessionConfig:   `{"access_token":"session-secret","session_source":"manual"}`,
+		SessionSource:   "manual",
+		AuthStatus:      model.UpstreamSourceAuthStatusHealthy,
+		LastValidatedAt: now - 10,
+		LastRefreshedAt: now - 20,
+		ExpiresAt:       now + 60,
+		CreatedTime:     now - 20,
+		UpdatedTime:     now - 10,
+	}))
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(source.Id), nil, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.Equal(t, model.UpstreamSourceAuthStatusExpiring, response.Data.AuthStatus)
+	assert.Equal(t, "manual", response.Data.SessionSource)
+	assert.Equal(t, now-10, response.Data.AuthLastValidatedAt)
+	assert.Equal(t, now-20, response.Data.AuthLastRefreshedAt)
+	assert.Equal(t, now+60, response.Data.AuthExpiresAt)
+	var session model.UpstreamSourceSession
+	require.NoError(t, model.DB.Where("source_id = ?", source.Id).First(&session).Error)
+	assert.Equal(t, model.UpstreamSourceAuthStatusExpiring, session.AuthStatus, "expiry reconciliation must be durable")
+}
+
+func TestUpstreamSourceAPIClearSessionPreservesCredentials(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{"email":"admin@example.com","password":"long-lived","access_token":"legacy-session"}`)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"current-session","refresh_token":"current-refresh"}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodDelete, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/session", nil, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.True(t, response.Data.HasCredentials)
+	assert.Equal(t, model.UpstreamSourceAuthStatusUnknown, response.Data.AuthStatus)
+	assert.Empty(t, response.Data.SessionSource)
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	plaintext, err := service.ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	assert.Contains(t, plaintext, "admin@example.com")
+	assert.Contains(t, plaintext, "long-lived")
+	assert.NotContains(t, plaintext, "legacy-session")
+	assert.NotContains(t, plaintext, "current-session")
+}
+
+func TestUpstreamSourceAPIMonitorRunsFiltersOtherScanTypes(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	scans := []model.UpstreamSourceScan{
+		{SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeDiscover, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 100, FinishedAt: 101},
+		{SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeMonitor, Status: model.UpstreamSourceScanStatusFailed, StartedAt: 200, FinishedAt: 201, ErrorSummary: "collector failed"},
+		{SourceID: source.Id, ScanType: model.UpstreamSourceScanTypeMonitor, Status: model.UpstreamSourceScanStatusSuccess, StartedAt: 300, FinishedAt: 301},
+	}
+	require.NoError(t, model.DB.Create(&scans).Error)
+
+	response := upstreamSourceAPIRequest[[]model.UpstreamSourceScan](t, router, http.MethodGet, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/monitor/runs", nil, true)
+
+	require.True(t, response.Success, response.Message)
+	require.Len(t, response.Data, 2)
+	assert.Equal(t, scans[2].Id, response.Data[0].Id)
+	assert.Equal(t, scans[1].Id, response.Data[1].Id)
+	for _, scan := range response.Data {
+		assert.Equal(t, model.UpstreamSourceScanTypeMonitor, scan.ScanType)
+	}
 }
 
 func upstreamSourceAPIRequest[T any](t *testing.T, router *gin.Engine, method string, target string, body any, authenticated bool) upstreamSourceAPIResponse[T] {
@@ -557,6 +663,11 @@ func TestUpstreamSourceAPICredentialsUpdateClearsCachedTokens(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(true)
 	source := createUpstreamSourceAPITestSource(t, `{"email":"old@example.com","password":"old-password","access_token":"old-access-token","refresh_token":"old-refresh-token","expires_at":9999999999}`)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"dedicated-access-token","refresh_token":"dedicated-refresh-token"}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
 	request := dto.UpstreamSourceCredentialsUpdateRequest{
 		Email:    "new@example.com",
 		Password: "new-password",
@@ -580,6 +691,9 @@ func TestUpstreamSourceAPICredentialsUpdateClearsCachedTokens(t *testing.T) {
 	assert.NotContains(t, persisted, "access_token")
 	assert.NotContains(t, persisted, "refresh_token")
 	assert.NotContains(t, persisted, "expires_at")
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	assert.Nil(t, session, "credential rotation must invalidate independently stored login sessions")
 }
 
 func TestUpstreamSourceAPIUpdateRejectsInvalidStatus(t *testing.T) {

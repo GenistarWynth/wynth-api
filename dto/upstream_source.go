@@ -30,6 +30,11 @@ type UpstreamSourceCredentialsUpdateRequest struct {
 	Password string `json:"password"`
 }
 
+type UpstreamSourceMonitorUpdateRequest struct {
+	Enabled         bool `json:"enabled"`
+	IntervalMinutes int  `json:"interval_minutes"`
+}
+
 // UpstreamSourceSessionImportRequest carries an admin-pasted upstream session
 // so login can be short-circuited when Cloudflare Turnstile blocks automated
 // login. new-api sources accept a raw session cookie string OR an
@@ -43,28 +48,37 @@ type UpstreamSourceSessionImportRequest struct {
 }
 
 type UpstreamSourceResponse struct {
-	Id                  int                            `json:"id"`
-	Name                string                         `json:"name"`
-	Type                string                         `json:"type"`
-	Status              string                         `json:"status"`
-	BaseURL             string                         `json:"base_url"`
-	AdminAPIBasePath    string                         `json:"admin_api_base_path"`
-	RelayBaseURL        string                         `json:"relay_base_url"`
-	LocalGroup          string                         `json:"local_group"`
-	AllowPrivateIP      bool                           `json:"allow_private_ip"`
-	LocalGroupRules     []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
-	MaskedEmail         string                         `json:"masked_email"`
-	HasCredentials      bool                           `json:"has_credentials"`
-	SessionSource       string                         `json:"session_source"`
-	TurnstileBlocked    bool                           `json:"turnstile_blocked"`
-	LastDiscoveryTime   int64                          `json:"last_discovery_time"`
-	LastDiscoveryStatus string                         `json:"last_discovery_status"`
-	LastDiscoveryError  string                         `json:"last_discovery_error"`
-	LastSyncTime        int64                          `json:"last_sync_time"`
-	LastSyncStatus      string                         `json:"last_sync_status"`
-	LastSyncError       string                         `json:"last_sync_error"`
-	CreatedTime         int64                          `json:"created_time"`
-	UpdatedTime         int64                          `json:"updated_time"`
+	Id                     int                            `json:"id"`
+	Name                   string                         `json:"name"`
+	Type                   string                         `json:"type"`
+	Status                 string                         `json:"status"`
+	BaseURL                string                         `json:"base_url"`
+	AdminAPIBasePath       string                         `json:"admin_api_base_path"`
+	RelayBaseURL           string                         `json:"relay_base_url"`
+	LocalGroup             string                         `json:"local_group"`
+	AllowPrivateIP         bool                           `json:"allow_private_ip"`
+	LocalGroupRules        []UpstreamSourceLocalGroupRule `json:"local_group_rules"`
+	MaskedEmail            string                         `json:"masked_email"`
+	HasCredentials         bool                           `json:"has_credentials"`
+	SessionSource          string                         `json:"session_source"`
+	TurnstileBlocked       bool                           `json:"turnstile_blocked"`
+	AuthStatus             string                         `json:"auth_status"`
+	AuthLastValidatedAt    int64                          `json:"auth_last_validated_at"`
+	AuthLastRefreshedAt    int64                          `json:"auth_last_refreshed_at"`
+	AuthExpiresAt          int64                          `json:"auth_expires_at"`
+	LastAuthError          string                         `json:"last_auth_error"`
+	MonitorEnabled         bool                           `json:"monitor_enabled"`
+	MonitorIntervalMinutes int                            `json:"monitor_interval_minutes"`
+	NextMonitorAt          int64                          `json:"next_monitor_at"`
+	LastMonitorTime        int64                          `json:"last_monitor_time"`
+	LastDiscoveryTime      int64                          `json:"last_discovery_time"`
+	LastDiscoveryStatus    string                         `json:"last_discovery_status"`
+	LastDiscoveryError     string                         `json:"last_discovery_error"`
+	LastSyncTime           int64                          `json:"last_sync_time"`
+	LastSyncStatus         string                         `json:"last_sync_status"`
+	LastSyncError          string                         `json:"last_sync_error"`
+	CreatedTime            int64                          `json:"created_time"`
+	UpdatedTime            int64                          `json:"updated_time"`
 }
 
 type UpstreamSourceLocalGroupRule struct {

@@ -17,6 +17,9 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 	if source == nil {
 		return errors.New("upstream source is required")
 	}
+	if _, err := loadUpstreamSourceRuntimeAuth(source); err != nil {
+		return err
+	}
 
 	finalJSON, err := buildImportedAuthConfigJSON(source, req) // imported session + preserved email/password
 	if err != nil {
@@ -33,6 +36,7 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return err
 	}
 	if _, err := adapter.DiscoverGroups(ctx, source); err != nil {
+		recordUpstreamSourceAuthFailure(source, err, common.GetTimestamp())
 		return errors.New("imported session failed validation: " + SanitizeUpstreamSourceError(err))
 	}
 
@@ -51,12 +55,7 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return err
 	}
 
-	stored, err := WriteUpstreamSourceAuthConfig(persistPlaintext)
-	if err != nil {
-		return err
-	}
-	source.AuthConfig = persistPlaintext
-	if err := model.PersistUpstreamSourceAuthConfig(source.Id, stored); err != nil {
+	if err := persistUpstreamSourceAuthSession(source, persistPlaintext, common.GetTimestamp(), true); err != nil {
 		return err
 	}
 	// A validated import proves the block is resolved; clear the sentinel so

@@ -27,12 +27,36 @@ func setupUpstreamSourceTestDB(t *testing.T) {
 
 	require.NoError(t, DB.AutoMigrate(
 		&UpstreamSource{},
+		&UpstreamSourceSession{},
 		&UpstreamSourceChannelMapping{},
 		&UpstreamSourceScan{},
 		&UpstreamSourceGroupChange{},
 		&Channel{},
 		&Ability{},
 	))
+}
+
+func TestBackfillUpstreamSourceMonitorDefaultsKeepsLegacyRowsDisabled(t *testing.T) {
+	setupUpstreamSourceTestDB(t)
+	source := UpstreamSource{
+		Name:    "legacy-source",
+		Type:    UpstreamSourceTypeSub2API,
+		Status:  UpstreamSourceStatusEnabled,
+		BaseURL: "https://legacy.example.com",
+	}
+	require.NoError(t, DB.Create(&source).Error)
+	require.NoError(t, DB.Exec(`UPDATE upstream_sources SET monitor_enabled = NULL, monitor_interval_minutes = NULL, next_monitor_at = NULL, current_monitor_token = NULL, monitor_started_at = NULL, last_monitor_time = NULL WHERE id = ?`, source.Id).Error)
+
+	require.NoError(t, backfillUpstreamSourceMonitorDefaults())
+
+	var reloaded UpstreamSource
+	require.NoError(t, DB.First(&reloaded, source.Id).Error)
+	assert.False(t, reloaded.MonitorEnabled)
+	assert.Zero(t, reloaded.MonitorIntervalMinutes)
+	assert.Zero(t, reloaded.NextMonitorAt)
+	assert.Empty(t, reloaded.CurrentMonitorToken)
+	assert.Zero(t, reloaded.MonitorStartedAt)
+	assert.Zero(t, reloaded.LastMonitorTime)
 }
 
 func TestUpstreamSourceRedactedResponseOmitsAuthConfig(t *testing.T) {

@@ -55,12 +55,54 @@ func TestApplyImportedSessionNewAPIAccessToken(t *testing.T) {
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
-	persisted, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
 	require.NoError(t, err)
-	var persistedCfg newAPIAuthConfig
-	require.NoError(t, common.UnmarshalJsonStr(persisted, &persistedCfg))
+	persistedCfg, err := parseNewAPIAuthConfig(&reloaded)
+	require.NoError(t, err)
 	assert.Equal(t, "access-imported", persistedCfg.AccessToken, "the imported session must be persisted so discover/sync reuse it instead of logging in again")
 	assert.Equal(t, 9, persistedCfg.UserID)
+}
+
+func TestApplyImportedSessionReplacesExistingDedicatedSession(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "replacement-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "17", r.Header.Get("New-Api-User"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeNewAPI,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"a@b.com","password":"p"}`,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"old-token","user_id":9,"session_source":"manual"}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "replacement-token",
+		UserID:      17,
+	})
+	require.NoError(t, err)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
+	require.NoError(t, err)
+	auth, err := parseNewAPIAuthConfig(&reloaded)
+	require.NoError(t, err)
+	assert.Equal(t, "replacement-token", auth.AccessToken)
+	assert.Equal(t, 17, auth.UserID)
 }
 
 func TestApplyImportedSessionNewAPICookieExchange(t *testing.T) {
@@ -198,11 +240,73 @@ func TestApplyImportedSessionSub2APIAccessToken(t *testing.T) {
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
-	persisted, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
 	require.NoError(t, err)
-	var persistedCfg sub2APIAuthConfig
-	require.NoError(t, common.UnmarshalJsonStr(persisted, &persistedCfg))
+	persistedCfg, err := parseSub2APIAuthConfig(&reloaded)
+	require.NoError(t, err)
 	assert.Equal(t, "jwt-imported", persistedCfg.AccessToken)
+}
+
+func TestApplyImportedSessionPersistsHealthyAuthStateSeparately(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	expiresAt := time.Now().Add(2 * time.Hour).Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			assert.Equal(t, "Bearer imported-session", r.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":[]}`))
+		case "/api/v1/groups/rates":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"code":0,"message":"","data":{}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	source := &model.UpstreamSource{
+		Type:             model.UpstreamSourceTypeSub2API,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api/v1",
+		AuthConfig:       `{"email":"a@b.com","password":"long-lived-secret"}`,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	startedAt := time.Now().Unix()
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "imported-session",
+		ExpiresAt:   expiresAt,
+	})
+	require.NoError(t, err)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	sourceAuth, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	assert.Contains(t, sourceAuth, "a@b.com")
+	assert.Contains(t, sourceAuth, "long-lived-secret")
+	assert.NotContains(t, sourceAuth, "imported-session")
+	assert.NotContains(t, sourceAuth, "access_token")
+	assert.NotContains(t, sourceAuth, "refresh_token")
+
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, model.UpstreamSourceAuthStatusHealthy, session.AuthStatus)
+	assert.GreaterOrEqual(t, session.LastValidatedAt, startedAt)
+	assert.GreaterOrEqual(t, session.LastRefreshedAt, startedAt)
+	assert.Equal(t, expiresAt, session.ExpiresAt)
+	assert.Empty(t, session.LastAuthError)
+	sessionAuth, err := ReadUpstreamSourceAuthConfig(session.SessionConfig)
+	require.NoError(t, err)
+	assert.Contains(t, sessionAuth, "imported-session")
+	assert.NotContains(t, sessionAuth, "long-lived-secret")
+	assert.NotContains(t, sessionAuth, "email")
+	assert.NotContains(t, sessionAuth, "password")
 }
 
 // TestSub2APIImportDerivesExpiryFromJWT verifies that a pasted access token
@@ -310,10 +414,10 @@ func TestApplyImportedSessionSub2APIRefreshesStaleAccessToken(t *testing.T) {
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
-	persisted, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
 	require.NoError(t, err)
-	var persistedCfg sub2APIAuthConfig
-	require.NoError(t, common.UnmarshalJsonStr(persisted, &persistedCfg))
+	persistedCfg, err := parseSub2APIAuthConfig(&reloaded)
+	require.NoError(t, err)
 	assert.Equal(t, "refreshed-token", persistedCfg.AccessToken)
 	assert.NotEqual(t, "stale-pasted-token", persistedCfg.AccessToken)
 	assert.Equal(t, "a@b.com", persistedCfg.Email)
@@ -361,6 +465,11 @@ func TestApplyImportedSessionFailsValidationDoesNotPersist(t *testing.T) {
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
 	assert.Equal(t, originalAuth, reloaded.AuthConfig, "a session that fails the live probe must not be persisted")
+	session, sessionErr := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, sessionErr)
+	require.NotNil(t, session)
+	assert.Equal(t, model.UpstreamSourceAuthStatusExpired, session.AuthStatus)
+	assert.NotContains(t, session.LastAuthError, "bad-token")
 }
 
 // TestApplyImportedSessionClearsTurnstileBlockedStatus is a regression guard

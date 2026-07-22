@@ -172,10 +172,15 @@ func UpdateUpstreamSourceCredentials(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
-		"auth_config":  authConfig,
-		"updated_time": common.GetTimestamp(),
-	}).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
+			"auth_config":  authConfig,
+			"updated_time": common.GetTimestamp(),
+		}).Error; err != nil {
+			return err
+		}
+		return model.ClearUpstreamSourceSessionTx(tx, source.Id)
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -207,6 +212,44 @@ func ImportUpstreamSourceSession(c *gin.Context) {
 	}
 	recordManageAudit(c, "upstream_source.session_import", map[string]interface{}{"id": source.Id, "name": source.Name})
 	common.ApiSuccess(c, upstreamSourceResponse(*source))
+}
+
+func ClearUpstreamSourceSession(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	if err := service.ClearUpstreamSourceSession(source.Id); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.DB.First(source, source.Id).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "upstream_source.session_clear", map[string]interface{}{"id": source.Id, "name": source.Name})
+	common.ApiSuccess(c, upstreamSourceResponse(*source))
+}
+
+func UpdateUpstreamSourceMonitor(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	var req dto.UpstreamSourceMonitorUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	updated, err := service.UpdateUpstreamSourceMonitorSettings(source.Id, req.Enabled, req.IntervalMinutes, common.GetTimestamp())
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "upstream_source.monitor_update", map[string]interface{}{
+		"id": source.Id, "name": source.Name, "enabled": req.Enabled, "interval_minutes": req.IntervalMinutes,
+	})
+	common.ApiSuccess(c, upstreamSourceResponse(*updated))
 }
 
 func DeleteUpstreamSource(c *gin.Context) {
@@ -265,6 +308,19 @@ func ListUpstreamSourceScans(c *gin.Context) {
 		return
 	}
 	scans, err := model.ListRecentUpstreamSourceScans(source.Id, upstreamSourceHistoryLimit(c))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, scans)
+}
+
+func ListUpstreamSourceMonitorRuns(c *gin.Context) {
+	source, ok := loadUpstreamSourceForController(c)
+	if !ok {
+		return
+	}
+	scans, err := model.ListRecentUpstreamSourceScansByType(source.Id, model.UpstreamSourceScanTypeMonitor, upstreamSourceHistoryLimit(c))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -542,6 +598,11 @@ func marshalUpstreamSourceSyncConfig(config upstreamSourceControllerSyncConfig) 
 
 func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceResponse {
 	auth := parseUpstreamSourceAuthConfig(source.AuthConfig)
+	authHealth, authHealthErr := service.GetUpstreamSourceAuthHealth(&source, common.GetTimestamp())
+	if authHealthErr != nil {
+		common.SysError("failed to load upstream source auth health: " + service.SanitizeUpstreamSourceError(authHealthErr))
+		authHealth.AuthStatus = model.UpstreamSourceAuthStatusUnknown
+	}
 	// Migrate on read too, so the admin UI sees folded rules for sources
 	// whose stored blob predates this create/update-time migration.
 	syncConfigRaw, err := service.MigrateAndNormalizeUpstreamSourceSyncConfigRaw(source.SyncConfig)
@@ -550,29 +611,47 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 	}
 	sync := parseUpstreamSourceSyncConfig(syncConfigRaw)
 	return dto.UpstreamSourceResponse{
-		Id:                  source.Id,
-		Name:                source.Name,
-		Type:                source.Type,
-		Status:              source.Status,
-		BaseURL:             source.BaseURL,
-		AdminAPIBasePath:    source.AdminAPIBasePath,
-		RelayBaseURL:        source.RelayBaseURL,
-		LocalGroup:          sync.LocalGroup,
-		AllowPrivateIP:      bool(sync.AllowPrivateIP),
-		LocalGroupRules:     sync.LocalGroupRules,
-		MaskedEmail:         common.MaskEmail(auth.Email),
-		HasCredentials:      upstreamSourceHasCredentials(auth),
-		SessionSource:       auth.SessionSource,
-		TurnstileBlocked:    upstreamSourceTurnstileBlocked(source),
-		LastDiscoveryTime:   source.LastDiscoveryTime,
-		LastDiscoveryStatus: source.LastDiscoveryStatus,
-		LastDiscoveryError:  sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
-		LastSyncTime:        source.LastSyncTime,
-		LastSyncStatus:      source.LastSyncStatus,
-		LastSyncError:       sanitizeUpstreamSourceResponseError(source.LastSyncError),
-		CreatedTime:         source.CreatedTime,
-		UpdatedTime:         source.UpdatedTime,
+		Id:                     source.Id,
+		Name:                   source.Name,
+		Type:                   source.Type,
+		Status:                 source.Status,
+		BaseURL:                source.BaseURL,
+		AdminAPIBasePath:       source.AdminAPIBasePath,
+		RelayBaseURL:           source.RelayBaseURL,
+		LocalGroup:             sync.LocalGroup,
+		AllowPrivateIP:         bool(sync.AllowPrivateIP),
+		LocalGroupRules:        sync.LocalGroupRules,
+		MaskedEmail:            common.MaskEmail(auth.Email),
+		HasCredentials:         upstreamSourceHasCredentials(auth) || strings.TrimSpace(authHealth.SessionConfig) != "",
+		SessionSource:          firstNonEmptyUpstreamSourceResponseValue(authHealth.SessionSource, auth.SessionSource),
+		TurnstileBlocked:       upstreamSourceTurnstileBlocked(source),
+		AuthStatus:             authHealth.AuthStatus,
+		AuthLastValidatedAt:    authHealth.LastValidatedAt,
+		AuthLastRefreshedAt:    authHealth.LastRefreshedAt,
+		AuthExpiresAt:          authHealth.ExpiresAt,
+		LastAuthError:          sanitizeUpstreamSourceResponseError(authHealth.LastAuthError),
+		MonitorEnabled:         source.MonitorEnabled,
+		MonitorIntervalMinutes: source.MonitorIntervalMinutes,
+		NextMonitorAt:          source.NextMonitorAt,
+		LastMonitorTime:        source.LastMonitorTime,
+		LastDiscoveryTime:      source.LastDiscoveryTime,
+		LastDiscoveryStatus:    source.LastDiscoveryStatus,
+		LastDiscoveryError:     sanitizeUpstreamSourceResponseError(source.LastDiscoveryError),
+		LastSyncTime:           source.LastSyncTime,
+		LastSyncStatus:         source.LastSyncStatus,
+		LastSyncError:          sanitizeUpstreamSourceResponseError(source.LastSyncError),
+		CreatedTime:            source.CreatedTime,
+		UpdatedTime:            source.UpdatedTime,
 	}
+}
+
+func firstNonEmptyUpstreamSourceResponseValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func upstreamSourceTurnstileBlocked(source model.UpstreamSource) bool {

@@ -141,6 +141,7 @@ func setupUpstreamSourceServiceTestDB(t *testing.T) {
 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.UpstreamSource{},
+		&model.UpstreamSourceSession{},
 		&model.UpstreamSourceChannelMapping{},
 		&model.UpstreamSourceScan{},
 		&model.UpstreamSourceGroupChange{},
@@ -453,9 +454,20 @@ func TestDiscoverUpstreamSourcePersistsRefreshedAuthConfig(t *testing.T) {
 	require.NoError(t, err)
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
-	got, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	storedCredentials, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
 	require.NoError(t, err)
-	assert.Equal(t, refreshedAuth, got, "a session acquired during discover must be persisted so the next run reuses it instead of logging in again")
+	assert.NotContains(t, storedCredentials, "discover-token")
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
+	require.NoError(t, err)
+	got, err := parseSub2APIAuthConfig(&reloaded)
+	require.NoError(t, err)
+	assert.Equal(t, "discover-token", got.AccessToken, "a session acquired during discover must be persisted so the next run reuses it instead of logging in again")
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, model.UpstreamSourceAuthStatusHealthy, session.AuthStatus)
+	assert.Equal(t, int64(12345), session.LastValidatedAt)
+	assert.Equal(t, int64(12345), session.LastRefreshedAt)
 }
 
 func TestDiscoverUpstreamSourceSetsSyncEnabledFromRuleEligibility(t *testing.T) {
@@ -1313,9 +1325,14 @@ func TestSyncUpstreamSourcePersistsRefreshedAuthConfig(t *testing.T) {
 	require.Equal(t, model.UpstreamSyncStatusSucceeded, result.Status)
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
-	got, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	storedCredentials, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
 	require.NoError(t, err)
-	assert.Equal(t, refreshedAuth, got, "a session acquired mid-sync must be persisted so the next run reuses it instead of logging in again")
+	assert.NotContains(t, storedCredentials, "sync-token")
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
+	require.NoError(t, err)
+	got, err := parseSub2APIAuthConfig(&reloaded)
+	require.NoError(t, err)
+	assert.Equal(t, "sync-token", got.AccessToken, "a session acquired mid-sync must be persisted so the next run reuses it instead of logging in again")
 }
 
 func TestSyncUpstreamSourceUsesShortRateNameAndRemark(t *testing.T) {

@@ -267,6 +267,7 @@ func runApplication() (runErr error) {
 
 	// Upstream source auto-sync task
 	service.StartUpstreamSourceAutoSyncWorker()
+	service.StartUpstreamSourceMonitorWorker()
 	service.StartChannelAutoPriorityWorker()
 
 	accountPoolWorkerCtx, stopAccountPoolWorkers := context.WithCancel(context.Background())

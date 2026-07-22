@@ -279,6 +279,7 @@ func migrateDB() error {
 		&Channel{},
 		&ChannelMonitorLog{},
 		&UpstreamSource{},
+		&UpstreamSourceSession{},
 		&UpstreamSourceChannelMapping{},
 		&UpstreamSourceScan{},
 		&UpstreamSourceGroupChange{},
@@ -320,6 +321,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := backfillUpstreamSourceMonitorDefaults(); err != nil {
+		return err
+	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -349,6 +353,7 @@ func migrateDBFast() error {
 		{&Channel{}, "Channel"},
 		{&ChannelMonitorLog{}, "ChannelMonitorLog"},
 		{&UpstreamSource{}, "UpstreamSource"},
+		{&UpstreamSourceSession{}, "UpstreamSourceSession"},
 		{&UpstreamSourceChannelMapping{}, "UpstreamSourceChannelMapping"},
 		{&UpstreamSourceScan{}, "UpstreamSourceScan"},
 		{&UpstreamSourceGroupChange{}, "UpstreamSourceGroupChange"},
@@ -407,6 +412,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := backfillUpstreamSourceMonitorDefaults(); err != nil {
+		return err
 	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
