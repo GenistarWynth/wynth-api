@@ -440,6 +440,48 @@ func upstreamSourceGeneratedBaseURL(source *model.UpstreamSource) string {
 	return strings.TrimRight(strings.TrimSpace(source.BaseURL), "/")
 }
 
+// RefreshUpstreamSourceGeneratedChannelConnectionsTx updates the source-owned
+// connection snapshot copied into generated channels. Channel type, key,
+// routing group, models, priority, weight, status, and rule settings remain
+// channel/mapping-owned and are refreshed by the normal source sync path.
+func RefreshUpstreamSourceGeneratedChannelConnectionsTx(tx *gorm.DB, source *model.UpstreamSource) (bool, error) {
+	if tx == nil {
+		return false, errors.New("database transaction is required")
+	}
+	if source == nil || source.Id == 0 {
+		return false, errors.New("upstream source is required")
+	}
+
+	var mappings []model.UpstreamSourceChannelMapping
+	if err := tx.Where("source_id = ? AND local_channel_id <> 0", source.Id).Find(&mappings).Error; err != nil {
+		return false, err
+	}
+	changed := false
+	baseURL := upstreamSourceGeneratedBaseURL(source)
+	for i := range mappings {
+		var channel model.Channel
+		if err := tx.First(&channel, mappings[i].LocalChannelID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return false, err
+		}
+		if !isGeneratedChannelOwnedByMapping(&channel, source, &mappings[i]) {
+			continue
+		}
+		if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{
+			"base_url":     baseURL,
+			"name":         upstreamSourceGeneratedChannelName(source, &mappings[i]),
+			"tag":          strings.TrimSpace(source.Name),
+			"updated_time": common.GetTimestamp(),
+		}).Error; err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
 func shouldPersistSkippedUpstreamSourceMapping(mode upstreamSourceSyncMode, resolution upstreamSourceRuleResolution) bool {
 	return mode != upstreamSourceSyncModeAuto || resolution.Reason != upstreamSourceMatchReasonAutoSyncNotDue
 }

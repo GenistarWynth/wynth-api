@@ -592,6 +592,112 @@ func TestUpstreamSourceAPIUpdateRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+func TestUpstreamSourceAPIUpdateRefreshesGeneratedChannelConnection(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	originalSyncConfig := `{"sync_config_version":1,"local_group":"paid","local_group_rules":[{"name":"keep-rule","local_group":"paid","platforms":["openai"],"model_strategy":"fixed","fixed_models":["gpt-4o"]}]}`
+	require.NoError(t, model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Update("sync_config", originalSyncConfig).Error)
+
+	rate := 1.0
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID: source.Id, SyncEnabled: true, UpstreamGroupID: "group-1",
+		UpstreamGroupName: "primary", DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier: &rate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+	oldBaseURL := "https://relay.example.com"
+	channel := model.Channel{
+		Name: "source-a / 1.000x", Type: constant.ChannelTypeOpenAI, Key: "sk-existing",
+		BaseURL: &oldBaseURL, Models: "gpt-4o", Group: "paid", Status: common.ChannelStatusEnabled,
+		Priority: common.GetPointer(int64(10)), Weight: common.GetPointer(uint(1)), Tag: common.GetPointer("source-a"),
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID: source.Id, GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{
+		Group: "paid", Model: "gpt-4o", ChannelId: channel.Id, Enabled: true,
+		Priority: common.GetPointer(int64(10)), Weight: 1,
+	}).Error)
+	model.InitChannelCache()
+
+	request := map[string]any{
+		"name": "source-renamed", "type": model.UpstreamSourceTypeNewAPI,
+		"status":   model.UpstreamSourceStatusEnabled,
+		"base_url": "https://new-admin.example.com", "admin_api_base_path": "/api",
+		"relay_base_url": "https://new-relay.example.com", "local_group": "paid",
+		"local_group_rules": []map[string]any{{
+			"name": "keep-rule", "local_group": "paid", "platforms": []string{"openai"},
+			"model_strategy": "fixed", "fixed_models": []string{"gpt-4o"},
+		}},
+	}
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(source.Id), request, true)
+
+	require.True(t, response.Success, response.Message)
+	assert.Equal(t, model.UpstreamSourceTypeNewAPI, response.Data.Type)
+	assert.Equal(t, "https://new-admin.example.com", response.Data.BaseURL)
+	assert.Equal(t, "https://new-relay.example.com", response.Data.RelayBaseURL)
+	require.Len(t, response.Data.LocalGroupRules, 1)
+	assert.Equal(t, "keep-rule", response.Data.LocalGroupRules[0].Name)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, model.UpstreamSourceTypeNewAPI, reloaded.Type)
+	assert.Contains(t, reloaded.SyncConfig, "keep-rule")
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	require.NotNil(t, reloadedChannel.BaseURL)
+	assert.Equal(t, "https://new-relay.example.com", *reloadedChannel.BaseURL)
+	assert.Equal(t, "sk-existing", reloadedChannel.Key)
+	assert.Equal(t, constant.ChannelTypeOpenAI, reloadedChannel.Type)
+	assert.Equal(t, "paid", reloadedChannel.Group)
+	assert.Equal(t, int64(10), reloadedChannel.GetPriority())
+	cachedChannel, err := model.CacheGetChannel(channel.Id)
+	require.NoError(t, err)
+	require.NotNil(t, cachedChannel.BaseURL)
+	assert.Equal(t, "https://new-relay.example.com", *cachedChannel.BaseURL)
+
+	adapter, err := service.DefaultUpstreamSourceAdapterFactory(reloaded.Type)
+	require.NoError(t, err)
+	assert.IsType(t, service.NewAPIAdapter{}, adapter)
+}
+
+func TestUpstreamSourceAPIUpdateRollsBackWhenGeneratedChannelRefreshFails(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	rate := 1.0
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID: source.Id, UpstreamGroupID: "group-1", DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+		EffectiveRateMultiplier: &rate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+	oldBaseURL := "https://relay.example.com"
+	channel := model.Channel{Name: "source-a / 1.000x", Type: constant.ChannelTypeOpenAI, Key: "sk-existing", BaseURL: &oldBaseURL}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{GeneratedByUpstreamSourceID: source.Id, GeneratedByUpstreamMappingID: mapping.Id})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
+	require.NoError(t, model.DB.Exec(`CREATE TRIGGER fail_generated_channel_refresh BEFORE UPDATE OF base_url ON channels BEGIN SELECT RAISE(FAIL, 'refresh failed'); END`).Error)
+
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(source.Id), map[string]any{
+		"name": source.Name, "type": model.UpstreamSourceTypeNewAPI, "status": source.Status,
+		"base_url": "https://new-admin.example.com", "relay_base_url": "https://new-relay.example.com",
+	}, true)
+
+	require.False(t, response.Success)
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, model.UpstreamSourceTypeSub2API, reloaded.Type)
+	assert.Equal(t, "https://admin.example.com", reloaded.BaseURL)
+	assert.Equal(t, "https://relay.example.com", reloaded.RelayBaseURL)
+	var reloadedChannel model.Channel
+	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
+	require.NotNil(t, reloadedChannel.BaseURL)
+	assert.Equal(t, oldBaseURL, *reloadedChannel.BaseURL)
+}
+
 func TestUpstreamSourceAPIDiscoverRequiresAdmin(t *testing.T) {
 	setupUpstreamSourceAPITestDB(t)
 	router := upstreamSourceAPIRouter(false)

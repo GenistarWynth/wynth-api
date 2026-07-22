@@ -15,6 +15,7 @@ type UpstreamSourceCreateRequest struct {
 
 type UpstreamSourceUpdateRequest struct {
 	Name             string                         `json:"name"`
+	Type             string                         `json:"type"`
 	Status           string                         `json:"status"`
 	BaseURL          string                         `json:"base_url"`
 	AdminAPIBasePath string                         `json:"admin_api_base_path"`

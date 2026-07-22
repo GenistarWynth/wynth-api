@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -125,13 +126,23 @@ func UpdateUpstreamSource(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(updates).Error; err != nil {
+	generatedChannelsChanged := false
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.First(source, source.Id).Error; err != nil {
+			return err
+		}
+		var err error
+		generatedChannelsChanged, err = service.RefreshUpstreamSourceGeneratedChannelConnectionsTx(tx, source)
+		return err
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.First(source, source.Id).Error; err != nil {
-		common.ApiError(c, err)
-		return
+	if generatedChannelsChanged {
+		model.InitChannelCache()
 	}
 	// Rules are authoritative for sync eligibility: re-derive each mapping's
 	// sync_enabled from the just-saved rules so adding/editing a rule takes effect
@@ -435,6 +446,14 @@ func upstreamSourceUpdateMap(req dto.UpstreamSourceUpdateRequest) (map[string]in
 			return nil, errors.New("invalid upstream source status")
 		}
 		updates["status"] = trimmed
+	}
+	if trimmed := strings.TrimSpace(req.Type); trimmed != "" {
+		switch trimmed {
+		case model.UpstreamSourceTypeSub2API, model.UpstreamSourceTypeNewAPI:
+			updates["type"] = trimmed
+		default:
+			return nil, fmt.Errorf("unsupported upstream source type %q", trimmed)
+		}
 	}
 	if trimmed := normalizeUpstreamSourceURL(req.BaseURL); trimmed != "" {
 		updates["base_url"] = trimmed
