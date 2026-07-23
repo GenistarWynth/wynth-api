@@ -60,7 +60,7 @@ func TestAutoPrioritySeparatesNominalPriceAndCache(t *testing.T) {
 				ChannelType:             constant.ChannelTypeOpenAI,
 				EffectiveRateMultiplier: 8,
 				CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
-				UsageLogCount:           20,
+				UsageLogCount:           0,
 				Availability:            floatPtr(1),
 				MonitorCheckCount:       3,
 				FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
@@ -75,6 +75,8 @@ func TestAutoPrioritySeparatesNominalPriceAndCache(t *testing.T) {
 		expensive := resultByChannelID(results, 12)
 		require.NotNil(t, cheap)
 		require.NotNil(t, expensive)
+		assert.Equal(t, 95.0, expensive.CacheScore)
+		assert.Equal(t, "default_95", expensive.CacheFactorSource)
 		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, autoPriorityDominanceScoreMargin)
 		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, autoPriorityDominancePriorityMargin)
 	})
@@ -96,7 +98,7 @@ func TestAutoPrioritySeparatesNominalPriceAndCache(t *testing.T) {
 				ChannelType:             constant.ChannelTypeOpenAI,
 				EffectiveRateMultiplier: 0.04,
 				CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
-				UsageLogCount:           20,
+				UsageLogCount:           0,
 				CohortCostFloor:         0.02,
 			},
 		}, 1000)
@@ -107,6 +109,7 @@ func TestAutoPrioritySeparatesNominalPriceAndCache(t *testing.T) {
 		require.NotNil(t, cacheBenefit)
 		assert.InDelta(t, 50, noBenefit.EffectivePriceScore, 1e-9)
 		assert.InDelta(t, 50, cacheBenefit.EffectivePriceScore, 1e-9)
+		assert.Equal(t, 95.0, cacheBenefit.CacheScore)
 	})
 
 	t.Run("close nominal price gap can be overturned by cache and quality", func(t *testing.T) {
@@ -150,14 +153,14 @@ func TestAutoPrioritySeparatesNominalPriceAndCache(t *testing.T) {
 		assert.Greater(t, betterCacheAndQuality.FinalScore, nominallyCheaper.FinalScore)
 	})
 
-	t.Run("cold start prior affects cache component only", func(t *testing.T) {
+	t.Run("default 95 affects the cache component only", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
 				ChannelID:               41,
 				LocalGroup:              "shared",
 				ChannelType:             constant.ChannelTypeOpenAI,
 				EffectiveRateMultiplier: 1,
-				CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+				CacheAdjustedCostFactor: 1,
 				UsageLogCount:           20,
 			},
 			{
@@ -172,10 +175,12 @@ func TestAutoPrioritySeparatesNominalPriceAndCache(t *testing.T) {
 		fresh := resultByChannelID(results, 42)
 		require.NotNil(t, mature)
 		require.NotNil(t, fresh)
-		assert.Equal(t, "cohort_prior", fresh.CacheFactorSource)
+		assert.Equal(t, "default_95", fresh.CacheFactorSource)
 		assert.Equal(t, mature.EffectivePriceScore, fresh.EffectivePriceScore)
-		assert.Greater(t, fresh.CacheScore, 0.0)
-		assert.Less(t, fresh.CacheScore, mature.CacheScore)
+		assert.Equal(t, mature.NominalPriceScore, fresh.NominalPriceScore)
+		assert.Equal(t, 0.0, mature.CacheScore)
+		assert.Equal(t, 95.0, fresh.CacheScore)
+		assert.Equal(t, autoPriorityCacheWeight*95, fresh.FinalScore-mature.FinalScore)
 	})
 }
 
@@ -202,4 +207,7 @@ func TestAutoPrioritySnapshotSeparatesNominalPriceAndCacheDiagnostics(t *testing
 	assert.Equal(t, results[0].CacheScore, diagnostics["cache_score"])
 	assert.Equal(t, results[0].CacheAdjustedCostFactor, diagnostics["cache_adjusted_cost_factor"])
 	assert.Equal(t, results[0].EffectiveCostMultiplier, diagnostics["effective_cost_multiplier"])
+	assert.Equal(t, "own", diagnostics["cache_factor_source"])
+	assert.InDelta(t, 0.3825, diagnostics["cache_factor_prior"], 1e-12)
+	assert.Equal(t, 1.0, diagnostics["cache_factor_own_confidence"])
 }

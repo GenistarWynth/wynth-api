@@ -17,24 +17,27 @@ Cache is an independent component of automatic priority scoring. It never change
 ## Rules
 
 1. Sample confidence:
-   - no usage logs: use the conservative mature same-cohort peer prior, or neutral `1.0` when no trustworthy peer exists;
-   - 1 to 19 usage logs: continuously blend the peer/neutral prior toward the channel's own measured factor;
-   - 20 or more usage logs: trust the measured cache factor.
+   - no usage logs: use an exact cache score of `95`, which contributes `95 * 10% = 9.5` points before the availability gate;
+   - derive the corresponding factor by inverting the existing cache-score mapping, not by using `0.95`: `1 - 0.95 * (1 - 0.35) = 0.3825`;
+   - trusted same-cohort peer medians do not change this zero-sample default;
+   - 1 to 19 usage logs: blend from `0.3825` toward the channel's own bounded factor with confidence `usage_log_count / 20`;
+   - 20 or more usage logs: use the channel's own bounded factor completely.
 
 2. Cache benefit floor:
    - cache-adjusted cost factor cannot go below `0.35`;
    - this prevents short bursts of extreme cache hits from making a channel appear nearly free.
 
-3. Historical smoothing and scoring:
-   - when a previous snapshot has a valid cache factor, smooth the cache factor independently of nominal rate:
+3. Historical diagnostics and scoring:
+   - the cache factor and cache score always follow the exact current-window confidence transition above; a previous snapshot never alters them;
+   - when a previous snapshot has a valid cache factor, smooth only the backward-compatible effective-cost diagnostic:
 
 ```text
-smoothed_cache_factor =
+smoothed_cache_factor_for_diagnostics =
   0.65 * current_cache_factor
   + 0.35 * previous_cache_factor
 
 effective_cost_diagnostic =
-  nominal_rate * smoothed_cache_factor
+  nominal_rate * smoothed_cache_factor_for_diagnostics
 ```
 
    - snapshots that predate cache-factor diagnostics retain the former effective-cost smoothing as a compatibility fallback;
@@ -49,4 +52,4 @@ effective_cost_diagnostic =
 
 ## Stored Snapshot
 
-Snapshot v3 stores the nominal rate and nominal price score separately from the guarded cache factor and cache score. The legacy `effective_rate_multiplier`, `effective_price_score`, and `effective_cost_multiplier` fields remain populated for compatibility; effective price aliases nominal price, while effective cost is diagnostic.
+Snapshot v3 stores the nominal rate and nominal price score separately from the guarded cache factor and cache score. It records `default_95`, `own_blend`, or `own` as the cache-factor source, `0.3825` as the prior factor, and the own-sample confidence (including zero). The legacy `effective_rate_multiplier`, `effective_price_score`, and `effective_cost_multiplier` fields remain populated for compatibility; effective price aliases nominal price, while effective cost is diagnostic.

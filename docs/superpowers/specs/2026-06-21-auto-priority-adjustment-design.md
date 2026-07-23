@@ -219,7 +219,7 @@ Within a cohort, a lower nominal source/channel rate gets a higher `nominal_pric
 
 When a cohort has only one managed channel with a valid nominal rate, assign `nominal_price_score = 100`.
 
-The guarded cache factor maps independently and monotonically to `cache_score`: `1.0` or worse maps to `0`, the existing `0.35` floor maps to `100`, and intermediate values are linearly interpolated. No-sample channels use the existing trusted-peer cold-start prior before this mapping.
+The guarded cache factor maps independently and monotonically to `cache_score`: `1.0` or worse maps to `0`, the existing `0.35` floor maps to `100`, and intermediate values are linearly interpolated. A no-sample channel scores exactly `95`, using the inverse-mapped factor `0.3825`, regardless of same-cohort peer data. Counts 1–19 blend that prior toward the channel's own bounded factor with confidence `usage_log_count / 20`; at 20 or more samples, the own factor is used completely.
 
 ### Availability
 

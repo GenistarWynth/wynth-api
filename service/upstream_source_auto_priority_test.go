@@ -570,23 +570,23 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.True(t, r.Applied)
 	assert.Empty(t, r.Reason)
 	assert.Equal(t, int64(100), r.OldPriority)
-	assert.Equal(t, int64(901), r.ComputedPriority)
-	assert.Equal(t, int64(901), r.NewPriority)
+	assert.Equal(t, int64(991), r.ComputedPriority)
+	assert.Equal(t, int64(991), r.NewPriority)
 	assert.Equal(t, 0.5, r.EffectiveRateMultiplier)
 	assert.Equal(t, 0.5, r.NominalRateMultiplier)
-	assert.InDelta(t, 0.9966666667, r.CacheAdjustedCostFactor, 0.0000001)
+	assert.InDelta(t, 0.4100416667, r.CacheAdjustedCostFactor, 0.0000001)
 	assert.InDelta(t, r.EffectiveRateMultiplier*r.CacheAdjustedCostFactor, r.EffectiveCostMultiplier, 0.0000001)
 	assert.Equal(t, 100.0, r.EffectivePriceScore)
 	assert.Equal(t, 100.0, r.NominalPriceScore)
-	assert.InDelta(t, 0.5128205, r.CacheScore, 0.0000001)
+	assert.InDelta(t, 90.7628205, r.CacheScore, 0.0000001)
 	assert.Equal(t, 100.0, r.AvailabilityScore)
 	assert.Equal(t, 100.0, r.FirstTokenScore)
 	assert.Equal(t, 100.0, r.ThroughputScore)
-	assert.InDelta(t, 90.0512821, r.FinalScore, 0.0000001)
+	assert.InDelta(t, 99.0762821, r.FinalScore, 0.0000001)
 
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
-	assert.Equal(t, int64(901), reloadedChannel.GetPriority())
+	assert.Equal(t, int64(991), reloadedChannel.GetPriority())
 	reloadedSettings := reloadedChannel.GetOtherSettings()
 	assert.True(t, reloadedSettings.ChannelAutoPriorityEnabled)
 	assert.Equal(t, upstreamSourceAutoPriorityDefaultIntervalMinutes, reloadedSettings.ChannelAutoPriorityIntervalMinutes)
@@ -598,7 +598,7 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastScore.ComputedAt)
 	assert.Equal(t, now-24*3600, reloadedSettings.ChannelAutoPriorityLastScore.WindowStart)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastScore.WindowEnd)
-	assert.Equal(t, int64(901), reloadedSettings.ChannelAutoPriorityLastScore.NewPriority)
+	assert.Equal(t, int64(991), reloadedSettings.ChannelAutoPriorityLastScore.NewPriority)
 	assert.True(t, reloadedSettings.ChannelAutoPriorityLastScore.Applied)
 	assert.Equal(t, int64(1), reloadedSettings.ChannelAutoPriorityLastScore.UsageLogCount)
 	assert.Equal(t, int64(1), reloadedSettings.ChannelAutoPriorityLastScore.MonitorCheckCount)
@@ -607,7 +607,7 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	var reloadedAbility model.Ability
 	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
 	require.NotNil(t, reloadedAbility.Priority)
-	assert.Equal(t, int64(901), *reloadedAbility.Priority)
+	assert.Equal(t, int64(991), *reloadedAbility.Priority)
 }
 
 func TestRunUpstreamSourceAutoPrioritySmoothsWithPreviousCostSnapshot(t *testing.T) {
@@ -651,17 +651,17 @@ func TestRunUpstreamSourceAutoPrioritySmoothsWithPreviousCostSnapshot(t *testing
 	require.Len(t, result.Results, 1)
 	r := result.Results[0]
 	assert.InDelta(t, 1.6566666667, r.EffectiveCostMultiplier, 0.0001)
-	assert.InDelta(t, 1.6566666667, r.CacheAdjustedCostFactor, 0.0001)
+	assert.InDelta(t, 0.9333333333, r.CacheAdjustedCostFactor, 0.0001)
 
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
 	reloadedSettings := reloadedChannel.GetOtherSettings()
 	require.NotNil(t, reloadedSettings.ChannelAutoPriorityLastScore)
 	assert.InDelta(t, 1.6566666667, reloadedSettings.ChannelAutoPriorityLastScore.EffectiveCostMultiplier, 0.0001)
-	assert.InDelta(t, 1.6566666667, reloadedSettings.ChannelAutoPriorityLastScore.CacheAdjustedCostFactor, 0.0001)
+	assert.InDelta(t, 0.9333333333, reloadedSettings.ChannelAutoPriorityLastScore.CacheAdjustedCostFactor, 0.0001)
 }
 
-func TestRunUpstreamSourceAutoPriorityRateChangeDoesNotCreateCacheBenefit(t *testing.T) {
+func TestRunUpstreamSourceAutoPriorityRateChangeKeepsFixedCacheDefaultIndependent(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(1_750_000)
 	source := createSyncTestSource(t, map[string]any{
@@ -699,9 +699,9 @@ func TestRunUpstreamSourceAutoPriorityRateChangeDoesNotCreateCacheBenefit(t *tes
 	require.Len(t, result.Results, 1)
 	score := result.Results[0]
 	assert.Equal(t, 2.0, score.NominalRateMultiplier)
-	assert.Equal(t, 1.0, score.CacheAdjustedCostFactor)
-	assert.Equal(t, 0.0, score.CacheScore)
-	assert.Equal(t, 2.0, score.EffectiveCostMultiplier)
+	assert.InDelta(t, 0.3825, score.CacheAdjustedCostFactor, 1e-12)
+	assert.Equal(t, 95.0, score.CacheScore)
+	assert.InDelta(t, 1.19725, score.EffectiveCostMultiplier, 1e-12)
 	assert.Equal(t, 100.0, score.NominalPriceScore)
 }
 
@@ -715,7 +715,7 @@ func TestRunUpstreamSourceAutoPriorityHysteresisUpdatesSnapshotOnly(t *testing.T
 	})
 	rate := 0.5
 	mapping := createSyncTestMapping(t, source.Id, "20", "openai", &rate)
-	channel := createAutoPriorityTestChannel(t, "source-a / openai-2", 895, dto.ChannelOtherSettings{
+	channel := createAutoPriorityTestChannel(t, "source-a / openai-2", 985, dto.ChannelOtherSettings{
 		GeneratedByUpstreamSourceID:        source.Id,
 		GeneratedByUpstreamMappingID:       mapping.Id,
 		ChannelAutoPriorityEnabled:         true,
@@ -727,7 +727,7 @@ func TestRunUpstreamSourceAutoPriorityHysteresisUpdatesSnapshotOnly(t *testing.T
 			ComputedAt:  now - 1000,
 			WindowStart: now - 24*3600 - 1000,
 			WindowEnd:   now - 1000,
-			NewPriority: 895,
+			NewPriority: 985,
 			Applied:     true,
 		},
 	})
@@ -748,25 +748,25 @@ func TestRunUpstreamSourceAutoPriorityHysteresisUpdatesSnapshotOnly(t *testing.T
 	r := result.Results[0]
 	assert.False(t, r.Applied)
 	assert.Equal(t, "hysteresis_delta_below_threshold", r.Reason)
-	assert.Equal(t, int64(895), r.OldPriority)
-	assert.Equal(t, int64(901), r.ComputedPriority)
-	assert.Equal(t, int64(895), r.NewPriority)
+	assert.Equal(t, int64(985), r.OldPriority)
+	assert.Equal(t, int64(991), r.ComputedPriority)
+	assert.Equal(t, int64(985), r.NewPriority)
 
 	var reloadedChannel model.Channel
 	require.NoError(t, model.DB.First(&reloadedChannel, channel.Id).Error)
-	assert.Equal(t, int64(895), reloadedChannel.GetPriority())
+	assert.Equal(t, int64(985), reloadedChannel.GetPriority())
 	reloadedSettings := reloadedChannel.GetOtherSettings()
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastRunAt)
 	assert.Equal(t, now-1000, reloadedSettings.ChannelAutoPriorityLastAppliedAt)
 	require.NotNil(t, reloadedSettings.ChannelAutoPriorityLastScore)
-	assert.Equal(t, int64(895), reloadedSettings.ChannelAutoPriorityLastScore.NewPriority)
+	assert.Equal(t, int64(985), reloadedSettings.ChannelAutoPriorityLastScore.NewPriority)
 	assert.False(t, reloadedSettings.ChannelAutoPriorityLastScore.Applied)
 	assert.Equal(t, "hysteresis_delta_below_threshold", reloadedSettings.ChannelAutoPriorityLastScore.Reason)
 
 	var reloadedAbility model.Ability
 	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
 	require.NotNil(t, reloadedAbility.Priority)
-	assert.Equal(t, int64(895), *reloadedAbility.Priority)
+	assert.Equal(t, int64(985), *reloadedAbility.Priority)
 }
 
 func TestRunUpstreamSourceAutoPrioritySkipsMetadataMismatch(t *testing.T) {

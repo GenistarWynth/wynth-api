@@ -64,9 +64,12 @@ type AutoPriorityScoreResult struct {
 const (
 	autoPriorityFullCacheSampleCount int64   = 20
 	autoPriorityMinCacheCostFactor   float64 = 0.35
-	// A mature same-cohort median is useful cold-start evidence, but a new channel
-	// receives only half of that estimated saving until it builds its own history.
-	autoPriorityCohortPriorWeight       float64 = 0.5
+	// The zero-sample cache component starts at exactly 95/100. Derive the
+	// corresponding factor from the inverse of autoPriorityCacheScore so this is
+	// never confused with a 0.95 cost factor.
+	autoPriorityDefaultCacheScore  float64 = 95
+	autoPriorityDefaultCacheFactor float64 = 1 -
+		(autoPriorityDefaultCacheScore/100)*(1-autoPriorityMinCacheCostFactor)
 	autoPriorityCurrentSmoothingWeight  float64 = 0.65
 	autoPriorityPreviousSmoothingWeight float64 = 0.35
 	autoPriorityPriceWeight             float64 = 0.75
@@ -113,41 +116,12 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 	priceCohorts := make(map[string][]int)
 	cohortCostFloors := make(map[string]float64)
 	availabilityGates := make([]float64, len(inputs))
-	cacheSamplesByCohort := make(map[string][]float64)
-	for _, input := range inputs {
-		if input.UsageLogCount < autoPriorityFullCacheSampleCount {
-			continue
-		}
-		cohort := autoPriorityCohortKey(input.LocalGroup, input.ChannelType)
-		factor := normalizedAutoPriorityCacheFactor(input.CacheAdjustedCostFactor)
-		if factor < autoPriorityMinCacheCostFactor {
-			factor = autoPriorityMinCacheCostFactor
-		}
-		// The cohort prior estimates potential cache savings only. A peer with
-		// exceptional cache-write overhead must not make an unmeasured channel
-		// look worse than the safe neutral factor.
-		if factor > 1 {
-			factor = 1
-		}
-		cacheSamplesByCohort[cohort] = append(cacheSamplesByCohort[cohort], factor)
-	}
-	cachePriorByCohort := make(map[string]float64, len(cacheSamplesByCohort))
-	for cohort, samples := range cacheSamplesByCohort {
-		sort.Float64s(samples)
-		middle := len(samples) / 2
-		median := samples[middle]
-		if len(samples)%2 == 0 {
-			median = (samples[middle-1] + samples[middle]) / 2
-		}
-		cachePriorByCohort[cohort] = 1 + (median-1)*autoPriorityCohortPriorWeight
-	}
 
 	for i, input := range inputs {
 		cohort := autoPriorityCohortKey(input.LocalGroup, input.ChannelType)
 		cacheFactor, cachePrior, ownConfidence, cacheSource := autoPriorityGuardedCacheFactor(
 			input.CacheAdjustedCostFactor,
 			input.UsageLogCount,
-			cachePriorByCohort[cohort],
 		)
 		result := AutoPriorityScoreResult{
 			ChannelID:                input.ChannelID,
@@ -178,23 +152,22 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			continue
 		}
 
+		result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
+		// Previous snapshots smooth only the backward-compatible effective-cost
+		// diagnostic. They must not change the exact default/count-confidence
+		// transition used by the cache component.
 		if input.HasPreviousSnapshot && isValidAutoPriorityMultiplier(input.PreviousCacheAdjustedCostFactor) {
-			result.CacheAdjustedCostFactor = autoPriorityCurrentSmoothingWeight*cacheFactor +
+			smoothedCacheFactor := autoPriorityCurrentSmoothingWeight*cacheFactor +
 				autoPriorityPreviousSmoothingWeight*input.PreviousCacheAdjustedCostFactor
-			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * result.CacheAdjustedCostFactor
-			result.CacheScore = autoPriorityCacheScore(result.CacheAdjustedCostFactor)
-		} else {
-			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
+			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * smoothedCacheFactor
 		}
-		// Snapshots predating cache-factor diagnostics can only preserve the
-		// legacy effective-cost smoothing behavior.
+		// Snapshots predating cache-factor diagnostics preserve the legacy
+		// effective-cost smoothing behavior without changing current cache score.
 		if input.HasPreviousSnapshot &&
 			!isValidAutoPriorityMultiplier(input.PreviousCacheAdjustedCostFactor) &&
 			isValidAutoPriorityMultiplier(input.PreviousEffectiveCostMultiplier) {
 			result.EffectiveCostMultiplier = autoPriorityCurrentSmoothingWeight*result.EffectiveCostMultiplier +
 				autoPriorityPreviousSmoothingWeight*input.PreviousEffectiveCostMultiplier
-			result.CacheAdjustedCostFactor = result.EffectiveCostMultiplier / input.EffectiveRateMultiplier
-			result.CacheScore = autoPriorityCacheScore(result.CacheAdjustedCostFactor)
 		}
 		priceCohorts[cohort] = append(priceCohorts[cohort], i)
 
@@ -457,6 +430,9 @@ func normalizedAutoPriorityCacheFactor(v float64) float64 {
 // existing 0.35 benefit floor scores 100. Lower factors are always better.
 func autoPriorityCacheScore(cacheFactor float64) float64 {
 	cacheFactor = normalizedAutoPriorityCacheFactor(cacheFactor)
+	if cacheFactor == autoPriorityDefaultCacheFactor {
+		return autoPriorityDefaultCacheScore
+	}
 	if cacheFactor >= 1 {
 		return 0
 	}
@@ -466,24 +442,21 @@ func autoPriorityCacheScore(cacheFactor float64) float64 {
 	return 100 * (1 - cacheFactor) / (1 - autoPriorityMinCacheCostFactor)
 }
 
-func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64, cohortPrior float64) (float64, float64, float64, string) {
+func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64) (float64, float64, float64, string) {
 	cacheFactor := normalizedAutoPriorityCacheFactor(v)
 	if cacheFactor < autoPriorityMinCacheCostFactor {
 		cacheFactor = autoPriorityMinCacheCostFactor
 	}
-	source := "cohort_prior"
-	if !isValidAutoPriorityMultiplier(cohortPrior) {
-		cohortPrior = 1
-		source = "neutral"
-	}
 	if usageLogCount <= 0 {
-		return cohortPrior, cohortPrior, 0, source
+		return autoPriorityDefaultCacheFactor, autoPriorityDefaultCacheFactor, 0, "default_95"
 	}
 	if usageLogCount < autoPriorityFullCacheSampleCount {
 		confidence := float64(usageLogCount) / float64(autoPriorityFullCacheSampleCount)
-		return cohortPrior + (cacheFactor-cohortPrior)*confidence, cohortPrior, confidence, "own_blend"
+		blendedFactor := autoPriorityDefaultCacheFactor +
+			(cacheFactor-autoPriorityDefaultCacheFactor)*confidence
+		return blendedFactor, autoPriorityDefaultCacheFactor, confidence, "own_blend"
 	}
-	return cacheFactor, cohortPrior, 1, "own"
+	return cacheFactor, autoPriorityDefaultCacheFactor, 1, "own"
 }
 
 // autoPriorityAvailabilityGate returns the multiplicative factor availability

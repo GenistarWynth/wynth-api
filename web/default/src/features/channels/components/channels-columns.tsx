@@ -213,7 +213,7 @@ function AutoPriorityHint({ channel }: { channel: Channel }) {
 
   const tooltip = snapshot
     ? t(
-        'Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.',
+        'Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}; source: {{cacheSource}}; prior factor: {{cachePrior}}x; own confidence: {{cacheConfidence}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.',
         {
           time: formatRelativeTime(
             settings.channel_auto_priority_last_run_at ?? 0
@@ -231,6 +231,16 @@ function AutoPriorityHint({ channel }: { channel: Channel }) {
             3
           ),
           cache: formatAutoPriorityScore(snapshot.cache_score),
+          cacheSource: snapshot.cache_factor_source ?? '-',
+          cachePrior: formatAutoPriorityNumber(
+            snapshot.cache_factor_prior,
+            4
+          ),
+          cacheConfidence: formatAutoPriorityScore(
+            typeof snapshot.cache_factor_own_confidence === 'number'
+              ? snapshot.cache_factor_own_confidence * 100
+              : undefined
+          ),
           cost: formatAutoPriorityNumber(
             snapshot.effective_cost_multiplier,
             3

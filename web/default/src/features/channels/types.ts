@@ -213,6 +213,9 @@ export interface ChannelAutoPriorityScore {
   monitor_check_count: number
   first_token_sample_count: number
   throughput_sample_count: number
+  cache_factor_source?: string
+  cache_factor_prior?: number
+  cache_factor_own_confidence?: number
 }
 
 export interface AdvancedCustomConfig {

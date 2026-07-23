@@ -26,7 +26,7 @@ nominal_price_score = 100 * cohort_nominal_rate_floor / nominal_rate
 
 The result is clamped to `0..100`. `effective_price_score` remains as a backward-compatible alias. A degenerate single-member cohort without external bounds retains the legacy score of `100`.
 
-The guarded cache factor maps monotonically to a separate score: factor `1.0` or worse scores `0`, the existing `0.35` floor scores `100`, and intermediate values are linearly interpolated. Cold starts continue to use the trusted-peer prior and own-sample confidence blend before this mapping.
+The guarded cache factor maps monotonically to a separate score: factor `1.0` or worse scores `0`, the existing `0.35` floor scores `100`, and intermediate values are linearly interpolated. A zero-sample cold start uses the fixed inverse-mapped factor `0.3825` for an exact score of `95`; same-cohort peer medians have no scoring effect. Counts 1–19 blend toward the channel's own factor using `usage_log_count / 20` confidence, and count 20 uses own data completely.
 
 This preserves the size of the nominal price gap instead of stretching every observed minimum and maximum to `100` and `0`. For example, 0.04 and 0.05 score 100 and 80, so cache, availability, first-token latency, and throughput can make the slightly more expensive but healthier channel win. The weighted score is:
 

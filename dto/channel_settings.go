@@ -163,7 +163,7 @@ type ChannelAutoPriorityScore struct {
 	ThroughputSampleCount    int64   `json:"throughput_sample_count"`
 	CacheFactorSource        string  `json:"cache_factor_source,omitempty"`
 	CacheFactorPrior         float64 `json:"cache_factor_prior,omitempty"`
-	CacheFactorOwnConfidence float64 `json:"cache_factor_own_confidence,omitempty"`
+	CacheFactorOwnConfidence float64 `json:"cache_factor_own_confidence"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
