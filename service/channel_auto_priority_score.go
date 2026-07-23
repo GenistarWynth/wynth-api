@@ -65,10 +65,10 @@ const (
 	autoPriorityCohortPriorWeight  float64 = 0.5
 	autoPriorityCurrentCostWeight  float64 = 0.65
 	autoPriorityPreviousCostWeight float64 = 0.35
-	autoPriorityPriceWeight        float64 = 0.75
-	autoPriorityAvailabilityWeight float64 = 0.12
-	autoPriorityFirstTokenWeight   float64 = 0.05
-	autoPriorityThroughputWeight   float64 = 0.08
+	autoPriorityPriceWeight        float64 = 0.85
+	autoPriorityAvailabilityWeight float64 = 0.08
+	autoPriorityFirstTokenWeight   float64 = 0.03
+	autoPriorityThroughputWeight   float64 = 0.04
 
 	autoPriorityExtremeCostRatio        float64 = 8
 	autoPriorityDominanceScoreMargin    float64 = 1
