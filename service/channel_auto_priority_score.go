@@ -14,6 +14,7 @@ type AutoPriorityScoreInput struct {
 	CurrentPriority                 int64
 	EffectiveRateMultiplier         float64
 	CacheAdjustedCostFactor         float64
+	PreviousCacheAdjustedCostFactor float64
 	PreviousEffectiveCostMultiplier float64
 	Availability                    *float64
 	FirstTokenLatencyMS             float64
@@ -24,10 +25,10 @@ type AutoPriorityScoreInput struct {
 	ThroughputSampleCount           int64
 	HasPreviousSnapshot             bool
 
-	// CohortCostFloor/CohortCostCeil, when > 0, are the local-group-wide effective
-	// cost multiplier bounds (across all upstream sources) for this input's cohort.
-	// They widen the price normalization range so cost differentiates channels even
-	// when this scoring run's cohort has a single member. 0 = unset (legacy behavior).
+	// CohortCostFloor/CohortCostCeil retain their legacy names, but when > 0 they
+	// are local-group-wide nominal rate multiplier bounds (across all upstream
+	// sources) for this input's cohort. Cache behavior must not move the price
+	// normalization range. 0 = unset (legacy behavior).
 	CohortCostFloor float64
 	CohortCostCeil  float64
 }
@@ -36,9 +37,12 @@ type AutoPriorityScoreResult struct {
 	ChannelID                int
 	Cohort                   string
 	EffectiveRateMultiplier  float64
+	NominalRateMultiplier    float64
 	CacheAdjustedCostFactor  float64
 	EffectiveCostMultiplier  float64
 	EffectivePriceScore      float64
+	NominalPriceScore        float64
+	CacheScore               float64
 	AvailabilityScore        float64
 	FirstTokenScore          float64
 	ThroughputScore          float64
@@ -62,13 +66,14 @@ const (
 	autoPriorityMinCacheCostFactor   float64 = 0.35
 	// A mature same-cohort median is useful cold-start evidence, but a new channel
 	// receives only half of that estimated saving until it builds its own history.
-	autoPriorityCohortPriorWeight  float64 = 0.5
-	autoPriorityCurrentCostWeight  float64 = 0.65
-	autoPriorityPreviousCostWeight float64 = 0.35
-	autoPriorityPriceWeight        float64 = 0.85
-	autoPriorityAvailabilityWeight float64 = 0.08
-	autoPriorityFirstTokenWeight   float64 = 0.03
-	autoPriorityThroughputWeight   float64 = 0.04
+	autoPriorityCohortPriorWeight       float64 = 0.5
+	autoPriorityCurrentSmoothingWeight  float64 = 0.65
+	autoPriorityPreviousSmoothingWeight float64 = 0.35
+	autoPriorityPriceWeight             float64 = 0.75
+	autoPriorityCacheWeight             float64 = 0.10
+	autoPriorityAvailabilityWeight      float64 = 0.08
+	autoPriorityFirstTokenWeight        float64 = 0.03
+	autoPriorityThroughputWeight        float64 = 0.04
 
 	autoPriorityExtremeCostRatio        float64 = 8
 	autoPriorityDominanceScoreMargin    float64 = 1
@@ -148,7 +153,9 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			ChannelID:                input.ChannelID,
 			Cohort:                   cohort,
 			EffectiveRateMultiplier:  input.EffectiveRateMultiplier,
+			NominalRateMultiplier:    input.EffectiveRateMultiplier,
 			CacheAdjustedCostFactor:  cacheFactor,
+			CacheScore:               autoPriorityCacheScore(cacheFactor),
 			OldPriority:              input.CurrentPriority,
 			AvailabilityScore:        autoPriorityAvailabilityScore(input.Availability),
 			FirstTokenScore:          autoPriorityNeutralPerfScore,
@@ -171,11 +178,23 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			continue
 		}
 
-		result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
-		if input.HasPreviousSnapshot && isValidAutoPriorityMultiplier(input.PreviousEffectiveCostMultiplier) {
-			result.EffectiveCostMultiplier = autoPriorityCurrentCostWeight*result.EffectiveCostMultiplier +
-				autoPriorityPreviousCostWeight*input.PreviousEffectiveCostMultiplier
+		if input.HasPreviousSnapshot && isValidAutoPriorityMultiplier(input.PreviousCacheAdjustedCostFactor) {
+			result.CacheAdjustedCostFactor = autoPriorityCurrentSmoothingWeight*cacheFactor +
+				autoPriorityPreviousSmoothingWeight*input.PreviousCacheAdjustedCostFactor
+			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * result.CacheAdjustedCostFactor
+			result.CacheScore = autoPriorityCacheScore(result.CacheAdjustedCostFactor)
+		} else {
+			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
+		}
+		// Snapshots predating cache-factor diagnostics can only preserve the
+		// legacy effective-cost smoothing behavior.
+		if input.HasPreviousSnapshot &&
+			!isValidAutoPriorityMultiplier(input.PreviousCacheAdjustedCostFactor) &&
+			isValidAutoPriorityMultiplier(input.PreviousEffectiveCostMultiplier) {
+			result.EffectiveCostMultiplier = autoPriorityCurrentSmoothingWeight*result.EffectiveCostMultiplier +
+				autoPriorityPreviousSmoothingWeight*input.PreviousEffectiveCostMultiplier
 			result.CacheAdjustedCostFactor = result.EffectiveCostMultiplier / input.EffectiveRateMultiplier
+			result.CacheScore = autoPriorityCacheScore(result.CacheAdjustedCostFactor)
 		}
 		priceCohorts[cohort] = append(priceCohorts[cohort], i)
 
@@ -196,25 +215,29 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			continue
 		}
 
-		minCost := results[indexes[0]].EffectiveCostMultiplier
+		minNominalRate := results[indexes[0]].NominalRateMultiplier
 		for _, idx := range indexes[1:] {
-			cost := results[idx].EffectiveCostMultiplier
-			if cost < minCost {
-				minCost = cost
+			nominalRate := results[idx].NominalRateMultiplier
+			if nominalRate < minNominalRate {
+				minNominalRate = nominalRate
 			}
 		}
 
-		// Widen the cohort floor with local-group-wide cost data. Scoring against
-		// the floor preserves relative gaps: close prices stay close enough for
-		// availability and performance to matter instead of always becoming 100/0.
+		// Widen the cohort floor with local-group-wide nominal rate data. Scoring
+		// against this cache-independent floor preserves relative price gaps:
+		// close prices stay close enough for cache and quality to matter.
 		for _, idx := range indexes {
-			if floor := inputs[idx].CohortCostFloor; isValidAutoPriorityMultiplier(floor) && floor < minCost {
-				minCost = floor
+			if floor := inputs[idx].CohortCostFloor; isValidAutoPriorityMultiplier(floor) && floor < minNominalRate {
+				minNominalRate = floor
 			}
 		}
-		cohortCostFloors[results[indexes[0]].Cohort] = minCost
+		cohortCostFloors[results[indexes[0]].Cohort] = minNominalRate
 		for _, idx := range indexes {
-			results[idx].EffectivePriceScore = relativeAutoPriorityPriceScore(results[idx].EffectiveCostMultiplier, minCost)
+			priceScore := relativeAutoPriorityPriceScore(results[idx].NominalRateMultiplier, minNominalRate)
+			// EffectivePriceScore is retained as a backward-compatible JSON/API
+			// field. It now aliases the nominal, cache-independent price score.
+			results[idx].EffectivePriceScore = priceScore
+			results[idx].NominalPriceScore = priceScore
 		}
 	}
 
@@ -230,7 +253,8 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		availabilityGates[i] = gate
 		results[i].FinalScore = weightedAutoPriorityFinalScore(
 			gate,
-			results[i].EffectivePriceScore,
+			results[i].NominalPriceScore,
+			results[i].CacheScore,
 			results[i].AvailabilityScore,
 			results[i].FirstTokenScore,
 			results[i].ThroughputScore,
@@ -290,8 +314,9 @@ func relativeAutoPriorityPriceScore(cost, cohortFloor float64) float64 {
 	return score
 }
 
-func weightedAutoPriorityFinalScore(gate, price, availability, firstToken, throughput float64) float64 {
+func weightedAutoPriorityFinalScore(gate, price, cache, availability, firstToken, throughput float64) float64 {
 	return gate * (autoPriorityPriceWeight*price +
+		autoPriorityCacheWeight*cache +
 		autoPriorityAvailabilityWeight*availability +
 		autoPriorityFirstTokenWeight*firstToken +
 		autoPriorityThroughputWeight*throughput)
@@ -311,15 +336,15 @@ func applyAutoPriorityExtremeCostDominance(
 		sort.Slice(ordered, func(i, j int) bool {
 			left := results[ordered[i]]
 			right := results[ordered[j]]
-			if left.EffectiveCostMultiplier == right.EffectiveCostMultiplier {
+			if left.NominalRateMultiplier == right.NominalRateMultiplier {
 				return left.ChannelID < right.ChannelID
 			}
-			return left.EffectiveCostMultiplier > right.EffectiveCostMultiplier
+			return left.NominalRateMultiplier > right.NominalRateMultiplier
 		})
 
 		for cheapPosition := 0; cheapPosition < len(ordered); cheapPosition++ {
 			cheapIndex := ordered[cheapPosition]
-			if availabilityGates[cheapIndex] != 1 || !isValidAutoPriorityMultiplier(results[cheapIndex].EffectiveCostMultiplier) {
+			if availabilityGates[cheapIndex] != 1 || !isValidAutoPriorityMultiplier(results[cheapIndex].NominalRateMultiplier) {
 				continue
 			}
 
@@ -329,7 +354,7 @@ func applyAutoPriorityExtremeCostDominance(
 			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
 				expensiveIndex := ordered[expensivePosition]
 				if availabilityGates[expensiveIndex] != 1 ||
-					!hasAutoPriorityExtremeCostAdvantage(results[cheapIndex].EffectiveCostMultiplier, results[expensiveIndex].EffectiveCostMultiplier) {
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
 					continue
 				}
 				hasDominance = true
@@ -338,10 +363,13 @@ func applyAutoPriorityExtremeCostDominance(
 			}
 
 			cohortCeil := inputs[cheapIndex].CohortCostCeil
-			if hasAutoPriorityExtremeCostAdvantage(results[cheapIndex].EffectiveCostMultiplier, cohortCeil) {
+			if hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, cohortCeil) {
 				hasDominance = true
 				syntheticPriceScore := relativeAutoPriorityPriceScore(cohortCeil, cohortCostFloors[cohort])
-				syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100)
+				// Compare against a synthetic expensive peer with the best
+				// possible cache and quality scores. Cache benefit therefore
+				// cannot bypass nominal 8x dominance.
+				syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
 				peerFinalScore = math.Max(peerFinalScore, syntheticFinalScore)
 				peerPriority = max(peerPriority, clampAutoPriorityPriority(int64(math.Round(syntheticFinalScore*10)), 0, maxPriority))
 			}
@@ -369,11 +397,11 @@ func applyAutoPriorityExtremeCostDominance(
 	return protected
 }
 
-func hasAutoPriorityExtremeCostAdvantage(cheapCost, expensiveCost float64) bool {
-	if !isValidAutoPriorityMultiplier(cheapCost) || !isValidAutoPriorityMultiplier(expensiveCost) {
+func hasAutoPriorityExtremeNominalRateAdvantage(cheapRate, expensiveRate float64) bool {
+	if !isValidAutoPriorityMultiplier(cheapRate) || !isValidAutoPriorityMultiplier(expensiveRate) {
 		return false
 	}
-	return expensiveCost/cheapCost >= autoPriorityExtremeCostRatio
+	return expensiveRate/cheapRate >= autoPriorityExtremeCostRatio
 }
 
 func addAutoPriorityDominanceMargin(priority, maxPriority int64) int64 {
@@ -396,7 +424,7 @@ func removeAutoPriorityHysteresisDominanceViolations(
 			}
 			for _, expensiveIndex := range indexes {
 				if availabilityGates[expensiveIndex] != 1 ||
-					!hasAutoPriorityExtremeCostAdvantage(results[cheapIndex].EffectiveCostMultiplier, results[expensiveIndex].EffectiveCostMultiplier) ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) ||
 					results[cheapIndex].NewPriority > results[expensiveIndex].NewPriority ||
 					results[expensiveIndex].Reason != "hysteresis_delta_below_threshold" {
 					continue
@@ -422,6 +450,20 @@ func normalizedAutoPriorityCacheFactor(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// autoPriorityCacheScore maps the guarded cache cost factor to [0, 100].
+// A factor at or above 1 has no measured cache benefit and scores 0; the
+// existing 0.35 benefit floor scores 100. Lower factors are always better.
+func autoPriorityCacheScore(cacheFactor float64) float64 {
+	cacheFactor = normalizedAutoPriorityCacheFactor(cacheFactor)
+	if cacheFactor >= 1 {
+		return 0
+	}
+	if cacheFactor <= autoPriorityMinCacheCostFactor {
+		return 100
+	}
+	return 100 * (1 - cacheFactor) / (1 - autoPriorityMinCacheCostFactor)
 }
 
 func autoPriorityGuardedCacheFactor(v float64, usageLogCount int64, cohortPrior float64) (float64, float64, float64, string) {

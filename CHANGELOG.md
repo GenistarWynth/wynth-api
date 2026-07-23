@@ -6,6 +6,9 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+### Fixed
+- Auto-priority now scores nominal source/channel price (75%) separately from guarded cache benefit (10%), keeps cache out of nominal cohort bounds and 8x dominance, and exposes additive v3 nominal/cache diagnostics while retaining legacy snapshot fields.
+
 ## [v1.0.0-rc.54] - 2026-07-23
 
 ### Added

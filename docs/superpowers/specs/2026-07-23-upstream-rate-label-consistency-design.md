@@ -16,8 +16,8 @@ each other.
 
 ## Constraints
 
-- Keep the 8x extreme-cost dominance threshold and every scoring weight
-  unchanged.
+- Keep the 8x extreme-price dominance threshold unchanged; this label-only
+  fix does not alter scoring weights.
 - Continue using the mapping's `effective_rate_multiplier` for generated
   channel scoring; never allow the manual channel rate setting to override it.
 - Do not change enabled, auto-disabled, or manually-disabled semantics.

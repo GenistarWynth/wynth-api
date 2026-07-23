@@ -2,38 +2,41 @@
 
 ## Goal
 
-Keep auto-priority multi-factor scoring meaningful for channels whose effective costs are close, while guaranteeing that a currently usable channel with an extreme cost advantage ranks above an at-least-8x-more-expensive peer in the same local-group and channel-type cohort.
+Keep auto-priority multi-factor scoring meaningful for channels whose nominal rates are close, while guaranteeing that a currently usable channel with an extreme nominal-price advantage ranks above an at-least-8x-more-expensive peer in the same local-group and channel-type cohort.
 
 ## Approved Approach: Plan A
 
-Plan A keeps the existing score inputs, availability gate, final-score weights, shared cohort cost bounds, and persistence flow. It changes price scoring so relative cost gaps remain proportional, then adds a post-score dominance correction for the extreme-cost invariant.
+Plan A keeps the availability gate, shared cohort bounds, and persistence flow. Price and cache are separate score components: nominal source/channel rates define price, while guarded cache behavior contributes independently. A post-score dominance correction enforces the extreme nominal-price invariant.
 
 The change is limited to automatic-priority scoring and cohort-bound regression coverage. It does not change request-time channel selection, channel weight, retry semantics, monitoring, or billing.
 
 ## Normal Multi-Factor Scoring
 
-Effective cost continues to include the guarded cache factor and previous-snapshot smoothing:
+Effective cost remains an explanatory diagnostic built after guarded cache-factor confidence and previous-factor smoothing:
 
 ```text
 effective_cost = effective_rate_multiplier * guarded_cache_factor
 ```
 
-Within each `local_group + channel_type` cohort, the scorer finds the minimum effective cost and widens it with valid `CohortCostFloor` values. Price score becomes a relative inverse-cost score:
+It does not drive price score or dominance. Within each `local_group + channel_type` cohort, the scorer finds the minimum nominal rate and widens it with valid `CohortCostFloor` values, whose legacy names now carry nominal-rate bounds. Price score is cache-independent:
 
 ```text
-effective_price_score = 100 * cohort_cost_floor / effective_cost
+nominal_price_score = 100 * cohort_nominal_rate_floor / nominal_rate
 ```
 
-The result is clamped to `0..100`. A degenerate single-member cohort without external bounds retains the legacy score of `100`.
+The result is clamped to `0..100`. `effective_price_score` remains as a backward-compatible alias. A degenerate single-member cohort without external bounds retains the legacy score of `100`.
 
-This preserves the size of the relative price gap instead of stretching every observed minimum and maximum to `100` and `0`. For example, 0.04 and 0.05 score 100 and 80, so availability, first-token latency, and throughput can make the slightly more expensive but healthier channel win. The existing weighted score remains:
+The guarded cache factor maps monotonically to a separate score: factor `1.0` or worse scores `0`, the existing `0.35` floor scores `100`, and intermediate values are linearly interpolated. Cold starts continue to use the trusted-peer prior and own-sample confidence blend before this mapping.
+
+This preserves the size of the nominal price gap instead of stretching every observed minimum and maximum to `100` and `0`. For example, 0.04 and 0.05 score 100 and 80, so cache, availability, first-token latency, and throughput can make the slightly more expensive but healthier channel win. The weighted score is:
 
 ```text
 final_score = availability_gate * (
-    0.75 * effective_price_score
-  + 0.12 * availability_score
-  + 0.05 * first_token_score
-  + 0.08 * throughput_score
+    0.75 * nominal_price_score
+  + 0.10 * cache_score
+  + 0.08 * availability_score
+  + 0.03 * first_token_score
+  + 0.04 * throughput_score
 )
 ```
 
@@ -43,7 +46,7 @@ After normal scoring and before hysteresis, the scorer performs dominance correc
 
 A real candidate participates only when:
 
-- its multiplier and effective cost are valid;
+- its nominal source/channel rate is valid;
 - its existing availability gate is exactly `1`;
 - the compared peer is in the same cohort and is also gate-usable.
 
@@ -52,16 +55,16 @@ Unknown availability and too-few monitor samples remain usable because the exist
 For each usable pair, the cheaper candidate dominates when:
 
 ```text
-expensive_effective_cost / cheap_effective_cost >= 8
+expensive_nominal_rate / cheap_nominal_rate >= 8
 ```
 
-The correction raises the cheaper candidate as needed so it has at least a 1-point `FinalScore` margin and a 10-point `ComputedPriority` margin over the expensive candidate. Corrections are processed from higher cost toward lower cost so multiple extreme relationships remain consistent.
+Cache factor never participates in this comparison. The correction raises the cheaper candidate as needed so it has at least a 1-point `FinalScore` margin and a 10-point `ComputedPriority` margin over the expensive candidate. Corrections are processed from higher nominal rate toward lower nominal rate so multiple extreme relationships remain consistent.
 
 ## Split-Worker Runs
 
-An upstream-source worker can score only one member of a larger cohort. When a usable candidate's valid `CohortCostCeil` is at least 8x its effective cost, the ceiling acts as a synthetic expensive peer.
+An upstream-source worker can score only one member of a larger cohort. When a usable candidate's valid nominal-rate `CohortCostCeil` is at least 8x its nominal rate, the ceiling acts as a synthetic expensive peer.
 
-The synthetic peer uses the normal price score at the ceiling and the maximum possible non-price component scores. The cheap candidate is raised as needed above that conservative peer by the same score and priority margins. This gives a 0.001 candidate the dominance correction even when a 0.05 peer is outside the current worker batch.
+The synthetic peer uses the normal nominal price score at the ceiling and the maximum possible cache and quality scores. The cheap candidate is raised as needed above that conservative peer by the same score and priority margins. This gives a 0.001 candidate the dominance correction even when a 0.05 peer is outside the current worker batch.
 
 `autoPriorityLocalGroupCostBounds` continues to aggregate enabled manual and upstream-generated channels. Generated channels use their mapping's effective rate multiplier and are not excluded merely because they are generated.
 
@@ -75,7 +78,7 @@ A channel whose score or priority was raised by extreme dominance skips hysteres
 
 ## Failure and Boundary Behavior
 
-- Invalid multipliers keep the existing `missing_effective_rate_multiplier` no-op behavior.
+- Invalid nominal multipliers keep the existing `missing_effective_rate_multiplier` no-op behavior.
 - Unusable cheap channels receive no extreme dominance and can rank below healthy expensive channels.
 - Dominance comparisons never cross local-group or channel-type cohort boundaries.
 - Final score remains bounded to `0..100`; computed and new priorities remain bounded by `maxPriority`.

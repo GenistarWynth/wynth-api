@@ -268,7 +268,7 @@ func TestRunDueChannelAutoPriorityProcessesGeneratedChannels(t *testing.T) {
 
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, generatedChannel.Id).Error)
-	assert.Equal(t, int64(1000), reloaded.GetPriority())
+	assert.Equal(t, int64(901), reloaded.GetPriority())
 	assert.Equal(t, now, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
 }
 
@@ -405,7 +405,7 @@ func TestRunDueChannelAutoPriorityUpdatesAbilityPriority(t *testing.T) {
 	var reloadedAbility model.Ability
 	require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&reloadedAbility).Error)
 	require.NotNil(t, reloadedAbility.Priority)
-	assert.Equal(t, int64(1000), *reloadedAbility.Priority)
+	assert.Equal(t, int64(901), *reloadedAbility.Priority)
 }
 
 func TestRunDueChannelAutoPrioritySinksManuallyDisabledMembers(t *testing.T) {

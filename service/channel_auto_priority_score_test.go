@@ -12,11 +12,12 @@ import (
 )
 
 func TestAutoPriorityScoreWeights(t *testing.T) {
-	assert.Equal(t, 0.85, autoPriorityPriceWeight)
+	assert.Equal(t, 0.75, autoPriorityPriceWeight)
+	assert.Equal(t, 0.10, autoPriorityCacheWeight)
 	assert.Equal(t, 0.08, autoPriorityAvailabilityWeight)
 	assert.Equal(t, 0.03, autoPriorityFirstTokenWeight)
 	assert.Equal(t, 0.04, autoPriorityThroughputWeight)
-	assert.InDelta(t, 1.0, autoPriorityPriceWeight+autoPriorityAvailabilityWeight+autoPriorityFirstTokenWeight+autoPriorityThroughputWeight, 1e-12)
+	assert.InDelta(t, 1.0, autoPriorityPriceWeight+autoPriorityCacheWeight+autoPriorityAvailabilityWeight+autoPriorityFirstTokenWeight+autoPriorityThroughputWeight, 1e-12)
 	assert.Equal(t, 8.0, autoPriorityExtremeCostRatio)
 }
 
@@ -125,8 +126,9 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 
 		require.Len(t, results, 1)
 		// gate == 1 at the knee: FinalScore is the ungated weighted sum. No first-token
-		// or throughput samples, so both use the neutral default.
-		assert.InDelta(t, 0.85*100+0.08*50+0.03*autoPriorityNeutralPerfScore+0.04*autoPriorityNeutralPerfScore, results[0].FinalScore, 1e-9)
+		// or throughput samples, so both use the neutral default. No trusted cache
+		// benefit means the independent cache component is zero.
+		assert.InDelta(t, 0.75*100+0.10*0+0.08*50+0.03*autoPriorityNeutralPerfScore+0.04*autoPriorityNeutralPerfScore, results[0].FinalScore, 1e-9)
 	})
 
 	t.Run("too few monitor checks bypass the availability gate", func(t *testing.T) {
@@ -142,8 +144,8 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		require.Len(t, results, 1)
 		// Only the additive availability penalty applies; the gate is off. No first-token
 		// or throughput samples, so both use the neutral default.
-		assert.InDelta(t, 0.85*100+0.08*0+0.03*autoPriorityNeutralPerfScore+0.04*autoPriorityNeutralPerfScore, results[0].FinalScore, 1e-9)
-		assert.Equal(t, int64(899), results[0].ComputedPriority)
+		assert.InDelta(t, 0.75*100+0.10*0+0.08*0+0.03*autoPriorityNeutralPerfScore+0.04*autoPriorityNeutralPerfScore, results[0].FinalScore, 1e-9)
+		assert.Equal(t, int64(799), results[0].ComputedPriority)
 	})
 
 	t.Run("same price in different cohorts still scores as 100", func(t *testing.T) {
@@ -179,7 +181,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.InDelta(t, 100, resultByChannelID(results, 202).EffectivePriceScore, 0.0001)
 	})
 
-	t.Run("cache adjusted cost changes the effective price ordering", func(t *testing.T) {
+	t.Run("cache adjusted cost stays diagnostic and does not redefine nominal price", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
 				ChannelID:               301,
@@ -217,8 +219,9 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		require.NotNil(t, r302)
 		assert.InDelta(t, 3.0, r301.EffectiveCostMultiplier, 0.0001)
 		assert.InDelta(t, 0.75, r302.EffectiveCostMultiplier, 0.0001)
-		assert.Greater(t, r302.EffectivePriceScore, r301.EffectivePriceScore)
-		assert.Greater(t, r302.ComputedPriority, r301.ComputedPriority)
+		assert.Greater(t, r301.EffectivePriceScore, r302.EffectivePriceScore)
+		assert.Less(t, r301.CacheScore, r302.CacheScore)
+		assert.Greater(t, r301.ComputedPriority, r302.ComputedPriority)
 	})
 
 	t.Run("low usage samples continuously blend cache benefit", func(t *testing.T) {
@@ -317,7 +320,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				ChannelID:               401,
 				LocalGroup:              "shared",
 				ChannelType:             constant.ChannelTypeOpenAI,
-				CurrentPriority:         967,
+				CurrentPriority:         867,
 				EffectiveRateMultiplier: 1,
 				Availability:            floatPtr(0.7),
 				FirstTokenLatencyMS:     100,
@@ -330,10 +333,10 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 
 		require.Len(t, results, 1)
 		result := results[0]
-		assert.Equal(t, int64(967), result.OldPriority)
-		assert.Equal(t, int64(964), result.ComputedPriority)
+		assert.Equal(t, int64(867), result.OldPriority)
+		assert.Equal(t, int64(864), result.ComputedPriority)
 		assert.False(t, result.Applied)
-		assert.Equal(t, int64(967), result.NewPriority)
+		assert.Equal(t, int64(867), result.NewPriority)
 		assert.Equal(t, "hysteresis_delta_below_threshold", result.Reason)
 	})
 
@@ -343,7 +346,7 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 				ChannelID:               402,
 				LocalGroup:              "shared",
 				ChannelType:             constant.ChannelTypeOpenAI,
-				CurrentPriority:         967,
+				CurrentPriority:         867,
 				EffectiveRateMultiplier: 1,
 				Availability:            floatPtr(0.7),
 				FirstTokenLatencyMS:     100,
@@ -592,8 +595,9 @@ func TestScoreAutoPriorityCandidatesColdStartCachePrior(t *testing.T) {
 		require.NotNil(t, mature)
 		assert.Greater(t, fresh.CacheAdjustedCostFactor, mature.CacheAdjustedCostFactor)
 		assert.Less(t, fresh.CacheAdjustedCostFactor, 1.0)
-		assert.Greater(t, fresh.EffectivePriceScore, 35.0)
-		assert.Less(t, fresh.EffectivePriceScore, mature.EffectivePriceScore)
+		assert.Equal(t, mature.EffectivePriceScore, fresh.EffectivePriceScore)
+		assert.Greater(t, fresh.CacheScore, 0.0)
+		assert.Less(t, fresh.CacheScore, mature.CacheScore)
 	})
 
 	t.Run("no trustworthy same cohort peer stays neutral", func(t *testing.T) {
@@ -658,11 +662,15 @@ func TestAutoPriorityColdStartDiagnosticsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	var decoded dto.ChannelAutoPriorityScore
 	require.NoError(t, common.Unmarshal(encoded, &decoded))
+	assert.Equal(t, "v3", decoded.Version)
 	assert.Equal(t, fresh.Cohort, decoded.Cohort)
 	assert.Equal(t, fresh.EffectiveRateMultiplier, decoded.EffectiveRateMultiplier)
+	assert.Equal(t, fresh.NominalRateMultiplier, decoded.NominalRateMultiplier)
 	assert.Equal(t, fresh.CacheAdjustedCostFactor, decoded.CacheAdjustedCostFactor)
 	assert.Equal(t, fresh.EffectiveCostMultiplier, decoded.EffectiveCostMultiplier)
 	assert.Equal(t, fresh.EffectivePriceScore, decoded.EffectivePriceScore)
+	assert.Equal(t, fresh.NominalPriceScore, decoded.NominalPriceScore)
+	assert.Equal(t, fresh.CacheScore, decoded.CacheScore)
 	assert.Equal(t, fresh.AvailabilityScore, decoded.AvailabilityScore)
 	assert.Equal(t, fresh.FirstTokenScore, decoded.FirstTokenScore)
 	assert.Equal(t, fresh.ThroughputScore, decoded.ThroughputScore)
@@ -678,6 +686,9 @@ func TestAutoPriorityColdStartDiagnosticsRoundTrip(t *testing.T) {
 	var legacy dto.ChannelAutoPriorityScore
 	require.NoError(t, common.Unmarshal([]byte(`{"effective_rate_multiplier":0.02,"cache_adjusted_cost_factor":1}`), &legacy))
 	assert.Empty(t, legacy.CacheFactorSource)
+	assert.Zero(t, legacy.NominalRateMultiplier)
+	assert.Zero(t, legacy.NominalPriceScore)
+	assert.Zero(t, legacy.CacheScore)
 }
 
 func floatPtr(v float64) *float64 {
@@ -775,9 +786,10 @@ func TestScoreAutoPriorityCandidatesCrossSourceCohortCostBounds(t *testing.T) {
 
 		require.Len(t, results, 1)
 		assert.InDelta(t, 100, results[0].EffectivePriceScore, 0.0001)
-		// price 100 + availability 100, but no first-token/throughput samples (neutral 70):
-		// 0.85*100 + 0.08*100 + 0.03*70 + 0.04*70 = 97.9 -> 979.
-		assert.Equal(t, int64(979), results[0].ComputedPriority)
+		// price 100 + availability 100, no measured cache benefit, and no
+		// first-token/throughput samples (neutral 70):
+		// 0.75*100 + 0.10*0 + 0.08*100 + 0.03*70 + 0.04*70 = 87.9 -> 879.
+		assert.Equal(t, int64(879), results[0].ComputedPriority)
 	})
 
 	t.Run("cross-source cohort bounds let cost differentiate a single-member run cohort", func(t *testing.T) {
@@ -852,7 +864,7 @@ func TestScoreAutoPriorityCandidatesCrossSourceCohortCostBounds(t *testing.T) {
 }
 
 func TestScoreAutoPriorityCandidatesExtremeCostDominance(t *testing.T) {
-	t.Run("four times cost gap has a materially stronger formula-based advantage", func(t *testing.T) {
+	t.Run("four times nominal gap remains formula based below the hard threshold", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
 				ChannelID:               991,
@@ -877,19 +889,10 @@ func TestScoreAutoPriorityCandidatesExtremeCostDominance(t *testing.T) {
 		require.NotNil(t, cheap)
 		require.NotNil(t, expensive)
 
-		previousWeightedScore := func(result *AutoPriorityScoreResult) float64 {
-			return 0.75*result.EffectivePriceScore +
-				0.12*result.AvailabilityScore +
-				0.05*result.FirstTokenScore +
-				0.08*result.ThroughputScore
-		}
-		previousGap := previousWeightedScore(cheap) - previousWeightedScore(expensive)
-		currentGap := cheap.FinalScore - expensive.FinalScore
-
 		// This pins the representative formula inputs, not a new hard 4x rule.
 		assert.InDelta(t, 100, cheap.EffectivePriceScore, 1e-9)
 		assert.InDelta(t, 25, expensive.EffectivePriceScore, 1e-9)
-		assert.Greater(t, currentGap, previousGap+5)
+		assert.InDelta(t, 0.75*(100-25), cheap.FinalScore-expensive.FinalScore, 1e-9)
 		assert.Greater(t, cheap.ComputedPriority, expensive.ComputedPriority)
 	})
 
@@ -1150,7 +1153,7 @@ func TestScoreAutoPriorityCandidatesExtremeCostDominance(t *testing.T) {
 		require.Len(t, results, 1)
 		result := results[0]
 		syntheticExpensivePriceScore := 100 * 0.00001 / 0.05
-		syntheticExpensiveFinalScore := 0.85*syntheticExpensivePriceScore + 0.08*100 + 0.03*100 + 0.04*100
+		syntheticExpensiveFinalScore := 0.75*syntheticExpensivePriceScore + 0.10*100 + 0.08*100 + 0.03*100 + 0.04*100
 		syntheticExpensivePriority := int64(math.Round(syntheticExpensiveFinalScore * 10))
 		assert.InDelta(t, 1, result.EffectivePriceScore, 0.0001)
 		assert.GreaterOrEqual(t, result.FinalScore-syntheticExpensiveFinalScore, 1.0)

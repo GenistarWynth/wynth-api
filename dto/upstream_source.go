@@ -213,9 +213,12 @@ type UpstreamSourceAutoPriorityChannelResult struct {
 	Applied                 bool    `json:"applied"`
 	Reason                  string  `json:"reason,omitempty"`
 	EffectiveRateMultiplier float64 `json:"effective_rate_multiplier"`
+	NominalRateMultiplier   float64 `json:"nominal_rate_multiplier"`
 	CacheAdjustedCostFactor float64 `json:"cache_adjusted_cost_factor"`
 	EffectiveCostMultiplier float64 `json:"effective_cost_multiplier"`
 	EffectivePriceScore     float64 `json:"effective_price_score"`
+	NominalPriceScore       float64 `json:"nominal_price_score"`
+	CacheScore              float64 `json:"cache_score"`
 	AvailabilityScore       float64 `json:"availability_score"`
 	FirstTokenScore         float64 `json:"first_token_score"`
 	ThroughputScore         float64 `json:"throughput_score"`

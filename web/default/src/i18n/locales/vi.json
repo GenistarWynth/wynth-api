@@ -569,6 +569,7 @@
     "Auto priority interval must be 0 minutes or greater": "Khoảng thời gian ưu tiên tự động phải từ 0 phút trở lên.",
     "Auto priority may overwrite manual edits on the next run.": "Ưu tiên tự động có thể ghi đè chỉnh sửa thủ công ở lần chạy tiếp theo.",
     "Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.": "Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.",
+    "Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.": "Ưu tiên tự động có thể ghi đè chỉnh sửa thủ công. Lần chạy gần nhất: {{time}}. Hệ số giá danh nghĩa: {{rate}}x; điểm giá: {{price}}. Hệ số bộ nhớ đệm: {{cacheFactor}}x; điểm bộ nhớ đệm: {{cache}}. Điểm khả dụng: {{availability}}. Điểm token đầu tiên: {{firstToken}}. Điểm thông lượng: {{throughput}}. Chi phí hiệu dụng dùng để chẩn đoán: {{cost}}x.",
     "Auto Priority Off": "Ưu tiên tự động tắt",
     "Auto Priority On": "Ưu tiên tự động bật",
     "Auto priority rate multiplier must be greater than 0": "Hệ số tỷ lệ ưu tiên tự động phải lớn hơn 0.",

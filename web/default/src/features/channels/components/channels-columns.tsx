@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 /* eslint-disable react-refresh/only-export-components */
 import { useContext, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { type ColumnDef } from '@tanstack/react-table'
+import type { ColumnDef } from '@tanstack/react-table'
 import {
   AlertTriangle,
   ChevronDown,
@@ -50,7 +50,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { BadgeListCell } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { ProviderBadge } from '@/components/provider-badge'
-import { StatusBadge } from '@/components/status-badge'
+import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { TruncatedText } from '@/components/truncated-text'
 import { getCodexUsage } from '../api'
@@ -159,10 +159,9 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
   )
 }
 
-// Auto-priority scores (availability / first-token / final) are already stored
-// on a 0–100 scale by the backend scorer, so render them directly as a percent.
-// (They are NOT 0–1 fractions — multiplying by 100 again showed values like
-// "9940%" / "10000%".)
+// Auto-priority component and final scores are already stored on a 0–100 scale
+// by the backend scorer, so render them directly as a percent. (They are NOT
+// 0–1 fractions — multiplying by 100 again showed values like "9940%".)
 function formatAutoPriorityScore(value: number | undefined) {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return '-'
@@ -199,25 +198,39 @@ function AutoPriorityHint({ channel }: { channel: Channel }) {
   const snapshot = getAutoPrioritySnapshot(
     settings.channel_auto_priority_last_score
   )
-  const label = snapshot
-    ? snapshot.applied
-      ? t('Auto: {{priority}} / {{score}}', {
-          priority: formatAutoPriorityNumber(snapshot.new_priority),
-          score: formatAutoPriorityScore(snapshot.final_score),
-        })
-      : t('Auto: {{priority}} / {{reason}}', {
-          priority: formatAutoPriorityNumber(snapshot.new_priority),
-          reason: snapshot.reason || t('not applied'),
-        })
-    : t('Auto priority enabled')
+  let label = t('Auto priority enabled')
+  if (snapshot?.applied) {
+    label = t('Auto: {{priority}} / {{score}}', {
+      priority: formatAutoPriorityNumber(snapshot.new_priority),
+      score: formatAutoPriorityScore(snapshot.final_score),
+    })
+  } else if (snapshot) {
+    label = t('Auto: {{priority}} / {{reason}}', {
+      priority: formatAutoPriorityNumber(snapshot.new_priority),
+      reason: snapshot.reason || t('not applied'),
+    })
+  }
 
   const tooltip = snapshot
     ? t(
-        'Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.',
+        'Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.',
         {
           time: formatRelativeTime(
             settings.channel_auto_priority_last_run_at ?? 0
           ),
+          rate: formatAutoPriorityNumber(
+            snapshot.nominal_rate_multiplier ??
+              snapshot.effective_rate_multiplier,
+            3
+          ),
+          price: formatAutoPriorityScore(
+            snapshot.nominal_price_score ?? snapshot.effective_price_score
+          ),
+          cacheFactor: formatAutoPriorityNumber(
+            snapshot.cache_adjusted_cost_factor,
+            3
+          ),
+          cache: formatAutoPriorityScore(snapshot.cache_score),
           cost: formatAutoPriorityNumber(
             snapshot.effective_cost_multiplier,
             3
@@ -420,6 +433,15 @@ export function BalanceCell({ channel }: { channel: Channel }) {
 
   // Regular channel row: show used and remaining with click to update
   const variant = getBalanceVariant(balance)
+  let balanceLabel = remainingDisplay
+  let balanceVariant: StatusVariant = variant
+  if (channel.type === 57) {
+    balanceLabel = t('Account Info')
+    balanceVariant = 'info'
+  } else if (isUpdating) {
+    balanceLabel = t('Updating...')
+    balanceVariant = 'neutral'
+  }
 
   const handleClickUpdate = async () => {
     if (isUpdating) return
@@ -471,20 +493,8 @@ export function BalanceCell({ channel }: { channel: Channel }) {
           <TooltipTrigger
             render={
               <StatusBadge
-                label={
-                  isUpdating
-                    ? t('Updating...')
-                    : channel.type === 57
-                      ? t('Account Info')
-                      : remainingDisplay
-                }
-                variant={
-                  channel.type === 57
-                    ? 'info'
-                    : isUpdating
-                      ? 'neutral'
-                      : variant
-                }
+                label={balanceLabel}
+                variant={balanceVariant}
                 size='sm'
                 copyable={false}
                 showDot={false}
@@ -989,9 +999,9 @@ export function useChannelsColumns(
         const modelArray = parseModelsList(models)
         return (
           <BadgeListCell
-            items={modelArray.map((model, idx) => (
+            items={modelArray.map((model) => (
               <StatusBadge
-                key={idx}
+                key={model}
                 label={model}
                 autoColor={model}
                 size='sm'
@@ -1038,8 +1048,9 @@ export function useChannelsColumns(
       meta: { mobileHidden: true },
       cell: ({ row }) => {
         const tag = row.getValue('tag') as string | null
-        if (!tag)
+        if (!tag) {
           return <span className='text-muted-foreground text-xs'>-</span>
+        }
 
         return (
           <StatusBadge

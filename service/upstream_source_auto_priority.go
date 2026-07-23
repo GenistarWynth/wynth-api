@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const upstreamSourceAutoPriorityScoreVersion = "v2"
+const upstreamSourceAutoPriorityScoreVersion = "v3"
 
 var errAutoPriorityGeneratedChannelChanged = errors.New("generated channel changed")
 
@@ -192,6 +192,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 				CurrentPriority:                 priority,
 				EffectiveRateMultiplier:         *mapping.EffectiveRateMultiplier,
 				CacheAdjustedCostFactor:         1,
+				PreviousCacheAdjustedCostFactor: previousAutoPriorityCacheAdjustedCostFactor(settings),
 				PreviousEffectiveCostMultiplier: previousAutoPriorityEffectiveCostMultiplier(settings),
 				Availability:                    nil,
 				FirstTokenLatencyMS:             0,
@@ -206,11 +207,9 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 		})
 	}
 
-	// Widen each candidate's price-cohort normalization range with cost bounds
-	// observed across ALL upstream sources in its local group, not just this
-	// source's run. Each source only ever contributes one channel per cohort, so
-	// without this the run-local cohort always has a single member and cost
-	// stops differentiating priority (see ScoreAutoPriorityCandidates).
+	// Widen each candidate's price-cohort normalization range with nominal
+	// rate bounds observed across ALL upstream sources in its local group, not
+	// just this source's run. Cache factors never enter these bounds.
 	distinctGroups := make(map[string]struct{}, len(pending))
 	distinctTypes := make(map[int]struct{}, len(pending))
 	groups := make([]string, 0, len(pending))
@@ -283,9 +282,12 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 			Applied:                 score.Applied,
 			Reason:                  score.Reason,
 			EffectiveRateMultiplier: score.EffectiveRateMultiplier,
+			NominalRateMultiplier:   score.NominalRateMultiplier,
 			CacheAdjustedCostFactor: score.CacheAdjustedCostFactor,
 			EffectiveCostMultiplier: score.EffectiveCostMultiplier,
 			EffectivePriceScore:     score.EffectivePriceScore,
+			NominalPriceScore:       score.NominalPriceScore,
+			CacheScore:              score.CacheScore,
 			AvailabilityScore:       score.AvailabilityScore,
 			FirstTokenScore:         score.FirstTokenScore,
 			ThroughputScore:         score.ThroughputScore,
@@ -341,7 +343,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 }
 
 // autoPriorityMappingCostRow projects the columns needed to accumulate
-// per-cohort cost bounds from upstream-source channel mappings.
+// per-cohort nominal rate bounds from upstream-source channel mappings.
 type autoPriorityMappingCostRow struct {
 	LocalChannelID          int
 	EffectiveRateMultiplier float64
@@ -443,7 +445,7 @@ func updateAutoPriorityCostBounds(bounds map[string][2]float64, cohort string, m
 }
 
 // autoPriorityLocalGroupCostBounds returns, keyed by autoPriorityCohortKey
-// (localGroup + "#" + channelType), the [min, max] effective rate multiplier
+// (localGroup + "#" + channelType), the [min, max] nominal rate multiplier
 // across all ENABLED auto-priority channels in that exact local group and
 // channel type. Normal channels use their channel-level rate multiplier (1x
 // when unset), while upstream-generated channels retain the effective rate from
@@ -563,6 +565,13 @@ func previousAutoPriorityEffectiveCostMultiplier(settings dto.ChannelOtherSettin
 		return 0
 	}
 	return settings.ChannelAutoPriorityLastScore.EffectiveCostMultiplier
+}
+
+func previousAutoPriorityCacheAdjustedCostFactor(settings dto.ChannelOtherSettings) float64 {
+	if settings.ChannelAutoPriorityLastScore == nil {
+		return 0
+	}
+	return settings.ChannelAutoPriorityLastScore.CacheAdjustedCostFactor
 }
 
 func initChannelCacheAfterAutoPriority(ctx context.Context) {
@@ -721,9 +730,12 @@ func markAutoPriorityGroupFailure(result *dto.UpstreamSourceAutoPriorityResult, 
 			Applied:                 false,
 			Reason:                  reason,
 			EffectiveRateMultiplier: candidate.scoreInput.EffectiveRateMultiplier,
+			NominalRateMultiplier:   candidate.scoreInput.EffectiveRateMultiplier,
 			CacheAdjustedCostFactor: candidate.scoreInput.CacheAdjustedCostFactor,
 			EffectiveCostMultiplier: candidate.scoreInput.EffectiveRateMultiplier * candidate.scoreInput.CacheAdjustedCostFactor,
 			EffectivePriceScore:     0,
+			NominalPriceScore:       0,
+			CacheScore:              0,
 			AvailabilityScore:       0,
 			FirstTokenScore:         0,
 			ThroughputScore:         0,
@@ -791,9 +803,12 @@ func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, window
 		WindowEnd:                windowEnd,
 		Cohort:                   score.Cohort,
 		EffectiveRateMultiplier:  score.EffectiveRateMultiplier,
+		NominalRateMultiplier:    score.NominalRateMultiplier,
 		CacheAdjustedCostFactor:  score.CacheAdjustedCostFactor,
 		EffectiveCostMultiplier:  score.EffectiveCostMultiplier,
 		EffectivePriceScore:      score.EffectivePriceScore,
+		NominalPriceScore:        score.NominalPriceScore,
+		CacheScore:               score.CacheScore,
 		AvailabilityScore:        score.AvailabilityScore,
 		FirstTokenScore:          score.FirstTokenScore,
 		ThroughputScore:          score.ThroughputScore,

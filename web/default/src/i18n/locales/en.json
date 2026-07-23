@@ -569,6 +569,7 @@
     "Auto priority interval must be 0 minutes or greater": "Auto priority interval must be 0 minutes or greater",
     "Auto priority may overwrite manual edits on the next run.": "Auto priority may overwrite manual edits on the next run.",
     "Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.": "Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.",
+    "Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.": "Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.",
     "Auto Priority Off": "Auto Priority Off",
     "Auto Priority On": "Auto Priority On",
     "Auto priority rate multiplier must be greater than 0": "Auto priority rate multiplier must be greater than 0",

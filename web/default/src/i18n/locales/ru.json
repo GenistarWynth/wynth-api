@@ -569,6 +569,7 @@
     "Auto priority interval must be 0 minutes or greater": "Интервал автоприоритета должен быть не менее 0 минут.",
     "Auto priority may overwrite manual edits on the next run.": "Автоприоритет может перезаписать ручные изменения при следующем запуске.",
     "Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.": "Auto priority may overwrite manual edits. Last run: {{time}}. Effective cost: {{cost}}x. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}.",
+    "Auto priority may overwrite manual edits. Last run: {{time}}. Nominal rate: {{rate}}x; price score: {{price}}. Cache factor: {{cacheFactor}}x; cache score: {{cache}}. Availability score: {{availability}}. First token score: {{firstToken}}. Throughput score: {{throughput}}. Effective cost diagnostic: {{cost}}x.": "Автоприоритет может перезаписать ручные изменения. Последний запуск: {{time}}. Номинальный тариф: {{rate}}x; оценка цены: {{price}}. Коэффициент кэша: {{cacheFactor}}x; оценка кэша: {{cache}}. Оценка доступности: {{availability}}. Оценка первого токена: {{firstToken}}. Оценка пропускной способности: {{throughput}}. Диагностическая эффективная стоимость: {{cost}}x.",
     "Auto Priority Off": "Автоприоритет выключен",
     "Auto Priority On": "Автоприоритет включен",
     "Auto priority rate multiplier must be greater than 0": "Коэффициент тарифа автоприоритета должен быть больше 0.",

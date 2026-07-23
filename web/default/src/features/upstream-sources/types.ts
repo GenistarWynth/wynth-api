@@ -309,11 +309,15 @@ export type UpstreamSourceAutoPriorityChannelResult = {
   applied: boolean
   reason?: string
   effective_rate_multiplier: number
+  nominal_rate_multiplier: number
   cache_adjusted_cost_factor: number
   effective_cost_multiplier: number
   effective_price_score: number
+  nominal_price_score: number
+  cache_score: number
   availability_score: number
   first_token_score: number
+  throughput_score: number
   final_score: number
 }
 
