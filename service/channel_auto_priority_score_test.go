@@ -65,6 +65,37 @@ func TestScoreAutoPriorityCandidates(t *testing.T) {
 		assert.Greater(t, cheap.ComputedPriority, expensive.ComputedPriority)
 	})
 
+	t.Run("hard unavailable member keeps price diagnostics without changing priority", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1,
+				LocalGroup:              "OpenAI",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         321,
+				EffectiveRateMultiplier: 0.02,
+				HardUnavailable:         true,
+			},
+			{
+				ChannelID:               2,
+				LocalGroup:              "OpenAI",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         222,
+				EffectiveRateMultiplier: 0.06,
+			},
+		}, 1000)
+
+		require.Len(t, results, 2)
+		unavailable := results[0]
+		assert.Equal(t, 100.0, unavailable.NominalPriceScore)
+		assert.Equal(t, 0.0, unavailable.AvailabilityScore)
+		assert.Equal(t, 0.0, unavailable.FinalScore)
+		assert.Equal(t, int64(0), unavailable.ComputedPriority)
+		assert.Equal(t, int64(321), unavailable.NewPriority)
+		assert.False(t, unavailable.Applied)
+		assert.Equal(t, "channel_auto_disabled", unavailable.Reason)
+		assert.InDelta(t, 100.0/3.0, results[1].NominalPriceScore, 1e-9)
+	})
+
 	t.Run("low availability gates a cheap channel below a healthy pricier one", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
@@ -743,11 +774,17 @@ func TestAutoPriorityColdStartDiagnosticsRoundTrip(t *testing.T) {
 	assert.Equal(t, "default_95", diagnostics["cache_factor_source"])
 	assert.InDelta(t, 0.3825, diagnostics["cache_factor_prior"], 1e-12)
 	assert.Equal(t, 0.0, diagnostics["cache_factor_own_confidence"])
+	assert.Equal(t, 0.02, diagnostics["cohort_floor"])
+	assert.Equal(t, 0.02, diagnostics["cohort_ceil"])
+	assert.Equal(t, float64(1), diagnostics["cohort_member_count"])
 
 	var decoded dto.ChannelAutoPriorityScore
 	require.NoError(t, common.Unmarshal(encoded, &decoded))
-	assert.Equal(t, "v3", decoded.Version)
+	assert.Equal(t, "v4", decoded.Version)
 	assert.Equal(t, fresh.Cohort, decoded.Cohort)
+	assert.Equal(t, fresh.CohortFloor, decoded.CohortFloor)
+	assert.Equal(t, fresh.CohortCeil, decoded.CohortCeil)
+	assert.Equal(t, fresh.CohortMemberCount, decoded.CohortMemberCount)
 	assert.Equal(t, fresh.EffectiveRateMultiplier, decoded.EffectiveRateMultiplier)
 	assert.Equal(t, fresh.NominalRateMultiplier, decoded.NominalRateMultiplier)
 	assert.Equal(t, fresh.CacheAdjustedCostFactor, decoded.CacheAdjustedCostFactor)

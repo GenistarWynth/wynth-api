@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const upstreamSourceAutoPriorityScoreVersion = "v3"
+const upstreamSourceAutoPriorityScoreVersion = "v4"
 
 var errAutoPriorityGeneratedChannelChanged = errors.New("generated channel changed")
 
@@ -39,7 +39,10 @@ type autoPriorityWindowKey struct {
 }
 
 func (s *UpstreamSourceService) RunAutoPriority(ctx context.Context, sourceID int, now int64) (*dto.UpstreamSourceAutoPriorityResult, error) {
-	return s.runAutoPriority(ctx, sourceID, now, nil)
+	if now == 0 {
+		now = s.now()
+	}
+	return runChannelAutoPriorityGroupsForSourceMappings(ctx, sourceID, now, nil, false)
 }
 
 func (s *UpstreamSourceService) RunAutoPriorityForMappings(ctx context.Context, sourceID int, now int64, mappingIDs []int) (*dto.UpstreamSourceAutoPriorityResult, error) {
@@ -50,7 +53,10 @@ func (s *UpstreamSourceService) RunAutoPriorityForMappings(ctx context.Context, 
 		}
 		filter[mappingID] = struct{}{}
 	}
-	return s.runAutoPriority(ctx, sourceID, now, filter)
+	if now == 0 {
+		now = s.now()
+	}
+	return runChannelAutoPriorityGroupsForSourceMappings(ctx, sourceID, now, filter, false)
 }
 
 func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID int, now int64, mappingFilter map[int]struct{}) (*dto.UpstreamSourceAutoPriorityResult, error) {
@@ -200,6 +206,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 				MonitorCheckCount:               0,
 				FirstTokenSampleCount:           0,
 				HasPreviousSnapshot:             settings.ChannelAutoPriorityLastScore != nil,
+				HardUnavailable:                 channel.Status == common.ChannelStatusAutoDisabled,
 			},
 			windowStart:             windowStart,
 			availabilityWindowStart: 0,
@@ -355,11 +362,11 @@ type autoPriorityChannelSettingsRow struct {
 }
 
 // autoPriorityLocalGroupAvailabilityWindowHours resolves one availability
-// window per exact local group across every enabled channel participating in
-// auto-priority scoring. Channel origin is intentionally irrelevant: manual and
-// upstream-generated members contribute equally. Taking the maximum preserves
-// the existing deterministic conflict policy until the next monitor save makes
-// every member's persisted value identical.
+// window per exact local group across every enabled or temporarily auto-disabled
+// channel participating in auto-priority scoring. Channel origin is intentionally
+// irrelevant: manual and upstream-generated members contribute equally. Taking
+// the maximum preserves the existing deterministic conflict policy until the
+// next monitor save makes every member's persisted value identical.
 func autoPriorityLocalGroupAvailabilityWindowHours(ctx context.Context, groups []string) (map[string]int, error) {
 	groupSet := make(map[string]struct{}, len(groups))
 	dedupedGroups := make([]string, 0, len(groups))
@@ -375,7 +382,7 @@ func autoPriorityLocalGroupAvailabilityWindowHours(ctx context.Context, groups [
 		return map[string]int{}, nil
 	}
 
-	channelRows, err := model.GetEnabledChannelGroupTypesInGroups(ctx, dedupedGroups)
+	channelRows, err := model.GetAutoPriorityChannelGroupTypesInGroups(ctx, dedupedGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -446,11 +453,11 @@ func updateAutoPriorityCostBounds(bounds map[string][2]float64, cohort string, m
 
 // autoPriorityLocalGroupCostBounds returns, keyed by autoPriorityCohortKey
 // (localGroup + "#" + channelType), the [min, max] nominal rate multiplier
-// across all ENABLED auto-priority channels in that exact local group and
-// channel type. Normal channels use their channel-level rate multiplier (1x
-// when unset), while upstream-generated channels retain the effective rate from
-// their mapping. A single worker run may see only part of a cohort, so this
-// widens price normalization to the whole local group.
+// across all enabled or temporarily auto-disabled auto-priority channels in that
+// exact local group and channel type. Normal channels use their channel-level
+// rate multiplier (1x when unset), while upstream-generated channels retain the
+// effective rate from their mapping. This auxiliary bounds query uses the same
+// eligibility rules as the primary full-cohort worker.
 //
 // Bounds are recomputed each run from the current enabled channels, so newly
 // added/removed channels only shift a peer's normalization at its next run
@@ -481,7 +488,7 @@ func autoPriorityLocalGroupCostBounds(ctx context.Context, groups []string, type
 		typeSet[t] = struct{}{}
 	}
 
-	channelRows, err := model.GetEnabledChannelGroupTypesInGroups(ctx, dedupedGroups)
+	channelRows, err := model.GetAutoPriorityChannelGroupTypesInGroups(ctx, dedupedGroups)
 	if err != nil {
 		return nil, err
 	}
@@ -695,7 +702,7 @@ func updateAutoPriorityCandidate(tx *gorm.DB, candidate upstreamSourceAutoPriori
 		updates["priority"] = score.NewPriority
 	}
 	res := tx.Model(&model.Channel{}).
-		Where("status = ?", common.ChannelStatusEnabled).
+		Where("status = ?", candidate.channel.Status).
 		Where("id = ? AND settings = ?", candidate.channel.Id, candidate.channel.OtherSettings).
 		Updates(updates)
 	if res.Error != nil {
@@ -802,6 +809,9 @@ func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, window
 		WindowStart:              windowStart,
 		WindowEnd:                windowEnd,
 		Cohort:                   score.Cohort,
+		CohortFloor:              score.CohortFloor,
+		CohortCeil:               score.CohortCeil,
+		CohortMemberCount:        score.CohortMemberCount,
 		EffectiveRateMultiplier:  score.EffectiveRateMultiplier,
 		NominalRateMultiplier:    score.NominalRateMultiplier,
 		CacheAdjustedCostFactor:  score.CacheAdjustedCostFactor,

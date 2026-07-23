@@ -194,6 +194,27 @@ func GetEnabledChannelGroupTypesInGroups(ctx context.Context, groups []string) (
 	return rows, err
 }
 
+// GetAutoPriorityChannelGroupTypesInGroups returns the cohort projection for
+// channels whose status can participate in auto-priority evaluation.
+// Auto-disabled channels remain members because that status is temporary;
+// manually disabled and unknown/deleted statuses are operator-controlled or
+// ineligible and must not affect normalization.
+func GetAutoPriorityChannelGroupTypesInGroups(ctx context.Context, groups []string) ([]ChannelGroupType, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+	var rows []ChannelGroupType
+	err := DB.WithContext(ctx).Model(&Channel{}).
+		Where("status IN ?", []int{
+			common.ChannelStatusEnabled,
+			common.ChannelStatusAutoDisabled,
+		}).
+		Where(commonGroupCol+" IN ?", groups).
+		Select("id", commonGroupCol+" as local_group", "type").
+		Find(&rows).Error
+	return rows, err
+}
+
 // Value implements driver.Valuer interface
 func (c ChannelInfo) Value() (driver.Value, error) {
 	return common.Marshal(&c)

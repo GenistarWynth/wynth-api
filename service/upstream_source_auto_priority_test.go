@@ -325,7 +325,7 @@ func TestListDueUpstreamSourcesForAutoPriorityBatchLoadsChannels(t *testing.T) {
 	assert.Equal(t, 1, loadCalls)
 }
 
-func TestRunDueUpstreamSourceAutoPriorityOnlyProcessesDueMappings(t *testing.T) {
+func TestRunDueUpstreamSourceAutoPriorityEvaluatesCompleteCohort(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(8_000_000)
 	source := createSyncTestSource(t, map[string]any{
@@ -333,8 +333,8 @@ func TestRunDueUpstreamSourceAutoPriorityOnlyProcessesDueMappings(t *testing.T) 
 		"auto_priority_interval_minutes": 30,
 		"auto_priority_window_hours":     24,
 	})
-	dueChannel, dueMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "due", 100)
-	notDueChannel, _ := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "not-due", 200)
+	dueChannel, dueMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.06, "due", 100)
+	notDueChannel, notDueMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.02, "not-due", 200)
 	dueSettings := dueChannel.GetOtherSettings()
 	dueSettings.ChannelAutoPriorityLastRunAt = now - 3600
 	dueChannel.SetOtherSettings(dueSettings)
@@ -353,14 +353,104 @@ func TestRunDueUpstreamSourceAutoPriorityOnlyProcessesDueMappings(t *testing.T) 
 
 	require.Len(t, results, 1)
 	assert.Equal(t, source.Id, results[0].SourceID)
-	require.Len(t, results[0].Results, 1)
-	assert.Equal(t, dueMapping.Id, results[0].Results[0].MappingID)
+	require.Len(t, results[0].Results, 2)
+	assert.ElementsMatch(t, []int{dueMapping.Id, notDueMapping.Id}, []int{
+		results[0].Results[0].MappingID,
+		results[0].Results[1].MappingID,
+	})
 
 	var reloadedDue, reloadedNotDue model.Channel
 	require.NoError(t, model.DB.First(&reloadedDue, dueChannel.Id).Error)
 	require.NoError(t, model.DB.First(&reloadedNotDue, notDueChannel.Id).Error)
+	dueSnapshot := reloadedDue.GetOtherSettings().ChannelAutoPriorityLastScore
+	reloadedNotDueSettings := reloadedNotDue.GetOtherSettings()
+	notDueSnapshot := reloadedNotDueSettings.ChannelAutoPriorityLastScore
 	assert.Equal(t, now, reloadedDue.GetOtherSettings().ChannelAutoPriorityLastRunAt)
-	assert.Equal(t, notDueLastRunAt, reloadedNotDue.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Equal(t, now, reloadedNotDueSettings.ChannelAutoPriorityLastRunAt)
+	require.NotNil(t, dueSnapshot)
+	require.NotNil(t, notDueSnapshot)
+	assert.Equal(t, dueSnapshot.Version, notDueSnapshot.Version)
+	assert.Equal(t, dueSnapshot.ComputedAt, notDueSnapshot.ComputedAt)
+	assert.InDelta(t, 0.02, dueSnapshot.CohortFloor, 1e-12)
+	assert.InDelta(t, 0.02, notDueSnapshot.CohortFloor, 1e-12)
+}
+
+func TestRunAutoPriorityForMappingsEvaluatesCompleteCohort(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(8_100_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     24,
+	})
+	triggerChannel, triggerMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.06, "trigger", 100)
+	cohortPeer, peerMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.02, "peer", 200)
+
+	result, err := (&UpstreamSourceService{}).RunAutoPriorityForMappings(
+		context.Background(),
+		source.Id,
+		now,
+		[]int{triggerMapping.Id},
+	)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 2)
+	assert.ElementsMatch(t, []int{triggerMapping.Id, peerMapping.Id}, []int{
+		result.Results[0].MappingID,
+		result.Results[1].MappingID,
+	})
+	var reloadedTrigger, reloadedPeer model.Channel
+	require.NoError(t, model.DB.First(&reloadedTrigger, triggerChannel.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedPeer, cohortPeer.Id).Error)
+	triggerSnapshot := reloadedTrigger.GetOtherSettings().ChannelAutoPriorityLastScore
+	peerSnapshot := reloadedPeer.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, triggerSnapshot)
+	require.NotNil(t, peerSnapshot)
+	assert.Equal(t, now, triggerSnapshot.ComputedAt)
+	assert.Equal(t, triggerSnapshot.ComputedAt, peerSnapshot.ComputedAt)
+	assert.Equal(t, 2, triggerSnapshot.CohortMemberCount)
+	assert.Equal(t, triggerSnapshot.CohortMemberCount, peerSnapshot.CohortMemberCount)
+	assert.InDelta(t, 0.02, triggerSnapshot.CohortFloor, 1e-12)
+	assert.InDelta(t, triggerSnapshot.CohortFloor, peerSnapshot.CohortFloor, 1e-12)
+}
+
+func TestRunDueUpstreamSourceAutoPriorityDoesNotRunUnrelatedGroups(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(8_200_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 30,
+		"auto_priority_window_hours":     24,
+	})
+	dueChannel, _ := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.06, "due", 100)
+	dueSettings := dueChannel.GetOtherSettings()
+	dueSettings.ChannelAutoPriorityLastRunAt = now - 3600
+	dueChannel.SetOtherSettings(dueSettings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", dueChannel.Id).
+		Update("settings", dueChannel.OtherSettings).Error)
+
+	unrelated := createAutoPriorityTestChannel(t, "unrelated due group", 300, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.01,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", unrelated.Id).
+		Update("group", "unrelated").Error)
+	require.NoError(t, model.DB.Model(&model.Ability{}).
+		Where("channel_id = ?", unrelated.Id).
+		Update("group", "unrelated").Error)
+
+	results := (&UpstreamSourceService{}).RunDueUpstreamSourceAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	var reloadedDue, reloadedUnrelated model.Channel
+	require.NoError(t, model.DB.First(&reloadedDue, dueChannel.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedUnrelated, unrelated.Id).Error)
+	assert.Equal(t, now, reloadedDue.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Zero(t, reloadedUnrelated.GetOtherSettings().ChannelAutoPriorityLastRunAt)
 }
 
 func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
@@ -589,12 +679,12 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.Equal(t, int64(991), reloadedChannel.GetPriority())
 	reloadedSettings := reloadedChannel.GetOtherSettings()
 	assert.True(t, reloadedSettings.ChannelAutoPriorityEnabled)
-	assert.Equal(t, upstreamSourceAutoPriorityDefaultIntervalMinutes, reloadedSettings.ChannelAutoPriorityIntervalMinutes)
+	assert.Equal(t, 15, reloadedSettings.ChannelAutoPriorityIntervalMinutes)
 	assert.Equal(t, 24, reloadedSettings.ChannelAutoPriorityWindowHours)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastRunAt)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastAppliedAt)
 	require.NotNil(t, reloadedSettings.ChannelAutoPriorityLastScore)
-	assert.Equal(t, "v3", reloadedSettings.ChannelAutoPriorityLastScore.Version)
+	assert.Equal(t, "v4", reloadedSettings.ChannelAutoPriorityLastScore.Version)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastScore.ComputedAt)
 	assert.Equal(t, now-24*3600, reloadedSettings.ChannelAutoPriorityLastScore.WindowStart)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastScore.WindowEnd)
@@ -810,6 +900,79 @@ func TestRunUpstreamSourceAutoPrioritySkipsMetadataMismatch(t *testing.T) {
 	reloadedSettings := reloadedChannel.GetOtherSettings()
 	assert.Equal(t, int64(0), reloadedSettings.ChannelAutoPriorityLastRunAt)
 	assert.Nil(t, reloadedSettings.ChannelAutoPriorityLastScore)
+}
+
+func TestRunUpstreamSourceAutoPriorityStaleMappingCannotTriggerManualChannelGroup(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(3_100_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+	})
+	rate := 0.5
+	mapping := createSyncTestMapping(t, source.Id, "31", "stale mapping", &rate)
+	manual := createAutoPriorityTestChannel(t, "ordinary manual channel", 250, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.5,
+	})
+	manualPeer := createAutoPriorityTestChannel(t, "ordinary manual peer", 300, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 15,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  1,
+	})
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).
+		Where("id = ?", mapping.Id).
+		Update("local_channel_id", manual.Id).Error)
+
+	result, err := (&UpstreamSourceService{}).RunAutoPriority(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "generated_channel_metadata_mismatch", result.Results[0].Reason)
+	assert.Equal(t, int64(250), result.Results[0].OldPriority)
+	assert.Equal(t, int64(250), result.Results[0].NewPriority)
+	for _, channel := range []model.Channel{manual, manualPeer} {
+		var reloaded model.Channel
+		require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+		assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+		assert.Nil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+	}
+}
+
+func TestRunUpstreamSourceAutoPriorityDuplicateMappingCannotShadowValidOwner(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(3_200_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 15,
+		"auto_priority_window_hours":     24,
+	})
+	channel, ownerMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "owner", 100)
+	staleRate := 0.75
+	staleMapping := createSyncTestMapping(t, source.Id, "32", "stale duplicate", &staleRate)
+	require.Greater(t, staleMapping.Id, ownerMapping.Id)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).
+		Where("id = ?", staleMapping.Id).
+		Update("local_channel_id", channel.Id).Error)
+
+	result, err := (&UpstreamSourceService{}).RunAutoPriority(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 2)
+	assert.Equal(t, ownerMapping.Id, result.Results[0].MappingID)
+	assert.True(t, result.Results[0].Applied)
+	assert.Equal(t, staleMapping.Id, result.Results[1].MappingID)
+	assert.Equal(t, "generated_channel_metadata_mismatch", result.Results[1].Reason)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	settings := reloaded.GetOtherSettings()
+	assert.Equal(t, now, settings.ChannelAutoPriorityLastRunAt)
+	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, 1, settings.ChannelAutoPriorityLastScore.CohortMemberCount)
 }
 
 func TestRunUpstreamSourceAutoPrioritySkipsDisabledAndMissingRate(t *testing.T) {
@@ -1206,6 +1369,37 @@ func TestAutoPriorityLocalGroupCostBoundsIncludesManualAndGeneratedChannels(t *t
 	require.Contains(t, bounds, cohort)
 	assert.InDelta(t, 0.001, bounds[cohort][0], 0.0001)
 	assert.InDelta(t, 0.05, bounds[cohort][1], 0.0001)
+}
+
+func TestAutoPriorityLocalGroupCostBoundsKeepsTemporaryDisabledAndExcludesManualDisabled(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+
+	temporaryCheap := createAutoPriorityTestChannel(t, "temporary cheap", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:        true,
+		ChannelAutoPriorityRateMultiplier: 0.02,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", temporaryCheap.Id).
+		Update("status", common.ChannelStatusAutoDisabled).Error)
+	createAutoPriorityTestChannel(t, "enabled expensive", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:        true,
+		ChannelAutoPriorityRateMultiplier: 0.06,
+	})
+	manualCheapest := createAutoPriorityTestChannel(t, "manual cheapest", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:        true,
+		ChannelAutoPriorityRateMultiplier: 0.001,
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", manualCheapest.Id).
+		Update("status", common.ChannelStatusManuallyDisabled).Error)
+
+	bounds, err := autoPriorityLocalGroupCostBounds(context.Background(), []string{"default"}, []int{constant.ChannelTypeOpenAI})
+
+	require.NoError(t, err)
+	cohort := autoPriorityCohortKey("default", constant.ChannelTypeOpenAI)
+	require.Contains(t, bounds, cohort)
+	assert.InDelta(t, 0.02, bounds[cohort][0], 0.0001)
+	assert.InDelta(t, 0.06, bounds[cohort][1], 0.0001)
 }
 
 func TestAutoPriorityLocalGroupCostBoundsReturnsEmptyForNoGroups(t *testing.T) {

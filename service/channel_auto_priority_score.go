@@ -24,6 +24,7 @@ type AutoPriorityScoreInput struct {
 	FirstTokenSampleCount           int64
 	ThroughputSampleCount           int64
 	HasPreviousSnapshot             bool
+	HardUnavailable                 bool
 
 	// CohortCostFloor/CohortCostCeil retain their legacy names, but when > 0 they
 	// are local-group-wide nominal rate multiplier bounds (across all upstream
@@ -36,6 +37,9 @@ type AutoPriorityScoreInput struct {
 type AutoPriorityScoreResult struct {
 	ChannelID                int
 	Cohort                   string
+	CohortFloor              float64
+	CohortCeil               float64
+	CohortMemberCount        int
 	EffectiveRateMultiplier  float64
 	NominalRateMultiplier    float64
 	CacheAdjustedCostFactor  float64
@@ -189,10 +193,14 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		}
 
 		minNominalRate := results[indexes[0]].NominalRateMultiplier
+		maxNominalRate := minNominalRate
 		for _, idx := range indexes[1:] {
 			nominalRate := results[idx].NominalRateMultiplier
 			if nominalRate < minNominalRate {
 				minNominalRate = nominalRate
+			}
+			if nominalRate > maxNominalRate {
+				maxNominalRate = nominalRate
 			}
 		}
 
@@ -203,6 +211,9 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			if floor := inputs[idx].CohortCostFloor; isValidAutoPriorityMultiplier(floor) && floor < minNominalRate {
 				minNominalRate = floor
 			}
+			if ceil := inputs[idx].CohortCostCeil; isValidAutoPriorityMultiplier(ceil) && ceil > maxNominalRate {
+				maxNominalRate = ceil
+			}
 		}
 		cohortCostFloors[results[indexes[0]].Cohort] = minNominalRate
 		for _, idx := range indexes {
@@ -211,11 +222,24 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			// field. It now aliases the nominal, cache-independent price score.
 			results[idx].EffectivePriceScore = priceScore
 			results[idx].NominalPriceScore = priceScore
+			results[idx].CohortFloor = minNominalRate
+			results[idx].CohortCeil = maxNominalRate
+			results[idx].CohortMemberCount = len(indexes)
 		}
 	}
 
 	for i := range results {
 		if results[i].Reason != "" {
+			continue
+		}
+		if inputs[i].HardUnavailable {
+			availabilityGates[i] = 0
+			results[i].AvailabilityScore = 0
+			results[i].FinalScore = 0
+			results[i].ComputedPriority = 0
+			results[i].NewPriority = results[i].OldPriority
+			results[i].Applied = false
+			results[i].Reason = "channel_auto_disabled"
 			continue
 		}
 

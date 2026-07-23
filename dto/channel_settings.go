@@ -142,6 +142,9 @@ type ChannelAutoPriorityScore struct {
 	WindowStart              int64   `json:"window_start"`
 	WindowEnd                int64   `json:"window_end"`
 	Cohort                   string  `json:"cohort,omitempty"`
+	CohortFloor              float64 `json:"cohort_floor,omitempty"`
+	CohortCeil               float64 `json:"cohort_ceil,omitempty"`
+	CohortMemberCount        int     `json:"cohort_member_count,omitempty"`
 	EffectiveRateMultiplier  float64 `json:"effective_rate_multiplier"`
 	NominalRateMultiplier    float64 `json:"nominal_rate_multiplier"`
 	CacheAdjustedCostFactor  float64 `json:"cache_adjusted_cost_factor"`

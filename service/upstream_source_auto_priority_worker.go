@@ -3,27 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-
-	"github.com/bytedance/gopkg/util/gopool"
-)
-
-const (
-	upstreamSourceAutoPriorityTickInterval  = time.Minute
-	upstreamSourceAutoPrioritySourceTimeout = 2 * time.Minute
-)
-
-var (
-	upstreamSourceAutoPriorityOnce    sync.Once
-	upstreamSourceAutoPriorityRunning atomic.Bool
 )
 
 type upstreamSourceAutoPriorityMappingLoader func(ctx context.Context, source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error)
@@ -157,67 +143,154 @@ func loadUpstreamSourceAutoPriorityChannels(ctx context.Context, mappings []mode
 func (s *UpstreamSourceService) RunDueUpstreamSourceAutoPriority(ctx context.Context, now int64) []dto.UpstreamSourceAutoPriorityResult {
 	jobs, err := listDueUpstreamSourceAutoPriorityJobs(ctx, now)
 	if err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: list due sources failed: %v", err))
+		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: list due jobs failed: %v", err))
+		return nil
+	}
+	mappingIDs := make([]int, 0)
+	for _, job := range jobs {
+		mappingIDs = append(mappingIDs, job.mappingIDs...)
+	}
+	if len(mappingIDs) == 0 {
 		return nil
 	}
 
-	results := make([]dto.UpstreamSourceAutoPriorityResult, 0, len(jobs))
-	for _, job := range jobs {
-		sourceCtx, cancel := context.WithTimeout(ctx, upstreamSourceAutoPrioritySourceTimeout)
-		result, err := s.RunAutoPriorityForMappings(sourceCtx, job.source.Id, now, job.mappingIDs)
-		cancel()
+	var mappings []model.UpstreamSourceChannelMapping
+	if err := model.DB.WithContext(ctx).
+		Select("local_channel_id").
+		Where("id IN ?", mappingIDs).
+		Find(&mappings).Error; err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: load due mappings failed: %v", err))
+		return nil
+	}
+	channelIDs := make([]int, 0, len(mappings))
+	for _, mapping := range mappings {
+		if mapping.LocalChannelID != 0 {
+			channelIDs = append(channelIDs, mapping.LocalChannelID)
+		}
+	}
+	if len(channelIDs) == 0 {
+		return nil
+	}
+
+	var triggerChannels []model.Channel
+	if err := model.DB.WithContext(ctx).
+		Select("id", "group").
+		Where("id IN ? AND status IN ?", channelIDs, []int{
+			common.ChannelStatusEnabled,
+			common.ChannelStatusAutoDisabled,
+		}).
+		Find(&triggerChannels).Error; err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: load due channels failed: %v", err))
+		return nil
+	}
+	localGroups := make(map[string]struct{}, len(triggerChannels))
+	for _, channel := range triggerChannels {
+		localGroups[strings.TrimSpace(channel.Group)] = struct{}{}
+	}
+	if len(localGroups) == 0 {
+		return nil
+	}
+
+	runResults, err := runChannelAutoPriority(ctx, now, localGroups, true)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: run due cohorts failed: %v", err))
+		return nil
+	}
+	if len(runResults) == 0 {
+		return nil
+	}
+
+	channelIDs = make([]int, 0, len(runResults))
+	for _, runResult := range runResults {
+		channelIDs = append(channelIDs, runResult.ChannelID)
+	}
+	var channels []model.Channel
+	if err := model.DB.WithContext(ctx).
+		Select("id", "settings").
+		Where("id IN ?", channelIDs).
+		Find(&channels).Error; err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: load completed channels failed: %v", err))
+		return nil
+	}
+	settingsByChannelID := make(map[int]dto.ChannelOtherSettings, len(channels))
+	for _, channel := range channels {
+		settings, ok := readChannelOtherSettingsForAutoPriorityDue(channel)
+		if !ok {
+			continue
+		}
+		settingsByChannelID[channel.Id] = settings
+	}
+
+	resultsBySourceID := make(map[int]*dto.UpstreamSourceAutoPriorityResult)
+	for _, runResult := range runResults {
+		settings, ok := settingsByChannelID[runResult.ChannelID]
+		if !ok || settings.GeneratedByUpstreamSourceID == 0 {
+			continue
+		}
+		result := resultsBySourceID[settings.GeneratedByUpstreamSourceID]
 		if result == nil {
 			result = &dto.UpstreamSourceAutoPriorityResult{
-				SourceID: job.source.Id,
+				SourceID: settings.GeneratedByUpstreamSourceID,
+				Results:  make([]dto.UpstreamSourceAutoPriorityChannelResult, 0),
 			}
+			resultsBySourceID[settings.GeneratedByUpstreamSourceID] = result
 		}
-		if err != nil {
+		reason := runResult.Reason
+		if reason == "" {
+			reason = runResult.score.Reason
+		}
+		result.Results = append(result.Results, dto.UpstreamSourceAutoPriorityChannelResult{
+			MappingID:               settings.GeneratedByUpstreamMappingID,
+			LocalChannelID:          runResult.ChannelID,
+			OldPriority:             runResult.score.OldPriority,
+			NewPriority:             runResult.score.NewPriority,
+			ComputedPriority:        runResult.score.ComputedPriority,
+			Applied:                 runResult.Applied,
+			Reason:                  reason,
+			EffectiveRateMultiplier: runResult.score.EffectiveRateMultiplier,
+			NominalRateMultiplier:   runResult.score.NominalRateMultiplier,
+			CacheAdjustedCostFactor: runResult.score.CacheAdjustedCostFactor,
+			EffectiveCostMultiplier: runResult.score.EffectiveCostMultiplier,
+			EffectivePriceScore:     runResult.score.EffectivePriceScore,
+			NominalPriceScore:       runResult.score.NominalPriceScore,
+			CacheScore:              runResult.score.CacheScore,
+			AvailabilityScore:       runResult.score.AvailabilityScore,
+			FirstTokenScore:         runResult.score.FirstTokenScore,
+			ThroughputScore:         runResult.score.ThroughputScore,
+			FinalScore:              runResult.score.FinalScore,
+		})
+		switch {
+		case runResult.Applied:
+			result.Updated++
+		case reason == "update_failed" || strings.HasSuffix(reason, "_failed"):
 			result.Failed++
-			if result.Error == "" {
-				result.Error = SanitizeUpstreamSourceError(err)
-			}
-			logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: run source_id=%d failed: %v", job.source.Id, err))
+		default:
+			result.Skipped++
 		}
-		results = append(results, *result)
+	}
+
+	sourceIDs := make([]int, 0, len(resultsBySourceID))
+	for sourceID := range resultsBySourceID {
+		sourceIDs = append(sourceIDs, sourceID)
+	}
+	sort.Ints(sourceIDs)
+	results := make([]dto.UpstreamSourceAutoPriorityResult, 0, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		results = append(results, *resultsBySourceID[sourceID])
 	}
 	return results
 }
 
 func StartUpstreamSourceAutoPriorityWorker() {
-	upstreamSourceAutoPriorityOnce.Do(func() {
-		if !common.IsMasterNode {
-			return
-		}
-		gopool.Go(func() {
-			logger.LogInfo(context.Background(), fmt.Sprintf("upstream source auto-priority worker started: tick=%s", upstreamSourceAutoPriorityTickInterval))
-			ticker := time.NewTicker(upstreamSourceAutoPriorityTickInterval)
-			defer ticker.Stop()
-
-			runDueUpstreamSourceAutoPriorityOnceRecovering()
-			for range ticker.C {
-				runDueUpstreamSourceAutoPriorityOnceRecovering()
-			}
-		})
-	})
+	StartChannelAutoPriorityWorker()
 }
 
 func runDueUpstreamSourceAutoPriorityOnceRecovering() {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.LogWarn(context.Background(), fmt.Sprintf("upstream source auto-priority: worker tick panic: %v", r))
-		}
-	}()
-	runDueUpstreamSourceAutoPriorityOnce()
+	runDueChannelAutoPriorityOnceRecovering()
 }
 
 func runDueUpstreamSourceAutoPriorityOnce() {
-	if !upstreamSourceAutoPriorityRunning.CompareAndSwap(false, true) {
-		return
-	}
-	defer upstreamSourceAutoPriorityRunning.Store(false)
-
-	now := common.GetTimestamp()
-	(&UpstreamSourceService{}).RunDueUpstreamSourceAutoPriority(context.Background(), now)
+	runDueChannelAutoPriorityOnce()
 }
 
 func upstreamSourceMappingAutoPriorityDue(source model.UpstreamSource, config upstreamSourceSyncConfig, mapping *model.UpstreamSourceChannelMapping, channels map[int]model.Channel, now int64) bool {

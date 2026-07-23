@@ -65,6 +65,16 @@ func RunChannelAutoPriorityGroup(ctx context.Context, channelID int, now int64) 
 }
 
 func RunChannelAutoPriorityGroupsForSource(ctx context.Context, sourceID int, now int64) (*dto.UpstreamSourceAutoPriorityResult, error) {
+	return runChannelAutoPriorityGroupsForSourceMappings(ctx, sourceID, now, nil, true)
+}
+
+func runChannelAutoPriorityGroupsForSourceMappings(
+	ctx context.Context,
+	sourceID int,
+	now int64,
+	mappingFilter map[int]struct{},
+	includeAllCohortResults bool,
+) (*dto.UpstreamSourceAutoPriorityResult, error) {
 	if sourceID == 0 {
 		return nil, fmt.Errorf("source ID is required")
 	}
@@ -95,34 +105,129 @@ func RunChannelAutoPriorityGroupsForSource(ctx context.Context, sourceID int, no
 	}
 
 	channelIDs := make([]int, 0, len(mappings))
+	candidateChannelIDs := make([]int, 0, len(mappings))
+	eligibleMappingsByID := make(map[int]model.UpstreamSourceChannelMapping, len(mappings))
+	triggerMappingIDs := make(map[int]struct{}, len(mappings))
+	triggerMappingIDsByChannelID := make(map[int][]int, len(mappings))
 	mappingIDByChannelID := make(map[int]int, len(mappings))
+	preResultsByMappingID := make(map[int]dto.UpstreamSourceAutoPriorityChannelResult)
 	for _, mapping := range mappings {
 		resolution := resolveUpstreamSourceRule(config, &mapping)
-		if mapping.LocalChannelID == 0 || !resolution.SyncEligible || !resolution.AutoPriorityEnabled {
-			result.Skipped++
+		selected := mappingFilter == nil
+		if !selected {
+			_, selected = mappingFilter[mapping.Id]
+		}
+		if !resolution.SyncEligible || !resolution.AutoPriorityEnabled {
+			if selected {
+				result.Skipped++
+			}
 			continue
 		}
-		channelIDs = append(channelIDs, mapping.LocalChannelID)
-		mappingIDByChannelID[mapping.LocalChannelID] = mapping.Id
+		eligibleMappingsByID[mapping.Id] = mapping
+		if mapping.LocalChannelID != 0 {
+			candidateChannelIDs = append(candidateChannelIDs, mapping.LocalChannelID)
+		}
+		if mapping.EffectiveRateMultiplier == nil || !isValidAutoPriorityMultiplier(*mapping.EffectiveRateMultiplier) {
+			if selected {
+				preResultsByMappingID[mapping.Id] = dto.UpstreamSourceAutoPriorityChannelResult{
+					MappingID:      mapping.Id,
+					LocalChannelID: mapping.LocalChannelID,
+					Reason:         "missing_effective_rate_multiplier",
+				}
+				result.Skipped++
+			}
+			continue
+		}
+		if mapping.LocalChannelID == 0 {
+			if selected {
+				preResultsByMappingID[mapping.Id] = dto.UpstreamSourceAutoPriorityChannelResult{
+					MappingID: mapping.Id,
+					Reason:    "local_channel_missing",
+				}
+				result.Skipped++
+			}
+			continue
+		}
+		if selected {
+			channelIDs = append(channelIDs, mapping.LocalChannelID)
+			triggerMappingIDs[mapping.Id] = struct{}{}
+			triggerMappingIDsByChannelID[mapping.LocalChannelID] = append(
+				triggerMappingIDsByChannelID[mapping.LocalChannelID],
+				mapping.Id,
+			)
+		}
 	}
 	if len(channelIDs) == 0 {
+		for _, mapping := range mappings {
+			if preResult, ok := preResultsByMappingID[mapping.Id]; ok {
+				result.Results = append(result.Results, preResult)
+			}
+		}
 		return result, nil
 	}
 
 	var channels []model.Channel
 	if err := model.DB.WithContext(ctx).
-		Select("id", "group", "settings").
-		Where("id IN ? AND status = ?", channelIDs, common.ChannelStatusEnabled).
+		Select("id", "group", "status", "priority", "settings").
+		Where("id IN ?", candidateChannelIDs).
 		Order("id").
 		Find(&channels).Error; err != nil {
 		return nil, err
 	}
 	localGroups := make(map[string]struct{}, len(channels))
 	for _, channel := range channels {
+		selectedMappingIDs := triggerMappingIDsByChannelID[channel.Id]
+		for _, mappingID := range selectedMappingIDs {
+			delete(triggerMappingIDs, mappingID)
+		}
+		settings, settingsOK := readChannelOtherSettingsForAutoPriorityDue(channel)
+		ownerMapping, ownerExists := eligibleMappingsByID[settings.GeneratedByUpstreamMappingID]
+		ownerValid := settingsOK &&
+			ownerExists &&
+			ownerMapping.LocalChannelID == channel.Id &&
+			isGeneratedChannelMetadataMatching(&settings, sourceID, ownerMapping.Id)
+		if ownerValid {
+			mappingIDByChannelID[channel.Id] = ownerMapping.Id
+		}
+		for _, selectedMappingID := range selectedMappingIDs {
+			if ownerValid && selectedMappingID == ownerMapping.Id {
+				continue
+			}
+			preResultsByMappingID[selectedMappingID] = dto.UpstreamSourceAutoPriorityChannelResult{
+				MappingID:      selectedMappingID,
+				LocalChannelID: channel.Id,
+				OldPriority:    channel.GetPriority(),
+				NewPriority:    channel.GetPriority(),
+				Reason:         "generated_channel_metadata_mismatch",
+			}
+			result.Skipped++
+		}
+		if !ownerValid {
+			continue
+		}
+		ownerWasSelected := false
+		for _, selectedMappingID := range selectedMappingIDs {
+			if selectedMappingID == ownerMapping.Id {
+				ownerWasSelected = true
+				break
+			}
+		}
+		if !ownerWasSelected {
+			continue
+		}
+		if channel.Status != common.ChannelStatusEnabled && channel.Status != common.ChannelStatusAutoDisabled {
+			result.Skipped++
+			continue
+		}
 		localGroups[strings.TrimSpace(channel.Group)] = struct{}{}
 	}
-	result.Skipped += len(channelIDs) - len(channels)
+	result.Skipped += len(triggerMappingIDs)
 	if len(localGroups) == 0 {
+		for _, mapping := range mappings {
+			if preResult, ok := preResultsByMappingID[mapping.Id]; ok {
+				result.Results = append(result.Results, preResult)
+			}
+		}
 		return result, nil
 	}
 
@@ -130,13 +235,19 @@ func RunChannelAutoPriorityGroupsForSource(ctx context.Context, sourceID int, no
 	if err != nil {
 		return nil, err
 	}
+	runResultByMappingID := make(map[int]dto.UpstreamSourceAutoPriorityChannelResult, len(runResults))
+	otherCohortResults := make([]dto.UpstreamSourceAutoPriorityChannelResult, 0)
 	for _, runResult := range runResults {
+		mappingID, belongsToSource := mappingIDByChannelID[runResult.ChannelID]
+		if !belongsToSource && !includeAllCohortResults {
+			continue
+		}
 		reason := runResult.Reason
 		if reason == "" {
 			reason = runResult.score.Reason
 		}
 		channelResult := dto.UpstreamSourceAutoPriorityChannelResult{
-			MappingID:               mappingIDByChannelID[runResult.ChannelID],
+			MappingID:               mappingID,
 			LocalChannelID:          runResult.ChannelID,
 			OldPriority:             runResult.score.OldPriority,
 			NewPriority:             runResult.score.NewPriority,
@@ -163,8 +274,22 @@ func RunChannelAutoPriorityGroupsForSource(ctx context.Context, sourceID int, no
 		default:
 			result.Skipped++
 		}
-		result.Results = append(result.Results, channelResult)
+		if belongsToSource {
+			runResultByMappingID[mappingID] = channelResult
+		} else {
+			otherCohortResults = append(otherCohortResults, channelResult)
+		}
 	}
+	for _, mapping := range mappings {
+		if runResult, ok := runResultByMappingID[mapping.Id]; ok {
+			result.Results = append(result.Results, runResult)
+			continue
+		}
+		if preResult, ok := preResultsByMappingID[mapping.Id]; ok {
+			result.Results = append(result.Results, preResult)
+		}
+	}
+	result.Results = append(result.Results, otherCohortResults...)
 	return result, nil
 }
 
@@ -271,7 +396,23 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 	if now == 0 {
 		now = common.GetTimestamp()
 	}
-	allSweepResults, err := sinkManuallyDisabledChannels(ctx, nil, nil, nil)
+	var sweepChannelIDs []int
+	if localGroupFilter != nil {
+		var manuallyDisabled []model.Channel
+		if err := model.DB.WithContext(ctx).
+			Select("id", "group").
+			Where("status = ?", common.ChannelStatusManuallyDisabled).
+			Find(&manuallyDisabled).Error; err != nil {
+			return nil, err
+		}
+		sweepChannelIDs = make([]int, 0, len(manuallyDisabled))
+		for _, channel := range manuallyDisabled {
+			if _, selected := localGroupFilter[strings.TrimSpace(channel.Group)]; selected {
+				sweepChannelIDs = append(sweepChannelIDs, channel.Id)
+			}
+		}
+	}
+	allSweepResults, err := sinkManuallyDisabledChannels(ctx, nil, sweepChannelIDs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +441,11 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 	var channels []model.Channel
 	if err := model.DB.WithContext(ctx).
-		Where("status IN ?", []int{common.ChannelStatusEnabled, common.ChannelStatusManuallyDisabled}).
+		Where("status IN ?", []int{
+			common.ChannelStatusEnabled,
+			common.ChannelStatusManuallyDisabled,
+			common.ChannelStatusAutoDisabled,
+		}).
 		Order("id").
 		Find(&channels).Error; err != nil {
 		return nil, err
@@ -375,8 +520,9 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		if !stateExists || !state.ruleResolved {
 			invalidReason = "upstream_rule_resolution_failed"
 		} else if state.localChannelID != configured.channel.Id ||
-			(settings.GeneratedByUpstreamSourceID != 0 && state.sourceID != settings.GeneratedByUpstreamSourceID) ||
-			!state.rateValid {
+			(settings.GeneratedByUpstreamSourceID != 0 && state.sourceID != settings.GeneratedByUpstreamSourceID) {
+			invalidReason = "generated_channel_metadata_mismatch"
+		} else if !state.rateValid {
 			invalidReason = "missing_effective_rate_multiplier"
 		}
 		configuredChannels = append(configuredChannels, configuredAutoPriorityChannel{
@@ -509,6 +655,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 					PreviousCacheAdjustedCostFactor: previousAutoPriorityCacheAdjustedCostFactor(settings),
 					PreviousEffectiveCostMultiplier: previousAutoPriorityEffectiveCostMultiplier(settings),
 					HasPreviousSnapshot:             settings.ChannelAutoPriorityLastScore != nil,
+					HardUnavailable:                 channel.Status == common.ChannelStatusAutoDisabled,
 				},
 				windowStart:             now - int64(windowHours)*3600,
 				availabilityWindowStart: now - int64(availabilityWindowHours)*3600,
@@ -596,10 +743,17 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		if len(indexes) > 0 {
 			if reason, failed := failedReasons[indexes[0]]; failed {
 				for _, idx := range indexes {
+					oldPriority := pending[idx].channel.GetPriority()
 					results = append(results, ChannelAutoPriorityRunResult{
 						ChannelID: pending[idx].channel.Id,
 						Applied:   false,
 						Reason:    reason,
+						score: AutoPriorityScoreResult{
+							ChannelID:   pending[idx].channel.Id,
+							OldPriority: oldPriority,
+							NewPriority: oldPriority,
+							Reason:      reason,
+						},
 					})
 				}
 				continue
@@ -608,6 +762,9 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 		sinkPriority := channelAutoPriorityDefaultSinkPriority
 		for _, idx := range indexes {
+			if pending[idx].scoreInput.HardUnavailable {
+				continue
+			}
 			enabledPriority := scoreResults[idx].NewPriority
 			if enabledPriority > sinkPriority {
 				continue
