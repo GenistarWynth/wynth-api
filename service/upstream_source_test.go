@@ -3286,16 +3286,23 @@ func TestAutoPriorityOwnsGeneratedChannelPriority(t *testing.T) {
 }
 
 func TestGeneratedChannelUpdateMapOmitsPriorityWhenAutoPriorityManaged(t *testing.T) {
-	channel := &model.Channel{Priority: common.GetPointer(int64(348))}
+	channel := &model.Channel{
+		Priority: common.GetPointer(int64(348)),
+		Remark:   common.GetPointer("Upstream group: Duck; Rate: 0.050x"),
+	}
 
 	managed := generatedChannelUpdateMap(channel, true)
 	assert.NotContains(t, managed, "priority",
 		"auto-priority-managed sync must not write the priority column (avoids clobbering a concurrent worker commit)")
 	assert.Contains(t, managed, "weight", "non-priority columns are still synced")
+	assert.Equal(t, channel.Remark, managed["remark"],
+		"normal and automatic sync must refresh the generated upstream-rate hover")
 
 	unmanaged := generatedChannelUpdateMap(channel, false)
 	assert.Equal(t, channel.Priority, unmanaged["priority"],
 		"auto-priority off: sync writes the rule static priority")
+	assert.Equal(t, channel.Remark, unmanaged["remark"],
+		"rule reapplication must refresh the generated upstream-rate hover")
 }
 
 func TestUpstreamSourceResponseSnippet(t *testing.T) {

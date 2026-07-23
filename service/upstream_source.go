@@ -614,6 +614,9 @@ func (s *UpstreamSourceService) syncUpstreamSourceMapping(ctx context.Context, s
 	if existingChannel != nil {
 		channel.Id = existingChannel.Id
 		mergeGeneratedChannelOtherSettings(channel, existingChannel, resolution, source, mapping)
+		if !isGeneratedChannelRemarkManagedByUpstreamSource(existingChannel.Remark) {
+			channel.Remark = existingChannel.Remark
+		}
 	}
 
 	models, modelErr := fetchGeneratedChannelModels(s.fetchModels(config), channel, resolution)
@@ -954,6 +957,10 @@ func upstreamSourceGeneratedChannelRemark(mapping *model.UpstreamSourceChannelMa
 	return common.GetPointer(remark)
 }
 
+func isGeneratedChannelRemarkManagedByUpstreamSource(remark *string) bool {
+	return remark == nil || strings.HasPrefix(strings.TrimSpace(*remark), "Upstream group:")
+}
+
 func truncateUpstreamSourceString(value string, maxBytes int) string {
 	if maxBytes <= 0 || len(value) <= maxBytes {
 		return value
@@ -1119,6 +1126,7 @@ func generatedChannelUpdateMap(channel *model.Channel, autoPriorityManaged bool)
 		"priority":       channel.Priority,
 		"weight":         channel.Weight,
 		"tag":            channel.Tag,
+		"remark":         channel.Remark,
 		"models":         channel.Models,
 		"settings":       channel.OtherSettings,
 		"status":         channel.Status,
@@ -1223,11 +1231,20 @@ func refreshGeneratedChannelRateLabelsTx(tx *gorm.DB, source *model.UpstreamSour
 		}
 
 		expectedName := upstreamSourceGeneratedChannelName(source, discovered)
-		if channel.Name == expectedName {
+		expectedRemark := upstreamSourceGeneratedChannelRemark(discovered)
+		if !isGeneratedChannelRemarkManagedByUpstreamSource(channel.Remark) {
+			expectedRemark = channel.Remark
+		}
+		remarkMatches := channel.Remark == nil && expectedRemark == nil
+		if channel.Remark != nil && expectedRemark != nil {
+			remarkMatches = *channel.Remark == *expectedRemark
+		}
+		if channel.Name == expectedName && remarkMatches {
 			continue
 		}
 		if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{
 			"name":         expectedName,
+			"remark":       expectedRemark,
 			"updated_time": now,
 		}).Error; err != nil {
 			return false, err

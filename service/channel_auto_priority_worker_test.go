@@ -272,6 +272,61 @@ func TestRunDueChannelAutoPriorityProcessesGeneratedChannels(t *testing.T) {
 	assert.Equal(t, now, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
 }
 
+func TestRunDueChannelAutoPriorityUsesMappingRateSourceNotGeneratedName(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_325_000)
+
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	generatedChannel, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.05, "duck", 100)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", generatedChannel.Id).
+		Update("name", "可达鸭 / 0.040x").Error)
+	createAutoPriorityTestUsageLog(t, generatedChannel.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, generatedChannel.Id, now-60)
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, generatedChannel.Id).Error)
+	settings := reloaded.GetOtherSettings()
+	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, 0.05, settings.ChannelAutoPriorityLastScore.NominalRateMultiplier)
+	assert.Equal(t, 0.05, settings.ChannelAutoPriorityLastScore.EffectiveRateMultiplier)
+	var reloadedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&reloadedMapping, mapping.Id).Error)
+	require.NotNil(t, reloadedMapping.EffectiveRateMultiplier)
+	assert.Equal(t, 0.05, *reloadedMapping.EffectiveRateMultiplier)
+}
+
+func TestRunDueChannelAutoPriorityUsesConfiguredRateSourceForManualChannel(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_330_000)
+
+	manualChannel := createAutoPriorityTestChannel(t, "manual / 0.040x", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.07,
+	})
+	createAutoPriorityTestUsageLog(t, manualChannel.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, manualChannel.Id, now-60)
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, manualChannel.Id).Error)
+	settings := reloaded.GetOtherSettings()
+	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, 0.07, settings.ChannelAutoPriorityLastScore.NominalRateMultiplier)
+	assert.Equal(t, 0.07, settings.ChannelAutoPriorityLastScore.EffectiveRateMultiplier)
+}
+
 func TestRunDueChannelAutoPriorityRejectsInvalidGeneratedRateForWholeGroup(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_350_000)
