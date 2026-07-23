@@ -6,6 +6,14 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.54] - 2026-07-23
+
+### Added
+- Upstream-source discovery and monitoring now persist scan records and per-group change ledgers, with admin APIs for recent runs, mapping changes, and collector outcomes.
+- Upstream sources now track session and authentication health and support opt-in scheduled monitoring with isolated claims, bounded concurrency and timeouts, stale-run recovery, and collection of balances, costs, rate groups, announcements, and subscription usage from supported New API and Sub2API providers.
+- Monitor notification subscriptions support source, event, and group filters, durable cooldowns, delivery history, and automatic retention cleanup for monitoring history.
+- The localized admin UI adds a source-monitoring sheet with authentication status, monitor controls, current balance and subscription snapshots, recent runs, group changes, and announcements.
+
 ## [v1.0.0-rc.53] - 2026-07-22
 
 ### Fixed
