@@ -6,6 +6,13 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.56] - 2026-07-23
+
+### Fixed
+- Auto-priority now reads generated-channel pricing from the current upstream mapping instead of parsing channel names, while manual channels continue to use their configured rate source.
+- Generated channel names and system-managed rate remarks now update together during discovery, monitor collection, normal and automatic sync, and rule reapplication, repairing historical label drift even when the upstream rate has not changed.
+- Rate-label repair preserves source ownership checks, stale-without-delete behavior, administrator custom remarks, and the v1.0.0-rc.55 scoring rules.
+
 ## [v1.0.0-rc.55] - 2026-07-23
 
 ### Fixed
