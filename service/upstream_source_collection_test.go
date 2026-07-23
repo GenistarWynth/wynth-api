@@ -3,6 +3,9 @@ package service
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/stretchr/testify/assert"
@@ -247,6 +250,165 @@ func TestMonitorRateCollectorUsesSharedDiscoveryLedgerRules(t *testing.T) {
 	assert.False(t, preserved.SyncEnabled)
 	assert.Equal(t, "key-a", preserved.UpstreamKeyID)
 	assert.Equal(t, 123, preserved.LocalChannelID)
+}
+
+func TestMonitorRateCollectorRefreshesGeneratedChannelRateLabel(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	oldRate := 0.08
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "gpt-codex",
+		UpstreamGroupName:       "GPT Codex",
+		UpstreamPlatform:        "openai",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamStatus:          "enabled",
+		UpstreamRateMultiplier:  &oldRate,
+		EffectiveRateMultiplier: &oldRate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+
+	channel := model.Channel{
+		Name:   upstreamSourceGeneratedChannelName(&source, &mapping),
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Group:  "default",
+		Models: "gpt-5",
+		Key:    "test-key",
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&mapping).Update("local_channel_id", channel.Id).Error)
+
+	newRate := 0.02
+	scan := createUpstreamSourceCollectionTestScan(t, source.Id, 200)
+	_, _, err := applyUpstreamSourceRateGroupSnapshot(&source, scan.Id, UpstreamRateGroupSnapshot{
+		Groups: []UpstreamGroup{{
+			ID:                      mapping.UpstreamGroupID,
+			Name:                    mapping.UpstreamGroupName,
+			Platform:                mapping.UpstreamPlatform,
+			Status:                  mapping.UpstreamStatus,
+			RateMultiplier:          &newRate,
+			EffectiveRateMultiplier: &newRate,
+		}},
+	}, 201)
+	require.NoError(t, err)
+
+	var updatedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&updatedMapping, mapping.Id).Error)
+	require.NotNil(t, updatedMapping.EffectiveRateMultiplier)
+	assert.Equal(t, newRate, *updatedMapping.EffectiveRateMultiplier)
+	assert.Equal(t, channel.Id, updatedMapping.LocalChannelID)
+
+	var updatedChannel model.Channel
+	require.NoError(t, model.DB.First(&updatedChannel, channel.Id).Error)
+	assert.Equal(t, upstreamSourceGeneratedChannelName(&source, &updatedMapping), updatedChannel.Name)
+	assert.Contains(t, updatedChannel.Name, "0.020x")
+}
+
+func TestMonitorRateCollectorRepairsExistingGeneratedChannelRateLabelDrift(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	currentRate := 0.02
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "gpt-codex",
+		UpstreamGroupName:       "GPT Codex",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamRateMultiplier:  &currentRate,
+		EffectiveRateMultiplier: &currentRate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+
+	staleRate := 0.08
+	staleLabelMapping := mapping
+	staleLabelMapping.EffectiveRateMultiplier = &staleRate
+	channel := model.Channel{
+		Name:   upstreamSourceGeneratedChannelName(&source, &staleLabelMapping),
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Group:  "default",
+		Models: "gpt-5",
+		Key:    "test-key",
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&mapping).Update("local_channel_id", channel.Id).Error)
+
+	scan := createUpstreamSourceCollectionTestScan(t, source.Id, 200)
+	_, _, err := applyUpstreamSourceRateGroupSnapshot(&source, scan.Id, UpstreamRateGroupSnapshot{
+		Groups: []UpstreamGroup{{
+			ID:                      mapping.UpstreamGroupID,
+			Name:                    mapping.UpstreamGroupName,
+			RateMultiplier:          &currentRate,
+			EffectiveRateMultiplier: &currentRate,
+		}},
+	}, 201)
+	require.NoError(t, err)
+
+	var updatedChannel model.Channel
+	require.NoError(t, model.DB.First(&updatedChannel, channel.Id).Error)
+	assert.Equal(t, "source-a / 0.020x", updatedChannel.Name)
+}
+
+func TestMonitorRateCollectorDoesNotRenameUnownedChannel(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	source := createDiscoveryTestSource(t)
+	oldRate := 0.08
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID:                source.Id,
+		SyncEnabled:             true,
+		UpstreamGroupID:         "gpt-codex",
+		UpstreamGroupName:       "GPT Codex",
+		DiscoveryStatus:         model.UpstreamMappingDiscoveryStatusActive,
+		UpstreamRateMultiplier:  &oldRate,
+		EffectiveRateMultiplier: &oldRate,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+
+	channel := model.Channel{
+		Name:   upstreamSourceGeneratedChannelName(&source, &mapping),
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Group:  "default",
+		Models: "gpt-5",
+		Key:    "manual-key",
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		GeneratedByUpstreamSourceID:  source.Id,
+		GeneratedByUpstreamMappingID: mapping.Id + 999,
+	})
+	require.NoError(t, model.DB.Create(&channel).Error)
+	require.NoError(t, model.DB.Model(&mapping).Update("local_channel_id", channel.Id).Error)
+
+	newRate := 0.02
+	scan := createUpstreamSourceCollectionTestScan(t, source.Id, 200)
+	_, _, err := applyUpstreamSourceRateGroupSnapshot(&source, scan.Id, UpstreamRateGroupSnapshot{
+		Groups: []UpstreamGroup{{
+			ID:                      mapping.UpstreamGroupID,
+			Name:                    mapping.UpstreamGroupName,
+			RateMultiplier:          &newRate,
+			EffectiveRateMultiplier: &newRate,
+		}},
+	}, 201)
+	require.NoError(t, err)
+
+	var updatedMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&updatedMapping, mapping.Id).Error)
+	require.NotNil(t, updatedMapping.EffectiveRateMultiplier)
+	assert.Equal(t, newRate, *updatedMapping.EffectiveRateMultiplier)
+
+	var updatedChannel model.Channel
+	require.NoError(t, model.DB.First(&updatedChannel, channel.Id).Error)
+	assert.Equal(t, "source-a / 0.080x", updatedChannel.Name)
 }
 
 func createUpstreamSourceCollectionTestScan(t *testing.T, sourceID int, startedAt int64) model.UpstreamSourceScan {

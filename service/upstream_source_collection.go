@@ -351,7 +351,7 @@ func applyUpstreamSourceRateGroupSnapshot(source *model.UpstreamSource, scanID i
 	if err != nil {
 		return false, 0, err
 	}
-	if application.StaleCount > 0 {
+	if application.StaleCount > 0 || application.ChannelLabelsChanged {
 		model.InitChannelCache()
 	}
 	return application.Baseline, application.ChangeCount, nil

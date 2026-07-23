@@ -93,7 +93,7 @@ func (s *UpstreamSourceService) Discover(ctx context.Context, sourceID int) (*dt
 	}); err != nil {
 		return s.recordDiscoveryFailure(source.Id, scan.Id, s.now(), err)
 	}
-	if application.StaleCount > 0 {
+	if application.StaleCount > 0 || application.ChannelLabelsChanged {
 		model.InitChannelCache()
 	}
 	return &result, nil
@@ -1189,10 +1189,52 @@ func isSupportedUpstreamSourceType(sourceType string) bool {
 }
 
 type upstreamSourceGroupApplication struct {
-	Baseline     bool
-	ChangeCount  int
-	StaleCount   int
-	InvalidCount int
+	Baseline             bool
+	ChangeCount          int
+	StaleCount           int
+	InvalidCount         int
+	ChannelLabelsChanged bool
+}
+
+func refreshGeneratedChannelRateLabelsTx(tx *gorm.DB, source *model.UpstreamSource, previousMappings []model.UpstreamSourceChannelMapping, discoveredMappings []model.UpstreamSourceChannelMapping, now int64) (bool, error) {
+	previousByGroupID := make(map[string]model.UpstreamSourceChannelMapping, len(previousMappings))
+	for _, mapping := range previousMappings {
+		previousByGroupID[mapping.UpstreamGroupID] = mapping
+	}
+
+	changed := false
+	for index := range discoveredMappings {
+		discovered := &discoveredMappings[index]
+		previous, exists := previousByGroupID[discovered.UpstreamGroupID]
+		if !exists || previous.LocalChannelID == 0 {
+			continue
+		}
+
+		var channel model.Channel
+		err := tx.First(&channel, previous.LocalChannelID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if !isGeneratedChannelOwnedByMapping(&channel, source, &previous) {
+			continue
+		}
+
+		expectedName := upstreamSourceGeneratedChannelName(source, discovered)
+		if channel.Name == expectedName {
+			continue
+		}
+		if err := tx.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(map[string]any{
+			"name":         expectedName,
+			"updated_time": now,
+		}).Error; err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
 }
 
 // applyUpstreamSourceGroupsTx is the single current-state and change-ledger
@@ -1234,6 +1276,10 @@ func applyUpstreamSourceGroupsTx(tx *gorm.DB, source *model.UpstreamSource, scan
 	if err := model.UpsertDiscoveredMappingsTx(tx, source.Id, mappings, now); err != nil {
 		return upstreamSourceGroupApplication{}, err
 	}
+	channelLabelsChanged, err := refreshGeneratedChannelRateLabelsTx(tx, source, previousMappings, mappings, now)
+	if err != nil {
+		return upstreamSourceGroupApplication{}, err
+	}
 	staleCount, err := markMissingDiscoveredMappingsStaleTx(tx, source.Id, discoveredIDs, now)
 	if err != nil {
 		return upstreamSourceGroupApplication{}, err
@@ -1247,10 +1293,11 @@ func applyUpstreamSourceGroupsTx(tx *gorm.DB, source *model.UpstreamSource, scan
 		return upstreamSourceGroupApplication{}, err
 	}
 	return upstreamSourceGroupApplication{
-		Baseline:     baseline,
-		ChangeCount:  len(changes),
-		StaleCount:   staleCount,
-		InvalidCount: invalidCount,
+		Baseline:             baseline,
+		ChangeCount:          len(changes),
+		StaleCount:           staleCount,
+		InvalidCount:         invalidCount,
+		ChannelLabelsChanged: channelLabelsChanged,
 	}, nil
 }
 

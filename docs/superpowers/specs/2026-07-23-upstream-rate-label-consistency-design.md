@@ -29,11 +29,13 @@ each other.
 ## Considered Approaches
 
 1. **Refresh the generated label in the shared group-application transaction
-   (selected).** Compare the prior and newly discovered effective rates. For an
-   existing mapping with a linked channel, verify ownership using the existing
-   generated-channel metadata guard, then update only the channel name when
-   the generated name changed. This keeps mapping and label atomic and covers
-   both manual discovery and rc.54 monitor collection.
+   (selected).** For every existing mapping with a linked channel, verify
+   ownership using the existing generated-channel metadata guard, then update
+   only the channel name when it differs from the current canonical name.
+   Reconciling even when the mapping rate itself did not change lets the first
+   post-fix collection repair drift already persisted by rc.54. This keeps
+   mapping and label atomic and covers both manual discovery and monitor
+   collection.
 2. **Trigger a full source sync after every rate change.** Rejected because it
    performs unrelated network calls and can change keys, models, abilities,
    status, and other channel settings.
@@ -46,7 +48,7 @@ each other.
 1. The adapter returns an `UpstreamGroup` with a direct effective multiplier.
 2. `applyUpstreamSourceGroupsTx` loads the previous mappings and upserts the
    current mappings.
-3. For each existing group whose effective rate representation changed:
+3. For each existing group with a linked channel:
    - load the linked channel in the same transaction;
    - confirm it is owned by the source/mapping;
    - compute the canonical name with
@@ -69,7 +71,11 @@ priority persistence remains unchanged.
 Add a regression test to `service/upstream_source_collection_test.go` that
 creates an owned generated channel named with `0.080x`, applies an rc.54-style
 rate snapshot changing the mapping to `0.020x`, and asserts both the mapping
-and channel name are `0.020x`. Run it before implementation to demonstrate the
-current stale-label failure, then after the minimal implementation. Existing
-auto-priority tests continue to prove 8x dominance, current-unavailability
-override, mapping-owned rates, hysteresis, and auto-disabled preservation.
+and channel name are `0.020x`. Add a second regression in which the mapping is
+already `0.020x` but the channel name is still `0.080x`, proving that a later
+unchanged snapshot repairs historical drift. An ownership-negative test
+ensures a mismatched channel is never renamed. Run both defect cases before
+their implementation changes to demonstrate the stale-label failures, then
+after the minimal implementation. Existing auto-priority tests continue to
+prove 8x dominance, current-unavailability override, mapping-owned rates,
+hysteresis, and auto-disabled preservation.
