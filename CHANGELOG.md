@@ -6,6 +6,14 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.57] - 2026-07-23
+
+### Fixed
+- Auto-priority now evaluates each score cohort atomically from the complete eligible set (enabled plus temporarily auto-disabled channels), so price floor/ceil and normalization no longer drift when only a due subset is claimed.
+- Temporarily auto-disabled members continue to contribute to cohort pricing, keep hard-unavailable priority behavior, and receive refreshed score snapshots instead of remaining indefinitely on stale v2 data.
+- Compatibility auto-priority paths now select groups first and then evaluate complete cohorts, preventing staggered last-run timestamps from producing inverted price scores such as 0.02 scoring below 0.06.
+- Auto-priority snapshot v4 records `cohort_floor`, `cohort_ceil`, and `cohort_member_count` so UI/tooltips can explain the shared pricing basis without reading channel names.
+
 ## [v1.0.0-rc.56] - 2026-07-23
 
 ### Fixed
