@@ -382,6 +382,36 @@ func applyAutoPriorityExtremeCostDominance(
 			return left.NominalRateMultiplier > right.NominalRateMultiplier
 		})
 
+		// A full +10 margin needs one slot per edge in the longest usable
+		// dominance chain. If the configured range is smaller, use the largest
+		// uniform positive step that still keeps every representable tier strict.
+		dominanceDepths := make([]int, len(ordered))
+		maxDominanceDepth := 0
+		for cheapPosition, cheapIndex := range ordered {
+			if availabilityGates[cheapIndex] != 1 || !isValidAutoPriorityMultiplier(results[cheapIndex].NominalRateMultiplier) {
+				continue
+			}
+			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
+				expensiveIndex := ordered[expensivePosition]
+				if inputs[expensiveIndex].HardUnavailable ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+					continue
+				}
+				dominanceDepths[cheapPosition] = max(
+					dominanceDepths[cheapPosition],
+					dominanceDepths[expensivePosition]+1,
+				)
+			}
+			maxDominanceDepth = max(maxDominanceDepth, dominanceDepths[cheapPosition])
+		}
+		priorityMargin := autoPriorityDominancePriorityMargin
+		if maxDominanceDepth > 0 {
+			priorityMargin = min(priorityMargin, maxPriority/int64(maxDominanceDepth))
+			if priorityMargin == 0 && maxPriority > 0 {
+				priorityMargin = 1
+			}
+		}
+
 		for cheapPosition := 0; cheapPosition < len(ordered); cheapPosition++ {
 			cheapIndex := ordered[cheapPosition]
 			if availabilityGates[cheapIndex] != 1 || !isValidAutoPriorityMultiplier(results[cheapIndex].NominalRateMultiplier) {
@@ -393,7 +423,8 @@ func applyAutoPriorityExtremeCostDominance(
 			peerPriority := int64(0)
 			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
 				expensiveIndex := ordered[expensivePosition]
-				if !hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+				if inputs[expensiveIndex].HardUnavailable ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
 					continue
 				}
 				hasDominance = true
@@ -426,8 +457,8 @@ func applyAutoPriorityExtremeCostDominance(
 			}
 			results[cheapIndex].FinalScore = targetFinalScore
 
-			targetPriority := addAutoPriorityDominanceMargin(results[cheapIndex].ComputedPriority, maxPriority)
-			targetPriority = max(targetPriority, addAutoPriorityDominanceMargin(peerPriority, maxPriority))
+			targetPriority := addAutoPriorityDominanceMargin(results[cheapIndex].ComputedPriority, priorityMargin, maxPriority)
+			targetPriority = max(targetPriority, addAutoPriorityDominanceMargin(peerPriority, priorityMargin, maxPriority))
 			targetPriority = max(targetPriority, clampAutoPriorityPriority(int64(math.Round(targetFinalScore*10)), 0, maxPriority))
 			results[cheapIndex].ComputedPriority = targetPriority
 			results[cheapIndex].NewPriority = targetPriority
@@ -438,6 +469,9 @@ func applyAutoPriorityExtremeCostDominance(
 		// creates the required margin by lowering every peer it dominates.
 		for expensivePosition := len(ordered) - 2; expensivePosition >= 0; expensivePosition-- {
 			expensiveIndex := ordered[expensivePosition]
+			if inputs[expensiveIndex].HardUnavailable {
+				continue
+			}
 			maxAllowedFinalScore := results[expensiveIndex].FinalScore
 			maxAllowedPriority := results[expensiveIndex].ComputedPriority
 			for cheapPosition := expensivePosition + 1; cheapPosition < len(ordered); cheapPosition++ {
@@ -452,7 +486,7 @@ func applyAutoPriorityExtremeCostDominance(
 				)
 				maxAllowedPriority = min(
 					maxAllowedPriority,
-					results[cheapIndex].ComputedPriority-autoPriorityDominancePriorityMargin,
+					results[cheapIndex].ComputedPriority-priorityMargin,
 				)
 			}
 			results[expensiveIndex].FinalScore = math.Max(0, maxAllowedFinalScore)
@@ -470,8 +504,8 @@ func hasAutoPriorityExtremeNominalRateAdvantage(cheapRate, expensiveRate float64
 	return expensiveRate/cheapRate >= autoPriorityExtremeCostRatio
 }
 
-func addAutoPriorityDominanceMargin(priority, maxPriority int64) int64 {
-	target, ok := safeAddInt64(priority, autoPriorityDominancePriorityMargin)
+func addAutoPriorityDominanceMargin(priority, margin, maxPriority int64) int64 {
+	target, ok := safeAddInt64(priority, margin)
 	if !ok {
 		return maxPriority
 	}

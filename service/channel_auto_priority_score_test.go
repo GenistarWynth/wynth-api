@@ -1304,6 +1304,125 @@ func TestScoreAutoPriorityCandidatesExtremeCostDominance(t *testing.T) {
 		assert.Greater(t, cheap.NewPriority, degradedExpensive.NewPriority)
 	})
 
+	t.Run("auto-disabled expensive peer stays outside competitive demotion", func(t *testing.T) {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			{
+				ChannelID:               1019,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         5_000,
+				EffectiveRateMultiplier: 0.08,
+				HardUnavailable:         true,
+			},
+			{
+				ChannelID:               1020,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 0.01,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+			},
+			{
+				ChannelID:               1021,
+				LocalGroup:              "shared",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				CurrentPriority:         100,
+				EffectiveRateMultiplier: 0.08,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+			},
+		}, 1000)
+
+		autoDisabled := resultByChannelID(results, 1019)
+		cheap := resultByChannelID(results, 1020)
+		usableExpensive := resultByChannelID(results, 1021)
+		require.NotNil(t, autoDisabled)
+		require.NotNil(t, cheap)
+		require.NotNil(t, usableExpensive)
+		assert.False(t, autoDisabled.Applied)
+		assert.Equal(t, "channel_auto_disabled", autoDisabled.Reason)
+		assert.Equal(t, int64(5_000), autoDisabled.OldPriority)
+		assert.Equal(t, int64(0), autoDisabled.ComputedPriority)
+		assert.Equal(t, autoDisabled.OldPriority, autoDisabled.NewPriority)
+		assert.GreaterOrEqual(t, cheap.FinalScore-usableExpensive.FinalScore, autoPriorityDominanceScoreMargin)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-usableExpensive.ComputedPriority, autoPriorityDominancePriorityMargin)
+		assert.Greater(t, cheap.NewPriority, usableExpensive.NewPriority)
+	})
+
+	t.Run("small priority ceiling preserves representable dominance tiers", func(t *testing.T) {
+		inputs := []AutoPriorityScoreInput{
+			{
+				ChannelID:               1062,
+				LocalGroup:              "small-ceiling",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 8,
+				CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+				UsageLogCount:           autoPriorityFullCacheSampleCount,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           autoPriorityThroughputFastTps,
+				ThroughputSampleCount:   1,
+			},
+			{
+				ChannelID:               1063,
+				LocalGroup:              "small-ceiling",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 1,
+				CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+				UsageLogCount:           autoPriorityFullCacheSampleCount,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           autoPriorityThroughputFastTps,
+				ThroughputSampleCount:   1,
+			},
+			{
+				ChannelID:               1061,
+				LocalGroup:              "small-ceiling",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: 64,
+				CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+				UsageLogCount:           autoPriorityFullCacheSampleCount,
+				Availability:            floatPtr(1),
+				MonitorCheckCount:       3,
+				FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+				FirstTokenSampleCount:   1,
+				ThroughputTps:           autoPriorityThroughputFastTps,
+				ThroughputSampleCount:   1,
+			},
+		}
+
+		results := ScoreAutoPriorityCandidates(inputs, 5)
+		permutedResults := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+			inputs[2],
+			inputs[0],
+			inputs[1],
+		}, 5)
+
+		expensive := resultByChannelID(results, 1061)
+		middle := resultByChannelID(results, 1062)
+		cheap := resultByChannelID(results, 1063)
+		require.NotNil(t, expensive)
+		require.NotNil(t, middle)
+		require.NotNil(t, cheap)
+		assert.Less(t, expensive.ComputedPriority, middle.ComputedPriority)
+		assert.Less(t, middle.ComputedPriority, cheap.ComputedPriority)
+		assert.Less(t, expensive.NewPriority, middle.NewPriority)
+		assert.Less(t, middle.NewPriority, cheap.NewPriority)
+		for _, result := range results {
+			assert.GreaterOrEqual(t, result.ComputedPriority, int64(0))
+			assert.LessOrEqual(t, result.ComputedPriority, int64(5))
+			permuted := resultByChannelID(permutedResults, result.ChannelID)
+			require.NotNil(t, permuted)
+			assert.Equal(t, result.ComputedPriority, permuted.ComputedPriority)
+			assert.Equal(t, result.NewPriority, permuted.NewPriority)
+		}
+	})
+
 	t.Run("exact eight times cost gap triggers dominance", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
 			{
