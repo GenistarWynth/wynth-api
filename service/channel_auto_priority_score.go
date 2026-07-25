@@ -393,10 +393,11 @@ func applyAutoPriorityExtremeCostDominance(
 			return left.NominalRateMultiplier > right.NominalRateMultiplier
 		})
 
-		// Full +1 score and +10 priority margins need one slot per edge in the
-		// longest usable dominance chain. Synthetic ceiling peers are immutable
-		// lower bounds, so reserve their baseline plus every real edge above them
-		// before choosing the largest uniform representable step.
+		// Full +1 score and +10 priority margins need one slot per actual edge
+		// in the longest usable dominance chain. Synthetic ceiling peers may
+		// further reduce that uniform step only when their own lower-bound edge
+		// is representable; a capped synthetic baseline must not flatten the
+		// independently representable actual graph.
 		dominanceDepths := make([]int, len(ordered))
 		dominanceHeights := make([]int, len(ordered))
 		maxDominanceDepth := 0
@@ -451,28 +452,11 @@ func applyAutoPriorityExtremeCostDominance(
 				0,
 				maxPriority,
 			)
-			maxDominanceDepth = max(maxDominanceDepth, dominanceHeights[position]+1)
 		}
 		scoreMargin := autoPriorityDominanceScoreMargin
 		if maxDominanceDepth > 0 {
 			boundedScoreMargin := 100 / float64(maxDominanceDepth)
 			if boundedScoreMargin*float64(maxDominanceDepth) > 100 {
-				boundedScoreMargin = math.Nextafter(boundedScoreMargin, 0)
-			}
-			if boundedScoreMargin > 0 && !math.IsNaN(boundedScoreMargin) && !math.IsInf(boundedScoreMargin, 0) {
-				scoreMargin = min(scoreMargin, boundedScoreMargin)
-			} else {
-				scoreMargin = 0
-			}
-		}
-		for position := range ordered {
-			if !syntheticDominance[position] {
-				continue
-			}
-			dominanceDepth := dominanceHeights[position] + 1
-			availableScore := 100 - syntheticFinalScores[position]
-			boundedScoreMargin := availableScore / float64(dominanceDepth)
-			if boundedScoreMargin*float64(dominanceDepth) > availableScore {
 				boundedScoreMargin = math.Nextafter(boundedScoreMargin, 0)
 			}
 			if boundedScoreMargin > 0 && !math.IsNaN(boundedScoreMargin) && !math.IsInf(boundedScoreMargin, 0) {
@@ -489,9 +473,23 @@ func applyAutoPriorityExtremeCostDominance(
 			if !syntheticDominance[position] {
 				continue
 			}
-			dominanceDepth := int64(dominanceHeights[position] + 1)
+			dominanceDepth := dominanceHeights[position] + 1
+			availableScore := 100 - syntheticFinalScores[position]
+			boundedScoreMargin := availableScore / float64(dominanceDepth)
+			if boundedScoreMargin*float64(dominanceDepth) > availableScore {
+				boundedScoreMargin = math.Nextafter(boundedScoreMargin, 0)
+			}
 			availablePriority := maxPriority - syntheticPriorities[position]
-			priorityMargin = min(priorityMargin, availablePriority/dominanceDepth)
+			boundedPriorityMargin := availablePriority / int64(dominanceDepth)
+			if boundedScoreMargin <= 0 ||
+				math.IsNaN(boundedScoreMargin) ||
+				math.IsInf(boundedScoreMargin, 0) ||
+				boundedPriorityMargin <= 0 {
+				syntheticDominance[position] = false
+				continue
+			}
+			scoreMargin = min(scoreMargin, boundedScoreMargin)
+			priorityMargin = min(priorityMargin, boundedPriorityMargin)
 		}
 		priorityMargins[cohort] = priorityMargin
 

@@ -784,13 +784,54 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("channel auto-priority: persist group=%q failed: %v", localGroup, err))
 			reason = "update_failed"
+		} else if reason != "" {
+			// A cohort-level CAS conflict rolls the whole transaction back just
+			// like any other persistence failure. Report one consistent group
+			// outcome; the post-rollback refresh below carries the DB truth.
+			reason = "update_failed"
 		}
 		if reason != "" {
+			affectedChannelIDs := make([]int, 0, len(indexes)+len(manuallyDisabled))
+			for _, idx := range indexes {
+				affectedChannelIDs = append(affectedChannelIDs, pending[idx].channel.Id)
+			}
+			for _, channel := range manuallyDisabled {
+				affectedChannelIDs = append(affectedChannelIDs, channel.Id)
+			}
+			var persistedChannels []model.Channel
+			if refreshErr := model.DB.WithContext(ctx).
+				Select("id", "priority").
+				Where("id IN ?", affectedChannelIDs).
+				Find(&persistedChannels).Error; refreshErr != nil {
+				return nil, fmt.Errorf(
+					"channel auto-priority: refresh persisted priorities after group=%q failure: %w",
+					localGroup,
+					refreshErr,
+				)
+			}
+			persistedPriorities := make(map[int]int64, len(persistedChannels))
+			for _, channel := range persistedChannels {
+				persistedPriorities[channel.Id] = channel.GetPriority()
+			}
+			for _, channelID := range affectedChannelIDs {
+				if _, exists := persistedPriorities[channelID]; !exists {
+					return nil, fmt.Errorf(
+						"channel auto-priority: refresh persisted priorities after group=%q failure omitted channel_id=%d",
+						localGroup,
+						channelID,
+					)
+				}
+			}
 			for _, idx := range indexes {
 				score := scoreResults[idx]
+				persistedPriority := persistedPriorities[pending[idx].channel.Id]
 				score.Applied = false
 				score.Reason = reason
-				score.NewPriority = score.OldPriority
+				// Failed-unapplied results define both old and new priority as
+				// the post-rollback persisted value. ComputedPriority remains
+				// the attempted target for diagnostics.
+				score.OldPriority = persistedPriority
+				score.NewPriority = persistedPriority
 				results = append(results, ChannelAutoPriorityRunResult{
 					ChannelID: pending[idx].channel.Id,
 					Applied:   false,
@@ -810,9 +851,9 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 					Reason:    reason,
 					score: AutoPriorityScoreResult{
 						ChannelID:        channel.Id,
-						OldPriority:      channel.GetPriority(),
+						OldPriority:      persistedPriorities[channel.Id],
 						ComputedPriority: sinkPriority,
-						NewPriority:      channel.GetPriority(),
+						NewPriority:      persistedPriorities[channel.Id],
 						Applied:          false,
 						Reason:           reason,
 					},
