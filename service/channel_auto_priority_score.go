@@ -35,34 +35,36 @@ type AutoPriorityScoreInput struct {
 }
 
 type AutoPriorityScoreResult struct {
-	ChannelID                int
-	Cohort                   string
-	CohortFloor              float64
-	CohortCeil               float64
-	CohortMemberCount        int
-	EffectiveRateMultiplier  float64
-	NominalRateMultiplier    float64
-	CacheAdjustedCostFactor  float64
-	EffectiveCostMultiplier  float64
-	EffectivePriceScore      float64
-	NominalPriceScore        float64
-	CacheScore               float64
-	AvailabilityScore        float64
-	FirstTokenScore          float64
-	ThroughputScore          float64
-	FinalScore               float64
-	OldPriority              int64
-	ComputedPriority         int64
-	NewPriority              int64
-	Applied                  bool
-	Reason                   string
-	UsageLogCount            int64
-	MonitorCheckCount        int64
-	FirstTokenSampleCount    int64
-	ThroughputSampleCount    int64
-	CacheFactorSource        string
-	CacheFactorPrior         float64
-	CacheFactorOwnConfidence float64
+	ChannelID                 int
+	Cohort                    string
+	CohortFloor               float64
+	CohortCeil                float64
+	CohortMemberCount         int
+	OrdinaryPriceFloor        float64
+	EffectivePriceFloorSource string
+	EffectiveRateMultiplier   float64
+	NominalRateMultiplier     float64
+	CacheAdjustedCostFactor   float64
+	EffectiveCostMultiplier   float64
+	EffectivePriceScore       float64
+	NominalPriceScore         float64
+	CacheScore                float64
+	AvailabilityScore         float64
+	FirstTokenScore           float64
+	ThroughputScore           float64
+	FinalScore                float64
+	OldPriority               int64
+	ComputedPriority          int64
+	NewPriority               int64
+	Applied                   bool
+	Reason                    string
+	UsageLogCount             int64
+	MonitorCheckCount         int64
+	FirstTokenSampleCount     int64
+	ThroughputSampleCount     int64
+	CacheFactorSource         string
+	CacheFactorPrior          float64
+	CacheFactorOwnConfidence  float64
 }
 
 const (
@@ -118,7 +120,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 	results := make([]AutoPriorityScoreResult, len(inputs))
 	priceCohorts := make(map[string][]int)
-	cohortCostFloors := make(map[string]float64)
+	cohortPriceFloors := make(map[string]float64)
 	availabilityGates := make([]float64, len(inputs))
 
 	for i, input := range inputs {
@@ -156,14 +158,20 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			continue
 		}
 
-		result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
+		result.EffectiveCostMultiplier = boundedAutoPriorityMultiplierProduct(
+			input.EffectiveRateMultiplier,
+			cacheFactor,
+		)
 		// Previous snapshots smooth only the backward-compatible effective-cost
 		// diagnostic. They must not change the exact default/count-confidence
 		// transition used by the cache component.
 		if input.HasPreviousSnapshot && isValidAutoPriorityMultiplier(input.PreviousCacheAdjustedCostFactor) {
 			smoothedCacheFactor := autoPriorityCurrentSmoothingWeight*cacheFactor +
 				autoPriorityPreviousSmoothingWeight*input.PreviousCacheAdjustedCostFactor
-			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * smoothedCacheFactor
+			result.EffectiveCostMultiplier = boundedAutoPriorityMultiplierProduct(
+				input.EffectiveRateMultiplier,
+				smoothedCacheFactor,
+			)
 		}
 		// Snapshots predating cache-factor diagnostics preserve the legacy
 		// effective-cost smoothing behavior without changing current cache score.
@@ -194,8 +202,11 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 		minNominalRate := results[indexes[0]].NominalRateMultiplier
 		maxNominalRate := minNominalRate
+		nominalRates := make([]float64, 0, len(indexes)+2)
+		nominalRates = append(nominalRates, minNominalRate)
 		for _, idx := range indexes[1:] {
 			nominalRate := results[idx].NominalRateMultiplier
+			nominalRates = append(nominalRates, nominalRate)
 			if nominalRate < minNominalRate {
 				minNominalRate = nominalRate
 			}
@@ -203,10 +214,12 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 				maxNominalRate = nominalRate
 			}
 		}
+		observedMinNominalRate := minNominalRate
+		observedMaxNominalRate := maxNominalRate
 
-		// Widen the cohort floor with local-group-wide nominal rate data. Scoring
-		// against this cache-independent floor preserves relative price gaps:
-		// close prices stay close enough for cache and quality to matter.
+		// Widen the raw bounds with local-group-wide nominal rate data. The bounds
+		// remain cache-independent and diagnostic even when the ordinary scoring
+		// floor excludes an extreme low-rate minority below.
 		for _, idx := range indexes {
 			if floor := inputs[idx].CohortCostFloor; isValidAutoPriorityMultiplier(floor) && floor < minNominalRate {
 				minNominalRate = floor
@@ -215,9 +228,21 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 				maxNominalRate = ceil
 			}
 		}
-		cohortCostFloors[results[indexes[0]].Cohort] = minNominalRate
+		if minNominalRate < observedMinNominalRate {
+			nominalRates = append(nominalRates, minNominalRate)
+		}
+		if maxNominalRate > observedMaxNominalRate {
+			nominalRates = append(nominalRates, maxNominalRate)
+		}
+		sort.Float64s(nominalRates)
+		ordinaryPriceFloor := autoPriorityOrdinaryPriceFloor(nominalRates)
+		priceFloorSource := "cohort_floor"
+		if ordinaryPriceFloor > minNominalRate {
+			priceFloorSource = "ordinary_band"
+		}
+		cohortPriceFloors[results[indexes[0]].Cohort] = ordinaryPriceFloor
 		for _, idx := range indexes {
-			priceScore := relativeAutoPriorityPriceScore(results[idx].NominalRateMultiplier, minNominalRate)
+			priceScore := relativeAutoPriorityPriceScore(results[idx].NominalRateMultiplier, ordinaryPriceFloor)
 			// EffectivePriceScore is retained as a backward-compatible JSON/API
 			// field. It now aliases the nominal, cache-independent price score.
 			results[idx].EffectivePriceScore = priceScore
@@ -225,6 +250,8 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			results[idx].CohortFloor = minNominalRate
 			results[idx].CohortCeil = maxNominalRate
 			results[idx].CohortMemberCount = len(indexes)
+			results[idx].OrdinaryPriceFloor = ordinaryPriceFloor
+			results[idx].EffectivePriceFloorSource = priceFloorSource
 		}
 	}
 
@@ -260,11 +287,11 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		results[i].NewPriority = results[i].ComputedPriority
 	}
 
-	dominanceProtected := applyAutoPriorityExtremeCostDominance(
+	dominanceProtected, dominancePriorityMargins := applyAutoPriorityExtremeCostDominance(
 		inputs,
 		results,
 		priceCohorts,
-		cohortCostFloors,
+		cohortPriceFloors,
 		availabilityGates,
 		int64(maxPriority),
 	)
@@ -288,9 +315,36 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		results[i].Reason = ""
 	}
 
-	removeAutoPriorityHysteresisDominanceViolations(results, priceCohorts, availabilityGates)
+	removeAutoPriorityHysteresisDominanceViolations(
+		results,
+		priceCohorts,
+		availabilityGates,
+		dominancePriorityMargins,
+	)
 
 	return results
+}
+
+func autoPriorityOrdinaryPriceFloor(sortedNominalRates []float64) float64 {
+	if len(sortedNominalRates) == 0 {
+		return 0
+	}
+
+	// Only a strict low-rate minority can be excluded from ordinary
+	// normalization. The same nominal 8x threshold still governs hard
+	// dominance separately, including equal-size and two-member cohorts.
+	ordinaryFloor := sortedNominalRates[0]
+	for idx := 0; idx+1 < len(sortedNominalRates); idx++ {
+		lowerCount := idx + 1
+		upperCount := len(sortedNominalRates) - lowerCount
+		if lowerCount >= upperCount {
+			break
+		}
+		if hasAutoPriorityExtremeNominalRateAdvantage(sortedNominalRates[idx], sortedNominalRates[idx+1]) {
+			ordinaryFloor = sortedNominalRates[idx+1]
+		}
+	}
+	return ordinaryFloor
 }
 
 func relativeAutoPriorityPriceScore(cost, cohortFloor float64) float64 {
@@ -301,7 +355,12 @@ func relativeAutoPriorityPriceScore(cost, cohortFloor float64) float64 {
 		return 100
 	}
 
-	score := 100 * cohortFloor / cost
+	score := 0.0
+	if cohortFloor <= math.MaxFloat64/100 {
+		score = (cohortFloor * 100) / cost
+	} else {
+		score = (cohortFloor / cost) * 100
+	}
 	if math.IsNaN(score) || math.IsInf(score, 0) || score < 0 {
 		return 0
 	}
@@ -323,11 +382,12 @@ func applyAutoPriorityExtremeCostDominance(
 	inputs []AutoPriorityScoreInput,
 	results []AutoPriorityScoreResult,
 	priceCohorts map[string][]int,
-	cohortCostFloors map[string]float64,
+	cohortPriceFloors map[string]float64,
 	availabilityGates []float64,
 	maxPriority int64,
-) []bool {
+) ([]bool, map[string]int64) {
 	protected := make([]bool, len(results))
+	priorityMargins := make(map[string]int64, len(priceCohorts))
 	for cohort, indexes := range priceCohorts {
 		ordered := append([]int(nil), indexes...)
 		sort.Slice(ordered, func(i, j int) bool {
@@ -339,59 +399,223 @@ func applyAutoPriorityExtremeCostDominance(
 			return left.NominalRateMultiplier > right.NominalRateMultiplier
 		})
 
+		// Full +1 score and +10 priority margins need one slot per actual edge
+		// in the longest usable dominance chain. Synthetic ceiling peers reduce
+		// each dimension's uniform step only when that lower-bound edge is
+		// representable in the same dimension; a capped synthetic baseline must
+		// not flatten either the other dimension or the actual graph.
+		dominanceDepths := make([]int, len(ordered))
+		dominanceHeights := make([]int, len(ordered))
+		maxDominanceDepth := 0
+		for cheapPosition, cheapIndex := range ordered {
+			if availabilityGates[cheapIndex] != 1 || !isValidAutoPriorityMultiplier(results[cheapIndex].NominalRateMultiplier) {
+				continue
+			}
+			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
+				expensiveIndex := ordered[expensivePosition]
+				if inputs[expensiveIndex].HardUnavailable ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+					continue
+				}
+				dominanceDepths[cheapPosition] = max(
+					dominanceDepths[cheapPosition],
+					dominanceDepths[expensivePosition]+1,
+				)
+			}
+			maxDominanceDepth = max(maxDominanceDepth, dominanceDepths[cheapPosition])
+		}
+		for expensivePosition := len(ordered) - 1; expensivePosition >= 0; expensivePosition-- {
+			expensiveIndex := ordered[expensivePosition]
+			if inputs[expensiveIndex].HardUnavailable ||
+				!isValidAutoPriorityMultiplier(results[expensiveIndex].NominalRateMultiplier) {
+				continue
+			}
+			for cheapPosition := expensivePosition + 1; cheapPosition < len(ordered); cheapPosition++ {
+				cheapIndex := ordered[cheapPosition]
+				if availabilityGates[cheapIndex] != 1 ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+					continue
+				}
+				dominanceHeights[expensivePosition] = max(
+					dominanceHeights[expensivePosition],
+					dominanceHeights[cheapPosition]+1,
+				)
+			}
+		}
+		syntheticScoreDominance := make([]bool, len(ordered))
+		syntheticPriorityDominance := make([]bool, len(ordered))
+		syntheticFinalScores := make([]float64, len(ordered))
+		syntheticPriorities := make([]int64, len(ordered))
+		for position, index := range ordered {
+			if availabilityGates[index] != 1 ||
+				!hasAutoPriorityExtremeNominalRateAdvantage(results[index].NominalRateMultiplier, inputs[index].CohortCostCeil) {
+				continue
+			}
+			syntheticScoreDominance[position] = true
+			syntheticPriorityDominance[position] = true
+			syntheticPriceScore := relativeAutoPriorityPriceScore(inputs[index].CohortCostCeil, cohortPriceFloors[cohort])
+			syntheticFinalScores[position] = weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+			syntheticPriorities[position] = clampAutoPriorityPriority(
+				int64(math.Round(syntheticFinalScores[position]*10)),
+				0,
+				maxPriority,
+			)
+		}
+		scoreMargin := autoPriorityDominanceScoreMargin
+		if maxDominanceDepth > 0 {
+			boundedScoreMargin := 100 / float64(maxDominanceDepth)
+			if boundedScoreMargin*float64(maxDominanceDepth) > 100 {
+				boundedScoreMargin = math.Nextafter(boundedScoreMargin, 0)
+			}
+			if boundedScoreMargin > 0 && !math.IsNaN(boundedScoreMargin) && !math.IsInf(boundedScoreMargin, 0) {
+				scoreMargin = min(scoreMargin, boundedScoreMargin)
+			} else {
+				scoreMargin = 0
+			}
+		}
+		priorityMargin := autoPriorityDominancePriorityMargin
+		if maxDominanceDepth > 0 {
+			priorityMargin = min(priorityMargin, maxPriority/int64(maxDominanceDepth))
+		}
+		for position := range ordered {
+			if !syntheticScoreDominance[position] && !syntheticPriorityDominance[position] {
+				continue
+			}
+			dominanceDepth := dominanceHeights[position] + 1
+			availableScore := 100 - syntheticFinalScores[position]
+			boundedScoreMargin := availableScore / float64(dominanceDepth)
+			if boundedScoreMargin*float64(dominanceDepth) > availableScore {
+				boundedScoreMargin = math.Nextafter(boundedScoreMargin, 0)
+			}
+			if boundedScoreMargin <= 0 ||
+				math.IsNaN(boundedScoreMargin) ||
+				math.IsInf(boundedScoreMargin, 0) {
+				syntheticScoreDominance[position] = false
+			} else {
+				// Scores stay within [0, 100], so the widest float64 spacing
+				// occurs at the upper bound. A smaller uniform step can collapse
+				// an otherwise positive synthetic chain edge into equality.
+				minimumRepresentableMargin := 100 - math.Nextafter(100, 0)
+				if boundedScoreMargin < minimumRepresentableMargin {
+					syntheticScoreDominance[position] = false
+				} else {
+					scoreMargin = min(scoreMargin, boundedScoreMargin)
+				}
+			}
+			availablePriority := maxPriority - syntheticPriorities[position]
+			boundedPriorityMargin := availablePriority / int64(dominanceDepth)
+			if boundedPriorityMargin <= 0 {
+				syntheticPriorityDominance[position] = false
+			} else {
+				priorityMargin = min(priorityMargin, boundedPriorityMargin)
+			}
+		}
+		priorityMargins[cohort] = priorityMargin
+
 		for cheapPosition := 0; cheapPosition < len(ordered); cheapPosition++ {
 			cheapIndex := ordered[cheapPosition]
 			if availabilityGates[cheapIndex] != 1 || !isValidAutoPriorityMultiplier(results[cheapIndex].NominalRateMultiplier) {
 				continue
 			}
 
-			hasDominance := false
+			hasScoreDominance := false
+			hasPriorityDominance := false
 			peerFinalScore := 0.0
 			peerPriority := int64(0)
 			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
 				expensiveIndex := ordered[expensivePosition]
-				if availabilityGates[expensiveIndex] != 1 ||
+				if inputs[expensiveIndex].HardUnavailable ||
 					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
 					continue
 				}
-				hasDominance = true
+				hasScoreDominance = true
+				hasPriorityDominance = priorityMargin > 0
 				peerFinalScore = math.Max(peerFinalScore, results[expensiveIndex].FinalScore)
 				peerPriority = max(peerPriority, results[expensiveIndex].ComputedPriority)
 			}
 
-			cohortCeil := inputs[cheapIndex].CohortCostCeil
-			if hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, cohortCeil) {
-				hasDominance = true
-				syntheticPriceScore := relativeAutoPriorityPriceScore(cohortCeil, cohortCostFloors[cohort])
-				// Compare against a synthetic expensive peer with the best
-				// possible cache and quality scores. Cache benefit therefore
-				// cannot bypass nominal 8x dominance.
-				syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
-				peerFinalScore = math.Max(peerFinalScore, syntheticFinalScore)
-				peerPriority = max(peerPriority, clampAutoPriorityPriority(int64(math.Round(syntheticFinalScore*10)), 0, maxPriority))
+			if syntheticScoreDominance[cheapPosition] {
+				hasScoreDominance = true
+				peerFinalScore = math.Max(peerFinalScore, syntheticFinalScores[cheapPosition])
 			}
-			if !hasDominance {
+			if syntheticPriorityDominance[cheapPosition] {
+				hasPriorityDominance = priorityMargin > 0
+				peerPriority = max(peerPriority, syntheticPriorities[cheapPosition])
+			}
+			if !hasScoreDominance && !hasPriorityDominance {
 				continue
 			}
 
-			protected[cheapIndex] = true
-			targetFinalScore := math.Max(
-				results[cheapIndex].FinalScore+autoPriorityDominanceScoreMargin,
-				peerFinalScore+autoPriorityDominanceScoreMargin,
-			)
-			if targetFinalScore > 100 {
-				targetFinalScore = 100
+			protected[cheapIndex] = hasPriorityDominance
+			if hasScoreDominance {
+				targetFinalScore := math.Max(
+					results[cheapIndex].FinalScore+scoreMargin,
+					peerFinalScore+scoreMargin,
+				)
+				if targetFinalScore > 100 {
+					targetFinalScore = 100
+				}
+				results[cheapIndex].FinalScore = targetFinalScore
 			}
-			results[cheapIndex].FinalScore = targetFinalScore
 
-			targetPriority := addAutoPriorityDominanceMargin(results[cheapIndex].ComputedPriority, maxPriority)
-			targetPriority = max(targetPriority, addAutoPriorityDominanceMargin(peerPriority, maxPriority))
-			targetPriority = max(targetPriority, clampAutoPriorityPriority(int64(math.Round(targetFinalScore*10)), 0, maxPriority))
-			results[cheapIndex].ComputedPriority = targetPriority
-			results[cheapIndex].NewPriority = targetPriority
+			if hasPriorityDominance {
+				targetPriority := addAutoPriorityDominanceMargin(results[cheapIndex].ComputedPriority, priorityMargin, maxPriority)
+				targetPriority = max(targetPriority, addAutoPriorityDominanceMargin(peerPriority, priorityMargin, maxPriority))
+				targetPriority = max(targetPriority, clampAutoPriorityPriority(int64(math.Round(results[cheapIndex].FinalScore*10)), 0, maxPriority))
+				results[cheapIndex].ComputedPriority = targetPriority
+				results[cheapIndex].NewPriority = targetPriority
+			}
+		}
+
+		// The forward pass above raises cheap candidates whenever headroom exists.
+		// Walk back from cheap to expensive so a capped cheap candidate instead
+		// creates the required margin by lowering every peer it dominates.
+		for expensivePosition := len(ordered) - 2; expensivePosition >= 0; expensivePosition-- {
+			expensiveIndex := ordered[expensivePosition]
+			if inputs[expensiveIndex].HardUnavailable {
+				continue
+			}
+			maxAllowedFinalScore := results[expensiveIndex].FinalScore
+			maxAllowedPriority := results[expensiveIndex].ComputedPriority
+			minAllowedFinalScore := 0.0
+			minAllowedPriority := int64(0)
+			if syntheticScoreDominance[expensivePosition] {
+				minAllowedFinalScore = syntheticFinalScores[expensivePosition] + scoreMargin
+			}
+			if syntheticPriorityDominance[expensivePosition] && priorityMargin > 0 {
+				minAllowedPriority = addAutoPriorityDominanceMargin(
+					syntheticPriorities[expensivePosition],
+					priorityMargin,
+					maxPriority,
+				)
+			}
+			for cheapPosition := expensivePosition + 1; cheapPosition < len(ordered); cheapPosition++ {
+				cheapIndex := ordered[cheapPosition]
+				if availabilityGates[cheapIndex] != 1 ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+					continue
+				}
+				maxAllowedFinalScore = math.Min(
+					maxAllowedFinalScore,
+					results[cheapIndex].FinalScore-scoreMargin,
+				)
+				if priorityMargin > 0 {
+					maxAllowedPriority = min(
+						maxAllowedPriority,
+						results[cheapIndex].ComputedPriority-priorityMargin,
+					)
+				}
+			}
+			results[expensiveIndex].FinalScore = math.Max(minAllowedFinalScore, math.Max(0, maxAllowedFinalScore))
+			results[expensiveIndex].ComputedPriority = clampAutoPriorityPriority(
+				max(minAllowedPriority, maxAllowedPriority),
+				0,
+				maxPriority,
+			)
+			results[expensiveIndex].NewPriority = results[expensiveIndex].ComputedPriority
 		}
 	}
-	return protected
+	return protected, priorityMargins
 }
 
 func hasAutoPriorityExtremeNominalRateAdvantage(cheapRate, expensiveRate float64) bool {
@@ -401,8 +625,8 @@ func hasAutoPriorityExtremeNominalRateAdvantage(cheapRate, expensiveRate float64
 	return expensiveRate/cheapRate >= autoPriorityExtremeCostRatio
 }
 
-func addAutoPriorityDominanceMargin(priority, maxPriority int64) int64 {
-	target, ok := safeAddInt64(priority, autoPriorityDominancePriorityMargin)
+func addAutoPriorityDominanceMargin(priority, margin, maxPriority int64) int64 {
+	target, ok := safeAddInt64(priority, margin)
 	if !ok {
 		return maxPriority
 	}
@@ -413,17 +637,24 @@ func removeAutoPriorityHysteresisDominanceViolations(
 	results []AutoPriorityScoreResult,
 	priceCohorts map[string][]int,
 	availabilityGates []float64,
+	priorityMargins map[string]int64,
 ) {
-	for _, indexes := range priceCohorts {
+	for cohort, indexes := range priceCohorts {
+		priorityMargin := priorityMargins[cohort]
+		if priorityMargin <= 0 {
+			continue
+		}
 		for _, cheapIndex := range indexes {
 			if availabilityGates[cheapIndex] != 1 {
 				continue
 			}
 			for _, expensiveIndex := range indexes {
-				if availabilityGates[expensiveIndex] != 1 ||
-					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) ||
-					results[cheapIndex].NewPriority > results[expensiveIndex].NewPriority ||
+				if !hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) ||
 					results[expensiveIndex].Reason != "hysteresis_delta_below_threshold" {
+					continue
+				}
+				requiredCheapPriority, ok := safeAddInt64(results[expensiveIndex].NewPriority, priorityMargin)
+				if ok && results[cheapIndex].NewPriority >= requiredCheapPriority {
 					continue
 				}
 				results[expensiveIndex].Applied = true
@@ -440,6 +671,16 @@ func autoPriorityCohortKey(localGroup string, channelType int) string {
 
 func isValidAutoPriorityMultiplier(v float64) bool {
 	return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+func boundedAutoPriorityMultiplierProduct(left, right float64) float64 {
+	if !isValidAutoPriorityMultiplier(left) || !isValidAutoPriorityMultiplier(right) {
+		return left * right
+	}
+	if left >= math.MaxFloat64/right {
+		return math.MaxFloat64
+	}
+	return left * right
 }
 
 func normalizedAutoPriorityCacheFactor(v float64) float64 {

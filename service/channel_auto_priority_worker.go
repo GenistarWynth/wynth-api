@@ -784,21 +784,97 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("channel auto-priority: persist group=%q failed: %v", localGroup, err))
 			reason = "update_failed"
+		} else if reason != "" {
+			// A cohort-level CAS conflict rolls the whole transaction back just
+			// like any other persistence failure. Report one consistent group
+			// outcome; the post-rollback refresh below carries the DB truth.
+			reason = "update_failed"
 		}
 		if reason != "" {
+			affectedChannelIDs := make([]int, 0, len(indexes)+len(manuallyDisabled))
 			for _, idx := range indexes {
+				affectedChannelIDs = append(affectedChannelIDs, pending[idx].channel.Id)
+			}
+			for _, channel := range manuallyDisabled {
+				affectedChannelIDs = append(affectedChannelIDs, channel.Id)
+			}
+			var persistedChannels []model.Channel
+			var persistedAbilities []model.Ability
+			if refreshErr := model.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := tx.
+					Select("id", "status", "priority", "settings").
+					Where("id IN ?", affectedChannelIDs).
+					Find(&persistedChannels).Error; err != nil {
+					return err
+				}
+				return tx.
+					Select("channel_id", "priority").
+					Where("channel_id IN ?", affectedChannelIDs).
+					Find(&persistedAbilities).Error
+			}); refreshErr != nil {
+				return nil, fmt.Errorf(
+					"channel auto-priority: refresh persisted priorities after group=%q failure: %w",
+					localGroup,
+					refreshErr,
+				)
+			}
+			persistedChannelsByID := make(map[int]model.Channel, len(persistedChannels))
+			for _, channel := range persistedChannels {
+				persistedChannelsByID[channel.Id] = channel
+			}
+			for _, channelID := range affectedChannelIDs {
+				if _, exists := persistedChannelsByID[channelID]; !exists {
+					return nil, fmt.Errorf(
+						"channel auto-priority: refresh persisted priorities after group=%q failure omitted channel_id=%d",
+						localGroup,
+						channelID,
+					)
+				}
+			}
+			persistedAbilityPrioritiesMatch := make(map[int]bool, len(affectedChannelIDs))
+			for _, channelID := range affectedChannelIDs {
+				persistedAbilityPrioritiesMatch[channelID] = true
+			}
+			for _, ability := range persistedAbilities {
+				persistedChannel := persistedChannelsByID[ability.ChannelId]
+				if ability.Priority == nil || *ability.Priority != persistedChannel.GetPriority() {
+					persistedAbilityPrioritiesMatch[ability.ChannelId] = false
+				}
+			}
+			for _, idx := range indexes {
+				score := scoreResults[idx]
+				persistedChannel := persistedChannelsByID[pending[idx].channel.Id]
+				persistedPriority := persistedChannel.GetPriority()
+				score.Applied = false
+				score.Reason = reason
+				// Failed-unapplied results define both old and new priority as
+				// the post-rollback persisted value. ComputedPriority remains
+				// the attempted target for diagnostics.
+				score.OldPriority = persistedPriority
+				score.NewPriority = persistedPriority
 				results = append(results, ChannelAutoPriorityRunResult{
 					ChannelID: pending[idx].channel.Id,
 					Applied:   false,
 					Reason:    reason,
-					score:     scoreResults[idx],
+					score:     score,
 				})
 			}
 			for _, channel := range manuallyDisabled {
 				processedManuallyDisabled[channel.Id] = struct{}{}
-				if sweepResult := sweepByChannelID[channel.Id]; sweepResult.Applied {
-					results = append(results, manuallyDisabledSinkRunResult(sweepResult))
-					continue
+				persistedChannel := persistedChannelsByID[channel.Id]
+				persistedPriority := persistedChannel.GetPriority()
+				sweepResult := sweepByChannelID[channel.Id]
+				if sweepResult.Applied &&
+					persistedChannel.Status == common.ChannelStatusManuallyDisabled &&
+					persistedPriority == sweepResult.NewPriority &&
+					persistedAbilityPrioritiesMatch[channel.Id] {
+					persistedSettings := persistedChannel.GetOtherSettings()
+					if persistedSettings.ChannelAutoPriorityLastRunAt == 0 &&
+						persistedSettings.ChannelAutoPriorityLastAppliedAt == 0 &&
+						persistedSettings.ChannelAutoPriorityLastScore == nil {
+						results = append(results, manuallyDisabledSinkRunResult(sweepResult))
+						continue
+					}
 				}
 				results = append(results, ChannelAutoPriorityRunResult{
 					ChannelID: channel.Id,
@@ -806,9 +882,9 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 					Reason:    reason,
 					score: AutoPriorityScoreResult{
 						ChannelID:        channel.Id,
-						OldPriority:      channel.GetPriority(),
+						OldPriority:      persistedPriority,
 						ComputedPriority: sinkPriority,
-						NewPriority:      channel.GetPriority(),
+						NewPriority:      persistedPriority,
 						Applied:          false,
 						Reason:           reason,
 					},
