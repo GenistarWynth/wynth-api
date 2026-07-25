@@ -684,7 +684,7 @@ func TestRunUpstreamSourceAutoPriorityAppliesGeneratedChannelPriority(t *testing
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastRunAt)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastAppliedAt)
 	require.NotNil(t, reloadedSettings.ChannelAutoPriorityLastScore)
-	assert.Equal(t, "v4", reloadedSettings.ChannelAutoPriorityLastScore.Version)
+	assert.Equal(t, "v5", reloadedSettings.ChannelAutoPriorityLastScore.Version)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastScore.ComputedAt)
 	assert.Equal(t, now-24*3600, reloadedSettings.ChannelAutoPriorityLastScore.WindowStart)
 	assert.Equal(t, now, reloadedSettings.ChannelAutoPriorityLastScore.WindowEnd)

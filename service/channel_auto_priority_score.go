@@ -35,34 +35,36 @@ type AutoPriorityScoreInput struct {
 }
 
 type AutoPriorityScoreResult struct {
-	ChannelID                int
-	Cohort                   string
-	CohortFloor              float64
-	CohortCeil               float64
-	CohortMemberCount        int
-	EffectiveRateMultiplier  float64
-	NominalRateMultiplier    float64
-	CacheAdjustedCostFactor  float64
-	EffectiveCostMultiplier  float64
-	EffectivePriceScore      float64
-	NominalPriceScore        float64
-	CacheScore               float64
-	AvailabilityScore        float64
-	FirstTokenScore          float64
-	ThroughputScore          float64
-	FinalScore               float64
-	OldPriority              int64
-	ComputedPriority         int64
-	NewPriority              int64
-	Applied                  bool
-	Reason                   string
-	UsageLogCount            int64
-	MonitorCheckCount        int64
-	FirstTokenSampleCount    int64
-	ThroughputSampleCount    int64
-	CacheFactorSource        string
-	CacheFactorPrior         float64
-	CacheFactorOwnConfidence float64
+	ChannelID                 int
+	Cohort                    string
+	CohortFloor               float64
+	CohortCeil                float64
+	CohortMemberCount         int
+	OrdinaryPriceFloor        float64
+	EffectivePriceFloorSource string
+	EffectiveRateMultiplier   float64
+	NominalRateMultiplier     float64
+	CacheAdjustedCostFactor   float64
+	EffectiveCostMultiplier   float64
+	EffectivePriceScore       float64
+	NominalPriceScore         float64
+	CacheScore                float64
+	AvailabilityScore         float64
+	FirstTokenScore           float64
+	ThroughputScore           float64
+	FinalScore                float64
+	OldPriority               int64
+	ComputedPriority          int64
+	NewPriority               int64
+	Applied                   bool
+	Reason                    string
+	UsageLogCount             int64
+	MonitorCheckCount         int64
+	FirstTokenSampleCount     int64
+	ThroughputSampleCount     int64
+	CacheFactorSource         string
+	CacheFactorPrior          float64
+	CacheFactorOwnConfidence  float64
 }
 
 const (
@@ -118,7 +120,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 	results := make([]AutoPriorityScoreResult, len(inputs))
 	priceCohorts := make(map[string][]int)
-	cohortCostFloors := make(map[string]float64)
+	cohortPriceFloors := make(map[string]float64)
 	availabilityGates := make([]float64, len(inputs))
 
 	for i, input := range inputs {
@@ -194,8 +196,11 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 
 		minNominalRate := results[indexes[0]].NominalRateMultiplier
 		maxNominalRate := minNominalRate
+		nominalRates := make([]float64, 0, len(indexes)+2)
+		nominalRates = append(nominalRates, minNominalRate)
 		for _, idx := range indexes[1:] {
 			nominalRate := results[idx].NominalRateMultiplier
+			nominalRates = append(nominalRates, nominalRate)
 			if nominalRate < minNominalRate {
 				minNominalRate = nominalRate
 			}
@@ -203,10 +208,12 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 				maxNominalRate = nominalRate
 			}
 		}
+		observedMinNominalRate := minNominalRate
+		observedMaxNominalRate := maxNominalRate
 
-		// Widen the cohort floor with local-group-wide nominal rate data. Scoring
-		// against this cache-independent floor preserves relative price gaps:
-		// close prices stay close enough for cache and quality to matter.
+		// Widen the raw bounds with local-group-wide nominal rate data. The bounds
+		// remain cache-independent and diagnostic even when the ordinary scoring
+		// floor excludes an extreme low-rate minority below.
 		for _, idx := range indexes {
 			if floor := inputs[idx].CohortCostFloor; isValidAutoPriorityMultiplier(floor) && floor < minNominalRate {
 				minNominalRate = floor
@@ -215,9 +222,21 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 				maxNominalRate = ceil
 			}
 		}
-		cohortCostFloors[results[indexes[0]].Cohort] = minNominalRate
+		if minNominalRate < observedMinNominalRate {
+			nominalRates = append(nominalRates, minNominalRate)
+		}
+		if maxNominalRate > observedMaxNominalRate {
+			nominalRates = append(nominalRates, maxNominalRate)
+		}
+		sort.Float64s(nominalRates)
+		ordinaryPriceFloor := autoPriorityOrdinaryPriceFloor(nominalRates)
+		priceFloorSource := "cohort_floor"
+		if ordinaryPriceFloor > minNominalRate {
+			priceFloorSource = "ordinary_band"
+		}
+		cohortPriceFloors[results[indexes[0]].Cohort] = ordinaryPriceFloor
 		for _, idx := range indexes {
-			priceScore := relativeAutoPriorityPriceScore(results[idx].NominalRateMultiplier, minNominalRate)
+			priceScore := relativeAutoPriorityPriceScore(results[idx].NominalRateMultiplier, ordinaryPriceFloor)
 			// EffectivePriceScore is retained as a backward-compatible JSON/API
 			// field. It now aliases the nominal, cache-independent price score.
 			results[idx].EffectivePriceScore = priceScore
@@ -225,6 +244,8 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			results[idx].CohortFloor = minNominalRate
 			results[idx].CohortCeil = maxNominalRate
 			results[idx].CohortMemberCount = len(indexes)
+			results[idx].OrdinaryPriceFloor = ordinaryPriceFloor
+			results[idx].EffectivePriceFloorSource = priceFloorSource
 		}
 	}
 
@@ -264,7 +285,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		inputs,
 		results,
 		priceCohorts,
-		cohortCostFloors,
+		cohortPriceFloors,
 		availabilityGates,
 		int64(maxPriority),
 	)
@@ -291,6 +312,28 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 	removeAutoPriorityHysteresisDominanceViolations(results, priceCohorts, availabilityGates)
 
 	return results
+}
+
+func autoPriorityOrdinaryPriceFloor(sortedNominalRates []float64) float64 {
+	if len(sortedNominalRates) == 0 {
+		return 0
+	}
+
+	// Only a strict low-rate minority can be excluded from ordinary
+	// normalization. The same nominal 8x threshold still governs hard
+	// dominance separately, including equal-size and two-member cohorts.
+	ordinaryFloor := sortedNominalRates[0]
+	for idx := 0; idx+1 < len(sortedNominalRates); idx++ {
+		lowerCount := idx + 1
+		upperCount := len(sortedNominalRates) - lowerCount
+		if lowerCount >= upperCount {
+			break
+		}
+		if hasAutoPriorityExtremeNominalRateAdvantage(sortedNominalRates[idx], sortedNominalRates[idx+1]) {
+			ordinaryFloor = sortedNominalRates[idx+1]
+		}
+	}
+	return ordinaryFloor
 }
 
 func relativeAutoPriorityPriceScore(cost, cohortFloor float64) float64 {
@@ -323,7 +366,7 @@ func applyAutoPriorityExtremeCostDominance(
 	inputs []AutoPriorityScoreInput,
 	results []AutoPriorityScoreResult,
 	priceCohorts map[string][]int,
-	cohortCostFloors map[string]float64,
+	cohortPriceFloors map[string]float64,
 	availabilityGates []float64,
 	maxPriority int64,
 ) []bool {
@@ -362,7 +405,7 @@ func applyAutoPriorityExtremeCostDominance(
 			cohortCeil := inputs[cheapIndex].CohortCostCeil
 			if hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, cohortCeil) {
 				hasDominance = true
-				syntheticPriceScore := relativeAutoPriorityPriceScore(cohortCeil, cohortCostFloors[cohort])
+				syntheticPriceScore := relativeAutoPriorityPriceScore(cohortCeil, cohortPriceFloors[cohort])
 				// Compare against a synthetic expensive peer with the best
 				// possible cache and quality scores. Cache benefit therefore
 				// cannot bypass nominal 8x dominance.

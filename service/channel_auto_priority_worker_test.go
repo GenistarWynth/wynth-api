@@ -102,11 +102,13 @@ func TestRunDueChannelAutoPriorityEvaluatesCompleteCohortWhenOnlyEnabledSubsetIs
 		assert.Equal(t, now, settings.ChannelAutoPriorityLastRunAt)
 		require.NotNil(t, settings.ChannelAutoPriorityLastScore)
 		snapshot := settings.ChannelAutoPriorityLastScore
-		assert.Equal(t, "v4", snapshot.Version)
+		assert.Equal(t, "v5", snapshot.Version)
 		assert.Equal(t, now, snapshot.ComputedAt)
 		assert.InDelta(t, 0.02, snapshot.CohortFloor, 1e-12)
 		assert.InDelta(t, 0.08, snapshot.CohortCeil, 1e-12)
 		assert.Equal(t, len(members), snapshot.CohortMemberCount)
+		assert.InDelta(t, 0.02, snapshot.OrdinaryPriceFloor, 1e-12)
+		assert.Equal(t, "cohort_floor", snapshot.EffectivePriceFloorSource)
 		assert.InDelta(t, members[i].expectedPrice, snapshot.NominalPriceScore, 1e-9)
 		if cohort == "" {
 			cohort = snapshot.Cohort
@@ -172,7 +174,7 @@ func TestRunDueChannelAutoPriorityRefreshesStaleAutoDisabledSnapshot(t *testing.
 	assert.Equal(t, now, recentSettings.ChannelAutoPriorityLastRunAt)
 	require.NotNil(t, staleSettings.ChannelAutoPriorityLastScore)
 	require.NotNil(t, recentSettings.ChannelAutoPriorityLastScore)
-	assert.Equal(t, "v4", staleSettings.ChannelAutoPriorityLastScore.Version)
+	assert.Equal(t, "v5", staleSettings.ChannelAutoPriorityLastScore.Version)
 	assert.Equal(t, recentSettings.ChannelAutoPriorityLastScore.Version, staleSettings.ChannelAutoPriorityLastScore.Version)
 	assert.Equal(t, recentSettings.ChannelAutoPriorityLastScore.ComputedAt, staleSettings.ChannelAutoPriorityLastScore.ComputedAt)
 	assert.Equal(t, "channel_auto_disabled", staleSettings.ChannelAutoPriorityLastScore.Reason)
@@ -999,16 +1001,22 @@ func TestRunDueChannelAutoPriorityRefreshesAutoDisabledMembersWithoutSinking(t *
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_550_000)
 
-	enabled := createAutoPriorityTestChannel(t, "enabled peer", 100, dto.ChannelOtherSettings{
+	ordinaryExpensive := createAutoPriorityTestChannel(t, "enabled expensive peer", 100, dto.ChannelOtherSettings{
 		ChannelAutoPriorityEnabled:         true,
 		ChannelAutoPriorityIntervalMinutes: 0,
 		ChannelAutoPriorityWindowHours:     24,
-		ChannelAutoPriorityRateMultiplier:  1,
+		ChannelAutoPriorityRateMultiplier:  0.07,
+	})
+	ordinaryCheap := createAutoPriorityTestChannel(t, "enabled cheap peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.04,
 	})
 	autoDisabled := createAutoPriorityTestChannel(t, "auto disabled extreme cheap", 5_000, dto.ChannelOtherSettings{
 		ChannelAutoPriorityEnabled:        true,
 		ChannelAutoPriorityWindowHours:    24,
-		ChannelAutoPriorityRateMultiplier: 0.01,
+		ChannelAutoPriorityRateMultiplier: 0.001,
 		ChannelAutoPriorityLastRunAt:      now - 120,
 		ChannelAutoPriorityLastAppliedAt:  now - 180,
 		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
@@ -1020,17 +1028,20 @@ func TestRunDueChannelAutoPriorityRefreshesAutoDisabledMembersWithoutSinking(t *
 	require.NoError(t, model.DB.Model(&model.Channel{}).
 		Where("id = ?", autoDisabled.Id).
 		Update("status", common.ChannelStatusAutoDisabled).Error)
-	createAutoPriorityTestUsageLog(t, enabled.Id, now-60)
-	createAutoPriorityTestMonitorLog(t, enabled.Id, now-60)
+	createAutoPriorityTestUsageLog(t, ordinaryExpensive.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, ordinaryExpensive.Id, now-60)
+	createAutoPriorityTestUsageLog(t, ordinaryCheap.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, ordinaryCheap.Id, now-60)
 
 	results := RunDueChannelAutoPriority(context.Background(), now)
 
-	require.Len(t, results, 2)
+	require.Len(t, results, 3)
 	resultCount := make(map[int]int, len(results))
 	for _, result := range results {
 		resultCount[result.ChannelID]++
 	}
-	assert.Equal(t, 1, resultCount[enabled.Id])
+	assert.Equal(t, 1, resultCount[ordinaryExpensive.Id])
+	assert.Equal(t, 1, resultCount[ordinaryCheap.Id])
 	assert.Equal(t, 1, resultCount[autoDisabled.Id])
 	var reloaded model.Channel
 	require.NoError(t, model.DB.First(&reloaded, autoDisabled.Id).Error)
@@ -1043,13 +1054,26 @@ func TestRunDueChannelAutoPriorityRefreshesAutoDisabledMembersWithoutSinking(t *
 	assert.Equal(t, now, settings.ChannelAutoPriorityLastRunAt)
 	assert.Equal(t, now-180, settings.ChannelAutoPriorityLastAppliedAt)
 	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
-	assert.Equal(t, "v4", settings.ChannelAutoPriorityLastScore.Version)
+	assert.Equal(t, "v5", settings.ChannelAutoPriorityLastScore.Version)
 	assert.Equal(t, 0.0, settings.ChannelAutoPriorityLastScore.FinalScore)
 	assert.Equal(t, int64(5_000), settings.ChannelAutoPriorityLastScore.NewPriority)
 	assert.False(t, settings.ChannelAutoPriorityLastScore.Applied)
 	assert.Equal(t, "channel_auto_disabled", settings.ChannelAutoPriorityLastScore.Reason)
-	assert.InDelta(t, 0.01, settings.ChannelAutoPriorityLastScore.CohortFloor, 1e-12)
-	assert.Equal(t, 2, settings.ChannelAutoPriorityLastScore.CohortMemberCount)
+	assert.InDelta(t, 0.001, settings.ChannelAutoPriorityLastScore.CohortFloor, 1e-12)
+	assert.InDelta(t, 0.04, settings.ChannelAutoPriorityLastScore.OrdinaryPriceFloor, 1e-12)
+	assert.Equal(t, "ordinary_band", settings.ChannelAutoPriorityLastScore.EffectivePriceFloorSource)
+	assert.Equal(t, 3, settings.ChannelAutoPriorityLastScore.CohortMemberCount)
+
+	var reloadedOrdinaryCheap, reloadedOrdinaryExpensive model.Channel
+	require.NoError(t, model.DB.First(&reloadedOrdinaryCheap, ordinaryCheap.Id).Error)
+	require.NoError(t, model.DB.First(&reloadedOrdinaryExpensive, ordinaryExpensive.Id).Error)
+	ordinaryCheapScore := reloadedOrdinaryCheap.GetOtherSettings().ChannelAutoPriorityLastScore
+	ordinaryExpensiveScore := reloadedOrdinaryExpensive.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, ordinaryCheapScore)
+	require.NotNil(t, ordinaryExpensiveScore)
+	assert.InDelta(t, 100, ordinaryCheapScore.NominalPriceScore, 1e-9)
+	assert.InDelta(t, 100*0.04/0.07, ordinaryExpensiveScore.NominalPriceScore, 1e-9)
+	assert.Greater(t, reloadedOrdinaryCheap.GetPriority(), reloadedOrdinaryExpensive.GetPriority())
 }
 
 func TestRunDueChannelAutoPrioritySinksBelowNegativeEnabledPriority(t *testing.T) {
