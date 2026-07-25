@@ -83,6 +83,24 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
+	if channel != nil && channel.Type == constant.ChannelTypeOpenAI {
+		normalizedModel := strings.ToLower(modelName)
+		if strings.Contains(normalizedModel, "rerank") {
+			return string(constant.EndpointTypeJinaRerank)
+		}
+		if strings.Contains(normalizedModel, "embedding") ||
+			strings.HasPrefix(modelName, "m3e") ||
+			strings.Contains(modelName, "bge-") ||
+			strings.Contains(modelName, "embed") {
+			return string(constant.EndpointTypeEmbeddings)
+		}
+		// Other recognized non-text model families keep the legacy automatic
+		// probe path instead of being forced through Responses or an identity
+		// preset intended for text-generation traffic.
+		if isSpecializedChannelTestModel(modelName) {
+			return ""
+		}
+	}
 	// Native Codex channel type, and any channel simulating Codex CLI identity,
 	// must probe the OpenAI Responses protocol. Upstream policy for codex_cli
 	// fingerprints rejects /v1/chat/completions with codex_requires_responses_protocol.

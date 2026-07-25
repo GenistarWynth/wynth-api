@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +34,58 @@ func TestNormalizeChannelTestEndpointUsesResponsesForOpenAI(t *testing.T) {
 	assert.Equal(t, "/v1/responses", endpoint.Path)
 }
 
+func TestNormalizeChannelTestEndpointPreservesOpenAIEmbeddingInference(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "text-embedding-3-large", "")
+	assert.Equal(t, string(constant.EndpointTypeEmbeddings), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/embeddings", endpoint.Path)
+	assert.IsType(t, &dto.EmbeddingRequest{}, buildTestRequest("text-embedding-3-large", endpointType, channel, false))
+}
+
+func TestNormalizeChannelTestEndpointPreservesOpenAIRerankInference(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "rerank-english-v3.0", "")
+	assert.Equal(t, string(constant.EndpointTypeJinaRerank), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/rerank", endpoint.Path)
+	assert.IsType(t, &dto.RerankRequest{}, buildTestRequest("rerank-english-v3.0", endpointType, channel, false))
+}
+
+func TestAutomaticAndMonitorOpenAISpecializedModelsUseInferredEndpoints(t *testing.T) {
+	t.Run("automatic embedding probe", func(t *testing.T) {
+		testModel := "text-embedding-3-large"
+		channel := &model.Channel{
+			Type:      constant.ChannelTypeOpenAI,
+			TestModel: &testModel,
+			Models:    testModel,
+		}
+
+		resolvedModel := resolveChannelTestModel(channel, "")
+		assert.Equal(t, testModel, resolvedModel)
+		assert.Equal(t, string(constant.EndpointTypeEmbeddings), normalizeChannelTestEndpoint(channel, resolvedModel, ""))
+	})
+
+	t.Run("monitor rerank probe", func(t *testing.T) {
+		testModel := "rerank-english-v3.0"
+		channel := &model.Channel{
+			Type:   constant.ChannelTypeOpenAI,
+			Models: testModel,
+		}
+		channel.SetOtherSettings(dto.ChannelOtherSettings{
+			ChannelMonitorModel: testModel,
+		})
+
+		resolvedModel := resolveChannelTestModel(channel, resolveChannelMonitorProbeModel(channel))
+		assert.Equal(t, testModel, resolvedModel)
+		assert.Equal(t, string(constant.EndpointTypeJinaRerank), normalizeChannelTestEndpoint(channel, resolvedModel, ""))
+	})
+}
+
 func TestNormalizeChannelTestEndpointPreservesExplicitEndpoint(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 
@@ -43,6 +96,13 @@ func TestNormalizeChannelTestEndpointUsesResponsesForNativeCodex(t *testing.T) {
 	codex := &model.Channel{Type: constant.ChannelTypeCodex}
 
 	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(codex, "gpt-5.4", ""))
+}
+
+func TestNormalizeChannelTestEndpointPreservesCompactModelEndpoint(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	modelName := ratio_setting.WithCompactModelSuffix("gpt-5.4")
+
+	assert.Equal(t, string(constant.EndpointTypeOpenAIResponseCompact), normalizeChannelTestEndpoint(channel, modelName, ""))
 }
 
 func TestNormalizeChannelTestEndpointLeavesNonOpenAIUnspecified(t *testing.T) {
