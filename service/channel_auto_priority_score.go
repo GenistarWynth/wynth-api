@@ -486,7 +486,15 @@ func applyAutoPriorityExtremeCostDominance(
 				math.IsInf(boundedScoreMargin, 0) {
 				syntheticScoreDominance[position] = false
 			} else {
-				scoreMargin = min(scoreMargin, boundedScoreMargin)
+				// Scores stay within [0, 100], so the widest float64 spacing
+				// occurs at the upper bound. A smaller uniform step can collapse
+				// an otherwise positive synthetic chain edge into equality.
+				minimumRepresentableMargin := 100 - math.Nextafter(100, 0)
+				if boundedScoreMargin < minimumRepresentableMargin {
+					syntheticScoreDominance[position] = false
+				} else {
+					scoreMargin = min(scoreMargin, boundedScoreMargin)
+				}
 			}
 			availablePriority := maxPriority - syntheticPriorities[position]
 			boundedPriorityMargin := availablePriority / int64(dominanceDepth)
@@ -515,7 +523,7 @@ func applyAutoPriorityExtremeCostDominance(
 					continue
 				}
 				hasScoreDominance = true
-				hasPriorityDominance = true
+				hasPriorityDominance = priorityMargin > 0
 				peerFinalScore = math.Max(peerFinalScore, results[expensiveIndex].FinalScore)
 				peerPriority = max(peerPriority, results[expensiveIndex].ComputedPriority)
 			}
@@ -525,7 +533,7 @@ func applyAutoPriorityExtremeCostDominance(
 				peerFinalScore = math.Max(peerFinalScore, syntheticFinalScores[cheapPosition])
 			}
 			if syntheticPriorityDominance[cheapPosition] {
-				hasPriorityDominance = true
+				hasPriorityDominance = priorityMargin > 0
 				peerPriority = max(peerPriority, syntheticPriorities[cheapPosition])
 			}
 			if !hasScoreDominance && !hasPriorityDominance {
@@ -568,7 +576,7 @@ func applyAutoPriorityExtremeCostDominance(
 			if syntheticScoreDominance[expensivePosition] {
 				minAllowedFinalScore = syntheticFinalScores[expensivePosition] + scoreMargin
 			}
-			if syntheticPriorityDominance[expensivePosition] {
+			if syntheticPriorityDominance[expensivePosition] && priorityMargin > 0 {
 				minAllowedPriority = addAutoPriorityDominanceMargin(
 					syntheticPriorities[expensivePosition],
 					priorityMargin,
@@ -585,10 +593,12 @@ func applyAutoPriorityExtremeCostDominance(
 					maxAllowedFinalScore,
 					results[cheapIndex].FinalScore-scoreMargin,
 				)
-				maxAllowedPriority = min(
-					maxAllowedPriority,
-					results[cheapIndex].ComputedPriority-priorityMargin,
-				)
+				if priorityMargin > 0 {
+					maxAllowedPriority = min(
+						maxAllowedPriority,
+						results[cheapIndex].ComputedPriority-priorityMargin,
+					)
+				}
 			}
 			results[expensiveIndex].FinalScore = math.Max(minAllowedFinalScore, math.Max(0, maxAllowedFinalScore))
 			results[expensiveIndex].ComputedPriority = clampAutoPriorityPriority(

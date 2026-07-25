@@ -2122,6 +2122,144 @@ func TestScoreAutoPriorityCandidatesSyntheticScoreOnlyPreservesPriorityHysteresi
 	assert.Equal(t, "hysteresis_delta_below_threshold", result.Reason)
 }
 
+func TestScoreAutoPriorityCandidatesZeroPriorityCapacityPreservesHysteresis(t *testing.T) {
+	rates := []float64{1, 8, 64, 512}
+	inputs := make([]AutoPriorityScoreInput, 0, len(rates))
+	for i, rate := range rates {
+		inputs = append(inputs, AutoPriorityScoreInput{
+			ChannelID:               4500 + i,
+			LocalGroup:              "zero-priority-capacity",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         1,
+			EffectiveRateMultiplier: rate,
+			CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		})
+	}
+
+	results := ScoreAutoPriorityCandidates(inputs, 2)
+
+	require.Len(t, results, len(inputs))
+	for _, result := range results {
+		assert.Equal(t, int64(2), result.ComputedPriority)
+		assert.Equal(t, int64(1), result.NewPriority)
+		assert.False(t, result.Applied)
+		assert.Equal(t, "hysteresis_delta_below_threshold", result.Reason)
+	}
+	for cheapIndex := 0; cheapIndex < len(rates)-1; cheapIndex++ {
+		cheap := resultByChannelID(results, 4500+cheapIndex)
+		expensive := resultByChannelID(results, 4501+cheapIndex)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.Greater(t, cheap.FinalScore, expensive.FinalScore)
+	}
+}
+
+func TestScoreAutoPriorityCandidatesSyntheticScoreMarginRequiresFloat64Capacity(t *testing.T) {
+	syntheticCeil := math.Nextafter(8, math.Inf(1))
+	rates := []float64{1, 1.0 / 8, 1.0 / 64, 8, 8, 8, 8}
+	inputs := make([]AutoPriorityScoreInput, 0, len(rates))
+	for i, rate := range rates {
+		inputs = append(inputs, AutoPriorityScoreInput{
+			ChannelID:               4600 + i,
+			LocalGroup:              "float64-score-capacity",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: rate,
+			CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			CohortCostCeil:          syntheticCeil,
+		})
+	}
+
+	results := ScoreAutoPriorityCandidates(inputs, 1000)
+
+	require.Len(t, results, len(inputs))
+	for cheapIndex, cheapInput := range inputs {
+		cheap := resultByChannelID(results, cheapInput.ChannelID)
+		require.NotNil(t, cheap)
+		assert.Equal(t, 8.0, cheap.OrdinaryPriceFloor)
+		assert.False(t, math.IsNaN(cheap.FinalScore))
+		assert.False(t, math.IsInf(cheap.FinalScore, 0))
+		for expensiveIndex, expensiveInput := range inputs {
+			if cheapIndex == expensiveIndex ||
+				!hasAutoPriorityExtremeNominalRateAdvantage(
+					cheapInput.EffectiveRateMultiplier,
+					expensiveInput.EffectiveRateMultiplier,
+				) {
+				continue
+			}
+			expensive := resultByChannelID(results, expensiveInput.ChannelID)
+			require.NotNil(t, expensive)
+			assert.Greater(
+				t,
+				cheap.FinalScore,
+				expensive.FinalScore,
+				"rate %g must strictly dominate rate %g",
+				cheapInput.EffectiveRateMultiplier,
+				expensiveInput.EffectiveRateMultiplier,
+			)
+		}
+	}
+
+	permutations := [][]AutoPriorityScoreInput{
+		{inputs[6], inputs[5], inputs[4], inputs[3], inputs[2], inputs[1], inputs[0]},
+		{inputs[2], inputs[3], inputs[4], inputs[5], inputs[6], inputs[0], inputs[1]},
+	}
+	for _, permutation := range permutations {
+		permutedResults := ScoreAutoPriorityCandidates(permutation, 1000)
+		require.Len(t, permutedResults, len(inputs))
+		for _, result := range results {
+			permuted := resultByChannelID(permutedResults, result.ChannelID)
+			require.NotNil(t, permuted)
+			assert.Equal(t, result, *permuted)
+		}
+	}
+
+	controlRates := []float64{1, 8, 8, 8}
+	controlInputs := make([]AutoPriorityScoreInput, 0, len(controlRates))
+	for i, rate := range controlRates {
+		controlInputs = append(controlInputs, AutoPriorityScoreInput{
+			ChannelID:               4700 + i,
+			LocalGroup:              "representable-float64-score-capacity",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: rate,
+			CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			CohortCostCeil:          syntheticCeil,
+		})
+	}
+	controlResults := ScoreAutoPriorityCandidates(controlInputs, 1000)
+	controlCheap := resultByChannelID(controlResults, 4700)
+	require.NotNil(t, controlCheap)
+	syntheticPriceScore := relativeAutoPriorityPriceScore(syntheticCeil, controlCheap.OrdinaryPriceFloor)
+	syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+	assert.Greater(t, controlCheap.FinalScore, syntheticFinalScore)
+	for channelID := 4701; channelID <= 4703; channelID++ {
+		controlExpensive := resultByChannelID(controlResults, channelID)
+		require.NotNil(t, controlExpensive)
+		assert.Greater(t, controlCheap.FinalScore, controlExpensive.FinalScore)
+	}
+}
+
 func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {
 	assert.True(t, autoPriorityDeltaBelowThreshold(100, 109, 10))
 	assert.False(t, autoPriorityDeltaBelowThreshold(100, 110, 10))
