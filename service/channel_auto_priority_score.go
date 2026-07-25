@@ -393,8 +393,7 @@ func applyAutoPriorityExtremeCostDominance(
 			peerPriority := int64(0)
 			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
 				expensiveIndex := ordered[expensivePosition]
-				if availabilityGates[expensiveIndex] != 1 ||
-					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+				if !hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
 					continue
 				}
 				hasDominance = true
@@ -433,6 +432,33 @@ func applyAutoPriorityExtremeCostDominance(
 			results[cheapIndex].ComputedPriority = targetPriority
 			results[cheapIndex].NewPriority = targetPriority
 		}
+
+		// The forward pass above raises cheap candidates whenever headroom exists.
+		// Walk back from cheap to expensive so a capped cheap candidate instead
+		// creates the required margin by lowering every peer it dominates.
+		for expensivePosition := len(ordered) - 2; expensivePosition >= 0; expensivePosition-- {
+			expensiveIndex := ordered[expensivePosition]
+			maxAllowedFinalScore := results[expensiveIndex].FinalScore
+			maxAllowedPriority := results[expensiveIndex].ComputedPriority
+			for cheapPosition := expensivePosition + 1; cheapPosition < len(ordered); cheapPosition++ {
+				cheapIndex := ordered[cheapPosition]
+				if availabilityGates[cheapIndex] != 1 ||
+					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
+					continue
+				}
+				maxAllowedFinalScore = math.Min(
+					maxAllowedFinalScore,
+					results[cheapIndex].FinalScore-autoPriorityDominanceScoreMargin,
+				)
+				maxAllowedPriority = min(
+					maxAllowedPriority,
+					results[cheapIndex].ComputedPriority-autoPriorityDominancePriorityMargin,
+				)
+			}
+			results[expensiveIndex].FinalScore = math.Max(0, maxAllowedFinalScore)
+			results[expensiveIndex].ComputedPriority = clampAutoPriorityPriority(maxAllowedPriority, 0, maxPriority)
+			results[expensiveIndex].NewPriority = results[expensiveIndex].ComputedPriority
+		}
 	}
 	return protected
 }
@@ -463,8 +489,7 @@ func removeAutoPriorityHysteresisDominanceViolations(
 				continue
 			}
 			for _, expensiveIndex := range indexes {
-				if availabilityGates[expensiveIndex] != 1 ||
-					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) ||
+				if !hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) ||
 					results[cheapIndex].NewPriority > results[expensiveIndex].NewPriority ||
 					results[expensiveIndex].Reason != "hysteresis_delta_below_threshold" {
 					continue
