@@ -5,9 +5,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,12 +22,158 @@ func TestNormalizeChannelTestEndpointUsesResponsesForCodexCLIIdentity(t *testing
 	})
 
 	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(channel, "gpt-5.4", ""))
-	// Explicit endpoint still wins when caller supplies one.
-	assert.Equal(t, string(constant.EndpointTypeOpenAI), normalizeChannelTestEndpoint(channel, "gpt-5.4", string(constant.EndpointTypeOpenAI)))
+}
 
-	// Native Codex channel type still maps to responses.
+func TestNormalizeChannelTestEndpointUsesResponsesForOpenAI(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "gpt-5.4", "")
+	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/responses", endpoint.Path)
+}
+
+func TestNormalizeChannelTestEndpointPreservesOpenAIEmbeddingInference(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "text-embedding-3-large", "")
+	assert.Equal(t, string(constant.EndpointTypeEmbeddings), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/embeddings", endpoint.Path)
+	assert.IsType(t, &dto.EmbeddingRequest{}, buildTestRequest("text-embedding-3-large", endpointType, channel, false))
+}
+
+func TestNormalizeChannelTestEndpointPreservesOpenAIRerankInference(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	endpointType := normalizeChannelTestEndpoint(channel, "rerank-english-v3.0", "")
+	assert.Equal(t, string(constant.EndpointTypeJinaRerank), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/rerank", endpoint.Path)
+	assert.IsType(t, &dto.RerankRequest{}, buildTestRequest("rerank-english-v3.0", endpointType, channel, false))
+}
+
+func TestAutomaticAndMonitorOpenAISpecializedModelsUseInferredEndpoints(t *testing.T) {
+	t.Run("automatic embedding probe", func(t *testing.T) {
+		testModel := "text-embedding-3-large"
+		channel := &model.Channel{
+			Type:      constant.ChannelTypeOpenAI,
+			TestModel: &testModel,
+			Models:    testModel,
+		}
+
+		resolvedModel := resolveChannelTestModel(channel, "")
+		assert.Equal(t, testModel, resolvedModel)
+		assert.Equal(t, string(constant.EndpointTypeEmbeddings), normalizeChannelTestEndpoint(channel, resolvedModel, ""))
+	})
+
+	t.Run("monitor rerank probe", func(t *testing.T) {
+		testModel := "rerank-english-v3.0"
+		channel := &model.Channel{
+			Type:   constant.ChannelTypeOpenAI,
+			Models: testModel,
+		}
+		channel.SetOtherSettings(dto.ChannelOtherSettings{
+			ChannelMonitorModel: testModel,
+		})
+
+		resolvedModel := resolveChannelTestModel(channel, resolveChannelMonitorProbeModel(channel))
+		assert.Equal(t, testModel, resolvedModel)
+		assert.Equal(t, string(constant.EndpointTypeJinaRerank), normalizeChannelTestEndpoint(channel, resolvedModel, ""))
+	})
+}
+
+func TestAutomaticOpenAIEmbeddingProbeUsesCodexCLIResponsesIdentity(t *testing.T) {
+	testModel := "text-embedding-3-large"
+	channel := &model.Channel{
+		Type:      constant.ChannelTypeOpenAI,
+		TestModel: &testModel,
+		Models:    testModel,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ClientIdentityPreset: dto.ClientIdentityPresetCodexCLI,
+	})
+
+	resolvedModel := resolveChannelTestModel(channel, "")
+	require.Equal(t, testModel, resolvedModel)
+
+	endpointType := normalizeChannelTestEndpoint(channel, resolvedModel, "")
+	require.Equal(t, string(constant.EndpointTypeOpenAIResponse), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/responses", endpoint.Path)
+
+	request, ok := buildTestRequest(resolvedModel, endpointType, channel, true).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NotNil(t, request.Stream)
+	assert.True(t, *request.Stream)
+	assert.JSONEq(t, `[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]`, string(request.Input))
+	assert.NotEmpty(t, request.Instructions)
+	assert.JSONEq(t, `false`, string(request.Store))
+	assert.JSONEq(t, `[]`, string(request.Tools))
+	assert.NotEmpty(t, request.PromptCacheKey)
+	require.NotNil(t, request.Reasoning)
+	assert.Equal(t, "medium", request.Reasoning.Effort)
+}
+
+func TestMonitorOpenAIRerankProbeUsesClaudeCodeMessagesIdentity(t *testing.T) {
+	testModel := "rerank-english-v3.0"
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpenAI,
+		Models: testModel,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelMonitorModel:  testModel,
+		ClientIdentityPreset: dto.ClientIdentityPresetClaudeCode,
+	})
+
+	resolvedModel := resolveChannelTestModel(channel, resolveChannelMonitorProbeModel(channel))
+	require.Equal(t, testModel, resolvedModel)
+
+	endpointType := normalizeChannelTestEndpoint(channel, resolvedModel, "")
+	require.Equal(t, string(constant.EndpointTypeAnthropic), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/messages", endpoint.Path)
+
+	request, ok := buildTestRequest(resolvedModel, endpointType, channel, true).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, testModel, request.Model)
+	require.NotNil(t, request.Stream)
+	assert.True(t, *request.Stream)
+	require.Len(t, request.Messages, 1)
+	assert.Equal(t, "user", request.Messages[0].Role)
+	assert.Equal(t, "hi", request.Messages[0].Content)
+	require.NotNil(t, request.MaxTokens)
+	assert.Equal(t, uint(16), *request.MaxTokens)
+}
+
+func TestNormalizeChannelTestEndpointPreservesExplicitEndpoint(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+
+	assert.Equal(t, string(constant.EndpointTypeOpenAI), normalizeChannelTestEndpoint(channel, "gpt-5.4", string(constant.EndpointTypeOpenAI)))
+}
+
+func TestNormalizeChannelTestEndpointUsesResponsesForNativeCodex(t *testing.T) {
 	codex := &model.Channel{Type: constant.ChannelTypeCodex}
+
 	assert.Equal(t, string(constant.EndpointTypeOpenAIResponse), normalizeChannelTestEndpoint(codex, "gpt-5.4", ""))
+}
+
+func TestNormalizeChannelTestEndpointPreservesCompactModelEndpoint(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	modelName := ratio_setting.WithCompactModelSuffix("gpt-5.4")
+
+	assert.Equal(t, string(constant.EndpointTypeOpenAIResponseCompact), normalizeChannelTestEndpoint(channel, modelName, ""))
+}
+
+func TestNormalizeChannelTestEndpointLeavesNonOpenAIUnspecified(t *testing.T) {
+	anthropic := &model.Channel{Type: constant.ChannelTypeAnthropic}
+
+	assert.Empty(t, normalizeChannelTestEndpoint(anthropic, "claude-sonnet-4", ""))
 }
 
 func TestBuildTestRequestUsesCodexCLIResponsesShape(t *testing.T) {
@@ -52,7 +200,9 @@ func TestBuildTestRequestUsesCodexCLIResponsesShape(t *testing.T) {
 }
 
 func TestBuildTestRequestKeepsSimpleResponsesShapeWithoutCodexCLIIdentity(t *testing.T) {
-	request, ok := buildTestRequest("gpt-5.6-sol", string(constant.EndpointTypeOpenAIResponse), &model.Channel{Type: constant.ChannelTypeOpenAI}, true).(*dto.OpenAIResponsesRequest)
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+	endpointType := normalizeChannelTestEndpoint(channel, "gpt-5.6-sol", "")
+	request, ok := buildTestRequest("gpt-5.6-sol", endpointType, channel, true).(*dto.OpenAIResponsesRequest)
 	require.True(t, ok)
 
 	assert.True(t, *request.Stream)
@@ -72,25 +222,24 @@ func TestShouldUseStreamForAutomaticChannelTestForcesCodexCLIIdentity(t *testing
 	assert.True(t, shouldUseStreamForAutomaticChannelTest(channel))
 }
 
-func TestResolveChannelTestStreamDefaultsToStream(t *testing.T) {
+func TestResolveChannelTestStreamDefaultsOpenAIToStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
-		ClientIdentityPreset: dto.ClientIdentityPresetCodexCLI,
-	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/channel/test/1", nil)
 	c, _ := gin.CreateTestContext(nil)
 	c.Request = req
 	assert.True(t, resolveChannelTestStream(c, channel))
+}
+
+func TestResolveChannelTestStreamPreservesExplicitOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 
 	reqFalse := httptest.NewRequest(http.MethodGet, "/api/channel/test/1?stream=false", nil)
 	cFalse, _ := gin.CreateTestContext(nil)
 	cFalse.Request = reqFalse
 	assert.False(t, resolveChannelTestStream(cFalse, channel))
-
-	normal := &model.Channel{Type: constant.ChannelTypeOpenAI}
-	assert.True(t, resolveChannelTestStream(c, normal))
 }
 
 func TestNormalizeChannelTestEndpointUsesMessagesForClaudeCodeIdentity(t *testing.T) {

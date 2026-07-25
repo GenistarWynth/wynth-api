@@ -744,7 +744,7 @@ func TestChannelMonitorStatusFromResult(t *testing.T) {
 	assert.Equal(t, model.ChannelMonitorStatusSuccess, channelMonitorStatusFromResult(testResult{}))
 }
 
-func TestShouldUseStreamForAutomaticChannelTestUsesSupportedChannels(t *testing.T) {
+func TestAutomaticAndMonitorChannelTestsUseStreamForSupportedChannels(t *testing.T) {
 	assert.True(t, shouldUseStreamForAutomaticChannelTest(&model.Channel{Type: constant.ChannelTypeOpenAI}))
 	assert.True(t, shouldUseStreamForAutomaticChannelTest(&model.Channel{Type: constant.ChannelTypeCodex}))
 	assert.False(t, shouldUseStreamForAutomaticChannelTest(&model.Channel{Type: constant.ChannelTypeMidjourney}))
