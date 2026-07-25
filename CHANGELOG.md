@@ -6,6 +6,12 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.58] - 2026-07-25
+
+### Fixed
+- OpenAI channel probes now use the Responses API while preserving client identity, specialized endpoint, and explicit endpoint precedence.
+- Auto-priority now applies an ordinary-price floor that resists compression from extreme outliers while preserving hard dominance, atomic cohort updates, diagnostics, and numeric and rollback correctness.
+
 ## [v1.0.0-rc.57] - 2026-07-23
 
 ### Fixed
