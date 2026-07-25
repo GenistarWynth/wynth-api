@@ -1884,7 +1884,7 @@ func TestScoreAutoPriorityCandidatesSyntheticCeilingReservesDominanceCapacity(t 
 	}
 }
 
-func TestScoreAutoPriorityCandidatesUnrepresentableSyntheticCeilingDoesNotFlattenActualDominance(t *testing.T) {
+func TestScoreAutoPriorityCandidatesSyntheticScoreDominanceSurvivesPriorityCapacityFailure(t *testing.T) {
 	inputs := []AutoPriorityScoreInput{
 		{
 			ChannelID:               4001,
@@ -1913,10 +1913,18 @@ func TestScoreAutoPriorityCandidatesUnrepresentableSyntheticCeilingDoesNotFlatte
 	expensive := resultByChannelID(results, 4002)
 	require.NotNil(t, cheap)
 	require.NotNil(t, expensive)
+	syntheticPriceScore := relativeAutoPriorityPriceScore(64, expensive.OrdinaryPriceFloor)
+	syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+	syntheticPriority := clampAutoPriorityPriority(int64(math.Round(syntheticFinalScore*10)), 0, 250)
+	assert.InDelta(t, 25.234375, syntheticFinalScore, 1e-12)
+	assert.Equal(t, int64(250), syntheticPriority)
 	assert.Equal(t, int64(250), cheap.ComputedPriority)
+	assert.Equal(t, int64(240), expensive.ComputedPriority)
+	assert.Equal(t, int64(250), cheap.NewPriority)
+	assert.Equal(t, int64(240), expensive.NewPriority)
 	assert.Equal(t, autoPriorityDominancePriorityMargin, cheap.ComputedPriority-expensive.ComputedPriority)
 	assert.Equal(t, autoPriorityDominancePriorityMargin, cheap.NewPriority-expensive.NewPriority)
-	assert.Greater(t, cheap.FinalScore, expensive.FinalScore)
+	assert.GreaterOrEqual(t, expensive.FinalScore-syntheticFinalScore, autoPriorityDominanceScoreMargin-1e-12)
 
 	permutedResults := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{inputs[1], inputs[0]}, 250)
 	for _, result := range results {
@@ -1926,7 +1934,7 @@ func TestScoreAutoPriorityCandidatesUnrepresentableSyntheticCeilingDoesNotFlatte
 	}
 }
 
-func TestScoreAutoPriorityCandidatesRepresentableSyntheticCeilingKeepsSelectedMargin(t *testing.T) {
+func TestScoreAutoPriorityCandidatesSyntheticDominanceKeepsBothRepresentableDimensions(t *testing.T) {
 	inputs := []AutoPriorityScoreInput{
 		{
 			ChannelID:               4101,
@@ -1969,6 +1977,149 @@ func TestScoreAutoPriorityCandidatesRepresentableSyntheticCeilingKeepsSelectedMa
 		require.NotNil(t, permuted)
 		assert.Equal(t, result, *permuted)
 	}
+}
+
+func TestScoreAutoPriorityCandidatesSyntheticPriorityDominanceSurvivesScoreCapacityFailure(t *testing.T) {
+	inputs := []AutoPriorityScoreInput{
+		{
+			ChannelID:               4201,
+			LocalGroup:              "score-capacity-failure",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 1,
+			CohortCostCeil:          8,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+		},
+		{
+			ChannelID:               4202,
+			LocalGroup:              "score-capacity-failure",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 8,
+			CohortCostCeil:          8,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+		},
+		{
+			ChannelID:               4203,
+			LocalGroup:              "score-capacity-failure",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 8,
+			CohortCostCeil:          8,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+		},
+	}
+
+	results := ScoreAutoPriorityCandidates(inputs, 2000)
+	cheap := resultByChannelID(results, 4201)
+	require.NotNil(t, cheap)
+	syntheticPriceScore := relativeAutoPriorityPriceScore(8, cheap.OrdinaryPriceFloor)
+	syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+	syntheticPriority := int64(math.Round(syntheticFinalScore * 10))
+	assert.Equal(t, 100.0, syntheticFinalScore)
+	assert.Equal(t, int64(1000), syntheticPriority)
+	assert.Less(t, cheap.FinalScore, syntheticFinalScore+autoPriorityDominanceScoreMargin)
+	assert.GreaterOrEqual(t, cheap.ComputedPriority-syntheticPriority, autoPriorityDominancePriorityMargin)
+	assert.GreaterOrEqual(t, cheap.NewPriority-syntheticPriority, autoPriorityDominancePriorityMargin)
+	for _, expensiveID := range []int{4202, 4203} {
+		expensive := resultByChannelID(results, expensiveID)
+		require.NotNil(t, expensive)
+		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, autoPriorityDominanceScoreMargin-1e-12)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, autoPriorityDominancePriorityMargin)
+		assert.GreaterOrEqual(t, cheap.NewPriority-expensive.NewPriority, autoPriorityDominancePriorityMargin)
+	}
+
+	permutedResults := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{inputs[2], inputs[0], inputs[1]}, 2000)
+	for _, result := range results {
+		permuted := resultByChannelID(permutedResults, result.ChannelID)
+		require.NotNil(t, permuted)
+		assert.Equal(t, result, *permuted)
+	}
+}
+
+func TestScoreAutoPriorityCandidatesSyntheticDominanceDegradesWhenNeitherDimensionIsRepresentable(t *testing.T) {
+	inputs := []AutoPriorityScoreInput{
+		{
+			ChannelID:               4301,
+			LocalGroup:              "no-synthetic-capacity",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 1,
+			CohortCostCeil:          8,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+		},
+		{
+			ChannelID:               4302,
+			LocalGroup:              "no-synthetic-capacity",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 8,
+			CohortCostCeil:          8,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+		},
+		{
+			ChannelID:               4303,
+			LocalGroup:              "no-synthetic-capacity",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: 8,
+			CohortCostCeil:          8,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+		},
+	}
+
+	results := ScoreAutoPriorityCandidates(inputs, 1000)
+	cheap := resultByChannelID(results, 4301)
+	require.NotNil(t, cheap)
+	syntheticPriceScore := relativeAutoPriorityPriceScore(8, cheap.OrdinaryPriceFloor)
+	syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+	syntheticPriority := int64(math.Round(syntheticFinalScore * 10))
+	assert.Equal(t, 100.0, syntheticFinalScore)
+	assert.Equal(t, int64(1000), syntheticPriority)
+	assert.Less(t, cheap.FinalScore, syntheticFinalScore+autoPriorityDominanceScoreMargin)
+	assert.Less(t, cheap.ComputedPriority, syntheticPriority+autoPriorityDominancePriorityMargin)
+	assert.Less(t, cheap.NewPriority, syntheticPriority+autoPriorityDominancePriorityMargin)
+	for _, expensiveID := range []int{4302, 4303} {
+		expensive := resultByChannelID(results, expensiveID)
+		require.NotNil(t, expensive)
+		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, autoPriorityDominanceScoreMargin-1e-12)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, autoPriorityDominancePriorityMargin)
+		assert.GreaterOrEqual(t, cheap.NewPriority-expensive.NewPriority, autoPriorityDominancePriorityMargin)
+	}
+
+	permutedResults := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{inputs[2], inputs[0], inputs[1]}, 1000)
+	for _, result := range results {
+		permuted := resultByChannelID(permutedResults, result.ChannelID)
+		require.NotNil(t, permuted)
+		assert.Equal(t, result, *permuted)
+	}
+}
+
+func TestScoreAutoPriorityCandidatesSyntheticScoreOnlyPreservesPriorityHysteresis(t *testing.T) {
+	input := AutoPriorityScoreInput{
+		ChannelID:               4401,
+		LocalGroup:              "score-only-hysteresis",
+		ChannelType:             constant.ChannelTypeOpenAI,
+		CurrentPriority:         335,
+		EffectiveRateMultiplier: 1,
+		CohortCostCeil:          8,
+		Availability:            floatPtr(1),
+		MonitorCheckCount:       3,
+		HasPreviousSnapshot:     true,
+	}
+
+	results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{input}, 340)
+	require.Len(t, results, 1)
+	result := results[0]
+	syntheticPriceScore := relativeAutoPriorityPriceScore(8, result.OrdinaryPriceFloor)
+	syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+	syntheticPriority := clampAutoPriorityPriority(int64(math.Round(syntheticFinalScore*10)), 0, 340)
+	assert.Equal(t, int64(340), syntheticPriority)
+	assert.GreaterOrEqual(t, result.FinalScore-syntheticFinalScore, autoPriorityDominanceScoreMargin-1e-12)
+	assert.Equal(t, int64(340), result.ComputedPriority)
+	assert.Equal(t, int64(335), result.NewPriority)
+	assert.False(t, result.Applied)
+	assert.Equal(t, "hysteresis_delta_below_threshold", result.Reason)
 }
 
 func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {

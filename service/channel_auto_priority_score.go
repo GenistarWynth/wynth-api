@@ -394,10 +394,10 @@ func applyAutoPriorityExtremeCostDominance(
 		})
 
 		// Full +1 score and +10 priority margins need one slot per actual edge
-		// in the longest usable dominance chain. Synthetic ceiling peers may
-		// further reduce that uniform step only when their own lower-bound edge
-		// is representable; a capped synthetic baseline must not flatten the
-		// independently representable actual graph.
+		// in the longest usable dominance chain. Synthetic ceiling peers reduce
+		// each dimension's uniform step only when that lower-bound edge is
+		// representable in the same dimension; a capped synthetic baseline must
+		// not flatten either the other dimension or the actual graph.
 		dominanceDepths := make([]int, len(ordered))
 		dominanceHeights := make([]int, len(ordered))
 		maxDominanceDepth := 0
@@ -436,7 +436,8 @@ func applyAutoPriorityExtremeCostDominance(
 				)
 			}
 		}
-		syntheticDominance := make([]bool, len(ordered))
+		syntheticScoreDominance := make([]bool, len(ordered))
+		syntheticPriorityDominance := make([]bool, len(ordered))
 		syntheticFinalScores := make([]float64, len(ordered))
 		syntheticPriorities := make([]int64, len(ordered))
 		for position, index := range ordered {
@@ -444,7 +445,8 @@ func applyAutoPriorityExtremeCostDominance(
 				!hasAutoPriorityExtremeNominalRateAdvantage(results[index].NominalRateMultiplier, inputs[index].CohortCostCeil) {
 				continue
 			}
-			syntheticDominance[position] = true
+			syntheticScoreDominance[position] = true
+			syntheticPriorityDominance[position] = true
 			syntheticPriceScore := relativeAutoPriorityPriceScore(inputs[index].CohortCostCeil, cohortPriceFloors[cohort])
 			syntheticFinalScores[position] = weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
 			syntheticPriorities[position] = clampAutoPriorityPriority(
@@ -470,7 +472,7 @@ func applyAutoPriorityExtremeCostDominance(
 			priorityMargin = min(priorityMargin, maxPriority/int64(maxDominanceDepth))
 		}
 		for position := range ordered {
-			if !syntheticDominance[position] {
+			if !syntheticScoreDominance[position] && !syntheticPriorityDominance[position] {
 				continue
 			}
 			dominanceDepth := dominanceHeights[position] + 1
@@ -479,17 +481,20 @@ func applyAutoPriorityExtremeCostDominance(
 			if boundedScoreMargin*float64(dominanceDepth) > availableScore {
 				boundedScoreMargin = math.Nextafter(boundedScoreMargin, 0)
 			}
-			availablePriority := maxPriority - syntheticPriorities[position]
-			boundedPriorityMargin := availablePriority / int64(dominanceDepth)
 			if boundedScoreMargin <= 0 ||
 				math.IsNaN(boundedScoreMargin) ||
-				math.IsInf(boundedScoreMargin, 0) ||
-				boundedPriorityMargin <= 0 {
-				syntheticDominance[position] = false
-				continue
+				math.IsInf(boundedScoreMargin, 0) {
+				syntheticScoreDominance[position] = false
+			} else {
+				scoreMargin = min(scoreMargin, boundedScoreMargin)
 			}
-			scoreMargin = min(scoreMargin, boundedScoreMargin)
-			priorityMargin = min(priorityMargin, boundedPriorityMargin)
+			availablePriority := maxPriority - syntheticPriorities[position]
+			boundedPriorityMargin := availablePriority / int64(dominanceDepth)
+			if boundedPriorityMargin <= 0 {
+				syntheticPriorityDominance[position] = false
+			} else {
+				priorityMargin = min(priorityMargin, boundedPriorityMargin)
+			}
 		}
 		priorityMargins[cohort] = priorityMargin
 
@@ -499,7 +504,8 @@ func applyAutoPriorityExtremeCostDominance(
 				continue
 			}
 
-			hasDominance := false
+			hasScoreDominance := false
+			hasPriorityDominance := false
 			peerFinalScore := 0.0
 			peerPriority := int64(0)
 			for expensivePosition := 0; expensivePosition < cheapPosition; expensivePosition++ {
@@ -508,35 +514,43 @@ func applyAutoPriorityExtremeCostDominance(
 					!hasAutoPriorityExtremeNominalRateAdvantage(results[cheapIndex].NominalRateMultiplier, results[expensiveIndex].NominalRateMultiplier) {
 					continue
 				}
-				hasDominance = true
+				hasScoreDominance = true
+				hasPriorityDominance = true
 				peerFinalScore = math.Max(peerFinalScore, results[expensiveIndex].FinalScore)
 				peerPriority = max(peerPriority, results[expensiveIndex].ComputedPriority)
 			}
 
-			if syntheticDominance[cheapPosition] {
-				hasDominance = true
+			if syntheticScoreDominance[cheapPosition] {
+				hasScoreDominance = true
 				peerFinalScore = math.Max(peerFinalScore, syntheticFinalScores[cheapPosition])
+			}
+			if syntheticPriorityDominance[cheapPosition] {
+				hasPriorityDominance = true
 				peerPriority = max(peerPriority, syntheticPriorities[cheapPosition])
 			}
-			if !hasDominance {
+			if !hasScoreDominance && !hasPriorityDominance {
 				continue
 			}
 
-			protected[cheapIndex] = true
-			targetFinalScore := math.Max(
-				results[cheapIndex].FinalScore+scoreMargin,
-				peerFinalScore+scoreMargin,
-			)
-			if targetFinalScore > 100 {
-				targetFinalScore = 100
+			protected[cheapIndex] = hasPriorityDominance
+			if hasScoreDominance {
+				targetFinalScore := math.Max(
+					results[cheapIndex].FinalScore+scoreMargin,
+					peerFinalScore+scoreMargin,
+				)
+				if targetFinalScore > 100 {
+					targetFinalScore = 100
+				}
+				results[cheapIndex].FinalScore = targetFinalScore
 			}
-			results[cheapIndex].FinalScore = targetFinalScore
 
-			targetPriority := addAutoPriorityDominanceMargin(results[cheapIndex].ComputedPriority, priorityMargin, maxPriority)
-			targetPriority = max(targetPriority, addAutoPriorityDominanceMargin(peerPriority, priorityMargin, maxPriority))
-			targetPriority = max(targetPriority, clampAutoPriorityPriority(int64(math.Round(targetFinalScore*10)), 0, maxPriority))
-			results[cheapIndex].ComputedPriority = targetPriority
-			results[cheapIndex].NewPriority = targetPriority
+			if hasPriorityDominance {
+				targetPriority := addAutoPriorityDominanceMargin(results[cheapIndex].ComputedPriority, priorityMargin, maxPriority)
+				targetPriority = max(targetPriority, addAutoPriorityDominanceMargin(peerPriority, priorityMargin, maxPriority))
+				targetPriority = max(targetPriority, clampAutoPriorityPriority(int64(math.Round(results[cheapIndex].FinalScore*10)), 0, maxPriority))
+				results[cheapIndex].ComputedPriority = targetPriority
+				results[cheapIndex].NewPriority = targetPriority
+			}
 		}
 
 		// The forward pass above raises cheap candidates whenever headroom exists.
@@ -551,8 +565,10 @@ func applyAutoPriorityExtremeCostDominance(
 			maxAllowedPriority := results[expensiveIndex].ComputedPriority
 			minAllowedFinalScore := 0.0
 			minAllowedPriority := int64(0)
-			if syntheticDominance[expensivePosition] {
+			if syntheticScoreDominance[expensivePosition] {
 				minAllowedFinalScore = syntheticFinalScores[expensivePosition] + scoreMargin
+			}
+			if syntheticPriorityDominance[expensivePosition] {
 				minAllowedPriority = addAutoPriorityDominanceMargin(
 					syntheticPriorities[expensivePosition],
 					priorityMargin,
