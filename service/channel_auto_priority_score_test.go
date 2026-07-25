@@ -1679,12 +1679,56 @@ func TestScoreAutoPriorityCandidatesDominanceCleanupPreservesSelectedMargin(t *t
 	assert.Empty(t, expensive.Reason)
 }
 
-func TestRelativeAutoPriorityPriceScoreAvoidsIntermediateOverflow(t *testing.T) {
-	score := relativeAutoPriorityPriceScore(math.MaxFloat64, math.MaxFloat64/8)
+func TestRelativeAutoPriorityPriceScoreStableArithmetic(t *testing.T) {
+	tests := []struct {
+		name        string
+		cost        float64
+		cohortFloor float64
+		want        float64
+	}{
+		{
+			name:        "smallest subnormal survives safe scaling",
+			cost:        100,
+			cohortFloor: math.SmallestNonzeroFloat64,
+			want:        math.SmallestNonzeroFloat64,
+		},
+		{
+			name:        "large finite values avoid intermediate overflow",
+			cost:        math.MaxFloat64,
+			cohortFloor: math.MaxFloat64 / 8,
+			want:        12.5,
+		},
+		{
+			name:        "ordinary ratio is unchanged",
+			cost:        4,
+			cohortFloor: 1,
+			want:        25,
+		},
+		{
+			name:        "equal cost keeps full score",
+			cost:        1,
+			cohortFloor: 1,
+			want:        100,
+		},
+		{name: "zero cost remains invalid", cost: 0, cohortFloor: 1, want: 0},
+		{name: "zero floor remains invalid", cost: 1, cohortFloor: 0, want: 0},
+		{name: "negative cost remains invalid", cost: -1, cohortFloor: 1, want: 0},
+		{name: "negative floor remains invalid", cost: 1, cohortFloor: -1, want: 0},
+		{name: "nan cost remains invalid", cost: math.NaN(), cohortFloor: 1, want: 0},
+		{name: "nan floor remains invalid", cost: 1, cohortFloor: math.NaN(), want: 0},
+		{name: "positive infinite cost remains invalid", cost: math.Inf(1), cohortFloor: 1, want: 0},
+		{name: "positive infinite floor remains invalid", cost: 1, cohortFloor: math.Inf(1), want: 0},
+		{name: "negative infinite cost remains invalid", cost: math.Inf(-1), cohortFloor: 1, want: 0},
+		{name: "negative infinite floor remains invalid", cost: 1, cohortFloor: math.Inf(-1), want: 0},
+	}
 
-	assert.False(t, math.IsNaN(score))
-	assert.False(t, math.IsInf(score, 0))
-	assert.InDelta(t, 12.5, score, 1e-12)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := relativeAutoPriorityPriceScore(tt.cost, tt.cohortFloor)
+
+			assert.Equal(t, math.Float64bits(tt.want), math.Float64bits(got))
+		})
+	}
 }
 
 func TestScoreAutoPriorityCandidatesLongDominanceChainUsesAdaptiveScoreMargin(t *testing.T) {
@@ -1756,6 +1800,86 @@ func TestScoreAutoPriorityCandidatesLongDominanceChainUsesAdaptiveScoreMargin(t 
 			assert.Equal(t, result.FinalScore, permuted.FinalScore)
 			assert.Equal(t, result.ComputedPriority, permuted.ComputedPriority)
 			assert.Equal(t, result.NewPriority, permuted.NewPriority)
+		}
+	}
+}
+
+func TestScoreAutoPriorityCandidatesSyntheticCeilingReservesDominanceCapacity(t *testing.T) {
+	const tierCount = 101
+	inputs := make([]AutoPriorityScoreInput, 0, tierCount)
+	rate := 1.0
+	for tier := 0; tier < tierCount; tier++ {
+		inputs = append(inputs, AutoPriorityScoreInput{
+			ChannelID:               3000 + tier,
+			LocalGroup:              "synthetic-ceiling-chain",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: rate,
+			CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+		})
+		rate *= autoPriorityExtremeCostRatio
+	}
+	syntheticCeil := rate
+	for i := range inputs {
+		inputs[i].CohortCostCeil = syntheticCeil
+	}
+
+	results := ScoreAutoPriorityCandidates(inputs, 1000)
+
+	require.Len(t, results, tierCount)
+	mostExpensive := resultByChannelID(results, 3000+tierCount-1)
+	require.NotNil(t, mostExpensive)
+	syntheticPriceScore := relativeAutoPriorityPriceScore(syntheticCeil, mostExpensive.OrdinaryPriceFloor)
+	syntheticFinalScore := weightedAutoPriorityFinalScore(1, syntheticPriceScore, 100, 100, 100, 100)
+	syntheticPriority := int64(math.Round(syntheticFinalScore * 10))
+	selectedScoreMargin := math.Min(
+		autoPriorityDominanceScoreMargin,
+		(100-syntheticFinalScore)/float64(tierCount),
+	)
+	selectedPriorityMargin := (int64(1000) - syntheticPriority) / int64(tierCount)
+	if selectedPriorityMargin > autoPriorityDominancePriorityMargin {
+		selectedPriorityMargin = autoPriorityDominancePriorityMargin
+	}
+	require.Greater(t, selectedScoreMargin, 0.0)
+	require.Greater(t, selectedPriorityMargin, int64(0))
+	assert.GreaterOrEqual(t, mostExpensive.FinalScore-syntheticFinalScore, selectedScoreMargin-1e-12)
+	assert.GreaterOrEqual(t, mostExpensive.ComputedPriority-syntheticPriority, selectedPriorityMargin)
+	assert.GreaterOrEqual(t, mostExpensive.NewPriority-syntheticPriority, selectedPriorityMargin)
+
+	for cheapTier := 0; cheapTier < tierCount-1; cheapTier++ {
+		cheap := resultByChannelID(results, 3000+cheapTier)
+		expensive := resultByChannelID(results, 3001+cheapTier)
+		require.NotNil(t, cheap)
+		require.NotNil(t, expensive)
+		assert.GreaterOrEqual(t, cheap.FinalScore-expensive.FinalScore, selectedScoreMargin-1e-12)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-expensive.ComputedPriority, selectedPriorityMargin)
+		assert.GreaterOrEqual(t, cheap.NewPriority-expensive.NewPriority, selectedPriorityMargin)
+	}
+
+	permutations := make([][]AutoPriorityScoreInput, 2)
+	permutations[0] = make([]AutoPriorityScoreInput, tierCount)
+	for i := range inputs {
+		permutations[0][i] = inputs[tierCount-1-i]
+	}
+	permutations[1] = make([]AutoPriorityScoreInput, 0, tierCount)
+	const rotation = 37
+	for i := range inputs {
+		permutations[1] = append(permutations[1], inputs[(i+rotation)%tierCount])
+	}
+
+	for _, permutation := range permutations {
+		permutedResults := ScoreAutoPriorityCandidates(permutation, 1000)
+		require.Len(t, permutedResults, tierCount)
+		for _, result := range results {
+			permuted := resultByChannelID(permutedResults, result.ChannelID)
+			require.NotNil(t, permuted)
+			assert.Equal(t, result, *permuted)
 		}
 	}
 }

@@ -1522,6 +1522,77 @@ func TestPersistChannelAutoPriorityGroupRollsBackEveryMemberOnConflict(t *testin
 	}
 }
 
+func TestRunDueChannelAutoPriorityPersistenceFailureReturnsPersistedPriorities(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_925_000)
+	channels := []model.Channel{
+		createAutoPriorityTestChannel(t, "failed cohort cheap", 100, dto.ChannelOtherSettings{
+			ChannelAutoPriorityEnabled:        true,
+			ChannelAutoPriorityWindowHours:    24,
+			ChannelAutoPriorityRateMultiplier: 0.5,
+		}),
+		createAutoPriorityTestChannel(t, "failed cohort expensive", 100, dto.ChannelOtherSettings{
+			ChannelAutoPriorityEnabled:        true,
+			ChannelAutoPriorityWindowHours:    24,
+			ChannelAutoPriorityRateMultiplier: 2,
+		}),
+	}
+	for _, channel := range channels {
+		createAutoPriorityTestUsageLog(t, channel.Id, now-60)
+		createAutoPriorityTestMonitorLog(t, channel.Id, now-60)
+	}
+
+	updateCount := 0
+	callbackName := fmt.Sprintf("fail_complete_auto_priority_cohort_%s", t.Name())
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil || tx.Statement.Schema.Name != "Channel" {
+			return
+		}
+		updates, ok := tx.Statement.Dest.(map[string]any)
+		if !ok {
+			return
+		}
+		settings, ok := updates["settings"].(string)
+		if !ok || !strings.Contains(settings, "channel_auto_priority_last_score") {
+			return
+		}
+		updateCount++
+		if updateCount == 2 {
+			tx.AddError(errors.New("forced complete-cohort persistence failure"))
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+	})
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, len(channels))
+	assert.Equal(t, len(channels), updateCount)
+	for _, result := range results {
+		assert.False(t, result.Applied)
+		assert.Equal(t, "update_failed", result.Reason)
+		assert.False(t, result.score.Applied)
+		assert.Equal(t, "update_failed", result.score.Reason)
+		assert.Equal(t, result.score.OldPriority, result.score.NewPriority)
+		assert.NotEqual(t, result.score.OldPriority, result.score.ComputedPriority)
+
+		var persisted model.Channel
+		require.NoError(t, model.DB.First(&persisted, result.ChannelID).Error)
+		assert.Equal(t, int64(100), persisted.GetPriority())
+		assert.Equal(t, persisted.GetPriority(), result.score.OldPriority)
+		assert.Equal(t, persisted.GetPriority(), result.score.NewPriority)
+		persistedSettings := persisted.GetOtherSettings()
+		assert.Zero(t, persistedSettings.ChannelAutoPriorityLastRunAt)
+		assert.Nil(t, persistedSettings.ChannelAutoPriorityLastScore)
+
+		var ability model.Ability
+		require.NoError(t, model.DB.Where("channel_id = ?", result.ChannelID).First(&ability).Error)
+		require.NotNil(t, ability.Priority)
+		assert.Equal(t, int64(100), *ability.Priority)
+	}
+}
+
 func TestRunDueChannelAutoPriorityReportsManualCleanupOnceWhenGroupPersistFails(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_950_000)

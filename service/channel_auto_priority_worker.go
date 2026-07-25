@@ -787,11 +787,15 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		}
 		if reason != "" {
 			for _, idx := range indexes {
+				score := scoreResults[idx]
+				score.Applied = false
+				score.Reason = reason
+				score.NewPriority = score.OldPriority
 				results = append(results, ChannelAutoPriorityRunResult{
 					ChannelID: pending[idx].channel.Id,
 					Applied:   false,
 					Reason:    reason,
-					score:     scoreResults[idx],
+					score:     score,
 				})
 			}
 			for _, channel := range manuallyDisabled {
