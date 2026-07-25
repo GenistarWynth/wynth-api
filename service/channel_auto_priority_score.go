@@ -158,14 +158,20 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			continue
 		}
 
-		result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * cacheFactor
+		result.EffectiveCostMultiplier = boundedAutoPriorityMultiplierProduct(
+			input.EffectiveRateMultiplier,
+			cacheFactor,
+		)
 		// Previous snapshots smooth only the backward-compatible effective-cost
 		// diagnostic. They must not change the exact default/count-confidence
 		// transition used by the cache component.
 		if input.HasPreviousSnapshot && isValidAutoPriorityMultiplier(input.PreviousCacheAdjustedCostFactor) {
 			smoothedCacheFactor := autoPriorityCurrentSmoothingWeight*cacheFactor +
 				autoPriorityPreviousSmoothingWeight*input.PreviousCacheAdjustedCostFactor
-			result.EffectiveCostMultiplier = input.EffectiveRateMultiplier * smoothedCacheFactor
+			result.EffectiveCostMultiplier = boundedAutoPriorityMultiplierProduct(
+				input.EffectiveRateMultiplier,
+				smoothedCacheFactor,
+			)
 		}
 		// Snapshots predating cache-factor diagnostics preserve the legacy
 		// effective-cost smoothing behavior without changing current cache score.
@@ -665,6 +671,16 @@ func autoPriorityCohortKey(localGroup string, channelType int) string {
 
 func isValidAutoPriorityMultiplier(v float64) bool {
 	return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+func boundedAutoPriorityMultiplierProduct(left, right float64) float64 {
+	if !isValidAutoPriorityMultiplier(left) || !isValidAutoPriorityMultiplier(right) {
+		return left * right
+	}
+	if left >= math.MaxFloat64/right {
+		return math.MaxFloat64
+	}
+	return left * right
 }
 
 func normalizedAutoPriorityCacheFactor(v float64) float64 {

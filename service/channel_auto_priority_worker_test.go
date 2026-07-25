@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -56,6 +57,60 @@ func TestRunDueChannelAutoPriorityDefaultsUnsetRateMultiplierToOne(t *testing.T)
 	assert.Equal(t, 0.5, cheapSettings.ChannelAutoPriorityLastScore.EffectiveRateMultiplier)
 
 	assert.Greater(t, reloadedCheap.GetPriority(), reloadedDefaultRate.GetPriority())
+}
+
+func TestRunDueChannelAutoPriorityPersistsFiniteSnapshotForExtremeEffectiveCost(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_010_000)
+
+	channel := createAutoPriorityTestChannel(t, "finite effective cost", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  math.MaxFloat64,
+	})
+	other, err := common.Marshal(map[string]any{
+		"input_tokens_total":    1,
+		"cache_creation_tokens": 1,
+		"cache_creation_ratio":  3,
+		"completion_ratio":      1,
+		"is_channel_test":       false,
+	})
+	require.NoError(t, err)
+	logs := make([]model.Log, 0, autoPriorityFullCacheSampleCount)
+	for i := int64(0); i < autoPriorityFullCacheSampleCount; i++ {
+		logs = append(logs, model.Log{
+			Type:         model.LogTypeConsume,
+			CreatedAt:    now - 60 - i,
+			ChannelId:    channel.Id,
+			PromptTokens: 1,
+			Other:        string(other),
+		})
+	}
+	require.NoError(t, model.LOG_DB.Create(&logs).Error)
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	assert.NotEqual(t, "update_failed", results[0].Reason)
+	assert.NotEqual(t, "update_failed", results[0].score.Reason)
+	assert.True(t, results[0].Applied)
+	assert.GreaterOrEqual(t, results[0].score.NewPriority, int64(0))
+	assert.LessOrEqual(t, results[0].score.NewPriority, int64(1000))
+
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+	settings := reloaded.GetOtherSettings()
+	assert.Equal(t, now, settings.ChannelAutoPriorityLastRunAt)
+	require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+	snapshot := settings.ChannelAutoPriorityLastScore
+	assert.Equal(t, "v5", snapshot.Version)
+	assert.Equal(t, 3.0, snapshot.CacheAdjustedCostFactor)
+	assert.Equal(t, math.MaxFloat64, snapshot.EffectiveCostMultiplier)
+	assert.False(t, math.IsNaN(snapshot.EffectiveCostMultiplier))
+	assert.False(t, math.IsInf(snapshot.EffectiveCostMultiplier, 0))
+	_, err = common.Marshal(snapshot)
+	require.NoError(t, err)
 }
 
 func TestRunDueChannelAutoPriorityEvaluatesCompleteCohortWhenOnlyEnabledSubsetIsDue(t *testing.T) {

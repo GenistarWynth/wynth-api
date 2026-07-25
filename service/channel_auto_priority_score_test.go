@@ -898,6 +898,150 @@ func TestScoreAutoPriorityCandidatesHandlesNonFiniteMultiplier(t *testing.T) {
 	assert.Equal(t, int64(321), results[0].NewPriority)
 }
 
+func TestScoreAutoPriorityCandidatesSaturatesEffectiveCostOverflowAndMarshalsSnapshot(t *testing.T) {
+	results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+		ChannelID:               802,
+		LocalGroup:              "finite-overflow",
+		ChannelType:             constant.ChannelTypeOpenAI,
+		CurrentPriority:         500,
+		EffectiveRateMultiplier: math.MaxFloat64,
+		CacheAdjustedCostFactor: 3,
+		UsageLogCount:           autoPriorityFullCacheSampleCount,
+	}}, 1000)
+
+	require.Len(t, results, 1)
+	result := results[0]
+	assert.Equal(t, math.MaxFloat64, result.EffectiveCostMultiplier)
+	assert.False(t, math.IsNaN(result.EffectiveCostMultiplier))
+	assert.False(t, math.IsInf(result.EffectiveCostMultiplier, 0))
+	for scoreName, score := range map[string]float64{
+		"effective price": result.EffectivePriceScore,
+		"nominal price":   result.NominalPriceScore,
+		"cache":           result.CacheScore,
+		"availability":    result.AvailabilityScore,
+		"first token":     result.FirstTokenScore,
+		"throughput":      result.ThroughputScore,
+		"final":           result.FinalScore,
+	} {
+		assert.GreaterOrEqual(t, score, 0.0, scoreName)
+		assert.LessOrEqual(t, score, 100.0, scoreName)
+	}
+	assert.GreaterOrEqual(t, result.ComputedPriority, int64(0))
+	assert.LessOrEqual(t, result.ComputedPriority, int64(1000))
+	assert.GreaterOrEqual(t, result.NewPriority, int64(0))
+	assert.LessOrEqual(t, result.NewPriority, int64(1000))
+
+	snapshot := buildChannelAutoPriorityScoreSnapshot(result, 100, 200)
+	assert.Equal(t, "v5", snapshot.Version)
+	_, err := common.Marshal(snapshot)
+	require.NoError(t, err)
+}
+
+func TestScoreAutoPriorityCandidatesEffectiveCostOverflowBoundary(t *testing.T) {
+	overflowThreshold := math.MaxFloat64 / 3
+	justOverThreshold := math.Nextafter(overflowThreshold, math.Inf(1))
+	testCases := []struct {
+		name         string
+		rate         float64
+		cacheFactor  float64
+		expectedCost float64
+	}{
+		{
+			name:         "factor one preserves max",
+			rate:         math.MaxFloat64,
+			cacheFactor:  1,
+			expectedCost: math.MaxFloat64,
+		},
+		{
+			name:         "factor three at threshold stays finite",
+			rate:         overflowThreshold,
+			cacheFactor:  3,
+			expectedCost: math.MaxFloat64,
+		},
+		{
+			name:         "factor three above threshold saturates",
+			rate:         justOverThreshold,
+			cacheFactor:  3,
+			expectedCost: math.MaxFloat64,
+		},
+		{
+			name:         "ordinary multiplication is unchanged",
+			rate:         2.5,
+			cacheFactor:  3,
+			expectedCost: 7.5,
+		},
+		{
+			name:         "positive subnormal multiplication is unchanged",
+			rate:         math.SmallestNonzeroFloat64,
+			cacheFactor:  3,
+			expectedCost: math.SmallestNonzeroFloat64 * 3,
+		},
+		{
+			name:         "zero cache factor keeps neutral fallback",
+			rate:         2,
+			cacheFactor:  0,
+			expectedCost: 2,
+		},
+		{
+			name:         "nan cache factor keeps neutral fallback",
+			rate:         2,
+			cacheFactor:  math.NaN(),
+			expectedCost: 2,
+		},
+		{
+			name:         "infinite cache factor keeps neutral fallback",
+			rate:         2,
+			cacheFactor:  math.Inf(1),
+			expectedCost: 2,
+		},
+	}
+
+	costs := make(map[string]float64, len(testCases))
+	for index, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+				ChannelID:               810 + index,
+				LocalGroup:              "overflow-boundary",
+				ChannelType:             constant.ChannelTypeOpenAI,
+				EffectiveRateMultiplier: testCase.rate,
+				CacheAdjustedCostFactor: testCase.cacheFactor,
+				UsageLogCount:           autoPriorityFullCacheSampleCount,
+			}}, 1000)
+
+			require.Len(t, results, 1)
+			result := results[0]
+			assert.Equal(t, testCase.expectedCost, result.EffectiveCostMultiplier)
+			assert.False(t, math.IsNaN(result.EffectiveCostMultiplier))
+			assert.False(t, math.IsInf(result.EffectiveCostMultiplier, 0))
+			costs[testCase.name] = result.EffectiveCostMultiplier
+		})
+	}
+	assert.GreaterOrEqual(
+		t,
+		costs["factor three above threshold saturates"],
+		costs["factor three at threshold stays finite"],
+	)
+
+	for index, invalidRate := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{{
+			ChannelID:               830 + index,
+			LocalGroup:              "invalid-rate",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         321,
+			EffectiveRateMultiplier: invalidRate,
+			CacheAdjustedCostFactor: 3,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+		}}, 1000)
+
+		require.Len(t, results, 1)
+		assert.Equal(t, "missing_effective_rate_multiplier", results[0].Reason)
+		assert.Zero(t, results[0].EffectiveCostMultiplier)
+		assert.False(t, results[0].Applied)
+		assert.Equal(t, int64(321), results[0].ComputedPriority)
+		assert.Equal(t, int64(321), results[0].NewPriority)
+	}
+}
+
 func TestScoreAutoPriorityCandidatesCrossSourceCohortCostBounds(t *testing.T) {
 	t.Run("legacy behavior preserved when cohort bounds are unset", func(t *testing.T) {
 		results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
