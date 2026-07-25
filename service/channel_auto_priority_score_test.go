@@ -1618,6 +1618,148 @@ func TestScoreAutoPriorityCandidatesExtremeCostDominance(t *testing.T) {
 	})
 }
 
+func TestScoreAutoPriorityCandidatesDominanceCleanupPreservesSelectedMargin(t *testing.T) {
+	results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+		{
+			ChannelID:               1071,
+			LocalGroup:              "ceiling-hysteresis-margin",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         1000,
+			EffectiveRateMultiplier: 0.001,
+			CacheAdjustedCostFactor: 1,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenSlowMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputSlowTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		},
+		{
+			ChannelID:               1072,
+			LocalGroup:              "ceiling-hysteresis-margin",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         995,
+			EffectiveRateMultiplier: 0.040,
+			CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		},
+		{
+			ChannelID:               1073,
+			LocalGroup:              "ceiling-hysteresis-margin",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         1000,
+			EffectiveRateMultiplier: 0.070,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			HasPreviousSnapshot:     true,
+		},
+	}, 1000)
+
+	cheap := resultByChannelID(results, 1071)
+	expensive := resultByChannelID(results, 1072)
+	require.NotNil(t, cheap)
+	require.NotNil(t, expensive)
+	assert.Equal(t, int64(1000), cheap.ComputedPriority)
+	assert.Equal(t, int64(1000), cheap.NewPriority)
+	assert.Equal(t, int64(990), expensive.ComputedPriority)
+	assert.Equal(t, int64(990), expensive.NewPriority)
+	assert.Equal(t, autoPriorityDominancePriorityMargin, cheap.NewPriority-expensive.NewPriority)
+	assert.True(t, cheap.Applied)
+	assert.Empty(t, cheap.Reason)
+	assert.True(t, expensive.Applied)
+	assert.Empty(t, expensive.Reason)
+}
+
+func TestRelativeAutoPriorityPriceScoreAvoidsIntermediateOverflow(t *testing.T) {
+	score := relativeAutoPriorityPriceScore(math.MaxFloat64, math.MaxFloat64/8)
+
+	assert.False(t, math.IsNaN(score))
+	assert.False(t, math.IsInf(score, 0))
+	assert.InDelta(t, 12.5, score, 1e-12)
+}
+
+func TestScoreAutoPriorityCandidatesLongDominanceChainUsesAdaptiveScoreMargin(t *testing.T) {
+	const tierCount = 102
+	inputs := make([]AutoPriorityScoreInput, 0, tierCount)
+	rate := 1.0
+	for tier := 0; tier < tierCount; tier++ {
+		inputs = append(inputs, AutoPriorityScoreInput{
+			ChannelID:               2000 + tier,
+			LocalGroup:              "long-dominance-chain",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			EffectiveRateMultiplier: rate,
+			CacheAdjustedCostFactor: autoPriorityMinCacheCostFactor,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+		})
+		rate *= autoPriorityExtremeCostRatio
+	}
+
+	results := ScoreAutoPriorityCandidates(inputs, 1000)
+	adaptiveScoreMargin := 100.0 / float64(tierCount-1)
+	adaptivePriorityMargin := int64(1000 / (tierCount - 1))
+	assert.Greater(t, adaptiveScoreMargin, 0.0)
+	assert.Less(t, adaptiveScoreMargin, autoPriorityDominanceScoreMargin)
+	assert.Greater(t, adaptivePriorityMargin, int64(0))
+	assert.Less(t, adaptivePriorityMargin, autoPriorityDominancePriorityMargin)
+
+	for cheapTier := 0; cheapTier < tierCount-1; cheapTier++ {
+		cheap := resultByChannelID(results, 2000+cheapTier)
+		require.NotNil(t, cheap)
+		assert.False(t, math.IsNaN(cheap.FinalScore))
+		assert.False(t, math.IsInf(cheap.FinalScore, 0))
+		for expensiveTier := cheapTier + 1; expensiveTier < tierCount; expensiveTier++ {
+			expensive := resultByChannelID(results, 2000+expensiveTier)
+			require.NotNil(t, expensive)
+			require.Greater(t, cheap.FinalScore, expensive.FinalScore)
+			require.Greater(t, cheap.ComputedPriority, expensive.ComputedPriority)
+			require.Greater(t, cheap.NewPriority, expensive.NewPriority)
+		}
+
+		adjacentExpensive := resultByChannelID(results, 2001+cheapTier)
+		require.NotNil(t, adjacentExpensive)
+		assert.GreaterOrEqual(t, cheap.FinalScore-adjacentExpensive.FinalScore, adaptiveScoreMargin-1e-12)
+		assert.GreaterOrEqual(t, cheap.ComputedPriority-adjacentExpensive.ComputedPriority, adaptivePriorityMargin)
+		assert.GreaterOrEqual(t, cheap.NewPriority-adjacentExpensive.NewPriority, adaptivePriorityMargin)
+	}
+
+	permutations := make([][]AutoPriorityScoreInput, 2)
+	permutations[0] = make([]AutoPriorityScoreInput, tierCount)
+	for i := range inputs {
+		permutations[0][i] = inputs[tierCount-1-i]
+	}
+	permutations[1] = make([]AutoPriorityScoreInput, 0, tierCount)
+	const rotation = 37
+	for i := range inputs {
+		permutations[1] = append(permutations[1], inputs[(i+rotation)%tierCount])
+	}
+
+	for _, permutation := range permutations {
+		permutedResults := ScoreAutoPriorityCandidates(permutation, 1000)
+		for _, result := range results {
+			permuted := resultByChannelID(permutedResults, result.ChannelID)
+			require.NotNil(t, permuted)
+			assert.Equal(t, result.FinalScore, permuted.FinalScore)
+			assert.Equal(t, result.ComputedPriority, permuted.ComputedPriority)
+			assert.Equal(t, result.NewPriority, permuted.NewPriority)
+		}
+	}
+}
+
 func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {
 	assert.True(t, autoPriorityDeltaBelowThreshold(100, 109, 10))
 	assert.False(t, autoPriorityDeltaBelowThreshold(100, 110, 10))
