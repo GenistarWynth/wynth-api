@@ -86,6 +86,71 @@ func TestAutomaticAndMonitorOpenAISpecializedModelsUseInferredEndpoints(t *testi
 	})
 }
 
+func TestAutomaticOpenAIEmbeddingProbeUsesCodexCLIResponsesIdentity(t *testing.T) {
+	testModel := "text-embedding-3-large"
+	channel := &model.Channel{
+		Type:      constant.ChannelTypeOpenAI,
+		TestModel: &testModel,
+		Models:    testModel,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ClientIdentityPreset: dto.ClientIdentityPresetCodexCLI,
+	})
+
+	resolvedModel := resolveChannelTestModel(channel, "")
+	require.Equal(t, testModel, resolvedModel)
+
+	endpointType := normalizeChannelTestEndpoint(channel, resolvedModel, "")
+	require.Equal(t, string(constant.EndpointTypeOpenAIResponse), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/responses", endpoint.Path)
+
+	request, ok := buildTestRequest(resolvedModel, endpointType, channel, true).(*dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NotNil(t, request.Stream)
+	assert.True(t, *request.Stream)
+	assert.JSONEq(t, `[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]`, string(request.Input))
+	assert.NotEmpty(t, request.Instructions)
+	assert.JSONEq(t, `false`, string(request.Store))
+	assert.JSONEq(t, `[]`, string(request.Tools))
+	assert.NotEmpty(t, request.PromptCacheKey)
+	require.NotNil(t, request.Reasoning)
+	assert.Equal(t, "medium", request.Reasoning.Effort)
+}
+
+func TestMonitorOpenAIRerankProbeUsesClaudeCodeMessagesIdentity(t *testing.T) {
+	testModel := "rerank-english-v3.0"
+	channel := &model.Channel{
+		Type:   constant.ChannelTypeOpenAI,
+		Models: testModel,
+	}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ChannelMonitorModel:  testModel,
+		ClientIdentityPreset: dto.ClientIdentityPresetClaudeCode,
+	})
+
+	resolvedModel := resolveChannelTestModel(channel, resolveChannelMonitorProbeModel(channel))
+	require.Equal(t, testModel, resolvedModel)
+
+	endpointType := normalizeChannelTestEndpoint(channel, resolvedModel, "")
+	require.Equal(t, string(constant.EndpointTypeAnthropic), endpointType)
+	endpoint, ok := common.GetDefaultEndpointInfo(constant.EndpointType(endpointType))
+	require.True(t, ok)
+	assert.Equal(t, "/v1/messages", endpoint.Path)
+
+	request, ok := buildTestRequest(resolvedModel, endpointType, channel, true).(*dto.GeneralOpenAIRequest)
+	require.True(t, ok)
+	assert.Equal(t, testModel, request.Model)
+	require.NotNil(t, request.Stream)
+	assert.True(t, *request.Stream)
+	require.Len(t, request.Messages, 1)
+	assert.Equal(t, "user", request.Messages[0].Role)
+	assert.Equal(t, "hi", request.Messages[0].Content)
+	require.NotNil(t, request.MaxTokens)
+	assert.Equal(t, uint(16), *request.MaxTokens)
+}
+
 func TestNormalizeChannelTestEndpointPreservesExplicitEndpoint(t *testing.T) {
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 
