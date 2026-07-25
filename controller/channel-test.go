@@ -96,6 +96,9 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if channelUsesClaudeCodeIdentity(channel) {
 		return string(constant.EndpointTypeAnthropic)
 	}
+	if channel != nil && channel.Type == constant.ChannelTypeOpenAI {
+		return string(constant.EndpointTypeOpenAIResponse)
+	}
 	return normalized
 }
 
