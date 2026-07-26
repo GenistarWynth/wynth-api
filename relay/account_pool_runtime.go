@@ -35,6 +35,24 @@ func applyAccountPoolRuntimeSelection(c *gin.Context, info *relaycommon.RelayInf
 type accountPoolRuntimeRequestFactory func() (dto.Request, *types.NewAPIError)
 type accountPoolRuntimeAttemptFunc func(dto.Request) *types.NewAPIError
 
+// BeginChannelAttempt is the single outer-attempt lifecycle seam. It restores
+// RelayInfo only while the downstream is uncommitted, then clears any
+// account-pool lease/selection that belonged to the previous channel.
+func BeginChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	started, hadPreviousAttempt := info.BeginChannelAttempt()
+	if !started {
+		return false
+	}
+	if hadPreviousAttempt {
+		relaycommon.ResetChannelAttemptContext(c)
+	}
+	service.ResetAccountPoolRuntimeChannelAttempt(c, info)
+	return true
+}
+
 type accountPoolRuntimeRelaySnapshot struct {
 	apiKey                  string
 	upstreamModelName       string

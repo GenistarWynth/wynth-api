@@ -87,6 +87,7 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
+		middleware.DrainAdminAuditJobs()
 		model.DB = oldDB
 		model.LOG_DB = oldLogDB
 		common.RedisEnabled = oldRedisEnabled

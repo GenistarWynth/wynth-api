@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,6 +45,7 @@ type relayTaskFailoverCandidate struct {
 type relayTaskFailoverOptions struct {
 	candidates       []relayTaskFailoverCandidate
 	statuses         map[int][]int
+	responseBodies   map[int]string
 	initialChannelID int
 	retryTimes       int
 	locked           bool
@@ -60,6 +62,7 @@ type relayTaskFailoverResult struct {
 	authorizations  []string
 	usedChannels    []string
 	errorLogCount   int64
+	errorLogContent string
 	consumeLogCount int64
 	consumeQuota    int
 	taskCount       int64
@@ -212,6 +215,10 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		if statusCode != http.StatusOK {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
+			if body := opts.responseBodies[channelID]; body != "" {
+				_, _ = io.WriteString(w, body)
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"error":{"message":"task-channel-%d-failed","code":"task_channel_%d_failed"}}`, channelID, channelID)
 			return
 		}
@@ -320,12 +327,16 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	if opts.contextSetup != nil {
 		opts.contextSetup(c)
 	}
-	require.Nil(t, middleware.SetupContextForSelectedChannel(c, initialChannel, relayTaskFailoverModel))
+	middleware.PreserveInitialChannelSetup(c, initialChannel, relayTaskFailoverModel)
 
 	RelayTask(c)
 
 	var errorLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
+	var errorLog model.Log
+	if errorLogCount > 0 {
+		require.NoError(t, db.Where("type = ?", model.LogTypeError).Order("id desc").First(&errorLog).Error)
+	}
 	var consumeLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogCount).Error)
 	var consumeQuota int
@@ -354,6 +365,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		authorizations:  finalAuthorizations,
 		usedChannels:    append([]string(nil), c.GetStringSlice("use_channel")...),
 		errorLogCount:   errorLogCount,
+		errorLogContent: errorLog.Content,
 		consumeLogCount: consumeLogCount,
 		consumeQuota:    consumeQuota,
 		taskCount:       taskCount,
@@ -438,6 +450,48 @@ func TestRelayTaskAffinitySelectionIsAttemptedBeforeRemainingCandidates(t *testi
 	assert.EqualValues(t, 1, result.taskCount)
 }
 
+func TestRelayTaskFinalUpstreamErrorAlwaysSanitizesCredentials(t *testing.T) {
+	const secret = "sk-live-ABCDEFGHIJKLMNOPQRST"
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{{id: 1, priority: 100}},
+		statuses: map[int][]int{
+			1: {http.StatusInternalServerError},
+		},
+		responseBodies: map[int]string{
+			1: `{"error":{"message":"credential ` + secret + ` for provider unavailable","code":"provider_denied"}}`,
+		},
+		initialChannelID: 1,
+		retryTimes:       0,
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, result.statusCode)
+	assert.Contains(t, result.body, "provider unavailable")
+	assert.Contains(t, result.body, "provider_denied")
+	assert.NotContains(t, result.body, secret)
+	assert.NotContains(t, result.errorLogContent, secret)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.Zero(t, result.consumeLogCount)
+}
+
+func TestRelayTaskFinalSafeUpstreamErrorPreservesDiagnosticMessage(t *testing.T) {
+	const safeMessage = "provider capacity exhausted in region west"
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{{id: 1, priority: 100}},
+		statuses: map[int][]int{
+			1: {http.StatusInternalServerError},
+		},
+		responseBodies: map[int]string{
+			1: `{"error":{"message":"` + safeMessage + `","code":"capacity_exhausted"}}`,
+		},
+		initialChannelID: 1,
+		retryTimes:       0,
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, result.statusCode)
+	assert.Contains(t, result.body, safeMessage)
+	assert.Contains(t, result.errorLogContent, safeMessage)
+}
+
 func TestRelayTaskSetupFailureContinuesToNextCandidate(t *testing.T) {
 	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
 		candidates: []relayTaskFailoverCandidate{
@@ -467,6 +521,65 @@ func TestRelayTaskSetupFailureContinuesToNextCandidate(t *testing.T) {
 	assert.EqualValues(t, 2, result.errorLogCount)
 	assert.EqualValues(t, 1, result.consumeLogCount)
 	assert.EqualValues(t, 1, result.taskCount)
+}
+
+func TestRelayTaskDistributorNoKeyContinuesWithoutUpstreamRequest(t *testing.T) {
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{
+			{
+				id:       1,
+				priority: 200,
+				keys:     []string{"credential-first", "credential-second"},
+				disabledKeys: map[int]int{
+					0: common.ChannelStatusAutoDisabled,
+					1: common.ChannelStatusManuallyDisabled,
+				},
+			},
+			{id: 2, priority: 100},
+		},
+		statuses:         map[int][]int{},
+		initialChannelID: 1,
+		retryTimes:       0,
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Contains(t, result.body, `"status":"queued"`)
+	assert.NotContains(t, result.body, "credential-first")
+	assert.NotContains(t, result.body, "credential-second")
+	assert.Equal(t, []int{2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.EqualValues(t, 1, result.taskCount)
+}
+
+func TestRelayTaskFixedDistributorNoKeyStaysPinnedWithinLegacyRetryLimit(t *testing.T) {
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{
+			{
+				id:       1,
+				priority: 200,
+				keys:     []string{"disabled-first", "disabled-second"},
+				disabledKeys: map[int]int{
+					0: common.ChannelStatusAutoDisabled,
+					1: common.ChannelStatusManuallyDisabled,
+				},
+			},
+			{id: 2, priority: 100},
+		},
+		statuses:         map[int][]int{},
+		initialChannelID: 1,
+		retryTimes:       1,
+		fixed:            true,
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, result.statusCode)
+	assert.Contains(t, result.body, "no enabled keys")
+	assert.Empty(t, result.attempts)
+	assert.Equal(t, []string{"1", "1"}, result.usedChannels)
+	assert.EqualValues(t, 2, result.errorLogCount)
+	assert.Zero(t, result.consumeLogCount)
+	assert.Zero(t, result.taskCount)
 }
 
 func TestRelayTaskExhaustsCandidatesAndPreservesFinalError(t *testing.T) {

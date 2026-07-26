@@ -202,19 +202,17 @@ func TaskErrorWrapperLocal(err error, code string, statusCode int) *dto.TaskErro
 }
 
 func TaskErrorWrapper(err error, code string, statusCode int) *dto.TaskError {
-	text := err.Error()
-	lowerText := strings.ToLower(text)
-	if strings.Contains(lowerText, "post") || strings.Contains(lowerText, "dial") || strings.Contains(lowerText, "http") {
-		common.SysLog(fmt.Sprintf("error: %s", text))
-		//text = "请求上游地址失败"
-		text = common.MaskSensitiveInfo(text)
+	if err == nil {
+		err = errors.New("unknown task relay error")
 	}
+	text := common.SanitizeSecrets(err.Error())
+	sanitizedErr := errors.New(text)
 	//避免暴露内部错误
 	taskError := &dto.TaskError{
 		Code:       code,
 		Message:    text,
 		StatusCode: statusCode,
-		Error:      err,
+		Error:      sanitizedErr,
 	}
 
 	return taskError
@@ -225,10 +223,11 @@ func TaskErrorFromAPIError(apiErr *types.NewAPIError) *dto.TaskError {
 	if apiErr == nil {
 		return nil
 	}
+	message := common.SanitizeSecrets(apiErr.Err.Error())
 	return &dto.TaskError{
 		Code:       string(apiErr.GetErrorCode()),
-		Message:    apiErr.Err.Error(),
+		Message:    message,
 		StatusCode: apiErr.StatusCode,
-		Error:      apiErr.Err,
+		Error:      errors.New(message),
 	}
 }

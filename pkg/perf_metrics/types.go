@@ -14,6 +14,7 @@ type Sample struct {
 	TtftMs       int64
 	HasTtft      bool
 	Success      bool
+	InputTokens  int64
 	OutputTokens int64
 	GenerationMs int64
 }
@@ -72,6 +73,7 @@ type counters struct {
 	totalLatencyMs int64
 	ttftSumMs      int64
 	ttftCount      int64
+	inputTokens    int64
 	outputTokens   int64
 	generationMs   int64
 }
@@ -82,6 +84,7 @@ type atomicBucket struct {
 	totalLatencyMs atomic.Int64
 	ttftSumMs      atomic.Int64
 	ttftCount      atomic.Int64
+	inputTokens    atomic.Int64
 	outputTokens   atomic.Int64
 	generationMs   atomic.Int64
 }
@@ -98,6 +101,9 @@ func (b *atomicBucket) add(sample Sample) {
 		b.ttftSumMs.Add(sample.TtftMs)
 		b.ttftCount.Add(1)
 	}
+	if sample.InputTokens > 0 {
+		b.inputTokens.Add(sample.InputTokens)
+	}
 	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
 		b.outputTokens.Add(sample.OutputTokens)
 		b.generationMs.Add(sample.GenerationMs)
@@ -111,6 +117,7 @@ func (b *atomicBucket) snapshot() counters {
 		totalLatencyMs: b.totalLatencyMs.Load(),
 		ttftSumMs:      b.ttftSumMs.Load(),
 		ttftCount:      b.ttftCount.Load(),
+		inputTokens:    b.inputTokens.Load(),
 		outputTokens:   b.outputTokens.Load(),
 		generationMs:   b.generationMs.Load(),
 	}
@@ -123,6 +130,7 @@ func (b *atomicBucket) drain() counters {
 		totalLatencyMs: b.totalLatencyMs.Swap(0),
 		ttftSumMs:      b.ttftSumMs.Swap(0),
 		ttftCount:      b.ttftCount.Swap(0),
+		inputTokens:    b.inputTokens.Swap(0),
 		outputTokens:   b.outputTokens.Swap(0),
 		generationMs:   b.generationMs.Swap(0),
 	}
@@ -143,6 +151,9 @@ func (b *atomicBucket) addCounters(c counters) {
 	}
 	if c.ttftCount != 0 {
 		b.ttftCount.Add(c.ttftCount)
+	}
+	if c.inputTokens != 0 {
+		b.inputTokens.Add(c.inputTokens)
 	}
 	if c.outputTokens != 0 {
 		b.outputTokens.Add(c.outputTokens)

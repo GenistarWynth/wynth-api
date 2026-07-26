@@ -36,6 +36,146 @@ func TestShouldRecordAccountPoolFailureSkipsDownstreamCancellation(t *testing.T)
 	assert.True(t, shouldRecordAccountPoolRuntimeFailure(live, &relaycommon.RelayInfo{}), "live request records upstream failures")
 }
 
+func TestBeginChannelAttemptClearsStreamParserAndAccountPoolRuntimeState(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-attempt")
+	request := &dto.GeneralOpenAIRequest{
+		Model:  "gpt-attempt",
+		Stream: common.GetPointer(false),
+	}
+	info, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, request, nil)
+	require.NoError(t, err)
+	info.ChannelMeta = &relaycommon.ChannelMeta{
+		ChannelId:         1,
+		ApiKey:            "sk-pooled",
+		UpstreamModelName: "pooled-model",
+	}
+	info.RuntimeProxy = "http://pool-proxy.invalid"
+	info.RuntimeBaseURL = "https://pool.invalid"
+	info.RuntimeAccountID = "pool-account"
+	info.RuntimeAnthropicOAuth = true
+	info.RuntimeGeminiOAuth = true
+	info.RuntimeGeminiOAuthType = "code_assist"
+	info.RuntimeGeminiProjectID = "project"
+	info.RuntimeVertexServiceAccount = true
+	info.RuntimeVertexProjectID = "vertex-project"
+	info.RuntimeVertexLocation = "us-central1"
+	info.RuntimeHeadersOverride = map[string]interface{}{"authorization": "Bearer pooled"}
+	info.RuntimeAccountHeadersOverride = map[string]interface{}{"x-account": "pooled"}
+	info.UseRuntimeHeadersOverride = true
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("attempt one failed"))
+	info.SetFirstResponseTime()
+	info.SendResponseCount = 3
+	info.ReceivedResponseCount = 4
+	info.IsStream = true
+	info.UpstreamRequestBodySize = 99
+	info.FinalRequestRelayFormat = types.RelayFormatClaude
+	info.RequestConversionChain = []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude}
+	info.ActualResponseModel = "pooled-result"
+	info.ActualResponseModelSource = relaycommon.ActualResponseModelSourceOpenAIChat
+	info.ThinkingContentInfo = relaycommon.ThinkingContentInfo{HasSentThinkingContent: true}
+	info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{
+		LastMessagesType: relaycommon.LastMessageTypeText,
+		Index:            7,
+		Done:             true,
+	}
+	info.ResponsesUsageInfo = &relaycommon.ResponsesUsageInfo{
+		BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
+			"web_search": {ToolName: "web_search", CallCount: 2},
+		},
+	}
+	service.AddAccountPoolAttemptedAccountID(c, 99)
+
+	require.True(t, BeginChannelAttempt(c, info))
+
+	assert.Nil(t, info.ChannelMeta)
+	assert.Nil(t, info.StreamStatus)
+	assert.False(t, info.HasSendResponse())
+	assert.Zero(t, info.SendResponseCount)
+	assert.Zero(t, info.ReceivedResponseCount)
+	assert.False(t, info.IsStream)
+	assert.Zero(t, info.UpstreamRequestBodySize)
+	assert.Empty(t, info.FinalRequestRelayFormat)
+	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAI}, info.RequestConversionChain)
+	assert.Empty(t, info.ActualResponseModel)
+	assert.Empty(t, info.ActualResponseModelSource)
+	assert.True(t, info.ThinkingContentInfo.IsFirstThinkingContent)
+	assert.False(t, info.ThinkingContentInfo.HasSentThinkingContent)
+	assert.Nil(t, info.ClaudeConvertInfo)
+	assert.Nil(t, info.ResponsesUsageInfo)
+	assert.Empty(t, info.RuntimeProxy)
+	assert.Empty(t, info.RuntimeBaseURL)
+	assert.Empty(t, info.RuntimeAccountID)
+	assert.False(t, info.RuntimeAnthropicOAuth)
+	assert.False(t, info.RuntimeGeminiOAuth)
+	assert.Empty(t, info.RuntimeGeminiOAuthType)
+	assert.Empty(t, info.RuntimeGeminiProjectID)
+	assert.False(t, info.RuntimeVertexServiceAccount)
+	assert.Empty(t, info.RuntimeVertexProjectID)
+	assert.Empty(t, info.RuntimeVertexLocation)
+	assert.Nil(t, info.RuntimeHeadersOverride)
+	assert.Nil(t, info.RuntimeAccountHeadersOverride)
+	assert.False(t, info.UseRuntimeHeadersOverride)
+	assert.Empty(t, service.GetAccountPoolAttemptedAccountIDs(c))
+
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: 2, ApiKey: "sk-non-pool"}
+	info.RuntimeAccountID = "second-pool-account"
+	service.AddAccountPoolAttemptedAccountID(c, 100)
+	require.True(t, BeginChannelAttempt(c, info))
+	assert.Nil(t, info.ChannelMeta)
+	assert.Empty(t, info.RuntimeAccountID)
+	assert.Empty(t, service.GetAccountPoolAttemptedAccountIDs(c))
+}
+
+func TestBeginChannelAttemptPreservesInitialSetupThenClearsRetriedChannelContext(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-attempt")
+	common.SetContextKey(c, constant.ContextKeyChannelId, 1)
+	common.SetContextKey(c, constant.ContextKeyChannelKey, "sk-initial")
+	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "org-initial")
+	c.Set("api_version", "2026-01-01")
+	c.Set("plugin", "initial-plugin")
+
+	info, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{Model: "gpt-attempt"}, nil)
+	require.NoError(t, err)
+
+	require.True(t, BeginChannelAttempt(c, info))
+	assert.Equal(t, 1, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
+	assert.Equal(t, "sk-initial", common.GetContextKeyString(c, constant.ContextKeyChannelKey))
+	assert.Equal(t, "org-initial", common.GetContextKeyString(c, constant.ContextKeyChannelOrganization))
+
+	require.True(t, BeginChannelAttempt(c, info))
+	assert.Zero(t, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
+	assert.Empty(t, common.GetContextKeyString(c, constant.ContextKeyChannelKey))
+	assert.Empty(t, common.GetContextKeyString(c, constant.ContextKeyChannelOrganization))
+	assert.Empty(t, c.GetString("api_version"))
+	assert.Empty(t, c.GetString("plugin"))
+	assert.Equal(t, "gpt-attempt", common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
+}
+
+func TestBeginChannelAttemptNeverClearsCommittedDownstreamState(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-committed")
+	info, genErr := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{Model: "gpt-committed"}, nil)
+	require.NoError(t, genErr)
+	info.StreamStatus = relaycommon.NewStreamStatus()
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("partial stream"))
+	_, writeErr := c.Writer.Write([]byte("data: partial\n\n"))
+	require.NoError(t, writeErr)
+
+	assert.False(t, BeginChannelAttempt(c, info))
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonScannerErr, info.StreamStatus.EndReason)
+	assert.True(t, info.HasSendResponse())
+}
+
 func TestAccountPoolRelayHookNoopsForUnboundChannel(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	ctx := newAccountPoolRelayTestContext("/v1/chat/completions")
@@ -272,6 +412,7 @@ func TestRunAccountPoolRuntimeAttemptsStreamingGuard(t *testing.T) {
 		callCount++
 		selected = append(selected, service.GetSelectedAccountPoolAccountID(ctx))
 		info.FirstResponseTime = info.StartTime.Add(time.Millisecond)
+		info.MarkDownstreamCommitted()
 		return types.NewErrorWithStatusCode(errors.New("streaming upstream 500"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
 	})
 
@@ -616,6 +757,7 @@ func TestAccountPoolRuntimeAttemptsDoNotRetryAfterResponseStarted(t *testing.T) 
 		attempts++
 		info.StartTime = time.Now().Add(-time.Second)
 		info.FirstResponseTime = time.Now()
+		info.MarkDownstreamCommitted()
 		return types.NewErrorWithStatusCode(errors.New("stream already started"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
 	})
 

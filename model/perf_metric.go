@@ -18,6 +18,7 @@ type PerfMetric struct {
 	TotalLatencyMs int64  `json:"-" gorm:"default:0"`
 	TtftSumMs      int64  `json:"-" gorm:"default:0"`
 	TtftCount      int64  `json:"-" gorm:"default:0"`
+	InputTokens    int64  `json:"-" gorm:"default:0"`
 	OutputTokens   int64  `json:"-" gorm:"default:0"`
 	GenerationMs   int64  `json:"-" gorm:"default:0"`
 }
@@ -42,6 +43,7 @@ func UpsertPerfMetric(metric *PerfMetric) error {
 			"total_latency_ms": gorm.Expr("perf_metrics.total_latency_ms + ?", metric.TotalLatencyMs),
 			"ttft_sum_ms":      gorm.Expr("perf_metrics.ttft_sum_ms + ?", metric.TtftSumMs),
 			"ttft_count":       gorm.Expr("perf_metrics.ttft_count + ?", metric.TtftCount),
+			"input_tokens":     gorm.Expr("perf_metrics.input_tokens + ?", metric.InputTokens),
 			"output_tokens":    gorm.Expr("perf_metrics.output_tokens + ?", metric.OutputTokens),
 			"generation_ms":    gorm.Expr("perf_metrics.generation_ms + ?", metric.GenerationMs),
 		}),
@@ -64,6 +66,7 @@ type PerfMetricSummary struct {
 	RequestCount   int64  `json:"request_count"`
 	SuccessCount   int64  `json:"success_count"`
 	TotalLatencyMs int64  `json:"total_latency_ms"`
+	InputTokens    int64  `json:"input_tokens"`
 	OutputTokens   int64  `json:"output_tokens"`
 	GenerationMs   int64  `json:"generation_ms"`
 }
@@ -74,6 +77,7 @@ type PerfMetricSummaryBucket struct {
 	RequestCount   int64  `json:"request_count"`
 	SuccessCount   int64  `json:"success_count"`
 	TotalLatencyMs int64  `json:"total_latency_ms"`
+	InputTokens    int64  `json:"input_tokens"`
 	OutputTokens   int64  `json:"output_tokens"`
 	GenerationMs   int64  `json:"generation_ms"`
 }
@@ -81,7 +85,7 @@ type PerfMetricSummaryBucket struct {
 func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]PerfMetricSummary, error) {
 	var summaries []PerfMetricSummary
 	query := DB.Model(&PerfMetric{}).
-		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
 		if len(groups) == 0 {
@@ -99,7 +103,7 @@ func GetPerfMetricsSummaryAll(startTs int64, endTs int64, groups []string) ([]Pe
 func GetPerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string) ([]PerfMetricSummaryBucket, error) {
 	var summaries []PerfMetricSummaryBucket
 	query := DB.Model(&PerfMetric{}).
-		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
 		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
 	if groups != nil {
 		if len(groups) == 0 {

@@ -49,6 +49,7 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		return key
 	}
 	t.Cleanup(func() {
+		middleware.DrainAdminAuditJobs()
 		model.DB = oldDB
 		model.LOG_DB = oldLogDB
 		common.RedisEnabled = oldRedisEnabled

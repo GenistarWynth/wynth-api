@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -95,6 +96,48 @@ type ResponsesNamespacedTool struct {
 type ResponsesChatConversionMetadata struct {
 	ReverseToolNames   map[string]ResponsesNamespacedTool
 	ToolSearchDeclared bool
+}
+
+type channelAttemptBaseline struct {
+	originModelName        string
+	requestURLPath         string
+	relayMode              int
+	relayFormat            types.RelayFormat
+	isStream               bool
+	shouldIncludeUsage     bool
+	disablePing            bool
+	inputAudioFormat       string
+	outputAudioFormat      string
+	realtimeTools          []dto.RealTimeTool
+	isFirstRequest         bool
+	requestConversionChain []types.RelayFormat
+	claudeConvertInfo      *ClaudeConvertInfo
+	responsesUsageInfo     *ResponsesUsageInfo
+	responseHeaders        http.Header
+}
+
+// commitTrackingResponseWriter is installed once for the relay lifecycle so
+// every downstream body write, including writes made by protocol-specific
+// helpers, marks the same sticky commitment bit.
+type commitTrackingResponseWriter struct {
+	gin.ResponseWriter
+	committed *atomic.Bool
+}
+
+func (w *commitTrackingResponseWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	if n > 0 {
+		w.committed.Store(true)
+	}
+	return n, err
+}
+
+func (w *commitTrackingResponseWriter) WriteString(data string) (int, error) {
+	n, err := w.ResponseWriter.WriteString(data)
+	if n > 0 {
+		w.committed.Store(true)
+	}
+	return n, err
 }
 
 type RelayInfo struct {
@@ -248,11 +291,18 @@ type RelayInfo struct {
 	// 若为空，调用 GetFinalRequestRelayFormat 会回退到 RequestConversionChain 的最后一项或 RelayFormat。
 	FinalRequestRelayFormat types.RelayFormat
 
-	StreamStatus *StreamStatus
+	StreamStatus           *StreamStatus
+	responseWriter         gin.ResponseWriter
+	downstreamCommitted    atomic.Bool
+	channelAttemptBaseline channelAttemptBaseline
+	channelAttemptCount    int
 	// performanceSampleRecorded keeps all quota-settlement and terminal-error
 	// paths on one request outcome. Multiple callers may race after a committed
 	// stream, but only the first one may update performance metrics.
 	performanceSampleRecorded atomic.Bool
+	performanceOutcomeMu      sync.Mutex
+	performanceInputTokens    int64
+	performanceOutputTokens   int64
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -265,6 +315,200 @@ type RelayInfo struct {
 
 func (info *RelayInfo) TryBeginPerformanceSample() bool {
 	return info != nil && info.performanceSampleRecorded.CompareAndSwap(false, true)
+}
+
+func (info *RelayInfo) CapturePerformanceUsage(inputTokens, outputTokens int64) {
+	if info == nil {
+		return
+	}
+	info.performanceOutcomeMu.Lock()
+	defer info.performanceOutcomeMu.Unlock()
+	if inputTokens > info.performanceInputTokens {
+		info.performanceInputTokens = inputTokens
+	}
+	if outputTokens > info.performanceOutputTokens {
+		info.performanceOutputTokens = outputTokens
+	}
+}
+
+func (info *RelayInfo) FinalizePerformanceUsage() (int64, int64, bool) {
+	if info == nil {
+		return 0, 0, false
+	}
+	info.performanceOutcomeMu.Lock()
+	defer info.performanceOutcomeMu.Unlock()
+	if !info.performanceSampleRecorded.CompareAndSwap(false, true) {
+		return 0, 0, false
+	}
+	return info.performanceInputTokens, info.performanceOutputTokens, true
+}
+
+func cloneClaudeConvertInfo(value *ClaudeConvertInfo) *ClaudeConvertInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	if value.Usage != nil {
+		usage := *value.Usage
+		cloned.Usage = &usage
+	}
+	return &cloned
+}
+
+func cloneResponsesUsageInfo(value *ResponsesUsageInfo) *ResponsesUsageInfo {
+	if value == nil {
+		return nil
+	}
+	cloned := &ResponsesUsageInfo{}
+	if value.BuiltInTools != nil {
+		cloned.BuiltInTools = make(map[string]*BuildInToolInfo, len(value.BuiltInTools))
+		for name, tool := range value.BuiltInTools {
+			if tool == nil {
+				cloned.BuiltInTools[name] = nil
+				continue
+			}
+			toolCopy := *tool
+			cloned.BuiltInTools[name] = &toolCopy
+		}
+	}
+	return cloned
+}
+
+// CaptureChannelAttemptBaseline freezes request-scoped relay/parser state that
+// every channel attempt must start from. Controllers call it again after
+// request-level task resolution because that phase may authoritatively fill the
+// origin model before attempts begin.
+func (info *RelayInfo) CaptureChannelAttemptBaseline() {
+	if info == nil {
+		return
+	}
+	var responseHeaders http.Header
+	if info.responseWriter != nil {
+		responseHeaders = info.responseWriter.Header().Clone()
+	}
+	info.channelAttemptBaseline = channelAttemptBaseline{
+		originModelName:        info.OriginModelName,
+		requestURLPath:         info.RequestURLPath,
+		relayMode:              info.RelayMode,
+		relayFormat:            info.RelayFormat,
+		isStream:               info.IsStream,
+		shouldIncludeUsage:     info.ShouldIncludeUsage,
+		disablePing:            info.DisablePing,
+		inputAudioFormat:       info.InputAudioFormat,
+		outputAudioFormat:      info.OutputAudioFormat,
+		realtimeTools:          append([]dto.RealTimeTool(nil), info.RealtimeTools...),
+		isFirstRequest:         info.IsFirstRequest,
+		requestConversionChain: append([]types.RelayFormat(nil), info.RequestConversionChain...),
+		claudeConvertInfo:      cloneClaudeConvertInfo(info.ClaudeConvertInfo),
+		responsesUsageInfo:     cloneResponsesUsageInfo(info.ResponsesUsageInfo),
+		responseHeaders:        responseHeaders,
+	}
+	info.channelAttemptCount = 0
+}
+
+// BeginChannelAttempt restores all attempt-local relay and protocol state. It
+// refuses to reset once the downstream writer is committed; commitment is
+// sticky and is never inferred from upstream first-response timing.
+func (info *RelayInfo) BeginChannelAttempt() (bool, bool) {
+	if info == nil || info.HasSendResponse() {
+		return false, false
+	}
+
+	hadPreviousAttempt := info.channelAttemptCount > 0
+	baseline := info.channelAttemptBaseline
+	if hadPreviousAttempt && info.responseWriter != nil {
+		responseHeaders := info.responseWriter.Header()
+		clear(responseHeaders)
+		for name, values := range baseline.responseHeaders {
+			responseHeaders[name] = append([]string(nil), values...)
+		}
+	}
+	info.OriginModelName = baseline.originModelName
+	info.RequestURLPath = baseline.requestURLPath
+	info.RelayMode = baseline.relayMode
+	info.RelayFormat = baseline.relayFormat
+	info.IsStream = baseline.isStream
+	info.ShouldIncludeUsage = baseline.shouldIncludeUsage
+	info.DisablePing = baseline.disablePing
+	info.InputAudioFormat = baseline.inputAudioFormat
+	info.OutputAudioFormat = baseline.outputAudioFormat
+	info.RealtimeTools = append([]dto.RealTimeTool(nil), baseline.realtimeTools...)
+	info.IsFirstRequest = baseline.isFirstRequest
+	info.RequestConversionChain = append([]types.RelayFormat(nil), baseline.requestConversionChain...)
+	info.FinalRequestRelayFormat = ""
+
+	info.FirstResponseTime = info.StartTime.Add(-time.Second)
+	info.isFirstResponse = true
+	info.SendResponseCount = 0
+	info.ReceivedResponseCount = 0
+	info.StreamStatus = nil
+	info.AudioUsage = false
+	info.ReasoningEffort = ""
+	info.IsGeminiBatchEmbedding = false
+	info.ThinkingContentInfo = ThinkingContentInfo{IsFirstThinkingContent: true}
+	info.ClaudeConvertInfo = cloneClaudeConvertInfo(baseline.claudeConvertInfo)
+	info.ResponsesUsageInfo = cloneResponsesUsageInfo(baseline.responsesUsageInfo)
+	info.ResponsesChatConversion = nil
+	info.ActualResponseModel = ""
+	info.ActualResponseModelSource = ""
+
+	info.ChannelMeta = nil
+	info.RuntimeHeadersOverride = nil
+	info.RuntimeAccountHeadersOverride = nil
+	info.UseRuntimeHeadersOverride = false
+	info.ParamOverrideAudit = nil
+	info.RuntimeProxy = ""
+	info.RuntimeBaseURL = ""
+	info.RuntimeAccountID = ""
+	info.RuntimeAnthropicOAuth = false
+	info.RuntimeGeminiOAuth = false
+	info.RuntimeGeminiOAuthType = ""
+	info.RuntimeGeminiProjectID = ""
+	info.RuntimeVertexServiceAccount = false
+	info.RuntimeVertexProjectID = ""
+	info.RuntimeVertexLocation = ""
+	info.WsHandshakeStatusCode = 0
+	info.WsHandshakeHeader = nil
+	info.WsHandshakeBody = nil
+	info.UpstreamRequestBodySize = 0
+	info.TargetWs = nil
+
+	if info.Request != nil {
+		info.Request.SetModelName(info.OriginModelName)
+	}
+	info.channelAttemptCount++
+	return true, hadPreviousAttempt
+}
+
+// ResetChannelAttemptContext clears channel/provider values that are populated
+// by channel setup. The request model/group and other request-scoped values are
+// intentionally preserved.
+func ResetChannelAttemptContext(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelId, 0)
+	common.SetContextKey(c, constant.ContextKeyChannelName, "")
+	common.SetContextKey(c, constant.ContextKeyChannelCreateTime, int64(0))
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "")
+	common.SetContextKey(c, constant.ContextKeyChannelType, 0)
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, nil)
+	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, nil)
+	common.SetContextKey(c, constant.ContextKeyChannelParamOverride, nil)
+	common.SetContextKey(c, constant.ContextKeyChannelHeaderOverride, nil)
+	common.SetContextKey(c, constant.ContextKeyChannelOrganization, "")
+	common.SetContextKey(c, constant.ContextKeyChannelAutoBan, false)
+	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, nil)
+	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, nil)
+	common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, false)
+	common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, 0)
+	common.SetContextKey(c, constant.ContextKeyChannelKey, "")
+	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
+	c.Set("api_version", "")
+	c.Set("region", "")
+	c.Set("plugin", "")
+	c.Set("bot_id", "")
+	c.Set("event_stream_headers_set", false)
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
@@ -578,6 +822,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 			estimatePromptTokens: common.GetContextKeyInt(c, constant.ContextKeyEstimatedTokens),
 		},
 	}
+	trackingWriter := &commitTrackingResponseWriter{
+		ResponseWriter: c.Writer,
+		committed:      &info.downstreamCommitted,
+	}
+	c.Writer = trackingWriter
+	info.responseWriter = trackingWriter
 
 	if info.RelayMode == relayconstant.RelayModeUnknown {
 		info.RelayMode = c.GetInt("relay_mode")
@@ -671,6 +921,7 @@ func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Req
 	}
 
 	info.InitRequestConversionChain()
+	info.CaptureChannelAttemptBaseline()
 	return info, nil
 }
 
@@ -746,8 +997,24 @@ func (info *RelayInfo) SetFirstResponseTime() {
 	}
 }
 
+func (info *RelayInfo) MarkDownstreamCommitted() {
+	if info != nil {
+		info.downstreamCommitted.Store(true)
+	}
+}
+
 func (info *RelayInfo) HasSendResponse() bool {
-	return info.FirstResponseTime.After(info.StartTime)
+	if info == nil {
+		return false
+	}
+	if info.downstreamCommitted.Load() {
+		return true
+	}
+	if info.responseWriter != nil && info.responseWriter.Written() {
+		info.downstreamCommitted.Store(true)
+		return true
+	}
+	return false
 }
 
 type TaskRelayInfo struct {

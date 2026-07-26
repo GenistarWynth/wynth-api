@@ -331,6 +331,34 @@ func clearSelectedAccountPoolRuntimeSelection(c *gin.Context) {
 	c.Set(accountPoolSelectedPlatformContextKey, "")
 }
 
+// ResetAccountPoolRuntimeChannelAttempt releases any prior account lease and
+// clears request-context selection state before a different channel attempt.
+// Attempted account IDs are channel-local: carrying them into another channel
+// can incorrectly exclude otherwise eligible accounts in that channel's pool.
+func ResetAccountPoolRuntimeChannelAttempt(c *gin.Context, info *relaycommon.RelayInfo) {
+	ReleaseAccountPoolRuntimeSelection(c)
+	clearSelectedAccountPoolRuntimeSelection(c)
+	if c != nil {
+		c.Set(accountPoolAttemptedAccountIDsContextKey, map[int]struct{}{})
+	}
+	if info == nil {
+		return
+	}
+	info.RuntimeProxy = ""
+	info.RuntimeBaseURL = ""
+	info.RuntimeAccountID = ""
+	info.RuntimeAnthropicOAuth = false
+	info.RuntimeGeminiOAuth = false
+	info.RuntimeGeminiOAuthType = ""
+	info.RuntimeGeminiProjectID = ""
+	info.RuntimeVertexServiceAccount = false
+	info.RuntimeVertexProjectID = ""
+	info.RuntimeVertexLocation = ""
+	info.RuntimeHeadersOverride = nil
+	info.RuntimeAccountHeadersOverride = nil
+	info.UseRuntimeHeadersOverride = false
+}
+
 // GetSelectedAccountPoolPlatform returns the platform string of the currently selected
 // account pool account (e.g. "anthropic", "openai", or ""). Returns "" when no account
 // is selected or when the platform was not recorded during selection.

@@ -717,7 +717,7 @@ func testChannelWithOptions(ctx context.Context, channel *model.Channel, testUse
 }
 
 func channelTestFirstTokenLatencyMS(info *relaycommon.RelayInfo) int64 {
-	if info == nil || !info.IsStream || !info.HasSendResponse() {
+	if info == nil || !info.IsStream {
 		return 0
 	}
 	milliseconds := info.FirstResponseTime.Sub(info.StartTime).Milliseconds()

@@ -70,6 +70,9 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+	// ContextKeyRelaySucceeded distinguishes a committed streaming failure
+	// (whose HTTP status may already be 200) from a successful relay outcome.
+	ContextKeyRelaySucceeded ContextKey = "relay_succeeded"
 
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit

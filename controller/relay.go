@@ -88,6 +88,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		common.SetContextKey(c, constant.ContextKeyRelaySucceeded, newAPIError == nil)
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			if relayInfo != nil && relayInfo.HasSendResponse() {
@@ -172,6 +173,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	defer func() {
+		perfmetrics.FinalizeRelaySample(relayInfo, newAPIError == nil)
+	}()
+
+	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
 		if newAPIError != nil {
 			newAPIError = service.NormalizeViolationFeeError(newAPIError)
@@ -200,11 +205,42 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
+	initialSetup, hasInitialSetup := middleware.TakeInitialChannelSetup(c)
+	firstChannelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if hasInitialSetup && initialSetup.ChannelID > 0 {
+		firstChannelID = initialSetup.ChannelID
+	}
+	firstChannel := initialSetup.Channel
+	var firstChannelErr error
+	if firstChannel == nil {
+		firstChannel, firstChannelErr = model.CacheGetChannel(firstChannelID)
+	}
+	if firstChannelErr != nil || firstChannel == nil {
+		if firstChannelErr == nil {
+			firstChannelErr = errors.New("distributor-selected channel not found")
+		}
+		newAPIError = types.NewError(firstChannelErr, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		return
+	}
+	firstAttempt := true
 
 	// The attempted-channel set bounds this loop by eligible candidates. A
 	// numeric retry budget must not stop same-group failover early.
 	for {
-		channel, channelErr := getChannel(c, relayInfo, retryParam)
+		if !relay.BeginChannelAttempt(c, relayInfo) {
+			break
+		}
+		var channel *model.Channel
+		var channelErr *types.NewAPIError
+		if firstAttempt {
+			channel = firstChannel
+			if hasInitialSetup {
+				channelErr = initialSetup.Error
+			}
+			firstAttempt = false
+		} else {
+			channel, channelErr = getChannel(c, relayInfo, retryParam)
+		}
 		if channel == nil {
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
@@ -279,11 +315,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
-	if newAPIError != nil {
-		gopool.Go(func() {
-			perfmetrics.RecordRelaySample(relayInfo, false, 0)
-		})
-	}
 }
 
 var upgrader = websocket.Upgrader{
@@ -329,19 +360,6 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 }
 
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
-	if info.ChannelMeta == nil {
-		autoBan := c.GetBool("auto_ban")
-		autoBanInt := 1
-		if !autoBan {
-			autoBanInt = 0
-		}
-		return &model.Channel{
-			Id:      c.GetInt("channel_id"),
-			Type:    c.GetInt("channel_type"),
-			Name:    c.GetString("channel_name"),
-			AutoBan: &autoBanInt,
-		}, nil
-	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 
 	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
@@ -527,6 +545,7 @@ func RelayTaskFetch(c *gin.Context) {
 }
 
 func RelayTask(c *gin.Context) {
+	common.SetContextKey(c, constant.ContextKeyRelaySucceeded, false)
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, &dto.TaskError{
@@ -541,11 +560,16 @@ func RelayTask(c *gin.Context) {
 	// for attempt one. ResolveOriginTask initializes ChannelMeta, so capture the
 	// selected ID before that initialization can make getChannel choose the
 	// selector path.
+	initialSetup, hasInitialSetup := middleware.TakeInitialChannelSetup(c)
 	distributorChannelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	if hasInitialSetup && initialSetup.ChannelID > 0 {
+		distributorChannelID = initialSetup.ChannelID
+	}
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
 		respondTaskError(c, taskErr)
 		return
 	}
+	relayInfo.CaptureChannelAttemptBaseline()
 
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
@@ -578,7 +602,10 @@ func RelayTask(c *gin.Context) {
 	isPinnedChannel := isLockedChannel || isFixedChannel
 	firstChannel := lockedChannel
 	if !isLockedChannel {
-		firstChannel, err = model.CacheGetChannel(distributorChannelID)
+		firstChannel = initialSetup.Channel
+		if firstChannel == nil {
+			firstChannel, err = model.CacheGetChannel(distributorChannelID)
+		}
 		if err != nil || firstChannel == nil {
 			if err == nil {
 				err = fmt.Errorf("distributor-selected channel #%d not found", distributorChannelID)
@@ -600,16 +627,24 @@ func RelayTask(c *gin.Context) {
 	// SetupContextForSelectedChannel can rotate credentials between attempts.
 	firstAttempt := true
 	for {
+		if !relay.BeginChannelAttempt(c, relayInfo) {
+			break
+		}
 		var channel *model.Channel
 		var channelErr *types.NewAPIError
 
 		if isPinnedChannel {
 			channel = lockedChannel
-			if retryParam.GetRetry() > 0 {
+			if firstAttempt && hasInitialSetup && initialSetup.ChannelID == channel.Id {
+				channelErr = initialSetup.Error
+			} else if retryParam.GetRetry() > 0 {
 				channelErr = middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName)
 			}
 		} else if firstAttempt {
 			channel = firstChannel
+			if hasInitialSetup {
+				channelErr = initialSetup.Error
+			}
 		} else {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 		}
@@ -686,6 +721,7 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
+		common.SetContextKey(c, constant.ContextKeyRelaySucceeded, true)
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}
@@ -722,6 +758,10 @@ func RelayTask(c *gin.Context) {
 func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
+	}
+	taskErr.Message = common.SanitizeSecrets(taskErr.Message)
+	if taskErr.Error != nil {
+		taskErr.Error = errors.New(common.SanitizeSecrets(taskErr.Error.Error()))
 	}
 	c.JSON(taskErr.StatusCode, taskErr)
 }

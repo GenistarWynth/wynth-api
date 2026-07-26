@@ -41,13 +41,34 @@ type relayFailoverCandidate struct {
 	abilityEnabled bool
 	channelType    int
 	supportedPath  string
+	keys           []string
+	disabledKeys   map[int]int
 }
 
 type relayFailoverUpstream struct {
-	statusCode      int
-	stream          bool
-	abortAfterChunk bool
-	onAttempt       func()
+	statusCode       int
+	stream           bool
+	abortBeforeChunk bool
+	abortAfterChunk  bool
+	abortAfterWrite  <-chan struct{}
+	onAttempt        func()
+}
+
+type relayCommitSignalWriter struct {
+	gin.ResponseWriter
+	onWrite func()
+}
+
+func (w *relayCommitSignalWriter) Write(data []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(data)
+	if n > 0 && w.onWrite != nil {
+		w.onWrite()
+	}
+	return n, err
+}
+
+func (w *relayCommitSignalWriter) WriteString(data string) (int, error) {
+	return w.Write([]byte(data))
 }
 
 type relayFailoverOptions struct {
@@ -68,6 +89,7 @@ type relayFailoverOptions struct {
 type relayFailoverResult struct {
 	statusCode       int
 	body             string
+	headers          http.Header
 	attempts         []int
 	usedChannels     []string
 	errorLogCount    int64
@@ -221,7 +243,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		}
 		if upstream.stream {
 			streamChunk := fmt.Sprintf("data: {\"id\":\"chatcmpl-%d\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"%s\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"channel-%d\"},\"finish_reason\":null}]}\n\n", channelID, relayFailoverModel, channelID)
-			if upstream.abortAfterChunk {
+			if upstream.abortBeforeChunk {
 				hijacker, ok := w.(http.Hijacker)
 				if !ok {
 					http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
@@ -231,9 +253,24 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 				if hijackErr != nil {
 					return
 				}
-				_, _ = fmt.Fprintf(buffer, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: %d\r\n\r\n%s", len(streamChunk)+1024, streamChunk)
+				_, _ = fmt.Fprint(buffer, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1024\r\n\r\n")
 				_ = buffer.Flush()
 				_ = conn.Close()
+				return
+			}
+			if upstream.abortAfterChunk {
+				// The OpenAI stream adapter buffers the latest upstream event so
+				// it can inspect final usage. Two events guarantee that the first
+				// one reached the downstream before the transport aborts.
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Content-Length", strconv.Itoa(len(streamChunk)*2+1024))
+				_, _ = fmt.Fprint(w, streamChunk, streamChunk)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				if upstream.abortAfterWrite != nil {
+					<-upstream.abortAfterWrite
+				}
 				return
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -252,10 +289,14 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 
 	for _, candidate := range opts.candidates {
 		baseURL := fmt.Sprintf("%s/channel/%d", upstreamServer.URL, candidate.id)
+		keys := candidate.keys
+		if len(keys) == 0 {
+			keys = []string{fmt.Sprintf("sk-channel-%d", candidate.id)}
+		}
 		channel := &model.Channel{
 			Id:       candidate.id,
 			Type:     candidate.channelType,
-			Key:      fmt.Sprintf("sk-channel-%d", candidate.id),
+			Key:      strings.Join(keys, "\n"),
 			Status:   candidate.status,
 			Name:     fmt.Sprintf("channel-%d", candidate.id),
 			BaseURL:  &baseURL,
@@ -264,6 +305,14 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 			Priority: &candidate.priority,
 			Weight:   common.GetPointer(uint(100)),
 			AutoBan:  common.GetPointer(0),
+		}
+		if len(keys) > 1 || len(candidate.disabledKeys) > 0 {
+			channel.ChannelInfo = model.ChannelInfo{
+				IsMultiKey:         true,
+				MultiKeySize:       len(keys),
+				MultiKeyStatusList: candidate.disabledKeys,
+				MultiKeyMode:       constant.MultiKeyModePolling,
+			}
 		}
 		if candidate.channelType == constant.ChannelTypeAdvancedCustom {
 			channel.SetOtherSettings(dto.ChannelOtherSettings{
@@ -328,7 +377,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	if opts.contextSetup != nil {
 		opts.contextSetup(c)
 	}
-	require.Nil(t, middleware.SetupContextForSelectedChannel(c, initialChannel, relayFailoverModel))
+	middleware.PreserveInitialChannelSetup(c, initialChannel, relayFailoverModel)
 
 	relayFormat := opts.relayFormat
 	if relayFormat == "" {
@@ -349,6 +398,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	return relayFailoverResult{
 		statusCode:       recorder.Code,
 		body:             recorder.Body.String(),
+		headers:          recorder.Result().Header.Clone(),
 		attempts:         finalAttempts,
 		usedChannels:     append([]string(nil), c.GetStringSlice("use_channel")...),
 		errorLogCount:    errorLogCount,
@@ -580,7 +630,37 @@ func TestRelayRetriesPreCommitStreamFailure(t *testing.T) {
 	assert.EqualValues(t, 1, result.consumeLogCount)
 }
 
-func TestRelayDoesNotRetryAfterStreamCommit(t *testing.T) {
+func TestRelayOrdinaryDistributorNoKeyContinuesWithoutUpstreamRequest(t *testing.T) {
+	first := enabledRelayFailoverCandidate(1, "default", 200)
+	first.keys = []string{"credential-first", "credential-second"}
+	first.disabledKeys = map[int]int{
+		0: common.ChannelStatusAutoDisabled,
+		1: common.ChannelStatusManuallyDisabled,
+	}
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			first,
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams:        map[int]relayFailoverUpstream{},
+		initialChannelID: 1,
+		retryTimes:       0,
+		usingGroup:       "default",
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Contains(t, result.body, "channel-2")
+	assert.NotContains(t, result.body, "credential-first")
+	assert.NotContains(t, result.body, "credential-second")
+	assert.Equal(t, []int{2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 1, result.userRequestCount)
+}
+
+func TestRelayFailedStreamAttemptThenJSONStartsClean(t *testing.T) {
 	candidates := []relayFailoverCandidate{
 		enabledRelayFailoverCandidate(1, "default", 200),
 		enabledRelayFailoverCandidate(2, "default", 100),
@@ -589,12 +669,97 @@ func TestRelayDoesNotRetryAfterStreamCommit(t *testing.T) {
 	result := runRelayFailover(t, relayFailoverOptions{
 		candidates: candidates,
 		upstreams: map[int]relayFailoverUpstream{
-			1: {stream: true, abortAfterChunk: true},
+			1: {stream: true, abortBeforeChunk: true},
+			2: {},
+		},
+		initialChannelID: 1,
+		retryTimes:       0,
+		usingGroup:       "default",
+		stream:           false,
+	})
+
+	expected := fmt.Sprintf(
+		`{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"%s","choices":[{"index":0,"message":{"role":"assistant","content":"channel-2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`,
+		relayFailoverModel,
+	)
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, expected, result.body)
+	assert.Equal(t, "application/json", result.headers.Get("Content-Type"))
+	assert.Empty(t, result.headers.Get("Cache-Control"))
+	assert.Empty(t, result.headers.Get("Connection"))
+	assert.Empty(t, result.headers.Get("Transfer-Encoding"))
+	assert.Empty(t, result.headers.Get("X-Accel-Buffering"))
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 1, result.userRequestCount)
+}
+
+func TestRelayFailedStreamAttemptThenStreamStartsClean(t *testing.T) {
+	candidates := []relayFailoverCandidate{
+		enabledRelayFailoverCandidate(1, "default", 200),
+		enabledRelayFailoverCandidate(2, "default", 100),
+	}
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: candidates,
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, abortBeforeChunk: true},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		retryTimes:       0,
+		usingGroup:       "default",
+		stream:           true,
+	})
+
+	expectedChunk := fmt.Sprintf(
+		`data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":1,"model":"%s","choices":[{"index":0,"delta":{"role":"assistant","content":"channel-2"},"finish_reason":null}]}`,
+		relayFailoverModel,
+	)
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Contains(t, result.body, expectedChunk)
+	assert.Equal(t, 1, strings.Count(result.body, expectedChunk))
+	assert.Equal(t, 1, strings.Count(result.body, "data: [DONE]"))
+	assert.NotContains(t, result.body, "chatcmpl-1")
+	assert.Equal(t, "text/event-stream", result.headers.Get("Content-Type"))
+	assert.Equal(t, "no-cache", result.headers.Get("Cache-Control"))
+	assert.Equal(t, "keep-alive", result.headers.Get("Connection"))
+	assert.Equal(t, "chunked", result.headers.Get("Transfer-Encoding"))
+	assert.Equal(t, "no", result.headers.Get("X-Accel-Buffering"))
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 1, result.userRequestCount)
+}
+
+func TestRelayDoesNotRetryAfterStreamCommit(t *testing.T) {
+	downstreamWrite := make(chan struct{})
+	var downstreamWriteOnce sync.Once
+	candidates := []relayFailoverCandidate{
+		enabledRelayFailoverCandidate(1, "default", 200),
+		enabledRelayFailoverCandidate(2, "default", 100),
+	}
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: candidates,
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, abortAfterChunk: true, abortAfterWrite: downstreamWrite},
 		},
 		initialChannelID: 1,
 		retryTimes:       10,
 		usingGroup:       "default",
 		stream:           true,
+		contextSetup: func(c *gin.Context) {
+			c.Writer = &relayCommitSignalWriter{
+				ResponseWriter: c.Writer,
+				onWrite: func() {
+					downstreamWriteOnce.Do(func() { close(downstreamWrite) })
+				},
+			}
+		},
 	})
 
 	assert.Equal(t, http.StatusOK, result.statusCode)
@@ -609,6 +774,8 @@ func TestRelayDoesNotRetryAfterStreamCommit(t *testing.T) {
 }
 
 func TestRelayAudioRecordsCommittedAbnormalStreamAsChannelFailure(t *testing.T) {
+	downstreamWrite := make(chan struct{})
+	var downstreamWriteOnce sync.Once
 	candidates := []relayFailoverCandidate{
 		enabledRelayFailoverCandidate(1, "default", 200),
 		enabledRelayFailoverCandidate(2, "default", 100),
@@ -617,7 +784,7 @@ func TestRelayAudioRecordsCommittedAbnormalStreamAsChannelFailure(t *testing.T) 
 	result := runRelayFailover(t, relayFailoverOptions{
 		candidates: candidates,
 		upstreams: map[int]relayFailoverUpstream{
-			1: {stream: true, abortAfterChunk: true},
+			1: {stream: true, abortAfterChunk: true, abortAfterWrite: downstreamWrite},
 		},
 		initialChannelID: 1,
 		retryTimes:       10,
@@ -625,6 +792,14 @@ func TestRelayAudioRecordsCommittedAbnormalStreamAsChannelFailure(t *testing.T) 
 		relayFormat:      types.RelayFormatOpenAIAudio,
 		requestPath:      "/v1/audio/speech",
 		requestBody:      fmt.Sprintf(`{"model":"%s","input":"hello","voice":"alloy","stream_format":"sse"}`, relayFailoverModel),
+		contextSetup: func(c *gin.Context) {
+			c.Writer = &relayCommitSignalWriter{
+				ResponseWriter: c.Writer,
+				onWrite: func() {
+					downstreamWriteOnce.Do(func() { close(downstreamWrite) })
+				},
+			}
+		},
 	})
 
 	assert.Equal(t, http.StatusOK, result.statusCode)

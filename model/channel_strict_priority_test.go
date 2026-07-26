@@ -1,8 +1,8 @@
 package model
 
 import (
+	"bytes"
 	"fmt"
-	"math/rand"
 	"slices"
 	"testing"
 
@@ -187,7 +187,6 @@ func TestGetRandomSatisfiedChannelCacheParityExcludesStaleDisabledAbilityAndNorm
 }
 
 func TestGetRandomSatisfiedChannelCacheParityExhaustsUnequalWeightsWithoutReplacement(t *testing.T) {
-	var sequences [][]int
 	for _, memoryCacheEnabled := range []bool{false, true} {
 		clearStrictPriorityTables(t)
 		withMemoryCacheForStrictPriority(t, memoryCacheEnabled)
@@ -195,27 +194,60 @@ func TestGetRandomSatisfiedChannelCacheParityExhaustsUnequalWeightsWithoutReplac
 		insertStrictPriorityCandidate(t, 2, "default", "gpt-weighted", 100, 99)
 		insertStrictPriorityCandidate(t, 3, "default", "gpt-weighted", 50, 50)
 		InitChannelCache()
-		rand.Seed(7)
 
-		attempted := make(map[int]struct{})
-		sequence := make([]int, 0, 3)
-		for range 3 {
+		for range 500 {
+			attempted := make(map[int]struct{})
+			sequence := make([]int, 0, 3)
+			for range 3 {
+				channel, err := GetRandomSatisfiedChannel("default", "gpt-weighted", 0, "", attempted)
+				require.NoError(t, err)
+				require.NotNil(t, channel)
+				sequence = append(sequence, channel.Id)
+				attempted[channel.Id] = struct{}{}
+			}
 			channel, err := GetRandomSatisfiedChannel("default", "gpt-weighted", 0, "", attempted)
 			require.NoError(t, err)
-			require.NotNil(t, channel)
-			sequence = append(sequence, channel.Id)
-			attempted[channel.Id] = struct{}{}
-		}
-		channel, err := GetRandomSatisfiedChannel("default", "gpt-weighted", 0, "", attempted)
-		require.NoError(t, err)
-		assert.Nil(t, channel)
+			assert.Nil(t, channel)
 
-		assert.ElementsMatch(t, []int{1, 2}, sequence[:2])
-		assert.Equal(t, 3, sequence[2])
-		sequences = append(sequences, sequence)
+			assert.ElementsMatch(t, []int{1, 2}, sequence[:2])
+			assert.Equal(t, 3, sequence[2])
+		}
+	}
+}
+
+func TestSelectHighestPriorityWeightedChannelWithReaderIsDeterministic(t *testing.T) {
+	priority := int64(100)
+	firstWeight := uint(1)
+	secondWeight := uint(3)
+	channels := []*Channel{
+		{Id: 1, Priority: &priority, Weight: &firstWeight},
+		{Id: 2, Priority: &priority, Weight: &secondWeight},
 	}
 
-	assert.Equal(t, sequences[0], sequences[1])
+	first, err := selectHighestPriorityWeightedChannelWithReader(channels, bytes.NewReader([]byte{0}))
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	assert.Equal(t, 1, first.Id)
+
+	second, err := selectHighestPriorityWeightedChannelWithReader(channels, bytes.NewReader([]byte{1}))
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.Equal(t, 2, second.Id)
+}
+
+func TestSelectHighestPriorityWeightedChannelWithReaderHandlesManyHugeWeights(t *testing.T) {
+	priority := int64(100)
+	weight := ^uint(0)
+	channels := make([]*Channel, 1000)
+	for index := range channels {
+		channels[index] = &Channel{Id: index + 1, Priority: &priority, Weight: &weight}
+	}
+
+	selected, err := selectHighestPriorityWeightedChannelWithReader(channels, bytes.NewReader(make([]byte, 32)))
+
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, 1, selected.Id)
 }
 
 func TestSelectHighestPriorityWeightedChannelHandlesFullWidthWeights(t *testing.T) {
@@ -378,8 +410,6 @@ func TestGetRandomSatisfiedChannelZeroWeightSamePriorityTierRemainsSelectable(t 
 	insertStrictPriorityCandidate(t, 1, "default", "gpt-strict", 100, 0)
 	insertStrictPriorityCandidate(t, 2, "default", "gpt-strict", 100, 0)
 	InitChannelCache()
-	rand.Seed(1)
-
 	channel, err := GetRandomSatisfiedChannel("default", "gpt-strict", 0, "", map[int]struct{}{})
 
 	require.NoError(t, err)
@@ -414,8 +444,6 @@ func TestGetRandomSatisfiedChannelDatabasePathFiltersAttemptedChannels(t *testin
 	clearStrictPriorityTables(t)
 	withMemoryCacheForStrictPriority(t, false)
 	setupStrictPriorityCandidates(t)
-	rand.Seed(1)
-
 	channel, err := GetRandomSatisfiedChannel("default", "gpt-strict", 1, "", map[int]struct{}{1: {}})
 
 	require.NoError(t, err)

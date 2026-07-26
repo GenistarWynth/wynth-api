@@ -33,10 +33,16 @@ func TestRecordRelaySampleCommittedAbnormalStreamRecordsSingleFailure(t *testing
 	}
 	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("unexpected EOF"))
 
-	// Partial usage settlement currently submits a success sample before the
-	// controller submits the committed stream failure sample.
-	RecordRelaySample(info, true, 7)
-	RecordRelaySample(info, false, 0)
+	CaptureRelayUsage(info, 3, 7)
+	var finalizers sync.WaitGroup
+	for i := 0; i < 256; i++ {
+		finalizers.Add(1)
+		go func(success bool) {
+			defer finalizers.Done()
+			FinalizeRelaySample(info, success)
+		}(i%2 == 0)
+	}
+	finalizers.Wait()
 
 	var snapshot counters
 	hotBuckets.Range(func(key, value any) bool {
@@ -48,7 +54,50 @@ func TestRecordRelaySampleCommittedAbnormalStreamRecordsSingleFailure(t *testing
 	})
 	assert.EqualValues(t, 1, snapshot.requestCount)
 	assert.Zero(t, snapshot.successCount)
+	assert.EqualValues(t, 3, snapshot.inputTokens)
 	assert.EqualValues(t, 7, snapshot.outputTokens)
+}
+
+func TestRelayOutcomeConcurrentUsageCaptureRetainsRichestPartialUsage(t *testing.T) {
+	previousRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	hotBuckets = sync.Map{}
+	t.Cleanup(func() {
+		common.RedisEnabled = previousRedisEnabled
+		hotBuckets = sync.Map{}
+	})
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-concurrent-partial-usage",
+		UsingGroup:      "default",
+		IsStream:        true,
+		StartTime:       time.Now().Add(-time.Second),
+		StreamStatus:    relaycommon.NewStreamStatus(),
+	}
+	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, errors.New("unexpected EOF"))
+
+	var captures sync.WaitGroup
+	for i := int64(1); i <= 128; i++ {
+		captures.Add(1)
+		go func(input int64) {
+			defer captures.Done()
+			CaptureRelayUsage(info, input, input*2)
+		}(i)
+	}
+	captures.Wait()
+	FinalizeRelaySample(info, false)
+
+	var snapshot counters
+	hotBuckets.Range(func(key, value any) bool {
+		if key.(bucketKey).model == info.OriginModelName {
+			snapshot = value.(*atomicBucket).snapshot()
+		}
+		return true
+	})
+	assert.EqualValues(t, 1, snapshot.requestCount)
+	assert.Zero(t, snapshot.successCount)
+	assert.EqualValues(t, 128, snapshot.inputTokens)
+	assert.EqualValues(t, 256, snapshot.outputTokens)
 }
 
 func TestRecordRelaySampleSuccessfulStreamRecordsSingleSuccess(t *testing.T) {
@@ -71,7 +120,8 @@ func TestRecordRelaySampleSuccessfulStreamRecordsSingleSuccess(t *testing.T) {
 	}
 	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
 
-	RecordRelaySample(info, true, 7)
+	CaptureRelayUsage(info, 4, 7)
+	FinalizeRelaySample(info, true)
 
 	var snapshot counters
 	found := false
@@ -86,6 +136,7 @@ func TestRecordRelaySampleSuccessfulStreamRecordsSingleSuccess(t *testing.T) {
 	require.True(t, found)
 	assert.EqualValues(t, 1, snapshot.requestCount)
 	assert.EqualValues(t, 1, snapshot.successCount)
+	assert.EqualValues(t, 4, snapshot.inputTokens)
 	assert.EqualValues(t, 7, snapshot.outputTokens)
 }
 
@@ -107,7 +158,8 @@ func TestRecordRelaySampleClientCancellationKeepsExistingSuccessClassification(t
 	}
 	info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, context.Canceled)
 
-	RecordRelaySample(info, true, 5)
+	CaptureRelayUsage(info, 2, 5)
+	FinalizeRelaySample(info, true)
 
 	var snapshot counters
 	hotBuckets.Range(func(key, value any) bool {
@@ -119,5 +171,6 @@ func TestRecordRelaySampleClientCancellationKeepsExistingSuccessClassification(t
 	})
 	assert.EqualValues(t, 1, snapshot.requestCount)
 	assert.EqualValues(t, 1, snapshot.successCount)
+	assert.EqualValues(t, 2, snapshot.inputTokens)
 	assert.EqualValues(t, 5, snapshot.outputTokens)
 }

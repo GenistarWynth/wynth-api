@@ -1,9 +1,10 @@
 package model
 
 import (
+	cryptorand "crypto/rand"
 	"fmt"
+	"io"
 	"math/big"
-	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -156,8 +157,15 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 }
 
 func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error) {
+	return selectHighestPriorityWeightedChannelWithReader(channels, cryptorand.Reader)
+}
+
+func selectHighestPriorityWeightedChannelWithReader(channels []*Channel, random io.Reader) (*Channel, error) {
 	if len(channels) == 0 {
 		return nil, nil
+	}
+	if random == nil {
+		return nil, fmt.Errorf("random source is nil")
 	}
 
 	targetPriority := channels[0].GetPriority()
@@ -185,7 +193,11 @@ func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error)
 		// Established zero-weight behavior: when every candidate is zero,
 		// choose uniformly. A zero-weight candidate remains unselectable while
 		// any positive-weight candidate exists at the same priority.
-		return targetChannels[rand.Intn(len(targetChannels))], nil
+		index, err := randomBigIntBelow(random, big.NewInt(int64(len(targetChannels))))
+		if err != nil {
+			return nil, err
+		}
+		return targetChannels[index.Int64()], nil
 	}
 
 	// Use arbitrary-precision accumulation so every uint weight and practical
@@ -193,7 +205,10 @@ func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error)
 	// uniform integer below the total without modulo bias. The former smoothing
 	// multiplier was common to all nonzero weights, so omitting it preserves the
 	// same proportional policy while avoiding unnecessary large products.
-	randomWeight := randomBigIntBelow(totalWeight)
+	randomWeight, err := randomBigIntBelow(random, totalWeight)
+	if err != nil {
+		return nil, err
+	}
 	for _, channel := range targetChannels {
 		weight := new(big.Int).SetUint64(uint64(channel.GetWeightUint()))
 		if randomWeight.Cmp(weight) < 0 {
@@ -204,18 +219,26 @@ func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error)
 	return nil, fmt.Errorf("channel not found at priority %d", targetPriority)
 }
 
-func randomBigIntBelow(limit *big.Int) *big.Int {
+func randomBigIntBelow(random io.Reader, limit *big.Int) (*big.Int, error) {
+	if random == nil {
+		return nil, fmt.Errorf("random source is nil")
+	}
+	if limit == nil || limit.Sign() <= 0 {
+		return nil, fmt.Errorf("random limit must be positive")
+	}
 	bitLength := limit.BitLen()
 	byteLength := (bitLength + 7) / 8
 	excessBits := uint(byteLength*8 - bitLength)
 	randomBytes := make([]byte, byteLength)
 
 	for {
-		_, _ = rand.Read(randomBytes)
+		if _, err := io.ReadFull(random, randomBytes); err != nil {
+			return nil, fmt.Errorf("read selector randomness: %w", err)
+		}
 		randomBytes[0] &= byte(0xff >> excessBits)
 		candidate := new(big.Int).SetBytes(randomBytes)
 		if candidate.Cmp(limit) < 0 {
-			return candidate
+			return candidate, nil
 		}
 	}
 }
