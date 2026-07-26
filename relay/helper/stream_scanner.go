@@ -17,6 +17,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 
@@ -45,6 +46,21 @@ func NewStreamScanner(reader io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
 	return scanner
+}
+
+// StreamFailureError turns an abnormal upstream stream termination into a
+// retryable channel error. A downstream disconnect is not an upstream health
+// failure, and the legacy normal terminal states remain successful.
+func StreamFailureError(info *relaycommon.RelayInfo) *types.NewAPIError {
+	if info == nil || info.StreamStatus == nil || info.StreamStatus.IsNormalEnd() ||
+		info.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
+		return nil
+	}
+	return types.NewOpenAIError(
+		fmt.Errorf("upstream stream ended unexpectedly: %s", info.StreamStatus.EndReason),
+		types.ErrorCodeReadResponseBodyFailed,
+		http.StatusInternalServerError,
+	)
 }
 
 func copyCodexSSEHeadersWithPolicy(c *gin.Context, resp *http.Response, shouldCopy func(*gin.Context, string, []string) bool) {

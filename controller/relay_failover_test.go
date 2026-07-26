@@ -91,7 +91,6 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
 	previousMemoryCache := common.MemoryCacheEnabled
-	previousRedisEnabled := common.RedisEnabled
 	previousMainDBType := common.MainDatabaseType()
 	previousLogDBType := common.LogDatabaseType()
 	previousRetryTimes := common.RetryTimes
@@ -125,7 +124,6 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	model.DB = db
 	model.LOG_DB = db
 	common.MemoryCacheEnabled = true
-	common.RedisEnabled = false
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
 	common.RetryTimes = opts.retryTimes
@@ -135,6 +133,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	common.LogConsumeEnabled = true
 	common.AutomaticDisableChannelEnabled = false
 	common.DataExportEnabled = false
+	service.ResetAccountPoolRuntimeForTest()
 	service.InitHttpClient()
 	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 599}}
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
@@ -144,7 +143,6 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.MemoryCacheEnabled = previousMemoryCache
-		common.RedisEnabled = previousRedisEnabled
 		common.SetMainDatabaseType(previousMainDBType)
 		common.SetLogDatabaseType(previousLogDBType)
 		common.RetryTimes = previousRetryTimes
@@ -154,6 +152,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		common.LogConsumeEnabled = previousLogConsumeEnabled
 		common.AutomaticDisableChannelEnabled = previousAutomaticDisable
 		common.DataExportEnabled = previousDataExportEnabled
+		service.ResetAccountPoolRuntimeForTest()
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
@@ -308,6 +307,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	common.SetContextKey(c, constant.ContextKeyTokenId, 1)
 	common.SetContextKey(c, constant.ContextKeyTokenKey, "test-token")
 	common.SetContextKey(c, constant.ContextKeyTokenUnlimited, false)
+	common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
 	common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 	c.Set("token_name", "relay-failover-token")
 	c.Set("username", "relay-failover-user")
@@ -590,7 +590,7 @@ func TestRelayDoesNotRetryAfterStreamCommit(t *testing.T) {
 	assert.NotContains(t, result.body, `"error"`)
 	assert.Equal(t, []int{1}, result.attempts)
 	assert.Equal(t, []string{"1"}, result.usedChannels)
-	assert.Zero(t, result.errorLogCount)
+	assert.EqualValues(t, 1, result.errorLogCount)
 	assert.EqualValues(t, 1, result.consumeLogCount)
 }
 

@@ -146,10 +146,15 @@ func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayI
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	if newAPIError == nil {
+		newAPIError = helper.StreamFailureError(info)
+	}
 	if newAPIError != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
+		if !info.HasSendResponse() || usage == nil {
+			return newAPIError
+		}
 	}
 
 	usageDto := usage.(*dto.Usage)
@@ -167,7 +172,7 @@ func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayI
 
 		info.OriginModelName = originModelName
 		info.PriceData = originPriceData
-		return nil
+		return newAPIError
 	}
 
 	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
@@ -175,5 +180,5 @@ func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayI
 	} else {
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
-	return nil
+	return newAPIError
 }

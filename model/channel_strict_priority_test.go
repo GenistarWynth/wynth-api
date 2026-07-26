@@ -15,6 +15,12 @@ import (
 
 func clearStrictPriorityTables(t *testing.T) {
 	t.Helper()
+	if DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
+		require.NoError(t, DB.Exec("DELETE FROM account_pool_channel_bindings").Error)
+	}
+	if DB.Migrator().HasTable(&AccountPool{}) {
+		require.NoError(t, DB.Exec("DELETE FROM account_pools").Error)
+	}
 	require.NoError(t, DB.Exec("DELETE FROM abilities").Error)
 	require.NoError(t, DB.Exec("DELETE FROM channels").Error)
 	InitChannelCache()
@@ -121,6 +127,95 @@ func TestGetRandomSatisfiedChannelNormalizedFallbackFiltersAttemptedChannels(t *
 	require.NoError(t, err)
 	require.NotNil(t, channel)
 	assert.Equal(t, 2, channel.Id)
+}
+
+func TestGetRandomSatisfiedChannelCacheParityExcludesStaleDisabledAbilityAndNormalizesModel(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_cache_%t", memoryCacheEnabled), func(t *testing.T) {
+			clearStrictPriorityTables(t)
+			withMemoryCacheForStrictPriority(t, memoryCacheEnabled)
+
+			priority := int64(200)
+			weight := uint(100)
+			require.NoError(t, DB.Create(&Channel{
+				Id:       1,
+				Type:     constant.ChannelTypeOpenAI,
+				Key:      "disabled-key",
+				Status:   common.ChannelStatusManuallyDisabled,
+				Name:     "manually-disabled",
+				Group:    "default",
+				Models:   "gpt-4o-gizmo-*",
+				Priority: &priority,
+				Weight:   &weight,
+			}).Error)
+			require.NoError(t, DB.Create(&Ability{
+				Group:     "default",
+				Model:     "gpt-4o-gizmo-*",
+				ChannelId: 1,
+				Enabled:   true,
+				Priority:  &priority,
+				Weight:    weight,
+			}).Error)
+			insertStrictPriorityCandidate(t, 2, "default", "gpt-4o-gizmo-*", 100, 25)
+			insertStrictPriorityCandidate(t, 3, "other", "gpt-4o-gizmo-*", 1_000, 100)
+			insertStrictPriorityCandidate(t, 4, "default", "different-model", 900, 100)
+			InitChannelCache()
+
+			channel, err := GetRandomSatisfiedChannel(
+				"default",
+				"gpt-4o-gizmo-review",
+				0,
+				"",
+				map[int]struct{}{3: {}, 4: {}},
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, channel)
+			assert.Equal(t, 2, channel.Id)
+
+			channel, err = GetRandomSatisfiedChannel(
+				"default",
+				"gpt-4o-gizmo-review",
+				1,
+				"",
+				map[int]struct{}{2: {}},
+			)
+			require.NoError(t, err)
+			assert.Nil(t, channel)
+		})
+	}
+}
+
+func TestGetRandomSatisfiedChannelCacheParityExhaustsUnequalWeightsWithoutReplacement(t *testing.T) {
+	var sequences [][]int
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		clearStrictPriorityTables(t)
+		withMemoryCacheForStrictPriority(t, memoryCacheEnabled)
+		insertStrictPriorityCandidate(t, 1, "default", "gpt-weighted", 100, 1)
+		insertStrictPriorityCandidate(t, 2, "default", "gpt-weighted", 100, 99)
+		insertStrictPriorityCandidate(t, 3, "default", "gpt-weighted", 50, 50)
+		InitChannelCache()
+		rand.Seed(7)
+
+		attempted := make(map[int]struct{})
+		sequence := make([]int, 0, 3)
+		for range 3 {
+			channel, err := GetRandomSatisfiedChannel("default", "gpt-weighted", 0, "", attempted)
+			require.NoError(t, err)
+			require.NotNil(t, channel)
+			sequence = append(sequence, channel.Id)
+			attempted[channel.Id] = struct{}{}
+		}
+		channel, err := GetRandomSatisfiedChannel("default", "gpt-weighted", 0, "", attempted)
+		require.NoError(t, err)
+		assert.Nil(t, channel)
+
+		assert.ElementsMatch(t, []int{1, 2}, sequence[:2])
+		assert.Equal(t, 3, sequence[2])
+		sequences = append(sequences, sequence)
+	}
+
+	assert.Equal(t, sequences[0], sequences[1])
 }
 
 func TestGetRandomSatisfiedChannelPathFilterCombinesWithAttemptedChannels(t *testing.T) {
@@ -324,4 +419,51 @@ func TestCacheUpdateChannelStatusKeepsEnabledAccountPoolRuntimeChannelRoutable(t
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, channel.Id, selected.Id)
+}
+
+func TestGetRandomSatisfiedChannelCacheParityKeepsEnabledAccountPoolRuntimeChannelRoutable(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_cache_%t", memoryCacheEnabled), func(t *testing.T) {
+			clearStrictPriorityTables(t)
+			withMemoryCacheForStrictPriority(t, memoryCacheEnabled)
+			require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolChannelBinding{}))
+
+			priority := int64(100)
+			weight := uint(100)
+			channel := Channel{
+				Id:       43,
+				Type:     constant.ChannelTypeOpenAI,
+				Key:      "account-pool-parity-key",
+				Status:   common.ChannelStatusManuallyDisabled,
+				Name:     "account-pool-parity-channel",
+				Group:    "default",
+				Models:   "gpt-runtime-parity",
+				Priority: &priority,
+				Weight:   &weight,
+			}
+			require.NoError(t, DB.Create(&channel).Error)
+			require.NoError(t, DB.Create(&Ability{
+				Group:     "default",
+				Model:     "gpt-runtime-parity",
+				ChannelId: channel.Id,
+				Enabled:   true,
+				Priority:  &priority,
+				Weight:    weight,
+			}).Error)
+			pool := AccountPool{Name: "runtime-parity-pool", Platform: AccountPoolPlatformOpenAI}
+			require.NoError(t, DB.Create(&pool).Error)
+			require.NoError(t, DB.Create(&AccountPoolChannelBinding{
+				PoolID:    pool.Id,
+				ChannelID: channel.Id,
+				Status:    AccountPoolBindingStatusEnabled,
+			}).Error)
+			InitChannelCache()
+
+			selected, err := GetRandomSatisfiedChannel("default", "gpt-runtime-parity", 0, "/v1/chat/completions")
+
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, channel.Id, selected.Id)
+		})
+	}
 }

@@ -8,7 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -60,167 +60,79 @@ func GetAllEnableAbilities() []Ability {
 	return abilities
 }
 
-func getPriority(group string, model string, retry int) (int, error) {
-
-	var priorities []int
-	err := DB.Model(&Ability{}).
-		Select("DISTINCT(priority)").
-		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
-		Order("priority DESC").              // 按优先级降序排序
-		Pluck("priority", &priorities).Error // Pluck用于将查询的结果直接扫描到一个切片中
-
-	if err != nil {
-		// 处理错误
-		return 0, err
-	}
-
-	if len(priorities) == 0 {
-		// 如果没有查询到优先级，则返回错误
-		return 0, errors.New("数据库一致性被破坏")
-	}
-
-	// 确定要使用的优先级
-	var priorityToUse int
-	if retry >= len(priorities) {
-		// 如果重试次数大于优先级数，则使用最小的优先级
-		priorityToUse = priorities[len(priorities)-1]
-	} else {
-		priorityToUse = priorities[retry]
-	}
-	return priorityToUse, nil
-}
-
-func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
-	if retry != 0 {
-		priority, err := getPriority(group, model, retry)
-		if err != nil {
-			return nil, err
-		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
-		}
-	}
-
-	return channelQuery, nil
-}
-
 func GetChannel(group string, model string, retry int, requestPath string, attemptedChannelIDs ...map[int]struct{}) (*Channel, error) {
-	var abilities []Ability
-
-	var err error = nil
-	// Wynth strict-priority model: fetch ALL enabled abilities (every tier), then below
-	// filter out attempted channels and serve the highest REMAINING priority tier. This
-	// is deliberately NOT upstream's getChannelQuery (which pre-filters to a single
-	// priority tier by retry index) — that would prevent tier fallback when all
-	// higher-priority channels have already been attempted. See channel_strict_priority_test.go.
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	err = channelQuery.Order("weight DESC").Find(&abilities).Error
+	attempted := firstAttemptedChannelIDs(attemptedChannelIDs...)
+	channels, err := findRelayEligibleChannels(group, model)
 	if err != nil {
 		return nil, err
 	}
-	abilities = filterAbilitiesByRequestPath(abilities, requestPath)
-	if len(attemptedChannelIDs) > 0 && len(attemptedChannelIDs[0]) > 0 {
-		filtered := make([]Ability, 0, len(abilities))
-		for _, ability := range abilities {
-			if _, attempted := attemptedChannelIDs[0][ability.ChannelId]; attempted {
-				continue
+	channels = filterRelayEligibleChannels(channels, requestPath, attempted)
+
+	if len(channels) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		if normalizedModel != "" && normalizedModel != model {
+			channels, err = findRelayEligibleChannels(group, normalizedModel)
+			if err != nil {
+				return nil, err
 			}
-			filtered = append(filtered, ability)
+			channels = filterRelayEligibleChannels(channels, requestPath, attempted)
 		}
-		abilities = filtered
 	}
-	if len(abilities) == 0 {
+	if len(channels) == 0 {
 		return nil, nil
 	}
-
-	targetPriority := int64(0)
-	for i, ability := range abilities {
-		priority := int64(0)
-		if ability.Priority != nil {
-			priority = *ability.Priority
-		}
-		if i == 0 || priority > targetPriority {
-			targetPriority = priority
-		}
-	}
-	samePriorityAbilities := make([]Ability, 0, len(abilities))
-	for _, ability := range abilities {
-		priority := int64(0)
-		if ability.Priority != nil {
-			priority = *ability.Priority
-		}
-		if priority == targetPriority {
-			samePriorityAbilities = append(samePriorityAbilities, ability)
-		}
-	}
-	abilities = samePriorityAbilities
-
-	channel := Channel{}
-	// Randomly choose one
-	weightSum := uint(0)
-	for _, ability_ := range abilities {
-		weightSum += ability_.Weight + 10
-	}
-	// Randomly choose one
-	weight := common.GetRandomInt(int(weightSum))
-	for _, ability_ := range abilities {
-		weight -= int(ability_.Weight) + 10
-		//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-		if weight <= 0 {
-			channel.Id = ability_.ChannelId
-			break
-		}
-	}
-	if channel.Id == 0 {
-		return nil, nil
-	}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
-	return &channel, err
+	return selectHighestPriorityWeightedChannel(channels)
 }
 
-// filterAbilitiesByRequestPath restricts candidates by request path for the DB
-// (non-memory-cache) selection path. Only Advanced Custom (type 58) channels are
-// path-checked: kept only when one of their routes matches requestPath; all other
-// channel types always pass. When requestPath is empty, filtering is skipped.
-func filterAbilitiesByRequestPath(abilities []Ability, requestPath string) []Ability {
-	if requestPath == "" || len(abilities) == 0 {
-		return abilities
+// findRelayEligibleChannels applies the same authoritative channel-status
+// eligibility used by the memory cache. Enabled account-pool bindings are the
+// established exception that keeps their disabled backing channel routable.
+func findRelayEligibleChannels(group string, modelName string) ([]*Channel, error) {
+	enabledAccountPoolChannelIDs, err := EnabledAccountPoolRuntimeChannelIDs()
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to load enabled account pool channel ids: %v", err))
+		enabledAccountPoolChannelIDs = map[int]struct{}{}
 	}
 
-	channelIds := make([]int, 0, len(abilities))
-	seen := make(map[int]struct{}, len(abilities))
-	for _, ability := range abilities {
-		if _, ok := seen[ability.ChannelId]; ok {
-			continue
+	query := DB.Table("channels").
+		Select("channels.*").
+		Joins("JOIN abilities ON abilities.channel_id = channels.id").
+		Where("abilities."+commonGroupCol+" = ? AND abilities.model = ? AND abilities.enabled = ?", group, modelName, true)
+	if len(enabledAccountPoolChannelIDs) == 0 {
+		query = query.Where("channels.status = ?", common.ChannelStatusEnabled)
+	} else {
+		channelIDs := make([]int, 0, len(enabledAccountPoolChannelIDs))
+		for channelID := range enabledAccountPoolChannelIDs {
+			channelIDs = append(channelIDs, channelID)
 		}
-		seen[ability.ChannelId] = struct{}{}
-		channelIds = append(channelIds, ability.ChannelId)
+		query = query.Where("(channels.status = ? OR channels.id IN ?)", common.ChannelStatusEnabled, channelIDs)
 	}
 
 	var channels []*Channel
-	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
-		// On error, fall back to unfiltered candidates to avoid blocking selection
-		return abilities
+	err = query.Order("channels.id").Find(&channels).Error
+	return channels, err
+}
+
+func filterRelayEligibleChannels(channels []*Channel, requestPath string, attempted map[int]struct{}) []*Channel {
+	if len(channels) == 0 {
+		return channels
 	}
 
-	advancedConfigs := make(map[int]*dto.AdvancedCustomConfig)
+	filtered := make([]*Channel, 0, len(channels))
 	for _, channel := range channels {
-		if channel.Type == constant.ChannelTypeAdvancedCustom {
-			advancedConfigs[channel.Id] = channel.GetOtherSettings().AdvancedCustom
-		}
-	}
-
-	filtered := make([]Ability, 0, len(abilities))
-	for _, ability := range abilities {
-		config, isAdvancedCustom := advancedConfigs[ability.ChannelId]
-		if !isAdvancedCustom {
-			filtered = append(filtered, ability)
+		if channel == nil {
 			continue
 		}
-		if config != nil && config.SupportsPath(requestPath) {
-			filtered = append(filtered, ability)
+		if _, wasAttempted := attempted[channel.Id]; wasAttempted {
+			continue
 		}
+		if requestPath != "" && channel.Type == constant.ChannelTypeAdvancedCustom {
+			config := channel.GetOtherSettings().AdvancedCustom
+			if config == nil || !config.SupportsPath(requestPath) {
+				continue
+			}
+		}
+		filtered = append(filtered, channel)
 	}
 	return filtered
 }

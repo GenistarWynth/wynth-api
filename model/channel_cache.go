@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -144,43 +143,40 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		return nil, nil
 	}
 
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
-			return channel, nil
-		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
-	}
-
-	var targetPriority int64
-	hasTargetPriority := false
+	candidates := make([]*Channel, 0, len(channels))
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
-			priority := channel.GetPriority()
-			if !hasTargetPriority || priority > targetPriority {
-				targetPriority = channel.GetPriority()
-				hasTargetPriority = true
-			}
+			candidates = append(candidates, channel)
 		} else {
 			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
 	}
+	return selectHighestPriorityWeightedChannel(candidates)
+}
 
-	// get the priority for the given retry number
-	var sumWeight = 0
+func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error) {
+	if len(channels) == 0 {
+		return nil, nil
+	}
+
+	targetPriority := channels[0].GetPriority()
+	for _, channel := range channels[1:] {
+		if channel.GetPriority() > targetPriority {
+			targetPriority = channel.GetPriority()
+		}
+	}
+
+	sumWeight := 0
 	var targetChannels []*Channel
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
-				targetChannels = append(targetChannels, channel)
-			}
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+	for _, channel := range channels {
+		if channel.GetPriority() == targetPriority {
+			sumWeight += channel.GetWeight()
+			targetChannels = append(targetChannels, channel)
 		}
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, fmt.Errorf("no channel found at priority %d", targetPriority)
 	}
 
 	// smoothing factor and adjustment
@@ -210,8 +206,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 			return channel, nil
 		}
 	}
-	// return null if no channel is not found
-	return nil, errors.New("channel not found")
+	return nil, fmt.Errorf("channel not found at priority %d", targetPriority)
 }
 
 func firstAttemptedChannelIDs(attemptedChannelIDs ...map[int]struct{}) map[int]struct{} {

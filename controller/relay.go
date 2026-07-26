@@ -567,16 +567,25 @@ func RelayTask(c *gin.Context) {
 		Retry:       common.GetPointer(0),
 	}
 
-	// Unlocked task channels are bounded by selector exhaustion; locked task
-	// channels are attempted once below.
+	lockedChannel, isLockedChannel := relayInfo.LockedChannel.(*model.Channel)
+	isLockedChannel = isLockedChannel && lockedChannel != nil
+	lockedRetryLimit := 0
+	if isLockedChannel {
+		lockedRetryLimit = service.ResolveChannelRetryTimes(common.RetryTimes, lockedChannel)
+	}
+
+	// Unlocked task channels are bounded by selector exhaustion. A task locked
+	// to its origin channel instead keeps the legacy same-channel retry budget
+	// so SetupContextForSelectedChannel can rotate credentials between attempts.
 	for {
 		var channel *model.Channel
 		var channelErr *types.NewAPIError
-		lockedChannel := false
 
-		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
-			channel = lockedCh
-			lockedChannel = true
+		if isLockedChannel {
+			channel = lockedChannel
+			if retryParam.GetRetry() > 0 {
+				channelErr = middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName)
+			}
 		} else {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 		}
@@ -597,8 +606,15 @@ func RelayTask(c *gin.Context) {
 		addUsedChannel(c, channel.Id)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
-			taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "setup_channel_failed", http.StatusInternalServerError)
-			if lockedChannel || c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
+			taskErr = service.TaskErrorWrapper(channelErr.Err, "setup_channel_failed", channelErr.StatusCode)
+			processChannelError(c,
+				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
+					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
+				channelErr)
+			if c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
+				break
+			}
+			if isLockedChannel && retryParam.GetRetry() >= lockedRetryLimit {
 				break
 			}
 			retryParam.IncreaseRetry()
@@ -628,7 +644,10 @@ func RelayTask(c *gin.Context) {
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 
-		if lockedChannel || c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
+		if c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
+			break
+		}
+		if isLockedChannel && retryParam.GetRetry() >= lockedRetryLimit {
 			break
 		}
 		retryParam.IncreaseRetry()
