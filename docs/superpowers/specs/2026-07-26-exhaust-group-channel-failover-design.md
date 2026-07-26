@@ -56,8 +56,11 @@ exhaustion its termination condition.
    usage logging, health/error processing, and final response serialization in
    their current single lifecycle.
 
-The same exhaustion rule applies to task submission retries, except a task
-locked to its origin channel remains single-channel and cannot fan out.
+The same exhaustion rule applies to unlocked task submission retries. A fixed
+or origin-locked task instead uses the exact channel selected by
+middleware/distributor context as attempt one, preserves the established
+`RetryTimes + 1` bounded setup/key-rotation attempts on that channel, and
+never fans out to another channel.
 
 ## Ordering and Eligibility
 
@@ -67,6 +70,8 @@ The next candidate is always obtained through
 
 - An affinity-selected channel remains the first attempt because it was
   selected by the distributor and is read from context on the first loop.
+- A fixed/locked task also reads that authoritative context selection directly;
+  it never re-runs the weighted selector to infer its first channel.
 - Its ID is added to `use_channel`, so subsequent selection cannot repeat it.
 - The selector exhausts all unattempted channels at the highest remaining
   priority before considering a lower tier.

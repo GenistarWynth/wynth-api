@@ -218,6 +218,70 @@ func TestGetRandomSatisfiedChannelCacheParityExhaustsUnequalWeightsWithoutReplac
 	assert.Equal(t, sequences[0], sequences[1])
 }
 
+func TestSelectHighestPriorityWeightedChannelHandlesFullWidthWeights(t *testing.T) {
+	priority := int64(100)
+	maxWeight := ^uint(0)
+	cases := []struct {
+		name    string
+		weights []uint
+	}{
+		{name: "two equal 1<<62 weights", weights: []uint{uint(uint64(1) << 62), uint(uint64(1) << 62)}},
+		{name: "near maximum stored weights", weights: []uint{maxWeight, maxWeight - 1}},
+		{name: "mixed maximum small and zero", weights: []uint{maxWeight, 1, 0}},
+		{name: "all zero remains uniform", weights: []uint{0, 0, 0}},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			channels := make([]*Channel, 0, len(test.weights))
+			for index, weight := range test.weights {
+				weight := weight
+				channels = append(channels, &Channel{
+					Id:       index + 1,
+					Priority: &priority,
+					Weight:   &weight,
+				})
+			}
+
+			for range 100 {
+				selected, err := selectHighestPriorityWeightedChannel(channels)
+				require.NoError(t, err)
+				require.NotNil(t, selected)
+				assert.Contains(t, channels, selected)
+			}
+		})
+	}
+}
+
+func TestGetRandomSatisfiedChannelCacheParityExhaustsHugeWeightsWithoutReplacement(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		clearStrictPriorityTables(t)
+		withMemoryCacheForStrictPriority(t, memoryCacheEnabled)
+		insertStrictPriorityCandidate(t, 1, "default", "gpt-huge-weight", 100, uint(uint64(1)<<62))
+		insertStrictPriorityCandidate(t, 2, "default", "gpt-huge-weight", 100, uint((uint64(1)<<62)-1))
+		insertStrictPriorityCandidate(t, 3, "default", "gpt-huge-weight", 100, 0)
+		insertStrictPriorityCandidate(t, 4, "default", "gpt-huge-weight", 50, 1)
+		InitChannelCache()
+
+		attempted := make(map[int]struct{})
+		sequence := make([]int, 0, 4)
+		for range 4 {
+			channel, err := GetRandomSatisfiedChannel("default", "gpt-huge-weight", 0, "", attempted)
+			require.NoError(t, err)
+			require.NotNil(t, channel)
+			sequence = append(sequence, channel.Id)
+			attempted[channel.Id] = struct{}{}
+		}
+		channel, err := GetRandomSatisfiedChannel("default", "gpt-huge-weight", 0, "", attempted)
+		require.NoError(t, err)
+		assert.Nil(t, channel)
+
+		assert.ElementsMatch(t, []int{1, 2}, sequence[:2])
+		assert.Equal(t, 3, sequence[2])
+		assert.Equal(t, 4, sequence[3])
+	}
+}
+
 func TestGetRandomSatisfiedChannelPathFilterCombinesWithAttemptedChannels(t *testing.T) {
 	clearStrictPriorityTables(t)
 	withMemoryCacheForStrictPriority(t, true)
@@ -464,6 +528,93 @@ func TestGetRandomSatisfiedChannelCacheParityKeepsEnabledAccountPoolRuntimeChann
 			require.NoError(t, err)
 			require.NotNil(t, selected)
 			assert.Equal(t, channel.Id, selected.Id)
+		})
+	}
+}
+
+func TestGetRandomSatisfiedChannelCacheParityTracksAccountPoolStatusTransitions(t *testing.T) {
+	for _, memoryCacheEnabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("memory_cache_%t", memoryCacheEnabled), func(t *testing.T) {
+			clearStrictPriorityTables(t)
+			withMemoryCacheForStrictPriority(t, memoryCacheEnabled)
+			require.NoError(t, DB.AutoMigrate(&AccountPool{}, &AccountPoolChannelBinding{}))
+
+			disabledPool := AccountPool{
+				Name:     "disabled-runtime-pool",
+				Platform: AccountPoolPlatformOpenAI,
+				Status:   AccountPoolStatusDisabled,
+			}
+			enabledPool := AccountPool{
+				Name:     "enabled-runtime-pool",
+				Platform: AccountPoolPlatformOpenAI,
+				Status:   AccountPoolStatusEnabled,
+			}
+			require.NoError(t, DB.Create(&disabledPool).Error)
+			require.NoError(t, DB.Create(&enabledPool).Error)
+
+			for _, candidate := range []struct {
+				id       int
+				priority int64
+				poolID   int
+			}{
+				{id: 51, priority: 200, poolID: disabledPool.Id},
+				{id: 52, priority: 100, poolID: enabledPool.Id},
+			} {
+				weight := uint(100)
+				require.NoError(t, DB.Create(&Channel{
+					Id:       candidate.id,
+					Type:     constant.ChannelTypeOpenAI,
+					Key:      fmt.Sprintf("pool-key-%d", candidate.id),
+					Status:   common.ChannelStatusManuallyDisabled,
+					Name:     fmt.Sprintf("pool-channel-%d", candidate.id),
+					Group:    "default",
+					Models:   "gpt-pool-transition",
+					Priority: &candidate.priority,
+					Weight:   &weight,
+				}).Error)
+				require.NoError(t, DB.Create(&Ability{
+					Group:     "default",
+					Model:     "gpt-pool-transition",
+					ChannelId: candidate.id,
+					Enabled:   true,
+					Priority:  &candidate.priority,
+					Weight:    weight,
+				}).Error)
+				require.NoError(t, DB.Create(&AccountPoolChannelBinding{
+					PoolID:    candidate.poolID,
+					ChannelID: candidate.id,
+					Status:    AccountPoolBindingStatusEnabled,
+				}).Error)
+			}
+			InitChannelCache()
+
+			runtimeChannelIDs, err := EnabledAccountPoolRuntimeChannelIDs()
+			require.NoError(t, err)
+			assert.Equal(t, map[int]struct{}{52: {}}, runtimeChannelIDs)
+
+			selected, err := GetRandomSatisfiedChannel("default", "gpt-pool-transition", 0, "/v1/chat/completions")
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, 52, selected.Id)
+
+			require.NoError(t, DB.Model(&AccountPool{}).
+				Where("id = ?", disabledPool.Id).
+				Update("status", AccountPoolStatusEnabled).Error)
+			require.NoError(t, DB.Model(&AccountPool{}).
+				Where("id = ?", enabledPool.Id).
+				Update("status", AccountPoolStatusDisabled).Error)
+			if memoryCacheEnabled {
+				InitChannelCache()
+			}
+
+			runtimeChannelIDs, err = EnabledAccountPoolRuntimeChannelIDs()
+			require.NoError(t, err)
+			assert.Equal(t, map[int]struct{}{51: {}}, runtimeChannelIDs)
+
+			selected, err = GetRandomSatisfiedChannel("default", "gpt-pool-transition", 0, "/v1/chat/completions")
+			require.NoError(t, err)
+			require.NotNil(t, selected)
+			assert.Equal(t, 51, selected.Id)
 		})
 	}
 }

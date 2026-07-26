@@ -171,7 +171,7 @@ func (channel *Channel) AddAbilities(tx *gorm.DB) error {
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Weight:    channel.GetWeightUint(),
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)
@@ -249,7 +249,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 				ChannelId: channel.Id,
 				Enabled:   channel.Status == common.ChannelStatusEnabled,
 				Priority:  channel.Priority,
-				Weight:    uint(channel.GetWeight()),
+				Weight:    channel.GetWeightUint(),
 				Tag:       channel.Tag,
 			}
 			abilities = append(abilities, ability)

@@ -61,10 +61,10 @@ func TestShouldRetryTaskRelayUsesSemanticsNotGlobalBudget(t *testing.T) {
 		require.True(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500}))
 	})
 
-	t.Run("fixed channel", func(t *testing.T) {
+	t.Run("fixed channel keeps retryable classification for bounded same-channel rotation", func(t *testing.T) {
 		c, _ := gin.CreateTestContext(nil)
 		c.Set("specific_channel_id", 7)
-		require.False(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500}))
+		require.True(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500}))
 	})
 
 	t.Run("request semantic error", func(t *testing.T) {

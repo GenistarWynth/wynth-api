@@ -171,9 +171,10 @@ Run the Task 1 command. Expected: all focused controller failover tests pass.
 - [ ] **Step 1: Add a failing task retry-classification test**
 
 Add a table test proving retryable task errors are not rejected only because
-the numeric budget is zero, while local/400/fixed-channel errors remain
-terminal and an affinity-selected retryable failure still permits same-group
-exhaustion:
+the numeric budget is zero, while local/400 errors remain terminal and an
+affinity-selected retryable failure still permits same-group exhaustion.
+Fixed/locked pinning is enforced by the bounded task-loop topology rather than
+by misclassifying a retryable channel failure as terminal:
 
 ```go
 func TestShouldRetryTaskRelayUsesSemanticsNotGlobalBudget(t *testing.T)
@@ -190,14 +191,16 @@ Expected: FAIL because `shouldRetryTaskRelay(..., 0)` currently returns false.
 - [ ] **Step 2: Use selector exhaustion for unlocked task channels**
 
 Freeze `RetryParam.TokenGroup` to the resolved group and make the unlocked task
-loop unbounded but candidate-bounded, using the same `getChannel` nil
-exhaustion and once-only `addUsedChannel` behavior. Keep
-`relayInfo.LockedChannel` single-channel: after its first failed submit, stop
-without selecting or reattempting another channel.
+loop unbounded but candidate-bounded, using the exact distributor/context
+channel as attempt one and then the same `getChannel` nil exhaustion and
+once-only `addUsedChannel` behavior. For a fixed or origin-locked task, use
+that authoritative selected channel as attempt one and preserve the
+established `RetryTimes + 1` bounded setup/key-rotation attempts on the same
+channel; never select or fan out to another channel.
 
 Remove numeric budget from `shouldRetryTaskRelay` while preserving its
-status/local-error rules and checking fixed-channel constraints first. Stop
-traversal when the request context is canceled.
+status/local-error rules. Keep fixed/locked topology outside this semantic
+classification, and stop traversal when the request context is canceled.
 
 - [ ] **Step 3: Run controller GREEN**
 
@@ -240,7 +243,8 @@ exact test, its package, and this full command before classifying it.
 Inspect `git diff origin/main...HEAD` and verify:
 
 - every loop iteration records a new positive channel ID or terminates;
-- fixed/locked channels cannot enter an unbounded retry path;
+- fixed/locked task channels remain bounded to `RetryTimes + 1` same-channel
+  setup/key rotations and cannot fan out;
 - auto group retry cannot cross the resolved group;
 - no retry occurs after downstream commitment or cancellation;
 - health/error accounting occurs once per failed attempt;

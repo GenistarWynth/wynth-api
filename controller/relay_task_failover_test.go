@@ -36,6 +36,7 @@ const (
 type relayTaskFailoverCandidate struct {
 	id           int
 	priority     int64
+	weight       *uint
 	keys         []string
 	disabledKeys map[int]int
 }
@@ -46,7 +47,9 @@ type relayTaskFailoverOptions struct {
 	initialChannelID int
 	retryTimes       int
 	locked           bool
+	fixed            bool
 	paid             bool
+	contextSetup     func(*gin.Context)
 	onAttempt        func(channelID int)
 }
 
@@ -224,6 +227,10 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		if len(keys) == 0 {
 			keys = []string{fmt.Sprintf("key-%d", candidate.id)}
 		}
+		weight := uint(100)
+		if candidate.weight != nil {
+			weight = *candidate.weight
+		}
 		channel := &model.Channel{
 			Id:       candidate.id,
 			Type:     constant.ChannelTypeOpenAI,
@@ -234,7 +241,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 			Group:    "default",
 			Models:   relayTaskFailoverModel,
 			Priority: &candidate.priority,
-			Weight:   common.GetPointer(uint(100)),
+			Weight:   &weight,
 			AutoBan:  common.GetPointer(0),
 		}
 		if len(keys) > 1 || len(candidate.disabledKeys) > 0 {
@@ -252,7 +259,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 			ChannelId: candidate.id,
 			Enabled:   true,
 			Priority:  &candidate.priority,
-			Weight:    100,
+			Weight:    weight,
 		}).Error)
 	}
 	model.InitChannelCache()
@@ -307,6 +314,12 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	c.Set("relay_mode", relayconstant.RelayModeVideoSubmit)
 	c.Set("token_name", "relay-task-token")
 	c.Set("username", "relay-task-user")
+	if opts.fixed {
+		c.Set("specific_channel_id", strconv.Itoa(opts.initialChannelID))
+	}
+	if opts.contextSetup != nil {
+		opts.contextSetup(c)
+	}
 	require.Nil(t, middleware.SetupContextForSelectedChannel(c, initialChannel, relayTaskFailoverModel))
 
 	RelayTask(c)
@@ -370,6 +383,57 @@ func TestRelayTaskLockedChannelRotatesKeyWithoutCrossChannelFailover(t *testing.
 	assert.Equal(t, []string{"Bearer locked-key-1", "Bearer locked-key-2"}, result.authorizations)
 	assert.Equal(t, []string{"1", "1"}, result.usedChannels)
 	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.EqualValues(t, 1, result.taskCount)
+}
+
+func TestRelayTaskFixedChannelUsesDistributorSelectionAndRotatesKeys(t *testing.T) {
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{
+			{id: 1, priority: 200, weight: common.GetPointer(uint(100))},
+			{id: 2, priority: 200, weight: common.GetPointer(uint(0)), keys: []string{"fixed-key-1", "fixed-key-2"}},
+		},
+		statuses: map[int][]int{
+			2: {http.StatusInternalServerError, http.StatusOK},
+		},
+		initialChannelID: 2,
+		retryTimes:       1,
+		fixed:            true,
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Contains(t, result.body, `"status":"queued"`)
+	assert.Equal(t, []int{2, 2}, result.attempts)
+	assert.Equal(t, []string{"Bearer fixed-key-1", "Bearer fixed-key-2"}, result.authorizations)
+	assert.Equal(t, []string{"2", "2"}, result.usedChannels)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.EqualValues(t, 1, result.taskCount)
+}
+
+func TestRelayTaskAffinitySelectionIsAttemptedBeforeRemainingCandidates(t *testing.T) {
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{
+			{id: 1, priority: 200, weight: common.GetPointer(uint(100))},
+			{id: 2, priority: 200, weight: common.GetPointer(uint(0))},
+			{id: 3, priority: 100},
+		},
+		statuses: map[int][]int{
+			1: {http.StatusInternalServerError},
+			2: {http.StatusInternalServerError},
+		},
+		initialChannelID: 2,
+		retryTimes:       0,
+		contextSetup: func(c *gin.Context) {
+			c.Set("channel_affinity_skip_retry_on_failure", true)
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Contains(t, result.body, `"status":"queued"`)
+	assert.Equal(t, []int{2, 1, 3}, result.attempts)
+	assert.Equal(t, []string{"2", "1", "3"}, result.usedChannels)
+	assert.EqualValues(t, 2, result.errorLogCount)
 	assert.EqualValues(t, 1, result.consumeLogCount)
 	assert.EqualValues(t, 1, result.taskCount)
 }

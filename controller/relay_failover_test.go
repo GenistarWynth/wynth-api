@@ -58,6 +58,9 @@ type relayFailoverOptions struct {
 	usingGroup       string
 	autoGroups       []string
 	stream           bool
+	relayFormat      types.RelayFormat
+	requestPath      string
+	requestBody      string
 	requestContext   context.Context
 	contextSetup     func(*gin.Context)
 }
@@ -292,11 +295,18 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	requestBody := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"hello"}],"stream":%t}`, relayFailoverModel, opts.stream)
+	if opts.requestBody != "" {
+		requestBody = opts.requestBody
+	}
+	requestPath := opts.requestPath
+	if requestPath == "" {
+		requestPath = "/v1/chat/completions"
+	}
 	requestContext := opts.requestContext
 	if requestContext == nil {
 		requestContext = context.Background()
 	}
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(requestBody)).WithContext(requestContext)
+	c.Request = httptest.NewRequest(http.MethodPost, requestPath, strings.NewReader(requestBody)).WithContext(requestContext)
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	common.SetContextKey(c, constant.ContextKeyUserId, 1)
@@ -320,7 +330,11 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	}
 	require.Nil(t, middleware.SetupContextForSelectedChannel(c, initialChannel, relayFailoverModel))
 
-	Relay(c, types.RelayFormatOpenAI)
+	relayFormat := opts.relayFormat
+	if relayFormat == "" {
+		relayFormat = types.RelayFormatOpenAI
+	}
+	Relay(c, relayFormat)
 
 	var errorLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
@@ -588,6 +602,32 @@ func TestRelayDoesNotRetryAfterStreamCommit(t *testing.T) {
 	assert.Contains(t, result.body, "data:")
 	assert.NotContains(t, result.body, "channel-2")
 	assert.NotContains(t, result.body, `"error"`)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+}
+
+func TestRelayAudioRecordsCommittedAbnormalStreamAsChannelFailure(t *testing.T) {
+	candidates := []relayFailoverCandidate{
+		enabledRelayFailoverCandidate(1, "default", 200),
+		enabledRelayFailoverCandidate(2, "default", 100),
+	}
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: candidates,
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, abortAfterChunk: true},
+		},
+		initialChannelID: 1,
+		retryTimes:       10,
+		usingGroup:       "default",
+		relayFormat:      types.RelayFormatOpenAIAudio,
+		requestPath:      "/v1/audio/speech",
+		requestBody:      fmt.Sprintf(`{"model":"%s","input":"hello","voice":"alloy","stream_format":"sse"}`, relayFailoverModel),
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
 	assert.Equal(t, []int{1}, result.attempts)
 	assert.Equal(t, []string{"1"}, result.usedChannels)
 	assert.EqualValues(t, 1, result.errorLogCount)

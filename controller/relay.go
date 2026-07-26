@@ -537,6 +537,11 @@ func RelayTask(c *gin.Context) {
 		return
 	}
 
+	// The distributor-selected channel in the request context is authoritative
+	// for attempt one. ResolveOriginTask initializes ChannelMeta, so capture the
+	// selected ID before that initialization can make getChannel choose the
+	// selector path.
+	distributorChannelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
 		respondTaskError(c, taskErr)
 		return
@@ -569,26 +574,46 @@ func RelayTask(c *gin.Context) {
 
 	lockedChannel, isLockedChannel := relayInfo.LockedChannel.(*model.Channel)
 	isLockedChannel = isLockedChannel && lockedChannel != nil
+	_, isFixedChannel := c.Get("specific_channel_id")
+	isPinnedChannel := isLockedChannel || isFixedChannel
+	firstChannel := lockedChannel
+	if !isLockedChannel {
+		firstChannel, err = model.CacheGetChannel(distributorChannelID)
+		if err != nil || firstChannel == nil {
+			if err == nil {
+				err = fmt.Errorf("distributor-selected channel #%d not found", distributorChannelID)
+			}
+			taskErr = service.TaskErrorWrapperLocal(err, "get_channel_failed", http.StatusInternalServerError)
+			respondTaskError(c, taskErr)
+			return
+		}
+	}
+
 	lockedRetryLimit := 0
-	if isLockedChannel {
+	if isPinnedChannel {
+		lockedChannel = firstChannel
 		lockedRetryLimit = service.ResolveChannelRetryTimes(common.RetryTimes, lockedChannel)
 	}
 
-	// Unlocked task channels are bounded by selector exhaustion. A task locked
-	// to its origin channel instead keeps the legacy same-channel retry budget
-	// so SetupContextForSelectedChannel can rotate credentials between attempts.
+	// Unlocked task channels are bounded by selector exhaustion. Fixed and
+	// origin-locked tasks instead keep the legacy same-channel retry budget so
+	// SetupContextForSelectedChannel can rotate credentials between attempts.
+	firstAttempt := true
 	for {
 		var channel *model.Channel
 		var channelErr *types.NewAPIError
 
-		if isLockedChannel {
+		if isPinnedChannel {
 			channel = lockedChannel
 			if retryParam.GetRetry() > 0 {
 				channelErr = middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName)
 			}
+		} else if firstAttempt {
+			channel = firstChannel
 		} else {
 			channel, channelErr = getChannel(c, relayInfo, retryParam)
 		}
+		firstAttempt = false
 		if channel == nil {
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
@@ -614,7 +639,7 @@ func RelayTask(c *gin.Context) {
 			if c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
 				break
 			}
-			if isLockedChannel && retryParam.GetRetry() >= lockedRetryLimit {
+			if isPinnedChannel && retryParam.GetRetry() >= lockedRetryLimit {
 				break
 			}
 			retryParam.IncreaseRetry()
@@ -647,7 +672,7 @@ func RelayTask(c *gin.Context) {
 		if c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
 			break
 		}
-		if isLockedChannel && retryParam.GetRetry() >= lockedRetryLimit {
+		if isPinnedChannel && retryParam.GetRetry() >= lockedRetryLimit {
 			break
 		}
 		retryParam.IncreaseRetry()
@@ -703,9 +728,6 @@ func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
 
 func shouldRetryTaskRelay(c *gin.Context, taskErr *dto.TaskError) bool {
 	if taskErr == nil {
-		return false
-	}
-	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
 	if taskErr.LocalError {

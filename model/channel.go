@@ -549,10 +549,19 @@ func (channel *Channel) GetPriority() int64 {
 }
 
 func (channel *Channel) GetWeight() int {
+	weight := channel.GetWeightUint()
+	maxInt := uint(^uint(0) >> 1)
+	if weight > maxInt {
+		return int(maxInt)
+	}
+	return int(weight)
+}
+
+func (channel *Channel) GetWeightUint() uint {
 	if channel.Weight == nil {
 		return 0
 	}
-	return int(*channel.Weight)
+	return *channel.Weight
 }
 
 func (channel *Channel) GetBaseURL() string {

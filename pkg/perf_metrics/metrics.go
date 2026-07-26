@@ -28,6 +28,15 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	if info == nil {
 		return
 	}
+	if success && info.StreamStatus != nil &&
+		info.StreamStatus.EndReason != relaycommon.StreamEndReasonNone &&
+		info.StreamStatus.EndReason != relaycommon.StreamEndReasonClientGone &&
+		!info.StreamStatus.IsNormalEnd() {
+		success = false
+	}
+	if !info.TryBeginPerformanceSample() {
+		return
+	}
 	now := time.Now()
 	hasTtft := info.IsStream && info.HasSendResponse()
 	ttftMs := int64(0)

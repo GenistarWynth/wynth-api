@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -248,6 +249,10 @@ type RelayInfo struct {
 	FinalRequestRelayFormat types.RelayFormat
 
 	StreamStatus *StreamStatus
+	// performanceSampleRecorded keeps all quota-settlement and terminal-error
+	// paths on one request outcome. Multiple callers may race after a committed
+	// stream, but only the first one may update performance metrics.
+	performanceSampleRecorded atomic.Bool
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -256,6 +261,10 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+func (info *RelayInfo) TryBeginPerformanceSample() bool {
+	return info != nil && info.performanceSampleRecorded.CompareAndSwap(false, true)
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

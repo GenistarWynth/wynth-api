@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math/big"
 	"math/rand"
 	"sort"
 	"sync"
@@ -166,11 +167,12 @@ func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error)
 		}
 	}
 
-	sumWeight := 0
+	totalWeight := new(big.Int)
 	var targetChannels []*Channel
 	for _, channel := range channels {
 		if channel.GetPriority() == targetPriority {
-			sumWeight += channel.GetWeight()
+			weight := new(big.Int).SetUint64(uint64(channel.GetWeightUint()))
+			totalWeight.Add(totalWeight, weight)
 			targetChannels = append(targetChannels, channel)
 		}
 	}
@@ -179,34 +181,43 @@ func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error)
 		return nil, fmt.Errorf("no channel found at priority %d", targetPriority)
 	}
 
-	// smoothing factor and adjustment
-	smoothingFactor := 1
-	smoothingAdjustment := 0
-
-	if sumWeight == 0 {
-		// when all channels have weight 0, set sumWeight to the number of channels and set smoothing adjustment to 100
-		// each channel's effective weight = 100
-		sumWeight = len(targetChannels) * 100
-		smoothingAdjustment = 100
-	} else if sumWeight/len(targetChannels) < 10 {
-		// when the average weight is less than 10, set smoothing factor to 100
-		smoothingFactor = 100
+	if totalWeight.Sign() == 0 {
+		// Established zero-weight behavior: when every candidate is zero,
+		// choose uniformly. A zero-weight candidate remains unselectable while
+		// any positive-weight candidate exists at the same priority.
+		return targetChannels[rand.Intn(len(targetChannels))], nil
 	}
 
-	// Calculate the total weight of all channels up to endIdx
-	totalWeight := sumWeight * smoothingFactor
-
-	// Generate a random value in the range [0, totalWeight)
-	randomWeight := rand.Intn(totalWeight)
-
-	// Find a channel based on its weight
+	// Use arbitrary-precision accumulation so every uint weight and practical
+	// candidate count is representable. Rejection sampling supplies an exactly
+	// uniform integer below the total without modulo bias. The former smoothing
+	// multiplier was common to all nonzero weights, so omitting it preserves the
+	// same proportional policy while avoiding unnecessary large products.
+	randomWeight := randomBigIntBelow(totalWeight)
 	for _, channel := range targetChannels {
-		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
-		if randomWeight < 0 {
+		weight := new(big.Int).SetUint64(uint64(channel.GetWeightUint()))
+		if randomWeight.Cmp(weight) < 0 {
 			return channel, nil
 		}
+		randomWeight.Sub(randomWeight, weight)
 	}
 	return nil, fmt.Errorf("channel not found at priority %d", targetPriority)
+}
+
+func randomBigIntBelow(limit *big.Int) *big.Int {
+	bitLength := limit.BitLen()
+	byteLength := (bitLength + 7) / 8
+	excessBits := uint(byteLength*8 - bitLength)
+	randomBytes := make([]byte, byteLength)
+
+	for {
+		_, _ = rand.Read(randomBytes)
+		randomBytes[0] &= byte(0xff >> excessBits)
+		candidate := new(big.Int).SetBytes(randomBytes)
+		if candidate.Cmp(limit) < 0 {
+			return candidate
+		}
+	}
 }
 
 func firstAttemptedChannelIDs(attemptedChannelIDs ...map[int]struct{}) map[int]struct{} {
