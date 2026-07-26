@@ -6,6 +6,15 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.59] - 2026-07-26
+
+### Added
+- Relay requests now exhaust every eligible, model-compatible channel in the resolved group using existing priority, affinity, and weighted selection before returning a retryable error, while preserving fixed-channel key rotation, request cancellation, and committed-stream boundaries.
+
+### Fixed
+- OpenAI Responses terminal failures (`response.failed`, `response.error`, empty/incomplete output) now become same-group channel failures before downstream commitment, so a later channel can answer instead of forcing premature model fallback.
+- Channel eligibility, account-pool selection, streaming attempt isolation, failure accounting, secret sanitization, and overflow-safe weighted selection now remain consistent across memory and database selector paths.
+
 ## [v1.0.0-rc.58] - 2026-07-25
 
 ### Fixed
