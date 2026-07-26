@@ -73,19 +73,20 @@ func (w *relayCommitSignalWriter) WriteString(data string) (int, error) {
 }
 
 type relayFailoverOptions struct {
-	candidates       []relayFailoverCandidate
-	upstreams        map[int]relayFailoverUpstream
-	initialChannelID int
-	retryTimes       int
-	usingGroup       string
-	autoGroups       []string
-	stream           bool
-	relayFormat      types.RelayFormat
-	requestPath      string
-	requestBody      string
-	requestContext   context.Context
-	contextSetup     func(*gin.Context)
-	responseBodies   map[int]string
+	candidates        []relayFailoverCandidate
+	upstreams         map[int]relayFailoverUpstream
+	initialChannelID  int
+	retryTimes        int
+	retryStatusRanges []operation_setting.StatusCodeRange
+	usingGroup        string
+	autoGroups        []string
+	stream            bool
+	relayFormat       types.RelayFormat
+	requestPath       string
+	requestBody       string
+	requestContext    context.Context
+	contextSetup      func(*gin.Context)
+	responseBodies    map[int]string
 }
 
 type relayFailoverResult struct {
@@ -164,7 +165,10 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	common.DataExportEnabled = false
 	service.ResetAccountPoolRuntimeForTest()
 	service.InitHttpClient()
-	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 599}}
+	operation_setting.AutomaticRetryStatusCodeRanges = opts.retryStatusRanges
+	if len(operation_setting.AutomaticRetryStatusCodeRanges) == 0 {
+		operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 599}}
+	}
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.6-sol":2.5}`))
 
@@ -250,6 +254,15 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 			return
 		}
 		if upstream.stream {
+			if body := opts.responseBodies[channelID]; body != "" && !upstream.abortBeforeChunk && !upstream.abortAfterChunk {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprint(w, body)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				return
+			}
 			streamChunk := fmt.Sprintf("data: {\"id\":\"chatcmpl-%d\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"%s\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"channel-%d\"},\"finish_reason\":null}]}\n\n", channelID, relayFailoverModel, channelID)
 			if upstream.abortBeforeChunk {
 				hijacker, ok := w.(http.Hijacker)
@@ -291,6 +304,10 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		if body := opts.responseBodies[channelID]; body != "" {
+			_, _ = fmt.Fprint(w, body)
+			return
+		}
 		_, _ = fmt.Fprintf(w, `{"id":"chatcmpl-%d","object":"chat.completion","created":1,"model":"%s","choices":[{"index":0,"message":{"role":"assistant","content":"channel-%d"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`, channelID, relayFailoverModel, channelID)
 	}))
 	t.Cleanup(upstreamServer.Close)
@@ -427,6 +444,188 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		errorLogContent:  errorLog.Content,
 		appLog:           appLog.String(),
 	}
+}
+
+func responsesFailoverRequestBody(stream bool) string {
+	return fmt.Sprintf(`{"model":"%s","input":"hello","stream":%t}`, relayFailoverModel, stream)
+}
+
+func successfulResponsesStreamBody(channelID int) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-%d\",\"status\":\"in_progress\",\"model\":\"%s\"}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-%d\",\"status\":\"completed\",\"model\":\"%s\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"channel-%d\"}]}],\"usage\":{\"input_tokens\":2,\"output_tokens\":3,\"total_tokens\":5}}}\n\n",
+		channelID,
+		relayFailoverModel,
+		channelID,
+		relayFailoverModel,
+		channelID,
+	)
+}
+
+func TestRelayResponsesSemanticFailureRetriesSameGroup(t *testing.T) {
+	candidates := []relayFailoverCandidate{
+		enabledRelayFailoverCandidate(1, "default", 200),
+		enabledRelayFailoverCandidate(2, "default", 100),
+	}
+	failed := "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"rate_limit_exceeded\",\"type\":\"rate_limit_exceeded\",\"message\":\"Concurrency limit exceeded for account, please retry later\"}}}\n\n"
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: candidates,
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID:  1,
+		retryTimes:        0,
+		retryStatusRanges: []operation_setting.StatusCodeRange{{Start: http.StatusTooManyRequests, End: http.StatusTooManyRequests}},
+		usingGroup:        "default",
+		stream:            true,
+		relayFormat:       types.RelayFormatOpenAIResponses,
+		requestPath:       "/v1/responses",
+		requestBody:       responsesFailoverRequestBody(true),
+		responseBodies: map[int]string{
+			1: failed,
+			2: successfulResponsesStreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.Contains(t, result.body, "channel-2")
+	assert.NotContains(t, result.body, "response.failed")
+	assert.NotContains(t, result.body, "Concurrency limit exceeded")
+	assert.NotContains(t, result.body, `"error"`)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 1, result.userRequestCount)
+}
+
+func TestRelayResponsesSemanticFailureAfterMeaningfulOutputDoesNotRetry(t *testing.T) {
+	service.InitTokenEncoders()
+	candidates := []relayFailoverCandidate{
+		enabledRelayFailoverCandidate(1, "default", 200),
+		enabledRelayFailoverCandidate(2, "default", 100),
+	}
+	failed := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\",\"status\":\"in_progress\",\"model\":\"gpt-5.6-sol\"}}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial-a\"}\n\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"type\":\"server_error\",\"message\":\"upstream failed after output\"}}}\n\n"
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: candidates,
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		retryTimes:       10,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      responsesFailoverRequestBody(true),
+		responseBodies: map[int]string{
+			1: failed,
+			2: successfulResponsesStreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.Contains(t, result.body, "partial-a")
+	assert.Contains(t, result.body, "response.failed")
+	assert.NotContains(t, result.body, "channel-2")
+	assert.Equal(t, 1, strings.Count(result.body, "event: response.failed"))
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 1, result.userRequestCount)
+}
+
+func TestRelayResponsesEmptyTerminalRetriesSameGroup(t *testing.T) {
+	tests := []struct {
+		name     string
+		terminal string
+	}{
+		{
+			name:     "completed",
+			terminal: "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"status\":\"completed\",\"model\":\"gpt-5.6-sol\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0,\"total_tokens\":1}}}\n\n",
+		},
+		{
+			name:     "incomplete",
+			terminal: "data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-1\",\"status\":\"incomplete\",\"model\":\"gpt-5.6-sol\",\"output\":[],\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runRelayFailover(t, relayFailoverOptions{
+				candidates: []relayFailoverCandidate{
+					enabledRelayFailoverCandidate(1, "default", 200),
+					enabledRelayFailoverCandidate(2, "default", 100),
+				},
+				upstreams: map[int]relayFailoverUpstream{
+					1: {stream: true},
+					2: {stream: true},
+				},
+				initialChannelID: 1,
+				retryTimes:       0,
+				usingGroup:       "default",
+				stream:           true,
+				relayFormat:      types.RelayFormatOpenAIResponses,
+				requestPath:      "/v1/responses",
+				requestBody:      responsesFailoverRequestBody(true),
+				responseBodies: map[int]string{
+					1: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\",\"status\":\"in_progress\",\"model\":\"gpt-5.6-sol\"}}\n\n" + test.terminal,
+					2: successfulResponsesStreamBody(2),
+				},
+			})
+
+			assert.Equal(t, http.StatusOK, result.statusCode)
+			assert.Equal(t, []int{1, 2}, result.attempts)
+			assert.Contains(t, result.body, "channel-2")
+			assert.NotContains(t, result.body, "resp-1")
+			assert.EqualValues(t, 1, result.errorLogCount)
+			assert.EqualValues(t, 1, result.consumeLogCount)
+		})
+	}
+}
+
+func TestRelayResponsesIncompleteAfterMeaningfulOutputDoesNotRetry(t *testing.T) {
+	service.InitTokenEncoders()
+	incomplete := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\",\"status\":\"in_progress\",\"model\":\"gpt-5.6-sol\"}}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial-a\"}\n\n" +
+		"data: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp-1\",\"status\":\"incomplete\",\"model\":\"gpt-5.6-sol\",\"output\":[],\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		retryTimes:       10,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      responsesFailoverRequestBody(true),
+		responseBodies: map[int]string{
+			1: incomplete,
+			2: successfulResponsesStreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Contains(t, result.body, "partial-a")
+	assert.Contains(t, result.body, "response.incomplete")
+	assert.NotContains(t, result.body, "channel-2")
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
 }
 
 func TestRelayExhaustsEligibleChannelsBeyondRetryTimes(t *testing.T) {

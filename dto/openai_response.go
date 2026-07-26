@@ -355,6 +355,7 @@ type ResponsesOutput struct {
 	Status    string                   `json:"status"`
 	Role      string                   `json:"role"`
 	Content   []ResponsesOutputContent `json:"content"`
+	Result    string                   `json:"result,omitempty"`
 	Quality   string                   `json:"quality"`
 	Size      string                   `json:"size"`
 	CallId    string                   `json:"call_id,omitempty"`
@@ -379,6 +380,7 @@ func ResponsesArgumentsString(arguments json.RawMessage) string {
 type ResponsesOutputContent struct {
 	Type        string        `json:"type"`
 	Text        string        `json:"text"`
+	Refusal     string        `json:"refusal,omitempty"`
 	Annotations []interface{} `json:"annotations"`
 }
 
@@ -403,10 +405,15 @@ const (
 
 // ResponsesStreamResponse 用于处理 /v1/responses 流式响应
 type ResponsesStreamResponse struct {
-	Type     string                   `json:"type"`
-	Response *OpenAIResponsesResponse `json:"response,omitempty"`
-	Delta    string                   `json:"delta,omitempty"`
-	Item     *ResponsesOutput         `json:"item,omitempty"`
+	Type      string                   `json:"type"`
+	Response  *OpenAIResponsesResponse `json:"response,omitempty"`
+	Error     any                      `json:"error,omitempty"`
+	Delta     string                   `json:"delta,omitempty"`
+	Text      string                   `json:"text,omitempty"`
+	Refusal   string                   `json:"refusal,omitempty"`
+	Result    string                   `json:"result,omitempty"`
+	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Item      *ResponsesOutput         `json:"item,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	OutputIndex  *int                           `json:"output_index,omitempty"`

@@ -323,12 +323,13 @@ func TestResponsesToChatStreamTerminationGatesSyntheticFrames(t *testing.T) {
 func TestResponsesStreamHandlerReturnsAbnormalTerminationWithoutSyntheticData(t *testing.T) {
 	service.InitTokenEncoders()
 	tests := []struct {
-		name         string
-		body         func(chan struct{}) io.Reader
-		signal       bool
-		wantErr      bool
-		wantContains string
-		wantTerminal bool
+		name          string
+		body          func(chan struct{}) io.Reader
+		signal        bool
+		wantErr       bool
+		wantErrorCode types.ErrorCode
+		wantContains  string
+		wantTerminal  bool
 	}{
 		{name: "zero byte abnormal", body: func(chan struct{}) io.Reader { return &abruptStreamReader{} }, wantErr: true},
 		{
@@ -344,8 +345,10 @@ func TestResponsesStreamHandlerReturnsAbnormalTerminationWithoutSyntheticData(t 
 			wantContains: "partial",
 		},
 		{
-			name: "normal empty",
-			body: func(chan struct{}) io.Reader { return strings.NewReader("") },
+			name:          "normal empty",
+			body:          func(chan struct{}) io.Reader { return strings.NewReader("") },
+			wantErr:       true,
+			wantErrorCode: types.ErrorCodeEmptyResponse,
 		},
 		{
 			name: "normal success",
@@ -370,7 +373,11 @@ func TestResponsesStreamHandlerReturnsAbnormalTerminationWithoutSyntheticData(t 
 			require.NotNil(t, usage)
 			if test.wantErr {
 				require.NotNil(t, apiErr)
-				assert.Equal(t, types.ErrorCodeReadResponseBodyFailed, apiErr.GetErrorCode())
+				wantErrorCode := test.wantErrorCode
+				if wantErrorCode == "" {
+					wantErrorCode = types.ErrorCodeReadResponseBodyFailed
+				}
+				assert.Equal(t, wantErrorCode, apiErr.GetErrorCode())
 			} else {
 				assert.Nil(t, apiErr)
 			}
