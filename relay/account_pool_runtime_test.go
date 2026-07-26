@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
@@ -22,6 +24,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+type accountPoolZeroUnexpectedEOFReader struct{}
+
+func (accountPoolZeroUnexpectedEOFReader) Read([]byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
 
 func TestShouldRecordAccountPoolFailureSkipsDownstreamCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1014,6 +1022,192 @@ func TestAccountPoolRuntimeAttemptsResetRuntimeHeaderOverrideForEachRetry(t *tes
 	require.Len(t, overrides, 2)
 	assert.Equal(t, map[string]any{"x-static": "channel-value"}, overrides[0])
 	assert.Equal(t, map[string]any{"x-static": "channel-value"}, overrides[1])
+}
+
+func TestAccountPoolRuntimeAttemptsResetFullLifecycleAfterZeroByteAbnormalStream(t *testing.T) {
+	testCases := []struct {
+		name        string
+		successBody string
+	}{
+		{name: "json successor", successBody: `{"winner":true}`},
+		{name: "stream successor", successBody: "data: winner\n\n"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setupAccountPoolRelayTestDB(t)
+			previousStreamingTimeout := constant.StreamingTimeout
+			constant.StreamingTimeout = 30
+			t.Cleanup(func() {
+				constant.StreamingTimeout = previousStreamingTimeout
+			})
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			ctx.Writer.Header().Set("X-Request-Baseline", "baseline")
+
+			pool := createAccountPoolRelayTestPool(t)
+			channel := createAccountPoolRelayTestChannel(t)
+			createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+			accountA := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+				Name:            "stream-account-a",
+				Priority:        100,
+				SupportedModels: []string{"gpt-5"},
+				ModelMapping:    map[string]string{"gpt-5": "model-a"},
+				Credential: service.AccountPoolCredentialConfig{
+					Type:   service.AccountPoolCredentialTypeAPIKey,
+					APIKey: "sk-account-a",
+				},
+			})
+			accountB := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+				Name:            "stream-account-b",
+				Priority:        50,
+				SupportedModels: []string{"gpt-5"},
+				ModelMapping:    map[string]string{"gpt-5": "model-b"},
+				Credential: service.AccountPoolCredentialConfig{
+					Type:   service.AccountPoolCredentialTypeAPIKey,
+					APIKey: "sk-account-b",
+				},
+			})
+
+			setAccountPoolRelayChannelContext(ctx, channel.Id)
+			common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "gpt-5")
+			startTime := time.Now().Add(-time.Second)
+			common.SetContextKey(ctx, constant.ContextKeyRequestStartTime, startTime)
+			baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5", Stream: common.GetPointer(true)}
+			info, genErr := relaycommon.GenRelayInfo(ctx, types.RelayFormatOpenAI, baseRequest, nil)
+			require.NoError(t, genErr)
+			info.InitChannelMeta(ctx)
+			info.UserId = 901
+
+			selectedIDs := make([]int, 0, 2)
+			newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+				request, copyErr := common.DeepCopy(baseRequest)
+				if copyErr != nil {
+					return nil, types.NewError(copyErr, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+				}
+				return request, nil
+			}, func(request dto.Request) *types.NewAPIError {
+				selectedAccountID := service.GetSelectedAccountPoolAccountID(ctx)
+				selectedIDs = append(selectedIDs, selectedAccountID)
+				if selectedAccountID == accountA.Id {
+					ctx.Writer.Header().Set("X-Stale-Account", "account-a")
+					info.FirstResponseTime = info.StartTime.Add(10 * time.Millisecond)
+					info.SendResponseCount = 7
+					info.ReceivedResponseCount = 8
+					info.ActualResponseModel = "model-a-response"
+					info.ActualResponseModelSource = relaycommon.ActualResponseModelSourceOpenAIChat
+					info.ThinkingContentInfo = relaycommon.ThinkingContentInfo{HasSentThinkingContent: true}
+					info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{
+						Done:  true,
+						Usage: &dto.Usage{PromptTokens: 101, CompletionTokens: 202},
+					}
+					info.CapturePerformanceUsage(101, 202)
+					_, _, recorded := info.FinalizePerformanceUsage()
+					require.True(t, recorded)
+
+					termination := helper.StreamScannerHandler(ctx, &http.Response{
+						Body: io.NopCloser(accountPoolZeroUnexpectedEOFReader{}),
+					}, info, func(string, *helper.StreamResult) {
+						t.Fatal("zero-byte abnormal stream must not invoke the data handler")
+					})
+					return helper.StreamTerminationError(termination)
+				}
+
+				require.Equal(t, accountB.Id, selectedAccountID)
+				requestModel := request.(*dto.GeneralOpenAIRequest).Model
+				assert.Equal(t, "model-b", requestModel)
+				assert.Equal(t, "sk-account-b", info.ApiKey)
+				assert.Equal(t, "model-b", info.UpstreamModelName)
+				assert.Equal(t, "baseline", ctx.Writer.Header().Get("X-Request-Baseline"))
+				assert.Empty(t, ctx.Writer.Header().Get("X-Stale-Account"))
+				assert.Equal(t, info.StartTime.Add(-time.Second), info.FirstResponseTime)
+				assert.Zero(t, info.SendResponseCount)
+				assert.Zero(t, info.ReceivedResponseCount)
+				assert.Nil(t, info.StreamStatus)
+				assert.Empty(t, info.ActualResponseModel)
+				assert.Empty(t, info.ActualResponseModelSource)
+				assert.True(t, info.ThinkingContentInfo.IsFirstThinkingContent)
+				assert.False(t, info.ThinkingContentInfo.HasSentThinkingContent)
+				assert.Nil(t, info.ClaudeConvertInfo)
+
+				info.FirstResponseTime = info.StartTime.Add(25 * time.Millisecond)
+				info.ActualResponseModel = "model-b-response"
+				info.ActualResponseModelSource = relaycommon.ActualResponseModelSourceOpenAIChat
+				info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{
+					Done:  true,
+					Usage: &dto.Usage{PromptTokens: 3, CompletionTokens: 5},
+				}
+				info.CapturePerformanceUsage(3, 5)
+				inputTokens, outputTokens, recorded := info.FinalizePerformanceUsage()
+				assert.True(t, recorded)
+				assert.EqualValues(t, 3, inputTokens)
+				assert.EqualValues(t, 5, outputTokens)
+				ctx.Writer.Header().Set("X-Winning-Account", "account-b")
+				_, writeErr := ctx.Writer.Write([]byte(testCase.successBody))
+				require.NoError(t, writeErr)
+				return nil
+			})
+
+			require.Nil(t, newAPIError)
+			assert.Equal(t, []int{accountA.Id, accountB.Id}, selectedIDs)
+			assert.Equal(t, testCase.successBody, recorder.Body.String())
+			assert.Equal(t, "account-b", recorder.Header().Get("X-Winning-Account"))
+			assert.Empty(t, recorder.Header().Get("X-Stale-Account"))
+			assert.Equal(t, info.StartTime.Add(25*time.Millisecond), info.FirstResponseTime)
+			assert.Equal(t, "model-b-response", info.ActualResponseModel)
+			require.NotNil(t, info.ClaudeConvertInfo)
+			require.NotNil(t, info.ClaudeConvertInfo.Usage)
+			assert.Equal(t, 3, info.ClaudeConvertInfo.Usage.PromptTokens)
+			assert.Equal(t, 5, info.ClaudeConvertInfo.Usage.CompletionTokens)
+		})
+	}
+}
+
+func TestAccountPoolRuntimeAttemptsNeverRetryAfterPartialCommittedStream(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	accountA := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "partial-account-a",
+		Priority: 100,
+	})
+	createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "must-not-run-account-b",
+		Priority: 50,
+	})
+
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	baseRequest := &dto.GeneralOpenAIRequest{Model: "gpt-5", Stream: common.GetPointer(true)}
+	info, genErr := relaycommon.GenRelayInfo(ctx, types.RelayFormatOpenAI, baseRequest, nil)
+	require.NoError(t, genErr)
+	info.InitChannelMeta(ctx)
+	attempts := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, copyErr := common.DeepCopy(baseRequest)
+		if copyErr != nil {
+			return nil, types.NewError(copyErr, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(dto.Request) *types.NewAPIError {
+		attempts++
+		assert.Equal(t, accountA.Id, service.GetSelectedAccountPoolAccountID(ctx))
+		_, writeErr := ctx.Writer.Write([]byte("data: partial\n\n"))
+		require.NoError(t, writeErr)
+		info.StreamStatus = relaycommon.NewStreamStatus()
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, io.ErrUnexpectedEOF)
+		return helper.StreamFailureError(info)
+	})
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, 1, attempts)
+	assert.Equal(t, "data: partial\n\n", recorder.Body.String())
+	assert.True(t, info.HasSendResponse())
 }
 
 func TestAccountPoolRelayTextHelperStopsBeforeUpstreamWhenPoolExhausted(t *testing.T) {

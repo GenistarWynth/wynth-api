@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,11 +36,21 @@ const (
 )
 
 type relayTaskFailoverCandidate struct {
-	id           int
-	priority     int64
-	weight       *uint
-	keys         []string
-	disabledKeys map[int]int
+	id             int
+	priority       int64
+	weight         *uint
+	keys           []string
+	disabledKeys   map[int]int
+	channelType    int
+	organization   string
+	other          string
+	createdTime    int64
+	setting        string
+	otherSetting   string
+	paramOverride  string
+	headerOverride string
+	modelMapping   string
+	statusMapping  string
 }
 
 type relayTaskFailoverOptions struct {
@@ -47,6 +58,7 @@ type relayTaskFailoverOptions struct {
 	statuses         map[int][]int
 	responseBodies   map[int]string
 	initialChannelID int
+	originChannelID  int
 	retryTimes       int
 	locked           bool
 	fixed            bool
@@ -56,19 +68,35 @@ type relayTaskFailoverOptions struct {
 }
 
 type relayTaskFailoverResult struct {
-	statusCode      int
-	body            string
-	attempts        []int
-	authorizations  []string
-	usedChannels    []string
-	errorLogCount   int64
-	errorLogContent string
-	consumeLogCount int64
-	consumeQuota    int
-	taskCount       int64
-	subscriptionUse int64
-	user            model.User
-	token           model.Token
+	statusCode          int
+	body                string
+	attempts            []int
+	authorizations      []string
+	requestHeaders      []http.Header
+	requestBodies       []string
+	usedChannels        []string
+	errorLogCount       int64
+	errorLogContent     string
+	consumeLogCount     int64
+	consumeQuota        int
+	taskCount           int64
+	subscriptionUse     int64
+	user                model.User
+	token               model.Token
+	channelID           int
+	channelType         int
+	channelName         string
+	channelBaseURL      string
+	channelKey          string
+	channelSetting      dto.ChannelSettings
+	channelOtherSetting dto.ChannelOtherSettings
+	paramOverride       map[string]interface{}
+	headerOverride      map[string]interface{}
+	organization        string
+	apiVersion          string
+	region              string
+	isMultiKey          bool
+	multiKeyIndex       int
 }
 
 func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTaskFailoverResult {
@@ -185,6 +213,8 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	var attemptsMu sync.Mutex
 	attempts := make([]int, 0, len(opts.candidates))
 	authorizations := make([]string, 0, len(opts.candidates))
+	requestHeaders := make([]http.Header, 0, len(opts.candidates))
+	requestBodies := make([]string, 0, len(opts.candidates))
 	attemptCounts := make(map[int]int)
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -198,11 +228,19 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 			return
 		}
 
+		requestBody, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			http.Error(w, "failed to read task request", http.StatusBadRequest)
+			return
+		}
+
 		attemptsMu.Lock()
 		attemptIndex := attemptCounts[channelID]
 		attemptCounts[channelID]++
 		attempts = append(attempts, channelID)
 		authorizations = append(authorizations, r.Header.Get("Authorization"))
+		requestHeaders = append(requestHeaders, r.Header.Clone())
+		requestBodies = append(requestBodies, string(requestBody))
 		attemptsMu.Unlock()
 		if opts.onAttempt != nil {
 			opts.onAttempt(channelID)
@@ -238,18 +276,43 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		if candidate.weight != nil {
 			weight = *candidate.weight
 		}
+		channelType := candidate.channelType
+		if channelType == 0 {
+			channelType = constant.ChannelTypeOpenAI
+		}
 		channel := &model.Channel{
-			Id:       candidate.id,
-			Type:     constant.ChannelTypeOpenAI,
-			Key:      strings.Join(keys, "\n"),
-			Status:   common.ChannelStatusEnabled,
-			Name:     fmt.Sprintf("task-channel-%d", candidate.id),
-			BaseURL:  &baseURL,
-			Group:    "default",
-			Models:   relayTaskFailoverModel,
-			Priority: &candidate.priority,
-			Weight:   &weight,
-			AutoBan:  common.GetPointer(0),
+			Id:          candidate.id,
+			Type:        channelType,
+			Key:         strings.Join(keys, "\n"),
+			Status:      common.ChannelStatusEnabled,
+			Name:        fmt.Sprintf("task-channel-%d", candidate.id),
+			CreatedTime: candidate.createdTime,
+			BaseURL:     &baseURL,
+			Other:       candidate.other,
+			Group:       "default",
+			Models:      relayTaskFailoverModel,
+			Priority:    &candidate.priority,
+			Weight:      &weight,
+			AutoBan:     common.GetPointer(0),
+		}
+		if candidate.organization != "" {
+			channel.OpenAIOrganization = common.GetPointer(candidate.organization)
+		}
+		if candidate.setting != "" {
+			channel.Setting = common.GetPointer(candidate.setting)
+		}
+		channel.OtherSettings = candidate.otherSetting
+		if candidate.paramOverride != "" {
+			channel.ParamOverride = common.GetPointer(candidate.paramOverride)
+		}
+		if candidate.headerOverride != "" {
+			channel.HeaderOverride = common.GetPointer(candidate.headerOverride)
+		}
+		if candidate.modelMapping != "" {
+			channel.ModelMapping = common.GetPointer(candidate.modelMapping)
+		}
+		if candidate.statusMapping != "" {
+			channel.StatusCodeMapping = common.GetPointer(candidate.statusMapping)
 		}
 		if len(keys) > 1 || len(candidate.disabledKeys) > 0 {
 			channel.ChannelInfo = model.ChannelInfo{
@@ -281,10 +344,14 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	}
 	if opts.locked {
 		path = "/v1/videos/origin-task/remix"
+		originChannelID := opts.originChannelID
+		if originChannelID == 0 {
+			originChannelID = opts.initialChannelID
+		}
 		require.NoError(t, db.Create(&model.Task{
 			TaskID:    "origin-task",
 			UserId:    1,
-			ChannelId: opts.initialChannelID,
+			ChannelId: originChannelID,
 			Platform:  constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeOpenAI)),
 			Status:    model.TaskStatusSuccess,
 			Properties: model.Properties{
@@ -357,22 +424,160 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	attemptsMu.Lock()
 	finalAttempts := append([]int(nil), attempts...)
 	finalAuthorizations := append([]string(nil), authorizations...)
+	finalRequestHeaders := append([]http.Header(nil), requestHeaders...)
+	finalRequestBodies := append([]string(nil), requestBodies...)
 	attemptsMu.Unlock()
+	channelSetting, _ := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	channelOtherSetting, _ := common.GetContextKeyType[dto.ChannelOtherSettings](c, constant.ContextKeyChannelOtherSetting)
 	return relayTaskFailoverResult{
-		statusCode:      recorder.Code,
-		body:            recorder.Body.String(),
-		attempts:        finalAttempts,
-		authorizations:  finalAuthorizations,
-		usedChannels:    append([]string(nil), c.GetStringSlice("use_channel")...),
-		errorLogCount:   errorLogCount,
-		errorLogContent: errorLog.Content,
-		consumeLogCount: consumeLogCount,
-		consumeQuota:    consumeQuota,
-		taskCount:       taskCount,
-		subscriptionUse: subscriptionUse,
-		user:            user,
-		token:           token,
+		statusCode:          recorder.Code,
+		body:                recorder.Body.String(),
+		attempts:            finalAttempts,
+		authorizations:      finalAuthorizations,
+		requestHeaders:      finalRequestHeaders,
+		requestBodies:       finalRequestBodies,
+		usedChannels:        append([]string(nil), c.GetStringSlice("use_channel")...),
+		errorLogCount:       errorLogCount,
+		errorLogContent:     errorLog.Content,
+		consumeLogCount:     consumeLogCount,
+		consumeQuota:        consumeQuota,
+		taskCount:           taskCount,
+		subscriptionUse:     subscriptionUse,
+		user:                user,
+		token:               token,
+		channelID:           common.GetContextKeyInt(c, constant.ContextKeyChannelId),
+		channelType:         common.GetContextKeyInt(c, constant.ContextKeyChannelType),
+		channelName:         common.GetContextKeyString(c, constant.ContextKeyChannelName),
+		channelBaseURL:      common.GetContextKeyString(c, constant.ContextKeyChannelBaseUrl),
+		channelKey:          common.GetContextKeyString(c, constant.ContextKeyChannelKey),
+		channelSetting:      channelSetting,
+		channelOtherSetting: channelOtherSetting,
+		paramOverride:       common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride),
+		headerOverride:      common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride),
+		organization:        common.GetContextKeyString(c, constant.ContextKeyChannelOrganization),
+		apiVersion:          c.GetString("api_version"),
+		region:              c.GetString("region"),
+		isMultiKey:          common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey),
+		multiKeyIndex:       common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex),
 	}
+}
+
+func TestRelayTaskLockedOriginReplacesEveryDistributorSettingBeforeFirstAndRotatedAttempts(t *testing.T) {
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{
+			{
+				id:             1,
+				priority:       100,
+				keys:           []string{"origin-key-1", "origin-key-2"},
+				organization:   "origin-organization",
+				createdTime:    111,
+				setting:        `{"proxy":"","system_prompt":"origin-system"}`,
+				otherSetting:   `{"client_identity_preset":"origin-client"}`,
+				paramOverride:  `{"temperature":0.25}`,
+				headerOverride: `{"X-Channel-Origin":"origin-header"}`,
+				modelMapping:   `{"sora-2":"origin-upstream-model"}`,
+				statusMapping:  `{"502":503}`,
+			},
+			{
+				id:             2,
+				priority:       200,
+				channelType:    constant.ChannelTypeAzure,
+				keys:           []string{"distributor-key"},
+				organization:   "distributor-organization",
+				other:          "distributor-api-version",
+				createdTime:    222,
+				setting:        `{"proxy":"http://127.0.0.1:1","system_prompt":"distributor-system"}`,
+				otherSetting:   `{"client_identity_preset":"distributor-client"}`,
+				paramOverride:  `{"temperature":0.75}`,
+				headerOverride: `{"X-Channel-Origin":"distributor-header"}`,
+				modelMapping:   `{"sora-2":"distributor-upstream-model"}`,
+				statusMapping:  `{"502":504}`,
+			},
+		},
+		statuses: map[int][]int{
+			1: {http.StatusInternalServerError, http.StatusOK},
+		},
+		initialChannelID: 2,
+		originChannelID:  1,
+		retryTimes:       1,
+		locked:           true,
+		contextSetup: func(c *gin.Context) {
+			c.Set("region", "distributor-region")
+		},
+	})
+
+	require.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 1}, result.attempts)
+	assert.Equal(t, []string{"Bearer origin-key-1", "Bearer origin-key-2"}, result.authorizations)
+	require.Len(t, result.requestHeaders, 2)
+	require.Len(t, result.requestBodies, 2)
+	for attempt := range result.requestHeaders {
+		assert.Equal(t, "origin-header", result.requestHeaders[attempt].Get("X-Channel-Origin"))
+		assert.Equal(t, "origin-organization", result.requestHeaders[attempt].Get("OpenAI-Organization"))
+		assert.Contains(t, result.requestBodies[attempt], `"model":"origin-upstream-model"`)
+		assert.NotContains(t, result.requestBodies[attempt], "distributor-upstream-model")
+		assert.NotContains(t, result.requestHeaders[attempt].Get("Authorization"), "distributor-key")
+	}
+
+	assert.Equal(t, 1, result.channelID)
+	assert.Equal(t, constant.ChannelTypeOpenAI, result.channelType)
+	assert.Equal(t, "task-channel-1", result.channelName)
+	assert.Contains(t, result.channelBaseURL, "/channel/1")
+	assert.Equal(t, "origin-key-2", result.channelKey)
+	assert.Equal(t, "origin-organization", result.organization)
+	assert.Equal(t, "origin-system", result.channelSetting.SystemPrompt)
+	assert.Empty(t, result.channelSetting.Proxy)
+	assert.Equal(t, "origin-client", result.channelOtherSetting.ClientIdentityPreset)
+	assert.EqualValues(t, 0.25, result.paramOverride["temperature"])
+	assert.Equal(t, "origin-header", result.headerOverride["X-Channel-Origin"])
+	assert.Empty(t, result.apiVersion)
+	assert.Empty(t, result.region)
+	assert.True(t, result.isMultiKey)
+	assert.Equal(t, 1, result.multiKeyIndex)
+}
+
+func TestRelayTaskLockedOriginSetupFailureHonorsCancellationWithoutStaleCredentials(t *testing.T) {
+	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+		candidates: []relayTaskFailoverCandidate{
+			{
+				id:             1,
+				priority:       100,
+				keys:           []string{"disabled-origin-key"},
+				disabledKeys:   map[int]int{0: common.ChannelStatusAutoDisabled},
+				organization:   "origin-organization",
+				headerOverride: `{"X-Channel-Origin":"origin-header"}`,
+			},
+			{
+				id:           2,
+				priority:     200,
+				channelType:  constant.ChannelTypeAzure,
+				keys:         []string{"stale-distributor-key"},
+				organization: "stale-distributor-organization",
+				other:        "stale-distributor-api-version",
+			},
+		},
+		initialChannelID: 2,
+		originChannelID:  1,
+		retryTimes:       5,
+		locked:           true,
+		contextSetup: func(c *gin.Context) {
+			requestContext, cancel := context.WithCancel(c.Request.Context())
+			cancel()
+			c.Request = c.Request.WithContext(requestContext)
+		},
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, result.statusCode)
+	assert.Empty(t, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.Equal(t, 1, result.channelID)
+	assert.Equal(t, constant.ChannelTypeOpenAI, result.channelType)
+	assert.Empty(t, result.channelKey)
+	assert.Equal(t, "origin-organization", result.organization)
+	assert.NotContains(t, result.body, "stale-distributor-key")
+	assert.NotContains(t, result.body, "stale-distributor-organization")
+	assert.Empty(t, result.apiVersion)
+	assert.Empty(t, result.region)
 }
 
 func TestRelayTaskLockedChannelRotatesKeyWithoutCrossChannelFailover(t *testing.T) {

@@ -1,9 +1,12 @@
 package common
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSanitizeSecretsMasksCredentialFormsWithoutRemovingSafeDiagnostics(t *testing.T) {
@@ -18,6 +21,11 @@ func TestSanitizeSecretsMasksCredentialFormsWithoutRemovingSafeDiagnostics(t *te
 		{name: "url userinfo", input: "grpc://user:secret-password@provider.example/v1 failed", secret: "secret-password"},
 		{name: "credential label", input: "credential provider-secret-value unavailable", secret: "provider-secret-value"},
 		{name: "query parameter", input: "provider failed ?api_key=query-secret-value&region=west", secret: "query-secret-value"},
+		{name: "basic authorization", input: "Authorization: Basic dXNlcjpiYXNpYy1zZWNyZXQ=", secret: "dXNlcjpiYXNpYy1zZWNyZXQ="},
+		{name: "json set cookie", input: `{"Set-Cookie":"session=json-cookie-secret; Path=/","code":"denied"}`, secret: "json-cookie-secret"},
+		{name: "hyphenated json api key", input: `{"X-Goog-Api-Key":"google-provider-secret","status":401}`, secret: "google-provider-secret"},
+		{name: "provider token header", input: "X-Auth-Token: provider-auth-secret", secret: "provider-auth-secret"},
+		{name: "mixed case json password", input: `{"PaSs-WoRd":"mixed-password-secret","status":"denied"}`, secret: "mixed-password-secret"},
 	}
 
 	for _, testCase := range testCases {
@@ -43,4 +51,18 @@ func TestSanitizeSecretsMasksCredentialFormsWithoutRemovingSafeDiagnostics(t *te
 	assert.Contains(t, sanitizedSetCookies, "Path=/")
 	assert.Contains(t, sanitizedSetCookies, "HttpOnly")
 	assert.Contains(t, sanitizedSetCookies, "Secure")
+}
+
+func TestSanitizeSecretsBoundsLargeAdversarialInput(t *testing.T) {
+	const secret = "large-adversarial-secret"
+	input := strings.Repeat(`{"Set-Cookie":"session=`+secret+`; Path=/","Authorization":"Basic dXNlcjpwYXNz"}`+"\n", 100_000)
+
+	started := time.Now()
+	sanitized := SanitizeSecrets(input)
+
+	require.Less(t, time.Since(started), 2*time.Second)
+	assert.LessOrEqual(t, len(sanitized), 70_000)
+	assert.NotContains(t, sanitized, secret)
+	assert.NotContains(t, sanitized, "dXNlcjpwYXNz")
+	assert.Contains(t, sanitized, "[truncated")
 }

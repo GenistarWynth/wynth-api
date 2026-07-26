@@ -2,6 +2,7 @@ package model
 
 import (
 	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -23,6 +24,50 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var enabledAccountPoolChannelIDsCache map[int]struct{}
 var channelSyncLock sync.RWMutex
+
+const (
+	selectorRandomMaxRejections = 128
+	selectorRandomMaxNoProgress = 8
+)
+
+type SelectorRandomErrorKind string
+
+const (
+	SelectorRandomInvalidLimit SelectorRandomErrorKind = "invalid_limit"
+	SelectorRandomReadFailure  SelectorRandomErrorKind = "read_failure"
+	SelectorRandomNoProgress   SelectorRandomErrorKind = "no_progress"
+	SelectorRandomRejection    SelectorRandomErrorKind = "rejection_exhausted"
+	SelectorRandomReaderPanic  SelectorRandomErrorKind = "reader_panic"
+)
+
+// SelectorRandomError reports a bounded entropy failure. Callers may inspect
+// Kind or unwrap Err without treating the eligible candidate set as empty.
+type SelectorRandomError struct {
+	Kind     SelectorRandomErrorKind
+	Attempts int
+	Err      error
+}
+
+func (err *SelectorRandomError) Error() string {
+	if err == nil {
+		return ""
+	}
+	if err.Err != nil {
+		return fmt.Sprintf("selector randomness %s after %d attempt(s): %v", err.Kind, err.Attempts, err.Err)
+	}
+	return fmt.Sprintf("selector randomness %s after %d attempt(s)", err.Kind, err.Attempts)
+}
+
+func (err *SelectorRandomError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
+func (err *SelectorRandomError) SelectorRandomFailure() bool {
+	return err != nil
+}
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
@@ -157,15 +202,25 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 }
 
 func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error) {
-	return selectHighestPriorityWeightedChannelWithReader(channels, cryptorand.Reader)
+	selected, err := selectHighestPriorityWeightedChannelWithReader(channels, cryptorand.Reader)
+	if err == nil {
+		return selected, nil
+	}
+	var randomErr *SelectorRandomError
+	if selected != nil && errors.As(err, &randomErr) {
+		logger.LogError(nil, fmt.Sprintf(
+			"weighted channel selector entropy failed; using eligible channel #%d fallback: %v",
+			selected.Id,
+			randomErr,
+		))
+		return selected, nil
+	}
+	return nil, err
 }
 
 func selectHighestPriorityWeightedChannelWithReader(channels []*Channel, random io.Reader) (*Channel, error) {
 	if len(channels) == 0 {
 		return nil, nil
-	}
-	if random == nil {
-		return nil, fmt.Errorf("random source is nil")
 	}
 
 	targetPriority := channels[0].GetPriority()
@@ -189,13 +244,23 @@ func selectHighestPriorityWeightedChannelWithReader(channels []*Channel, random 
 		return nil, fmt.Errorf("no channel found at priority %d", targetPriority)
 	}
 
+	fallback := targetChannels[0]
+	if totalWeight.Sign() > 0 {
+		for _, channel := range targetChannels {
+			if channel.GetWeightUint() > 0 {
+				fallback = channel
+				break
+			}
+		}
+	}
+
 	if totalWeight.Sign() == 0 {
 		// Established zero-weight behavior: when every candidate is zero,
 		// choose uniformly. A zero-weight candidate remains unselectable while
 		// any positive-weight candidate exists at the same priority.
 		index, err := randomBigIntBelow(random, big.NewInt(int64(len(targetChannels))))
 		if err != nil {
-			return nil, err
+			return fallback, err
 		}
 		return targetChannels[index.Int64()], nil
 	}
@@ -207,7 +272,7 @@ func selectHighestPriorityWeightedChannelWithReader(channels []*Channel, random 
 	// same proportional policy while avoiding unnecessary large products.
 	randomWeight, err := randomBigIntBelow(random, totalWeight)
 	if err != nil {
-		return nil, err
+		return fallback, err
 	}
 	for _, channel := range targetChannels {
 		weight := new(big.Int).SetUint64(uint64(channel.GetWeightUint()))
@@ -219,27 +284,94 @@ func selectHighestPriorityWeightedChannelWithReader(channels []*Channel, random 
 	return nil, fmt.Errorf("channel not found at priority %d", targetPriority)
 }
 
-func randomBigIntBelow(random io.Reader, limit *big.Int) (*big.Int, error) {
-	if random == nil {
-		return nil, fmt.Errorf("random source is nil")
-	}
+func randomBigIntBelow(random io.Reader, limit *big.Int) (selected *big.Int, err error) {
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			selected = nil
+			err = &SelectorRandomError{
+				Kind:     SelectorRandomReaderPanic,
+				Attempts: 1,
+				Err:      fmt.Errorf("reader panic: %v", panicValue),
+			}
+		}
+	}()
+
 	if limit == nil || limit.Sign() <= 0 {
-		return nil, fmt.Errorf("random limit must be positive")
+		return nil, &SelectorRandomError{
+			Kind: SelectorRandomInvalidLimit,
+			Err:  errors.New("random limit must be positive"),
+		}
+	}
+	if limit.Cmp(big.NewInt(1)) == 0 {
+		return new(big.Int), nil
+	}
+	if random == nil {
+		return nil, &SelectorRandomError{
+			Kind: SelectorRandomReadFailure,
+			Err:  errors.New("random source is nil"),
+		}
 	}
 	bitLength := limit.BitLen()
 	byteLength := (bitLength + 7) / 8
 	excessBits := uint(byteLength*8 - bitLength)
 	randomBytes := make([]byte, byteLength)
 
-	for {
-		if _, err := io.ReadFull(random, randomBytes); err != nil {
-			return nil, fmt.Errorf("read selector randomness: %w", err)
+	for rejectionAttempt := 1; rejectionAttempt <= selectorRandomMaxRejections; rejectionAttempt++ {
+		offset := 0
+		noProgress := 0
+		readCalls := 0
+		maxReadCalls := byteLength*2 + selectorRandomMaxNoProgress
+		for offset < byteLength {
+			if readCalls >= maxReadCalls {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomReadFailure,
+					Attempts: rejectionAttempt,
+					Err:      errors.New("bounded read attempts exhausted"),
+				}
+			}
+			readCalls++
+			count, readErr := random.Read(randomBytes[offset:])
+			if count < 0 || count > byteLength-offset {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomReadFailure,
+					Attempts: rejectionAttempt,
+					Err:      fmt.Errorf("invalid reader count %d", count),
+				}
+			}
+			if count > 0 {
+				offset += count
+				noProgress = 0
+			} else {
+				noProgress++
+			}
+			if offset == byteLength {
+				break
+			}
+			if readErr != nil {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomReadFailure,
+					Attempts: rejectionAttempt,
+					Err:      fmt.Errorf("read selector randomness: %w", readErr),
+				}
+			}
+			if noProgress >= selectorRandomMaxNoProgress {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomNoProgress,
+					Attempts: rejectionAttempt,
+					Err:      errors.New("random reader made no progress"),
+				}
+			}
 		}
 		randomBytes[0] &= byte(0xff >> excessBits)
 		candidate := new(big.Int).SetBytes(randomBytes)
 		if candidate.Cmp(limit) < 0 {
 			return candidate, nil
 		}
+	}
+	return nil, &SelectorRandomError{
+		Kind:     SelectorRandomRejection,
+		Attempts: selectorRandomMaxRejections,
+		Err:      errors.New("rejection attempts exhausted"),
 	}
 }
 

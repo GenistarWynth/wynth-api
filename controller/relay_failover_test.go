@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -84,6 +85,7 @@ type relayFailoverOptions struct {
 	requestBody      string
 	requestContext   context.Context
 	contextSetup     func(*gin.Context)
+	responseBodies   map[int]string
 }
 
 type relayFailoverResult struct {
@@ -95,6 +97,8 @@ type relayFailoverResult struct {
 	errorLogCount    int64
 	consumeLogCount  int64
 	userRequestCount int
+	errorLogContent  string
+	appLog           string
 }
 
 func enabledRelayFailoverCandidate(id int, group string, priority int64) relayFailoverCandidate {
@@ -238,6 +242,10 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		if upstream.statusCode != 0 && upstream.statusCode != http.StatusOK {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(upstream.statusCode)
+			if body := opts.responseBodies[channelID]; body != "" {
+				_, _ = fmt.Fprint(w, body)
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"error":{"message":"channel-%d-failed","type":"upstream_error","code":"channel_%d_failed"}}`, channelID, channelID)
 			return
 		}
@@ -383,10 +391,22 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	if relayFormat == "" {
 		relayFormat = types.RelayFormatOpenAI
 	}
+	var appLog bytes.Buffer
+	common.LogWriterMu.Lock()
+	oldErrorWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &appLog
+	common.LogWriterMu.Unlock()
 	Relay(c, relayFormat)
+	common.LogWriterMu.Lock()
+	gin.DefaultErrorWriter = oldErrorWriter
+	common.LogWriterMu.Unlock()
 
 	var errorLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
+	var errorLog model.Log
+	if errorLogCount > 0 {
+		require.NoError(t, db.Where("type = ?", model.LogTypeError).Order("id desc").First(&errorLog).Error)
+	}
 	var consumeLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogCount).Error)
 	var user model.User
@@ -404,6 +424,8 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		errorLogCount:    errorLogCount,
 		consumeLogCount:  consumeLogCount,
 		userRequestCount: user.RequestCount,
+		errorLogContent:  errorLog.Content,
+		appLog:           appLog.String(),
 	}
 }
 
@@ -835,4 +857,38 @@ func TestRelayCancellationStopsCandidateTraversal(t *testing.T) {
 	assert.Equal(t, []string{"1"}, result.usedChannels)
 	assert.LessOrEqual(t, result.errorLogCount, int64(1))
 	assert.Zero(t, result.consumeLogCount)
+}
+
+func TestRelayFinalUpstreamErrorSanitizesOrdinaryResponseLogAndDatabase(t *testing.T) {
+	const safe = "provider capacity exhausted in region west"
+	secrets := []string{
+		"basic-auth-secret",
+		"json-cookie-secret",
+		"google-provider-secret",
+		"query-token-secret",
+		"proxy-password-secret",
+	}
+	message := safe +
+		` Authorization: Basic basic-auth-secret` +
+		` {"Set-Cookie":"session=json-cookie-secret; Path=/","X-Goog-Api-Key":"google-provider-secret"}` +
+		` https://user:proxy-password-secret@provider.example/v1?access_token=query-token-secret`
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates:       []relayFailoverCandidate{enabledRelayFailoverCandidate(1, "default", 100)},
+		upstreams:        map[int]relayFailoverUpstream{1: {statusCode: http.StatusInternalServerError}},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		responseBodies: map[int]string{
+			1: `{"error":{"message":` + strconv.Quote(message) + `,"type":"provider_error","code":"capacity_exhausted"}}`,
+		},
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, result.statusCode)
+	for _, sink := range []string{result.body, result.appLog, result.errorLogContent} {
+		assert.Contains(t, sink, safe)
+		for _, secret := range secrets {
+			assert.NotContains(t, sink, secret)
+		}
+	}
+	assert.Contains(t, result.body, "capacity_exhausted")
 }

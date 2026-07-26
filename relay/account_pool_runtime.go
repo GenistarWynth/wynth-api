@@ -142,6 +142,14 @@ func runAccountPoolRuntimeAttempts(
 	// AccountRetryTimes budget.
 	normalAttempts := 0
 	for {
+		if info != nil && !info.BeginAccountAttempt() {
+			return types.NewErrorWithStatusCode(
+				errors.New("downstream response is already committed"),
+				types.ErrorCodeBadResponse,
+				http.StatusInternalServerError,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
 		// Pool-mode same-account retry: reuse the previously selected account
 		// without re-running selection. Restore from the post-selection snapshot
 		// so that the selected account's ApiKey/UpstreamModelName/RuntimeProxy/

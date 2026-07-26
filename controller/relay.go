@@ -637,7 +637,7 @@ func RelayTask(c *gin.Context) {
 			channel = lockedChannel
 			if firstAttempt && hasInitialSetup && initialSetup.ChannelID == channel.Id {
 				channelErr = initialSetup.Error
-			} else if retryParam.GetRetry() > 0 {
+			} else {
 				channelErr = middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName)
 			}
 		} else if firstAttempt {

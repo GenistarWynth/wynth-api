@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -174,4 +175,215 @@ func TestHandleStreamFormatGeminiMetadataOnlyChunkDoesNotCommit(t *testing.T) {
 
 	assert.Empty(t, recorder.Body.String())
 	assert.False(t, info.HasSendResponse())
+}
+
+func TestChatToResponsesStreamTerminationGatesSyntheticFrames(t *testing.T) {
+	chunk := `{"id":"chatcmpl-convert","object":"chat.completion.chunk","created":1,"model":"gpt-stream-test","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}`
+	tests := []struct {
+		name          string
+		body          func(chan struct{}) io.Reader
+		signal        bool
+		wantErr       bool
+		wantContains  string
+		wantCompleted bool
+	}{
+		{name: "zero byte abnormal", body: func(chan struct{}) io.Reader { return &abruptStreamReader{} }, wantErr: true},
+		{
+			name: "partial abnormal",
+			body: func(signal chan struct{}) io.Reader {
+				return &abruptStreamReader{
+					data:         []byte("data: " + chunk + "\n\n"),
+					waitForWrite: signal,
+				}
+			},
+			signal:       true,
+			wantErr:      true,
+			wantContains: "partial",
+		},
+		{
+			name:          "normal empty",
+			body:          func(chan struct{}) io.Reader { return strings.NewReader("data: [DONE]\n\n") },
+			wantCompleted: true,
+		},
+		{
+			name: "normal success",
+			body: func(chan struct{}) io.Reader {
+				return strings.NewReader("data: " + chunk + "\n\ndata: [DONE]\n\n")
+			},
+			wantContains:  "partial",
+			wantCompleted: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var signal chan struct{}
+			if test.signal {
+				signal = make(chan struct{})
+			}
+			c, recorder, resp, info := newOAIStreamTerminationFixture(t, test.body(signal), signal)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+			usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+
+			require.NotNil(t, usage)
+			if test.wantErr {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, types.ErrorCodeReadResponseBodyFailed, apiErr.GetErrorCode())
+			} else {
+				require.Nil(t, apiErr)
+			}
+			if test.wantContains != "" {
+				assert.Contains(t, recorder.Body.String(), test.wantContains)
+			}
+			if test.wantCompleted {
+				assert.Contains(t, recorder.Body.String(), "response.completed")
+			} else {
+				assert.NotContains(t, recorder.Body.String(), "response.completed")
+			}
+			if test.name == "zero byte abnormal" {
+				assert.Empty(t, recorder.Body.String())
+				assert.False(t, info.HasSendResponse())
+			}
+		})
+	}
+}
+
+func TestResponsesToChatStreamTerminationGatesSyntheticFrames(t *testing.T) {
+	chunk := `{"type":"response.output_text.delta","delta":"partial"}`
+	tests := []struct {
+		name         string
+		body         func(chan struct{}) io.Reader
+		signal       bool
+		wantErr      bool
+		wantContains string
+		wantTerminal bool
+	}{
+		{name: "zero byte abnormal", body: func(chan struct{}) io.Reader { return &abruptStreamReader{} }, wantErr: true},
+		{
+			name: "partial abnormal",
+			body: func(signal chan struct{}) io.Reader {
+				return &abruptStreamReader{
+					data:         []byte("data: " + chunk + "\n\n"),
+					waitForWrite: signal,
+				}
+			},
+			signal:       true,
+			wantErr:      true,
+			wantContains: "partial",
+		},
+		{
+			name:         "normal empty",
+			body:         func(chan struct{}) io.Reader { return strings.NewReader("data: [DONE]\n\n") },
+			wantTerminal: true,
+		},
+		{
+			name: "normal success",
+			body: func(chan struct{}) io.Reader {
+				return strings.NewReader("data: " + chunk + "\n\ndata: [DONE]\n\n")
+			},
+			wantContains: "partial",
+			wantTerminal: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var signal chan struct{}
+			if test.signal {
+				signal = make(chan struct{})
+			}
+			c, recorder, resp, info := newOAIStreamTerminationFixture(t, test.body(signal), signal)
+
+			usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+
+			require.NotNil(t, usage)
+			if test.wantErr {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, types.ErrorCodeReadResponseBodyFailed, apiErr.GetErrorCode())
+			} else {
+				require.Nil(t, apiErr)
+			}
+			if test.wantContains != "" {
+				assert.Contains(t, recorder.Body.String(), test.wantContains)
+			}
+			if test.wantTerminal {
+				assert.Contains(t, recorder.Body.String(), "[DONE]")
+			} else {
+				assert.NotContains(t, recorder.Body.String(), "[DONE]")
+			}
+			if test.name == "zero byte abnormal" {
+				assert.Empty(t, recorder.Body.String())
+				assert.False(t, info.HasSendResponse())
+			}
+		})
+	}
+}
+
+func TestResponsesStreamHandlerReturnsAbnormalTerminationWithoutSyntheticData(t *testing.T) {
+	service.InitTokenEncoders()
+	tests := []struct {
+		name         string
+		body         func(chan struct{}) io.Reader
+		signal       bool
+		wantErr      bool
+		wantContains string
+		wantTerminal bool
+	}{
+		{name: "zero byte abnormal", body: func(chan struct{}) io.Reader { return &abruptStreamReader{} }, wantErr: true},
+		{
+			name: "partial abnormal",
+			body: func(signal chan struct{}) io.Reader {
+				return &abruptStreamReader{
+					data:         []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"),
+					waitForWrite: signal,
+				}
+			},
+			signal:       true,
+			wantErr:      true,
+			wantContains: "partial",
+		},
+		{
+			name: "normal empty",
+			body: func(chan struct{}) io.Reader { return strings.NewReader("") },
+		},
+		{
+			name: "normal success",
+			body: func(chan struct{}) io.Reader {
+				return strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"complete\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-stream-test\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n")
+			},
+			wantContains: "complete",
+			wantTerminal: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var signal chan struct{}
+			if test.signal {
+				signal = make(chan struct{})
+			}
+			c, recorder, resp, info := newOAIStreamTerminationFixture(t, test.body(signal), signal)
+
+			usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+			require.NotNil(t, usage)
+			if test.wantErr {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, types.ErrorCodeReadResponseBodyFailed, apiErr.GetErrorCode())
+			} else {
+				assert.Nil(t, apiErr)
+			}
+			if test.wantTerminal {
+				assert.Contains(t, recorder.Body.String(), "response.completed")
+			} else {
+				assert.NotContains(t, recorder.Body.String(), "response.completed")
+			}
+			if test.wantContains != "" {
+				assert.Contains(t, recorder.Body.String(), test.wantContains)
+			} else if test.wantErr {
+				assert.Empty(t, recorder.Body.String())
+			}
+		})
+	}
 }

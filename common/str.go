@@ -25,6 +25,7 @@ const LocalLogContentLimit = 2048
 
 // LocalLogPreview limits log-only content unless debug logging is enabled.
 func LocalLogPreview(content string) string {
+	content = SanitizeSecrets(content)
 	if DebugEnabled || len(content) <= LocalLogContentLimit {
 		return content
 	}

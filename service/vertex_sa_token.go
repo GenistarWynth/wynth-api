@@ -247,5 +247,5 @@ func maskVertexSAError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return errors.New(common.MaskSensitiveInfo(err.Error()))
+	return errors.New(common.SanitizeSecrets(err.Error()))
 }

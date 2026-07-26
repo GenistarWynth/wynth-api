@@ -84,3 +84,28 @@ func TestNewUpstreamBodyDecodeError(t *testing.T) {
 		assert.Equal(t, decodeErr.Error(), e.Error())
 	})
 }
+
+func TestNewAPIErrorFormattingSanitizesEveryOperationalView(t *testing.T) {
+	const secret = "json-cookie-secret"
+	const safe = "provider capacity exhausted"
+	message := safe + ` {"Set-Cookie":"session=` + secret + `; Path=/","status":503}`
+	apiErr := WithOpenAIError(OpenAIError{
+		Message: message,
+		Type:    "provider_error",
+		Code:    ErrorCodeBadResponseStatusCode,
+	}, http.StatusServiceUnavailable)
+
+	views := []string{
+		apiErr.ErrorWithStatusCode(),
+		apiErr.MaskSensitiveError(),
+		apiErr.MaskSensitiveErrorWithStatusCode(),
+		apiErr.ToOpenAIError().Message,
+		apiErr.ToClaudeError().Message,
+	}
+	for _, view := range views {
+		assert.Contains(t, view, safe)
+		assert.NotContains(t, view, secret)
+	}
+
+	assert.Contains(t, apiErr.Error(), secret, "raw internal error remains available for classification")
+}

@@ -416,7 +416,29 @@ func (info *RelayInfo) BeginChannelAttempt() (bool, bool) {
 
 	hadPreviousAttempt := info.channelAttemptCount > 0
 	baseline := info.channelAttemptBaseline
-	if hadPreviousAttempt && info.responseWriter != nil {
+	info.resetAttemptLocalState(baseline, hadPreviousAttempt)
+	info.ChannelMeta = nil
+	info.resetAttemptRuntimeState()
+	info.channelAttemptCount++
+	return true, hadPreviousAttempt
+}
+
+// BeginAccountAttempt restores the same parser, stream, timing, header, usage,
+// model, and performance state as a fresh channel attempt while preserving the
+// already-selected outer channel. Account-pool selection is reapplied after
+// this reset, so selected-account credentials and runtime routing remain
+// coherent without leaking state from the previous account.
+func (info *RelayInfo) BeginAccountAttempt() bool {
+	if info == nil || info.HasSendResponse() {
+		return false
+	}
+	info.resetAttemptLocalState(info.channelAttemptBaseline, true)
+	info.resetAttemptRuntimeState()
+	return true
+}
+
+func (info *RelayInfo) resetAttemptLocalState(baseline channelAttemptBaseline, restoreResponseHeaders bool) {
+	if restoreResponseHeaders && info.responseWriter != nil {
 		responseHeaders := info.responseWriter.Header()
 		clear(responseHeaders)
 		for name, values := range baseline.responseHeaders {
@@ -452,7 +474,18 @@ func (info *RelayInfo) BeginChannelAttempt() (bool, bool) {
 	info.ActualResponseModel = ""
 	info.ActualResponseModelSource = ""
 
-	info.ChannelMeta = nil
+	info.performanceSampleRecorded.Store(false)
+	info.performanceOutcomeMu.Lock()
+	info.performanceInputTokens = 0
+	info.performanceOutputTokens = 0
+	info.performanceOutcomeMu.Unlock()
+
+	if info.Request != nil {
+		info.Request.SetModelName(info.OriginModelName)
+	}
+}
+
+func (info *RelayInfo) resetAttemptRuntimeState() {
 	info.RuntimeHeadersOverride = nil
 	info.RuntimeAccountHeadersOverride = nil
 	info.UseRuntimeHeadersOverride = false
@@ -472,12 +505,6 @@ func (info *RelayInfo) BeginChannelAttempt() (bool, bool) {
 	info.WsHandshakeBody = nil
 	info.UpstreamRequestBodySize = 0
 	info.TargetWs = nil
-
-	if info.Request != nil {
-		info.Request.SetModelName(info.OriginModelName)
-	}
-	info.channelAttemptCount++
-	return true, hadPreviousAttempt
 }
 
 // ResetChannelAttemptContext clears channel/provider values that are populated

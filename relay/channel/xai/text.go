@@ -43,7 +43,7 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	helper.SetEventStreamHeaders(c)
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	termination := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var xAIResp *dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &xAIResp); err != nil {
 			common.SysLog("error unmarshalling stream response: " + err.Error())
@@ -72,6 +72,10 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		usage.CompletionTokens += toolCount * 7
 	}
 
+	if streamErr := helper.StreamTerminationError(termination); streamErr != nil {
+		service.CloseResponseBodyGracefully(resp)
+		return usage, streamErr
+	}
 	helper.Done(c)
 	service.CloseResponseBodyGracefully(resp)
 	return usage, nil

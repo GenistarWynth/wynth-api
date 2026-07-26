@@ -263,6 +263,7 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 	}
 	stream := awsResp.GetStream()
 	defer stream.Close()
+	info.StreamStatus = relaycommon.NewStreamStatus()
 
 	claudeInfo := &claude.ClaudeResponseInfo{
 		ResponseId:   helper.GetResponseID(c),
@@ -278,19 +279,38 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 			info.SetFirstResponseTime()
 			respErr := claude.HandleStreamResponseData(c, info, claudeInfo, string(v.Value.Bytes))
 			if respErr != nil {
-				return respErr, nil
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, respErr)
+				claude.HandleStreamFinalResponse(c, info, claudeInfo, false)
+				return respErr, claudeInfo.Usage
 			}
 		case *bedrockruntimeTypes.UnknownUnionMember:
 			fmt.Println("unknown tag:", v.Tag)
-			return types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest), nil
+			streamErr := types.NewError(errors.New("unknown response type"), types.ErrorCodeInvalidRequest)
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, streamErr)
+			claude.HandleStreamFinalResponse(c, info, claudeInfo, false)
+			return streamErr, claudeInfo.Usage
 		default:
 			fmt.Println("union is nil or unknown type")
-			return types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest), nil
+			streamErr := types.NewError(errors.New("nil or unknown response type"), types.ErrorCodeInvalidRequest)
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, streamErr)
+			claude.HandleStreamFinalResponse(c, info, claudeInfo, false)
+			return streamErr, claudeInfo.Usage
 		}
 	}
 
-	claude.HandleStreamFinalResponse(c, info, claudeInfo)
-	return nil, claudeInfo.Usage
+	if err := stream.Err(); err != nil {
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+	} else {
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonEOF, nil)
+	}
+	streamFailure := finalizeAWSStream(c, info, claudeInfo, info.StreamStatus.Termination())
+	return streamFailure, claudeInfo.Usage
+}
+
+func finalizeAWSStream(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *claude.ClaudeResponseInfo, termination relaycommon.StreamTermination) *types.NewAPIError {
+	streamFailure := helper.StreamTerminationError(termination)
+	claude.HandleStreamFinalResponse(c, info, claudeInfo, streamFailure == nil)
+	return streamFailure
 }
 
 // Nova模型处理函数
