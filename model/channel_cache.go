@@ -54,22 +54,28 @@ func InitChannelCache() {
 	for group := range groups {
 		newGroup2model2channels[group] = make(map[string][]int)
 	}
-	for _, channel := range channels {
+	// Ability rows are authoritative for group/model eligibility. Channel.Models
+	// alone cannot represent a disabled individual ability.
+	for _, ability := range abilities {
+		if !ability.Enabled {
+			continue
+		}
+		channel, ok := newChannelId2channel[ability.ChannelId]
+		if !ok {
+			continue
+		}
 		if channel.Status != common.ChannelStatusEnabled {
 			if _, enabledByAccountPool := enabledAccountPoolChannelIDs[channel.Id]; !enabledByAccountPool {
 				continue // skip disabled channels unless an enabled account-pool binding exposes them
 			}
 		}
-		groups := splitNonEmptyCSV(channel.Group)
-		for _, group := range groups {
-			models := splitNonEmptyCSV(channel.Models)
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
-			}
+		if _, ok := newGroup2model2channels[ability.Group][ability.Model]; !ok {
+			newGroup2model2channels[ability.Group][ability.Model] = make([]int, 0)
 		}
+		newGroup2model2channels[ability.Group][ability.Model] = append(
+			newGroup2model2channels[ability.Group][ability.Model],
+			channel.Id,
+		)
 	}
 
 	// sort by priority

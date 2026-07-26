@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -25,7 +26,7 @@ func TestShouldRetryUsesChannelOnlyStatusCode(t *testing.T) {
 	})
 	err := types.NewErrorWithStatusCode(errors.New("model not found"), types.ErrorCodeBadResponse, 404)
 
-	require.True(t, shouldRetry(c, err, 1))
+	require.True(t, shouldRetry(c, err))
 }
 
 func TestShouldRetryEmptyChannelRulesUseGlobalOnly(t *testing.T) {
@@ -37,5 +38,42 @@ func TestShouldRetryEmptyChannelRulesUseGlobalOnly(t *testing.T) {
 	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{})
 	err := types.NewErrorWithStatusCode(errors.New("model not found"), types.ErrorCodeBadResponse, 404)
 
-	require.False(t, shouldRetry(c, err, 1))
+	require.False(t, shouldRetry(c, err))
+}
+
+func TestShouldRetryDoesNotFanOutFixedChannelErrors(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	c.Set("specific_channel_id", 7)
+	err := types.NewErrorWithStatusCode(errors.New("fixed channel failed"), types.ErrorCode("channel:test"), 500)
+
+	require.False(t, shouldRetry(c, err))
+}
+
+func TestShouldRetryTaskRelayUsesSemanticsNotGlobalBudget(t *testing.T) {
+	t.Run("retryable upstream failure", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(nil)
+		require.True(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500}))
+	})
+
+	t.Run("affinity failure still exhausts group", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(nil)
+		c.Set("channel_affinity_skip_retry_on_failure", true)
+		require.True(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500}))
+	})
+
+	t.Run("fixed channel", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(nil)
+		c.Set("specific_channel_id", 7)
+		require.False(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500}))
+	})
+
+	t.Run("request semantic error", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(nil)
+		require.False(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: http.StatusBadRequest}))
+	})
+
+	t.Run("local error", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(nil)
+		require.False(t, shouldRetryTaskRelay(c, &dto.TaskError{StatusCode: 500, LocalError: true}))
+	})
 }
