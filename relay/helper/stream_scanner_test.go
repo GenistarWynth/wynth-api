@@ -895,3 +895,46 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
 }
+
+func TestStreamFailureErrorClassifiesAbnormalUpstreamTermination(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason relaycommon.StreamEndReason
+		endErr error
+		want   bool
+	}{
+		{name: "done", reason: relaycommon.StreamEndReasonDone},
+		{name: "eof", reason: relaycommon.StreamEndReasonEOF},
+		{name: "handler stop", reason: relaycommon.StreamEndReasonHandlerStop, endErr: fmt.Errorf("handler failed"), want: true},
+		{name: "handler stop after request cancellation", reason: relaycommon.StreamEndReasonHandlerStop, endErr: context.Canceled},
+		{name: "client gone", reason: relaycommon.StreamEndReasonClientGone},
+		{name: "scanner error", reason: relaycommon.StreamEndReasonScannerErr, want: true},
+		{name: "timeout", reason: relaycommon.StreamEndReasonTimeout, want: true},
+		{name: "panic", reason: relaycommon.StreamEndReasonPanic, want: true},
+		{name: "ping failure", reason: relaycommon.StreamEndReasonPingFail, want: true},
+	}
+
+	assert.Nil(t, StreamFailureError(nil))
+	assert.Nil(t, StreamFailureError(&relaycommon.RelayInfo{}), "non-stream responses have no stream status")
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+			endErr := test.endErr
+			if endErr == nil {
+				endErr = fmt.Errorf("transport details must stay internal")
+			}
+			info.StreamStatus.SetEndReason(test.reason, endErr)
+
+			streamErr := StreamFailureError(info)
+			if !test.want {
+				assert.Nil(t, streamErr)
+				return
+			}
+			require.NotNil(t, streamErr)
+			assert.Equal(t, http.StatusInternalServerError, streamErr.StatusCode)
+			assert.Equal(t, "read_response_body_failed", string(streamErr.GetErrorCode()))
+			assert.NotContains(t, streamErr.Error(), "transport details")
+		})
+	}
+}

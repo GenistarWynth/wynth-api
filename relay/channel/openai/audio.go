@@ -35,8 +35,6 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		}
 		c.Writer.Header().Set(k, v[0])
 	}
-	c.Writer.WriteHeader(resp.StatusCode)
-
 	if info.IsStream {
 		helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 			if service.SundaySearch(data, "usage") {
@@ -55,6 +53,7 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			}
 		})
 	} else {
+		c.Writer.WriteHeader(resp.StatusCode)
 		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 		// 读取响应体到缓冲区
 		bodyBytes, err := io.ReadAll(resp.Body)

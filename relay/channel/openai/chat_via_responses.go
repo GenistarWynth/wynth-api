@@ -217,7 +217,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return true
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	termination := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
@@ -265,6 +265,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, state.UsageText(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		state.Usage = usage
+	}
+	if streamFailure := helper.StreamTerminationError(termination); streamFailure != nil {
+		return usage, streamFailure
 	}
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil {

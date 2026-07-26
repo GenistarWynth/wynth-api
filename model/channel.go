@@ -324,7 +324,9 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 			idx := (start + i) % len(keys)
 			if getStatus(idx) == common.ChannelStatusEnabled {
 				// update polling index for next call (point to the next position)
-				channel.ChannelInfo.MultiKeyPollingIndex = (idx + 1) % len(keys)
+				next := (idx + 1) % len(keys)
+				channelInfo.MultiKeyPollingIndex = next
+				channel.ChannelInfo.MultiKeyPollingIndex = next
 				return keys[idx], idx, nil
 			}
 		}
@@ -549,10 +551,19 @@ func (channel *Channel) GetPriority() int64 {
 }
 
 func (channel *Channel) GetWeight() int {
+	weight := channel.GetWeightUint()
+	maxInt := uint(^uint(0) >> 1)
+	if weight > maxInt {
+		return int(maxInt)
+	}
+	return int(weight)
+}
+
+func (channel *Channel) GetWeightUint() uint {
 	if channel.Weight == nil {
 		return 0
 	}
-	return int(*channel.Weight)
+	return *channel.Weight
 }
 
 func (channel *Channel) GetBaseURL() string {

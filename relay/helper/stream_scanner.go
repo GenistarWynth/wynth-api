@@ -17,6 +17,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 
@@ -45,6 +46,27 @@ func NewStreamScanner(reader io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
 	return scanner
+}
+
+// StreamFailureError turns an abnormal upstream stream termination into a
+// retryable channel error. A downstream disconnect is not an upstream health
+// failure, and the legacy normal terminal states remain successful.
+func StreamTerminationError(termination relaycommon.StreamTermination) *types.NewAPIError {
+	if termination.IsNormal() || termination.IsCancelled() {
+		return nil
+	}
+	return types.NewOpenAIError(
+		fmt.Errorf("upstream stream ended unexpectedly: %s", termination.EndReason),
+		types.ErrorCodeReadResponseBodyFailed,
+		http.StatusInternalServerError,
+	)
+}
+
+func StreamFailureError(info *relaycommon.RelayInfo) *types.NewAPIError {
+	if info == nil || info.StreamStatus == nil {
+		return nil
+	}
+	return StreamTerminationError(info.StreamStatus.Termination())
 }
 
 func copyCodexSSEHeadersWithPolicy(c *gin.Context, resp *http.Response, shouldCopy func(*gin.Context, string, []string) bool) {
@@ -78,10 +100,10 @@ func ExtendWriteDeadline(c *gin.Context) {
 	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
-func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) relaycommon.StreamTermination {
 
-	if resp == nil || dataHandler == nil {
-		return
+	if resp == nil || dataHandler == nil || info == nil {
+		return relaycommon.StreamTermination{Kind: relaycommon.StreamTerminationAbnormal}
 	}
 
 	// 无条件新建 StreamStatus
@@ -355,4 +377,5 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	} else {
 		logger.LogError(c, fmt.Sprintf("stream ended: %s, received=%d", info.StreamStatus.Summary(), info.ReceivedResponseCount))
 	}
+	return info.StreamStatus.Termination()
 }

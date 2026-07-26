@@ -67,7 +67,8 @@ func TestOaiResponsesHandlerActualResponseModelBestEffortWithNilInfo(t *testing.
 			"id":"resp_1",
 			"object":"response",
 			"model":"gpt-5.4",
-			"output":[],
+			"status":"completed",
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
 			"tools":[],
 			"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}
 		}`)),

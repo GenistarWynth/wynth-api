@@ -24,8 +24,24 @@ func Init() {
 	go flushLoop()
 }
 
-func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+func CaptureRelayUsage(info *relaycommon.RelayInfo, inputTokens, outputTokens int64) {
+	if info != nil {
+		info.CapturePerformanceUsage(inputTokens, outputTokens)
+	}
+}
+
+func FinalizeRelaySample(info *relaycommon.RelayInfo, success bool) {
 	if info == nil {
+		return
+	}
+	if success && info.StreamStatus != nil &&
+		info.StreamStatus.EndReason != relaycommon.StreamEndReasonNone &&
+		info.StreamStatus.EndReason != relaycommon.StreamEndReasonClientGone &&
+		!info.StreamStatus.IsNormalEnd() {
+		success = false
+	}
+	inputTokens, outputTokens, recorded := info.FinalizePerformanceUsage()
+	if !recorded {
 		return
 	}
 	now := time.Now()
@@ -49,9 +65,15 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 		TtftMs:       ttftMs,
 		HasTtft:      hasTtft,
 		Success:      success,
+		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		GenerationMs: generationMs,
 	})
+}
+
+func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+	CaptureRelayUsage(info, 0, outputTokens)
+	FinalizeRelaySample(info, success)
 }
 
 func Record(sample Sample) {
@@ -102,6 +124,7 @@ func Query(params QueryParams) (QueryResult, error) {
 			totalLatencyMs: row.TotalLatencyMs,
 			ttftSumMs:      row.TtftSumMs,
 			ttftCount:      row.TtftCount,
+			inputTokens:    row.InputTokens,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		})
@@ -145,6 +168,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
+			inputTokens:    row.InputTokens,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		}
@@ -208,6 +232,7 @@ func mergeModelTotals(totals map[string]counters, modelName string, value counte
 	current.totalLatencyMs += value.totalLatencyMs
 	current.ttftSumMs += value.ttftSumMs
 	current.ttftCount += value.ttftCount
+	current.inputTokens += value.inputTokens
 	current.outputTokens += value.outputTokens
 	current.generationMs += value.generationMs
 	totals[modelName] = current
@@ -226,6 +251,7 @@ func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName stri
 	current.totalLatencyMs += value.totalLatencyMs
 	current.ttftSumMs += value.ttftSumMs
 	current.ttftCount += value.ttftCount
+	current.inputTokens += value.inputTokens
 	current.outputTokens += value.outputTokens
 	current.generationMs += value.generationMs
 	modelBuckets[modelName][bucketTs] = current
@@ -281,6 +307,7 @@ func mergeCounters(merged map[bucketKey]counters, key bucketKey, value counters)
 	current.totalLatencyMs += value.totalLatencyMs
 	current.ttftSumMs += value.ttftSumMs
 	current.ttftCount += value.ttftCount
+	current.inputTokens += value.inputTokens
 	current.outputTokens += value.outputTokens
 	current.generationMs += value.generationMs
 	merged[key] = current
@@ -324,6 +351,7 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 			total.totalLatencyMs += value.totalLatencyMs
 			total.ttftSumMs += value.ttftSumMs
 			total.ttftCount += value.ttftCount
+			total.inputTokens += value.inputTokens
 			total.outputTokens += value.outputTokens
 			total.generationMs += value.generationMs
 			series = append(series, bucketPoint(ts, value))
@@ -396,6 +424,9 @@ func recordRedis(key bucketKey, sample Sample) {
 	if sample.HasTtft && sample.TtftMs >= 0 {
 		pipe.HIncrBy(ctx, redisKey, "ttft", sample.TtftMs)
 		pipe.HIncrBy(ctx, redisKey, "ttft_n", 1)
+	}
+	if sample.InputTokens > 0 {
+		pipe.HIncrBy(ctx, redisKey, "in", sample.InputTokens)
 	}
 	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
 		pipe.HIncrBy(ctx, redisKey, "out", sample.OutputTokens)

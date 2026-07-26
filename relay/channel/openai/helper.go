@@ -21,15 +21,18 @@ import (
 func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
 	info.SendResponseCount++
 
+	var err error
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		return sendStreamData(c, info, data, forceFormat, thinkToContent)
+		err = sendStreamData(c, info, data, forceFormat, thinkToContent)
 	case types.RelayFormatClaude:
-		return handleClaudeFormat(c, data, info)
+		err = handleClaudeFormat(c, data, info)
 	case types.RelayFormatGemini:
-		return handleGeminiFormat(c, data, info)
+		err = handleGeminiFormat(c, data, info)
+	default:
+		return nil
 	}
-	return nil
+	return err
 }
 
 func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo) error {
@@ -201,11 +204,4 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(geminiResponseStr)})
 		_ = helper.FlushWriter(c)
 	}
-}
-
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) {
-	if data == "" {
-		return
-	}
-	_ = helper.ResponseChunkData(c, streamResponse, data)
 }

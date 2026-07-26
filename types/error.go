@@ -183,7 +183,7 @@ func (e *NewAPIError) ErrorWithStatusCode() string {
 	if e == nil {
 		return ""
 	}
-	msg := e.Error()
+	msg := common.SanitizeSecrets(e.Error())
 	if e.StatusCode == 0 {
 		return msg
 	}
@@ -200,11 +200,7 @@ func (e *NewAPIError) MaskSensitiveError() string {
 	if e.Err == nil {
 		return string(e.errorCode)
 	}
-	errStr := e.Err.Error()
-	if e.errorCode == ErrorCodeCountTokenFailed {
-		return errStr
-	}
-	return common.MaskSensitiveInfo(errStr)
+	return common.SanitizeSecrets(e.Err.Error())
 }
 
 func (e *NewAPIError) MaskSensitiveErrorWithStatusCode() string {
@@ -249,9 +245,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 			Code:    e.errorCode,
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = common.MaskSensitiveInfo(result.Message)
-	}
+	result.Message = common.SanitizeSecrets(result.Message)
 	if result.Message == "" {
 		result.Message = string(e.errorType)
 	}
@@ -278,9 +272,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			Type:    string(e.errorType),
 		}
 	}
-	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = common.MaskSensitiveInfo(result.Message)
-	}
+	result.Message = common.SanitizeSecrets(result.Message)
 	if result.Message == "" {
 		result.Message = string(e.errorType)
 	}

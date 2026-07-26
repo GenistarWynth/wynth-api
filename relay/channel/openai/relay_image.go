@@ -113,7 +113,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	var lastStreamData []byte
 	var completedImages int64
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	termination := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		raw := common.StringToByteSlice(data)
 		lastStreamData = raw
 		if isOpenAIImageStreamErrorEvent(raw) {
@@ -165,7 +165,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 			updateOpenAIImageCount(info, completedImages)
 		}
 	}
-	return usage, nil
+	return usage, helper.StreamTerminationError(termination)
 }
 
 // writeOpenaiImageStreamChunk rebuilds the SSE frame for an image stream chunk:

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -10,6 +11,79 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
+
+type adminAuditJobTracker struct {
+	mu             sync.Mutex
+	cond           *sync.Cond
+	nextGeneration uint64
+	pending        map[uint64]struct{}
+}
+
+func newAdminAuditJobTracker() *adminAuditJobTracker {
+	tracker := &adminAuditJobTracker{pending: make(map[uint64]struct{})}
+	tracker.cond = sync.NewCond(&tracker.mu)
+	return tracker
+}
+
+func (tracker *adminAuditJobTracker) submit(job func()) {
+	if tracker == nil || job == nil {
+		return
+	}
+	tracker.mu.Lock()
+	tracker.nextGeneration++
+	generation := tracker.nextGeneration
+	tracker.pending[generation] = struct{}{}
+	tracker.mu.Unlock()
+
+	gopool.Go(func() {
+		defer func() {
+			tracker.mu.Lock()
+			delete(tracker.pending, generation)
+			tracker.cond.Broadcast()
+			tracker.mu.Unlock()
+		}()
+		job()
+	})
+}
+
+func (tracker *adminAuditJobTracker) snapshotGeneration() uint64 {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return tracker.nextGeneration
+}
+
+func (tracker *adminAuditJobTracker) drainThrough(target uint64) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	for {
+		hasPending := false
+		for generation := range tracker.pending {
+			if generation <= target {
+				hasPending = true
+				break
+			}
+		}
+		if !hasPending {
+			return
+		}
+		tracker.cond.Wait()
+	}
+}
+
+func (tracker *adminAuditJobTracker) drain() {
+	if tracker == nil {
+		return
+	}
+	tracker.drainThrough(tracker.snapshotGeneration())
+}
+
+var adminAuditJobs = newAdminAuditJobTracker()
+
+// DrainAdminAuditJobs waits for the audit generation visible at call time.
+// Later production requests remain asynchronous and do not extend this drain.
+func DrainAdminAuditJobs() {
+	adminAuditJobs.drain()
+}
 
 // auditResponseWriter 包装 gin.ResponseWriter，捕获响应状态码并将响应体复制一份到
 // 有限大小的缓冲区，用于判断业务是否成功（解析响应 JSON 的 success 字段）。
@@ -175,7 +249,7 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 		auditInfo["params"] = routeParams
 	}
 
-	gopool.Go(func() {
+	adminAuditJobs.submit(func() {
 		model.RecordOperationAuditLog(operatorId, content, ip, action, opParams, adminInfo, auditInfo)
 	})
 }

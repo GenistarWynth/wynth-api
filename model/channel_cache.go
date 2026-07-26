@@ -1,9 +1,11 @@
 package model
 
 import (
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
-	"math/rand"
+	"io"
+	"math/big"
 	"sort"
 	"sync"
 	"time"
@@ -22,6 +24,50 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var enabledAccountPoolChannelIDsCache map[int]struct{}
 var channelSyncLock sync.RWMutex
+
+const (
+	selectorRandomMaxRejections = 128
+	selectorRandomMaxNoProgress = 8
+)
+
+type SelectorRandomErrorKind string
+
+const (
+	SelectorRandomInvalidLimit SelectorRandomErrorKind = "invalid_limit"
+	SelectorRandomReadFailure  SelectorRandomErrorKind = "read_failure"
+	SelectorRandomNoProgress   SelectorRandomErrorKind = "no_progress"
+	SelectorRandomRejection    SelectorRandomErrorKind = "rejection_exhausted"
+	SelectorRandomReaderPanic  SelectorRandomErrorKind = "reader_panic"
+)
+
+// SelectorRandomError reports a bounded entropy failure. Callers may inspect
+// Kind or unwrap Err without treating the eligible candidate set as empty.
+type SelectorRandomError struct {
+	Kind     SelectorRandomErrorKind
+	Attempts int
+	Err      error
+}
+
+func (err *SelectorRandomError) Error() string {
+	if err == nil {
+		return ""
+	}
+	if err.Err != nil {
+		return fmt.Sprintf("selector randomness %s after %d attempt(s): %v", err.Kind, err.Attempts, err.Err)
+	}
+	return fmt.Sprintf("selector randomness %s after %d attempt(s)", err.Kind, err.Attempts)
+}
+
+func (err *SelectorRandomError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
+func (err *SelectorRandomError) SelectorRandomFailure() bool {
+	return err != nil
+}
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
@@ -54,22 +100,28 @@ func InitChannelCache() {
 	for group := range groups {
 		newGroup2model2channels[group] = make(map[string][]int)
 	}
-	for _, channel := range channels {
+	// Ability rows are authoritative for group/model eligibility. Channel.Models
+	// alone cannot represent a disabled individual ability.
+	for _, ability := range abilities {
+		if !ability.Enabled {
+			continue
+		}
+		channel, ok := newChannelId2channel[ability.ChannelId]
+		if !ok {
+			continue
+		}
 		if channel.Status != common.ChannelStatusEnabled {
 			if _, enabledByAccountPool := enabledAccountPoolChannelIDs[channel.Id]; !enabledByAccountPool {
 				continue // skip disabled channels unless an enabled account-pool binding exposes them
 			}
 		}
-		groups := splitNonEmptyCSV(channel.Group)
-		for _, group := range groups {
-			models := splitNonEmptyCSV(channel.Models)
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
-			}
+		if _, ok := newGroup2model2channels[ability.Group][ability.Model]; !ok {
+			newGroup2model2channels[ability.Group][ability.Model] = make([]int, 0)
 		}
+		newGroup2model2channels[ability.Group][ability.Model] = append(
+			newGroup2model2channels[ability.Group][ability.Model],
+			channel.Id,
+		)
 	}
 
 	// sort by priority
@@ -138,74 +190,189 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		return nil, nil
 	}
 
-	if len(channels) == 1 {
-		if channel, ok := channelsIDM[channels[0]]; ok {
-			return channel, nil
-		}
-		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
-	}
-
-	var targetPriority int64
-	hasTargetPriority := false
+	candidates := make([]*Channel, 0, len(channels))
 	for _, channelId := range channels {
 		if channel, ok := channelsIDM[channelId]; ok {
-			priority := channel.GetPriority()
-			if !hasTargetPriority || priority > targetPriority {
-				targetPriority = channel.GetPriority()
-				hasTargetPriority = true
-			}
+			candidates = append(candidates, channel)
 		} else {
 			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
 		}
 	}
+	return selectHighestPriorityWeightedChannel(candidates)
+}
 
-	// get the priority for the given retry number
-	var sumWeight = 0
+func selectHighestPriorityWeightedChannel(channels []*Channel) (*Channel, error) {
+	selected, err := selectHighestPriorityWeightedChannelWithReader(channels, cryptorand.Reader)
+	if err == nil {
+		return selected, nil
+	}
+	var randomErr *SelectorRandomError
+	if selected != nil && errors.As(err, &randomErr) {
+		logger.LogError(nil, fmt.Sprintf(
+			"weighted channel selector entropy failed; using eligible channel #%d fallback: %v",
+			selected.Id,
+			randomErr,
+		))
+		return selected, nil
+	}
+	return nil, err
+}
+
+func selectHighestPriorityWeightedChannelWithReader(channels []*Channel, random io.Reader) (*Channel, error) {
+	if len(channels) == 0 {
+		return nil, nil
+	}
+
+	targetPriority := channels[0].GetPriority()
+	for _, channel := range channels[1:] {
+		if channel.GetPriority() > targetPriority {
+			targetPriority = channel.GetPriority()
+		}
+	}
+
+	totalWeight := new(big.Int)
 	var targetChannels []*Channel
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
-				targetChannels = append(targetChannels, channel)
-			}
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+	for _, channel := range channels {
+		if channel.GetPriority() == targetPriority {
+			weight := new(big.Int).SetUint64(uint64(channel.GetWeightUint()))
+			totalWeight.Add(totalWeight, weight)
+			targetChannels = append(targetChannels, channel)
 		}
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, fmt.Errorf("no channel found at priority %d", targetPriority)
 	}
 
-	// smoothing factor and adjustment
-	smoothingFactor := 1
-	smoothingAdjustment := 0
-
-	if sumWeight == 0 {
-		// when all channels have weight 0, set sumWeight to the number of channels and set smoothing adjustment to 100
-		// each channel's effective weight = 100
-		sumWeight = len(targetChannels) * 100
-		smoothingAdjustment = 100
-	} else if sumWeight/len(targetChannels) < 10 {
-		// when the average weight is less than 10, set smoothing factor to 100
-		smoothingFactor = 100
-	}
-
-	// Calculate the total weight of all channels up to endIdx
-	totalWeight := sumWeight * smoothingFactor
-
-	// Generate a random value in the range [0, totalWeight)
-	randomWeight := rand.Intn(totalWeight)
-
-	// Find a channel based on its weight
-	for _, channel := range targetChannels {
-		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
-		if randomWeight < 0 {
-			return channel, nil
+	fallback := targetChannels[0]
+	if totalWeight.Sign() > 0 {
+		for _, channel := range targetChannels {
+			if channel.GetWeightUint() > 0 {
+				fallback = channel
+				break
+			}
 		}
 	}
-	// return null if no channel is not found
-	return nil, errors.New("channel not found")
+
+	if totalWeight.Sign() == 0 {
+		// Established zero-weight behavior: when every candidate is zero,
+		// choose uniformly. A zero-weight candidate remains unselectable while
+		// any positive-weight candidate exists at the same priority.
+		index, err := randomBigIntBelow(random, big.NewInt(int64(len(targetChannels))))
+		if err != nil {
+			return fallback, err
+		}
+		return targetChannels[index.Int64()], nil
+	}
+
+	// Use arbitrary-precision accumulation so every uint weight and practical
+	// candidate count is representable. Rejection sampling supplies an exactly
+	// uniform integer below the total without modulo bias. The former smoothing
+	// multiplier was common to all nonzero weights, so omitting it preserves the
+	// same proportional policy while avoiding unnecessary large products.
+	randomWeight, err := randomBigIntBelow(random, totalWeight)
+	if err != nil {
+		return fallback, err
+	}
+	for _, channel := range targetChannels {
+		weight := new(big.Int).SetUint64(uint64(channel.GetWeightUint()))
+		if randomWeight.Cmp(weight) < 0 {
+			return channel, nil
+		}
+		randomWeight.Sub(randomWeight, weight)
+	}
+	return nil, fmt.Errorf("channel not found at priority %d", targetPriority)
+}
+
+func randomBigIntBelow(random io.Reader, limit *big.Int) (selected *big.Int, err error) {
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			selected = nil
+			err = &SelectorRandomError{
+				Kind:     SelectorRandomReaderPanic,
+				Attempts: 1,
+				Err:      fmt.Errorf("reader panic: %v", panicValue),
+			}
+		}
+	}()
+
+	if limit == nil || limit.Sign() <= 0 {
+		return nil, &SelectorRandomError{
+			Kind: SelectorRandomInvalidLimit,
+			Err:  errors.New("random limit must be positive"),
+		}
+	}
+	if limit.Cmp(big.NewInt(1)) == 0 {
+		return new(big.Int), nil
+	}
+	if random == nil {
+		return nil, &SelectorRandomError{
+			Kind: SelectorRandomReadFailure,
+			Err:  errors.New("random source is nil"),
+		}
+	}
+	bitLength := limit.BitLen()
+	byteLength := (bitLength + 7) / 8
+	excessBits := uint(byteLength*8 - bitLength)
+	randomBytes := make([]byte, byteLength)
+
+	for rejectionAttempt := 1; rejectionAttempt <= selectorRandomMaxRejections; rejectionAttempt++ {
+		offset := 0
+		noProgress := 0
+		readCalls := 0
+		maxReadCalls := byteLength*2 + selectorRandomMaxNoProgress
+		for offset < byteLength {
+			if readCalls >= maxReadCalls {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomReadFailure,
+					Attempts: rejectionAttempt,
+					Err:      errors.New("bounded read attempts exhausted"),
+				}
+			}
+			readCalls++
+			count, readErr := random.Read(randomBytes[offset:])
+			if count < 0 || count > byteLength-offset {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomReadFailure,
+					Attempts: rejectionAttempt,
+					Err:      fmt.Errorf("invalid reader count %d", count),
+				}
+			}
+			if count > 0 {
+				offset += count
+				noProgress = 0
+			} else {
+				noProgress++
+			}
+			if offset == byteLength {
+				break
+			}
+			if readErr != nil {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomReadFailure,
+					Attempts: rejectionAttempt,
+					Err:      fmt.Errorf("read selector randomness: %w", readErr),
+				}
+			}
+			if noProgress >= selectorRandomMaxNoProgress {
+				return nil, &SelectorRandomError{
+					Kind:     SelectorRandomNoProgress,
+					Attempts: rejectionAttempt,
+					Err:      errors.New("random reader made no progress"),
+				}
+			}
+		}
+		randomBytes[0] &= byte(0xff >> excessBits)
+		candidate := new(big.Int).SetBytes(randomBytes)
+		if candidate.Cmp(limit) < 0 {
+			return candidate, nil
+		}
+	}
+	return nil, &SelectorRandomError{
+		Kind:     SelectorRandomRejection,
+		Attempts: selectorRandomMaxRejections,
+		Err:      errors.New("rejection attempts exhausted"),
+	}
 }
 
 func firstAttemptedChannelIDs(attemptedChannelIDs ...map[int]struct{}) map[int]struct{} {

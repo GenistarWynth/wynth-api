@@ -93,8 +93,13 @@ func textHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, 
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 		applySystemPromptIfNeeded(c, info, request)
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
+		if newApiErr == nil {
+			newApiErr = helper.StreamFailureError(info)
+		}
 		if newApiErr != nil {
-			return newApiErr
+			if !info.HasSendResponse() || usage == nil {
+				return newApiErr
+			}
 		}
 
 		var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
@@ -105,7 +110,7 @@ func textHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, 
 		} else {
 			service.PostTextConsumeQuota(c, info, usage, nil)
 		}
-		return nil
+		return newApiErr
 	}
 
 	var requestBody io.Reader
@@ -223,10 +228,15 @@ func textHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, 
 	}
 
 	usage, newApiErr := adaptor.DoResponse(c, httpResp, info)
+	if newApiErr == nil {
+		newApiErr = helper.StreamFailureError(info)
+	}
 	if newApiErr != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newApiErr, statusCodeMappingStr)
-		return newApiErr
+		if !info.HasSendResponse() || usage == nil {
+			return newApiErr
+		}
 	}
 
 	var containAudioTokens = usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0
@@ -237,5 +247,5 @@ func textHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo, 
 	} else {
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
-	return nil
+	return newApiErr
 }

@@ -135,10 +135,15 @@ func imageHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	if newAPIError == nil {
+		newAPIError = helper.StreamFailureError(info)
+	}
 	if newAPIError != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
+		if !info.HasSendResponse() || usage == nil {
+			return newAPIError
+		}
 	}
 
 	imageN := uint(1)
@@ -181,5 +186,5 @@ func imageHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
-	return nil
+	return newAPIError
 }

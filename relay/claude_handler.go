@@ -191,12 +191,17 @@ func claudeHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo
 		}
 
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, openAIRequest)
+		if newApiErr == nil {
+			newApiErr = helper.StreamFailureError(info)
+		}
 		if newApiErr != nil {
-			return newApiErr
+			if !info.HasSendResponse() || usage == nil {
+				return newApiErr
+			}
 		}
 
 		service.PostTextConsumeQuota(c, info, usage, nil)
-		return nil
+		return newApiErr
 	}
 
 	var requestBody io.Reader
@@ -262,12 +267,17 @@ func claudeHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	if newAPIError == nil {
+		newAPIError = helper.StreamFailureError(info)
+	}
 	if newAPIError != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
+		if !info.HasSendResponse() || usage == nil {
+			return newAPIError
+		}
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
-	return nil
+	return newAPIError
 }

@@ -36,6 +36,8 @@ type TaskSubmitResult struct {
 // 以及提取 OtherRatios（时长、分辨率）。
 // 该函数在控制器的重试循环之前调用一次，其结果通过 info 字段和上下文持久化。
 func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
+	info.InitChannelMeta(c)
+
 	// 检测 remix action
 	path := c.Request.URL.Path
 	if strings.Contains(path, "/v1/videos/") && strings.HasSuffix(path, "/remix") {
@@ -88,22 +90,6 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "task_channel_disable", http.StatusBadRequest)
 	}
 	info.LockedChannel = ch
-
-	if originTask.ChannelId != info.ChannelId {
-		key, _, newAPIError := ch.GetNextEnabledKey()
-		if newAPIError != nil {
-			return service.TaskErrorWrapper(newAPIError, "channel_no_available_key", newAPIError.StatusCode)
-		}
-		common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-		common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
-		common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, ch.GetBaseURL())
-		common.SetContextKey(c, constant.ContextKeyChannelId, originTask.ChannelId)
-
-		info.ChannelBaseUrl = ch.GetBaseURL()
-		info.ChannelId = originTask.ChannelId
-		info.ChannelType = ch.Type
-		info.ApiKey = key
-	}
 
 	// 提取 remix 参数（时长、分辨率 → OtherRatios）
 	if info.Action == constant.TaskActionRemix {

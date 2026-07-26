@@ -470,7 +470,7 @@ func sanitizeAccountPoolFailureMessage(err *types.NewAPIError, maxLen int) strin
 		return ""
 	}
 	message := err.MaskSensitiveErrorWithStatusCode()
-	message = common.MaskSensitiveInfo(message)
+	message = common.SanitizeSecrets(message)
 	for _, pattern := range accountPoolRuntimeSecretPatterns {
 		message = pattern.ReplaceAllStringFunc(message, func(match string) string {
 			lower := strings.ToLower(match)

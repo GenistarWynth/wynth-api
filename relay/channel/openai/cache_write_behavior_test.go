@@ -35,7 +35,7 @@ func TestGPT56AliasRoutesToSol(t *testing.T) {
 }
 
 func TestResponsesHandlersPreserveBothCacheCreationRepresentations(t *testing.T) {
-	body := `{"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11,"input_tokens_details":{"cached_tokens":2,"cached_creation_tokens":4,"cache_write_tokens":7}}}`
+	body := `{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11,"input_tokens_details":{"cached_tokens":2,"cached_creation_tokens":4,"cache_write_tokens":7}}}`
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
@@ -48,7 +48,7 @@ func TestResponsesHandlersPreserveBothCacheCreationRepresentations(t *testing.T)
 }
 
 func TestStreamingResponsesPreservesBothCacheCreationRepresentations(t *testing.T) {
-	body := "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1,\"total_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":2,\"cached_creation_tokens\":9,\"cache_write_tokens\":7}}}}\n\n"
+	body := "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":10,\"output_tokens\":1,\"total_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":2,\"cached_creation_tokens\":9,\"cache_write_tokens\":7}}}}\n\n"
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

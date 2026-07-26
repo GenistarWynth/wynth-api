@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	rootconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/clientidentity"
 	"github.com/QuantumNous/new-api/relay/common"
@@ -603,6 +604,15 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	if info.ChannelType == rootconstant.ChannelTypeOpenAI && info.Organization != "" {
+		req.Header.Set("OpenAI-Organization", info.Organization)
+	}
+	headerOverride, err := processHeaderOverride(info, c)
+	if err != nil {
+		return nil, err
+	}
+	applyHeaderOverrideToRequest(req, headerOverride)
+	finalizeRequestHeaders(req.Header, info)
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)

@@ -353,13 +353,21 @@ func AccountPoolControlledChannelIDs() ([]int, error) {
 
 func EnabledAccountPoolRuntimeChannelIDs() (map[int]struct{}, error) {
 	channelIDs := make(map[int]struct{})
-	if DB == nil || !DB.Migrator().HasTable(&AccountPoolChannelBinding{}) {
+	if DB == nil ||
+		!DB.Migrator().HasTable(&AccountPoolChannelBinding{}) ||
+		!DB.Migrator().HasTable(&AccountPool{}) {
 		return channelIDs, nil
 	}
 	var ids []int
 	if err := DB.Model(&AccountPoolChannelBinding{}).
-		Where("status = ?", AccountPoolBindingStatusEnabled).
-		Pluck("channel_id", &ids).Error; err != nil {
+		Joins("JOIN account_pools ON account_pools.id = account_pool_channel_bindings.pool_id").
+		Where(
+			"account_pool_channel_bindings.status = ? AND account_pools.status = ?",
+			AccountPoolBindingStatusEnabled,
+			AccountPoolStatusEnabled,
+		).
+		Distinct("account_pool_channel_bindings.channel_id").
+		Pluck("account_pool_channel_bindings.channel_id", &ids).Error; err != nil {
 		return nil, err
 	}
 	for _, id := range ids {

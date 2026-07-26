@@ -424,7 +424,7 @@ func markAccountPoolXAIOAuthTransientFailure(account model.AccountPoolAccount, r
 }
 
 func sanitizeAccountPoolRuntimeErrorMessage(message string, maxLen int) string {
-	message = common.MaskSensitiveInfo(message)
+	message = common.SanitizeSecrets(message)
 	for _, pattern := range accountPoolRuntimeSecretPatterns {
 		message = pattern.ReplaceAllStringFunc(message, func(match string) string {
 			lower := strings.ToLower(match)

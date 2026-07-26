@@ -44,7 +44,7 @@ func requestContextDone(c *gin.Context) bool {
 
 func SetEventStreamHeaders(c *gin.Context) {
 	// 检查是否已经设置过头部
-	if _, exists := c.Get("event_stream_headers_set"); exists {
+	if c.GetBool("event_stream_headers_set") {
 		return
 	}
 

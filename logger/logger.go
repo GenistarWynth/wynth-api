@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -26,12 +27,19 @@ const (
 
 const maxLogCount = 1000000
 
-var logCount int
+var logCount atomic.Int64
+var logRotationThreshold atomic.Int64
+var logRotationHookMu sync.RWMutex
+var logRotationHook = SetupLogger
 var setupLogLock sync.Mutex
-var setupLogWorking bool
+var setupLogWorking atomic.Bool
 var currentLogPath string
 var currentLogPathMu sync.RWMutex
 var currentLogFile *os.File
+
+func init() {
+	logRotationThreshold.Store(maxLogCount)
+}
 
 func GetCurrentLogPath() string {
 	currentLogPathMu.RLock()
@@ -40,9 +48,6 @@ func GetCurrentLogPath() string {
 }
 
 func SetupLogger() {
-	defer func() {
-		setupLogWorking = false
-	}()
 	if *common.LogDir != "" {
 		ok := setupLogLock.TryLock()
 		if !ok {
@@ -95,6 +100,7 @@ func LogDebug(ctx context.Context, msg string, args ...any) {
 }
 
 func logHelper(ctx context.Context, level string, msg string) {
+	msg = common.SanitizeSecrets(msg)
 	var id any = "SYSTEM"
 	if ctx != nil {
 		if requestID := ctx.Value(common.RequestIdKey); requestID != nil {
@@ -109,12 +115,14 @@ func logHelper(ctx context.Context, level string, msg string) {
 	}
 	_, _ = fmt.Fprintf(writer, "[%s] %v | %s | %s \n", level, now.Format("2006/01/02 - 15:04:05"), id, msg)
 	common.LogWriterMu.RUnlock()
-	logCount++ // we don't need accurate count, so no lock here
-	if logCount > maxLogCount && !setupLogWorking {
-		logCount = 0
-		setupLogWorking = true
+	if logCount.Add(1) > logRotationThreshold.Load() && setupLogWorking.CompareAndSwap(false, true) {
+		logCount.Store(0)
+		logRotationHookMu.RLock()
+		rotationHook := logRotationHook
+		logRotationHookMu.RUnlock()
 		gopool.Go(func() {
-			SetupLogger()
+			defer setupLogWorking.Store(false)
+			rotationHook()
 		})
 	}
 }

@@ -1,7 +1,9 @@
 package model
 
 import (
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -52,6 +54,43 @@ func TestRecordConsumeLogAttachesSelectedAccountPoolIDs(t *testing.T) {
 	require.NoError(t, LOG_DB.First(&log).Error)
 	assert.Equal(t, 17, log.AccountPoolId)
 	assert.Equal(t, 29, log.AccountPoolAccountId)
+}
+
+func TestRecordErrorLogSanitizesEveryStoredTextField(t *testing.T) {
+	setupAccountPoolLogTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&User{}))
+	require.NoError(t, DB.Create(&User{Id: 7, Username: "alice", Status: common.UserStatusEnabled}).Error)
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set("username", "alice")
+	ctx.Set(common.UpstreamRequestIdKey, "safe-request Authorization: Bearer upstream-request-secret")
+
+	RecordErrorLog(
+		ctx,
+		7,
+		11,
+		"gpt-test",
+		"token",
+		`provider capacity exhausted {"Set-Cookie":"session=content-secret"}`,
+		13,
+		1,
+		false,
+		"default",
+		map[string]any{
+			"safe_status": "rate_limited",
+			"diagnostic":  "X-Goog-Api-Key: other-field-secret",
+		},
+	)
+
+	var log Log
+	require.NoError(t, LOG_DB.First(&log).Error)
+	stored := strings.Join([]string{log.Content, log.UpstreamRequestId, log.Other}, "\n")
+	assert.NotContains(t, stored, "content-secret")
+	assert.NotContains(t, stored, "upstream-request-secret")
+	assert.NotContains(t, stored, "other-field-secret")
+	assert.Contains(t, stored, "provider capacity exhausted")
+	assert.Contains(t, stored, "rate_limited")
 }
 
 func TestGetAccountPoolUsage24hAggregatesOnlySelectedAccountAndWindow(t *testing.T) {

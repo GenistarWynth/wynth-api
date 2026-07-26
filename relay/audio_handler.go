@@ -82,10 +82,15 @@ func audioHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo,
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	if newAPIError == nil {
+		newAPIError = helper.StreamFailureError(info)
+	}
 	if newAPIError != nil {
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
+		if !info.HasSendResponse() || usage == nil {
+			return newAPIError
+		}
 	}
 	if usage.(*dto.Usage).CompletionTokenDetails.AudioTokens > 0 || usage.(*dto.Usage).PromptTokensDetails.AudioTokens > 0 {
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
@@ -93,5 +98,5 @@ func audioHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo,
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
 
-	return nil
+	return newAPIError
 }

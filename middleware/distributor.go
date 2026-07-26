@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -187,10 +188,16 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		PreserveInitialChannelSetup(c, channel, modelRequest.Model)
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
-			service.RecordChannelAffinity(c, channel.Id)
+		if c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+			if _, exists := c.Get(string(constant.ContextKeyRelaySucceeded)); exists &&
+				!common.GetContextKeyBool(c, constant.ContextKeyRelaySucceeded) {
+				return
+			}
+			if successfulChannelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId); successfulChannelID > 0 {
+				service.RecordChannelAffinity(c, successfulChannelID)
+			}
 		}
 	}
 }
@@ -531,8 +538,52 @@ func getTaskOriginModelName(c *gin.Context) string {
 	return ""
 }
 
+type InitialChannelSetup struct {
+	ChannelID int
+	Channel   *model.Channel
+	Error     *types.NewAPIError
+}
+
+type initialChannelSetupHolder struct {
+	result   InitialChannelSetup
+	consumed bool
+}
+
+const initialChannelSetupContextKey = "initial_channel_setup_result"
+
+// PreserveInitialChannelSetup performs the distributor's authoritative setup
+// exactly once and retains its result for the relay controller. A channel-local
+// credential/setup failure must remain an attempt result instead of vanishing
+// between middleware and controller.
+func PreserveInitialChannelSetup(c *gin.Context, channel *model.Channel, modelName string) {
+	result := InitialChannelSetup{}
+	if channel != nil {
+		result.ChannelID = channel.Id
+		result.Channel = channel
+	}
+	result.Error = SetupContextForSelectedChannel(c, channel, modelName)
+	c.Set(initialChannelSetupContextKey, &initialChannelSetupHolder{result: result})
+}
+
+// TakeInitialChannelSetup consumes the distributor handoff once. This prevents
+// a successful distributor setup from being repeated and rotating its key
+// before the first upstream attempt.
+func TakeInitialChannelSetup(c *gin.Context) (InitialChannelSetup, bool) {
+	value, exists := c.Get(initialChannelSetupContextKey)
+	if !exists {
+		return InitialChannelSetup{}, false
+	}
+	holder, ok := value.(*initialChannelSetupHolder)
+	if !ok || holder == nil || holder.consumed {
+		return InitialChannelSetup{}, false
+	}
+	holder.consumed = true
+	return holder.result, true
+}
+
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
 	c.Set("original_model", modelName) // for retry
+	relaycommon.ResetChannelAttemptContext(c)
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}

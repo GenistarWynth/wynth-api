@@ -448,8 +448,8 @@ func TestOpenaiImageHandlersReturnJSONError(t *testing.T) {
 }
 
 // TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent verifies that an error
-// event inside the SSE stream is recorded as a soft error while the payload is
-// still forwarded to the client.
+// event inside the SSE stream is recorded and returned as an abnormal
+// termination while the already-emitted payload remains untouched.
 func TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
@@ -471,7 +471,8 @@ func TestOpenaiImageStreamHandlerRecordsUpstreamErrorEvent(t *testing.T) {
 	c, recorder, resp, info := newImageTestContext(t, body, "text/event-stream", true)
 
 	usage, err := OpenaiImageStreamHandler(c, info, resp)
-	require.Nil(t, err)
+	require.NotNil(t, err)
+	require.Equal(t, "read_response_body_failed", string(err.GetErrorCode()))
 	require.NotNil(t, usage)
 	require.NotNil(t, info.StreamStatus)
 	require.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.EndReason)

@@ -215,13 +215,18 @@ func geminiHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	usage, openaiErr := adaptor.DoResponse(c, resp.(*http.Response), info)
+	if openaiErr == nil {
+		openaiErr = helper.StreamFailureError(info)
+	}
 	if openaiErr != nil {
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
-		return openaiErr
+		if !info.HasSendResponse() || usage == nil {
+			return openaiErr
+		}
 	}
 
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
-	return nil
+	return openaiErr
 }
 
 func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
