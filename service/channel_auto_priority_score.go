@@ -87,6 +87,7 @@ const (
 	autoPriorityExtremeCostRatio        float64 = 8
 	autoPriorityDominanceScoreMargin    float64 = 1
 	autoPriorityDominancePriorityMargin int64   = 10
+	autoPriorityHysteresisThreshold     int64   = 10
 
 	// Below this measured availability the whole score is scaled down linearly,
 	// so an unavailable channel cannot outrank a healthy one on price alone.
@@ -304,7 +305,7 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 			results[i].Applied = true
 			continue
 		}
-		if inputs[i].HasPreviousSnapshot && autoPriorityDeltaBelowThreshold(results[i].OldPriority, results[i].ComputedPriority, 10) {
+		if inputs[i].HasPreviousSnapshot && autoPriorityDeltaBelowThreshold(results[i].OldPriority, results[i].ComputedPriority, autoPriorityHysteresisThreshold) {
 			results[i].Applied = false
 			results[i].NewPriority = results[i].OldPriority
 			results[i].Reason = "hysteresis_delta_below_threshold"
@@ -315,6 +316,11 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 		results[i].Reason = ""
 	}
 
+	reconcileAutoPriorityHysteresisOrdering(
+		results,
+		priceCohorts,
+		autoPriorityHysteresisThreshold,
+	)
 	removeAutoPriorityHysteresisDominanceViolations(
 		results,
 		priceCohorts,
@@ -323,6 +329,55 @@ func ScoreAutoPriorityCandidates(inputs []AutoPriorityScoreInput, maxPriority in
 	)
 
 	return results
+}
+
+func reconcileAutoPriorityHysteresisOrdering(
+	results []AutoPriorityScoreResult,
+	priceCohorts map[string][]int,
+	threshold int64,
+) {
+	for {
+		release := make([]bool, len(results))
+		for _, indexes := range priceCohorts {
+			for _, higherIndex := range indexes {
+				higher := results[higherIndex]
+				if higher.Reason != "" && higher.Reason != "hysteresis_delta_below_threshold" {
+					continue
+				}
+				for _, lowerIndex := range indexes {
+					lower := results[lowerIndex]
+					if higher.ComputedPriority <= lower.ComputedPriority ||
+						autoPriorityDeltaBelowThreshold(lower.ComputedPriority, higher.ComputedPriority, threshold) ||
+						higher.NewPriority > lower.NewPriority ||
+						(lower.Reason != "" && lower.Reason != "hysteresis_delta_below_threshold") {
+						continue
+					}
+					if higher.Reason == "hysteresis_delta_below_threshold" &&
+						higher.NewPriority != higher.ComputedPriority {
+						release[higherIndex] = true
+					}
+					if lower.Reason == "hysteresis_delta_below_threshold" &&
+						lower.NewPriority != lower.ComputedPriority {
+						release[lowerIndex] = true
+					}
+				}
+			}
+		}
+
+		released := false
+		for idx, shouldRelease := range release {
+			if !shouldRelease {
+				continue
+			}
+			results[idx].Applied = true
+			results[idx].NewPriority = results[idx].ComputedPriority
+			results[idx].Reason = ""
+			released = true
+		}
+		if !released {
+			return
+		}
+	}
 }
 
 func autoPriorityOrdinaryPriceFloor(sortedNominalRates []float64) float64 {

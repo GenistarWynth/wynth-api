@@ -2409,3 +2409,252 @@ func TestAutoPriorityDeltaBelowThreshold(t *testing.T) {
 	assert.False(t, autoPriorityDeltaBelowThreshold(100, 110, 10))
 	assert.False(t, autoPriorityDeltaBelowThreshold(math.MinInt64+1, math.MaxInt64, 10))
 }
+
+func TestReconcileAutoPriorityHysteresisOrdering(t *testing.T) {
+	t.Run("computed gap below threshold remains held", func(t *testing.T) {
+		for gap := int64(1); gap < 10; gap++ {
+			results := []AutoPriorityScoreResult{
+				{
+					ChannelID:        1,
+					OldPriority:      100,
+					ComputedPriority: 100 + gap,
+					NewPriority:      100,
+					Reason:           "hysteresis_delta_below_threshold",
+				},
+				{
+					ChannelID:        2,
+					OldPriority:      100 + gap,
+					ComputedPriority: 100,
+					NewPriority:      100 + gap,
+					Reason:           "hysteresis_delta_below_threshold",
+				},
+			}
+			original := append([]AutoPriorityScoreResult(nil), results...)
+
+			reconcileAutoPriorityHysteresisOrdering(results, map[string][]int{"shared#1": {0, 1}}, 10)
+
+			assert.Equal(t, original, results, "computed gap %d", gap)
+		}
+	})
+
+	t.Run("equal computed priorities remain stable", func(t *testing.T) {
+		results := []AutoPriorityScoreResult{
+			{
+				ChannelID:        1,
+				OldPriority:      91,
+				ComputedPriority: 100,
+				NewPriority:      91,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        2,
+				OldPriority:      109,
+				ComputedPriority: 100,
+				NewPriority:      109,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+		}
+		original := append([]AutoPriorityScoreResult(nil), results...)
+
+		reconcileAutoPriorityHysteresisOrdering(results, map[string][]int{"shared#1": {0, 1}}, 10)
+
+		assert.Equal(t, original, results)
+	})
+
+	t.Run("different cohorts do not interact", func(t *testing.T) {
+		results := []AutoPriorityScoreResult{
+			{
+				ChannelID:        1,
+				OldPriority:      101,
+				ComputedPriority: 110,
+				NewPriority:      101,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        2,
+				OldPriority:      109,
+				ComputedPriority: 100,
+				NewPriority:      109,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+		}
+		original := append([]AutoPriorityScoreResult(nil), results...)
+
+		reconcileAutoPriorityHysteresisOrdering(results, map[string][]int{
+			"default#1": {0},
+			"vip#1":     {1},
+		}, 10)
+
+		assert.Equal(t, original, results)
+	})
+
+	t.Run("auto-disabled candidate remains untouched", func(t *testing.T) {
+		results := []AutoPriorityScoreResult{
+			{
+				ChannelID:        1,
+				OldPriority:      111,
+				ComputedPriority: 120,
+				NewPriority:      111,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        2,
+				OldPriority:      121,
+				ComputedPriority: 100,
+				NewPriority:      121,
+				Reason:           "channel_auto_disabled",
+			},
+		}
+		original := append([]AutoPriorityScoreResult(nil), results...)
+
+		reconcileAutoPriorityHysteresisOrdering(results, map[string][]int{"shared#1": {0, 1}}, 10)
+
+		assert.Equal(t, original, results)
+	})
+
+	t.Run("non-hysteresis failure remains untouched", func(t *testing.T) {
+		results := []AutoPriorityScoreResult{
+			{
+				ChannelID:        1,
+				OldPriority:      111,
+				ComputedPriority: 120,
+				NewPriority:      111,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        2,
+				OldPriority:      121,
+				ComputedPriority: 100,
+				NewPriority:      121,
+				Reason:           "monitor_stats_failed",
+			},
+		}
+		original := append([]AutoPriorityScoreResult(nil), results...)
+
+		reconcileAutoPriorityHysteresisOrdering(results, map[string][]int{"shared#1": {0, 1}}, 10)
+
+		assert.Equal(t, original, results)
+	})
+
+	t.Run("chain reconciliation is deterministic and restores every relation", func(t *testing.T) {
+		base := []AutoPriorityScoreResult{
+			{
+				ChannelID:        1,
+				OldPriority:      131,
+				ComputedPriority: 140,
+				NewPriority:      131,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        2,
+				OldPriority:      139,
+				ComputedPriority: 130,
+				NewPriority:      139,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        3,
+				OldPriority:      111,
+				ComputedPriority: 120,
+				NewPriority:      111,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+			{
+				ChannelID:        4,
+				OldPriority:      119,
+				ComputedPriority: 110,
+				NewPriority:      119,
+				Reason:           "hysteresis_delta_below_threshold",
+			},
+		}
+		permutations := [][]int{
+			{0, 1, 2, 3},
+			{3, 1, 0, 2},
+			{2, 0, 3, 1},
+		}
+
+		for _, permutation := range permutations {
+			results := make([]AutoPriorityScoreResult, 0, len(base))
+			for _, idx := range permutation {
+				results = append(results, base[idx])
+			}
+
+			reconcileAutoPriorityHysteresisOrdering(
+				results,
+				map[string][]int{"shared#1": {0, 1, 2, 3}},
+				10,
+			)
+
+			for _, result := range results {
+				assert.Equal(t, result.ComputedPriority, result.NewPriority)
+				assert.True(t, result.Applied)
+				assert.Empty(t, result.Reason)
+			}
+			for _, higher := range results {
+				for _, lower := range results {
+					if higher.ComputedPriority <= lower.ComputedPriority ||
+						autoPriorityDeltaBelowThreshold(lower.ComputedPriority, higher.ComputedPriority, 10) {
+						continue
+					}
+					assert.Greater(t, higher.NewPriority, lower.NewPriority)
+				}
+			}
+		}
+	})
+}
+
+func TestScoreAutoPriorityCandidatesReconcilesProductionHysteresisInversion(t *testing.T) {
+	results := ScoreAutoPriorityCandidates([]AutoPriorityScoreInput{
+		{
+			ChannelID:               175,
+			LocalGroup:              "OpenAI",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         371,
+			EffectiveRateMultiplier: 0.060,
+			CacheAdjustedCostFactor: 0.43688438383406902,
+			CohortCostFloor:         0.01,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		},
+		{
+			ChannelID:               150,
+			LocalGroup:              "OpenAI",
+			ChannelType:             constant.ChannelTypeOpenAI,
+			CurrentPriority:         367,
+			EffectiveRateMultiplier: 0.045,
+			CacheAdjustedCostFactor: 0.63338533554855192,
+			CohortCostFloor:         0.01,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		},
+	}, 1000)
+
+	require.Len(t, results, 2)
+	channel175 := resultByChannelID(results, 175)
+	channel150 := resultByChannelID(results, 150)
+	require.NotNil(t, channel175)
+	require.NotNil(t, channel150)
+	assert.Equal(t, int64(371), channel175.OldPriority)
+	assert.Equal(t, int64(367), channel150.OldPriority)
+	assert.Equal(t, int64(362), channel175.ComputedPriority)
+	assert.Equal(t, int64(373), channel150.ComputedPriority)
+	assert.Equal(t, channel175.ComputedPriority, channel175.NewPriority)
+	assert.Equal(t, channel150.ComputedPriority, channel150.NewPriority)
+	assert.True(t, channel175.Applied)
+	assert.True(t, channel150.Applied)
+	assert.Empty(t, channel175.Reason)
+	assert.Empty(t, channel150.Reason)
+	assert.Greater(t, channel150.NewPriority, channel175.NewPriority)
+}
