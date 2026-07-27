@@ -59,6 +59,127 @@ func TestRunDueChannelAutoPriorityDefaultsUnsetRateMultiplierToOne(t *testing.T)
 	assert.Greater(t, reloadedCheap.GetPriority(), reloadedDefaultRate.GetPriority())
 }
 
+func TestPersistChannelAutoPriorityGroupPersistsRankReconciledRows(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_005_000)
+	windowStart := now - 24*3600
+
+	channel175 := createAutoPriorityTestChannel(t, "production channel 175", 371, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.060,
+		ChannelAutoPriorityLastScore:       &dto.ChannelAutoPriorityScore{NewPriority: 371},
+	})
+	channel150 := createAutoPriorityTestChannel(t, "production channel 150", 367, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.045,
+		ChannelAutoPriorityLastScore:       &dto.ChannelAutoPriorityScore{NewPriority: 367},
+	})
+	scoreInputs := []AutoPriorityScoreInput{
+		{
+			ChannelID:               channel175.Id,
+			LocalGroup:              channel175.Group,
+			ChannelType:             channel175.Type,
+			CurrentPriority:         371,
+			EffectiveRateMultiplier: 0.060,
+			CacheAdjustedCostFactor: 0.43688438383406902,
+			CohortCostFloor:         0.01,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		},
+		{
+			ChannelID:               channel150.Id,
+			LocalGroup:              channel150.Group,
+			ChannelType:             channel150.Type,
+			CurrentPriority:         367,
+			EffectiveRateMultiplier: 0.045,
+			CacheAdjustedCostFactor: 0.63338533554855192,
+			CohortCostFloor:         0.01,
+			Availability:            floatPtr(1),
+			MonitorCheckCount:       3,
+			UsageLogCount:           autoPriorityFullCacheSampleCount,
+			FirstTokenLatencyMS:     autoPriorityFirstTokenFastMS,
+			FirstTokenSampleCount:   1,
+			ThroughputTps:           autoPriorityThroughputFastTps,
+			ThroughputSampleCount:   1,
+			HasPreviousSnapshot:     true,
+		},
+	}
+	scores := ScoreAutoPriorityCandidates(scoreInputs, 1000)
+	require.Len(t, scores, 2)
+	assert.Equal(t, int64(362), scores[0].ComputedPriority)
+	assert.Equal(t, int64(373), scores[1].ComputedPriority)
+	for _, score := range scores {
+		assert.True(t, score.Applied)
+		assert.Equal(t, score.ComputedPriority, score.NewPriority)
+		assert.Empty(t, score.Reason)
+	}
+
+	resolution := upstreamSourceRuleResolution{
+		AutoPriorityEnabled:                 true,
+		AutoPriorityIntervalMinutes:         0,
+		AutoPriorityWindowHours:             24,
+		AutoPriorityAvailabilityWindowHours: 24,
+	}
+	candidates := []upstreamSourceAutoPriorityCandidate{
+		{
+			channel:     channel175,
+			settings:    channel175.GetOtherSettings(),
+			resolution:  resolution,
+			scoreInput:  scoreInputs[0],
+			windowStart: windowStart,
+			windowEnd:   now,
+		},
+		{
+			channel:     channel150,
+			settings:    channel150.GetOtherSettings(),
+			resolution:  resolution,
+			scoreInput:  scoreInputs[1],
+			windowStart: windowStart,
+			windowEnd:   now,
+		},
+	}
+
+	reason, err := persistChannelAutoPriorityGroup(
+		context.Background(),
+		candidates,
+		scores,
+		[]int{0, 1},
+		nil,
+		channelAutoPriorityDefaultSinkPriority,
+		now,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, reason)
+
+	for idx, channel := range []model.Channel{channel175, channel150} {
+		var reloaded model.Channel
+		require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+		assert.Equal(t, scores[idx].NewPriority, reloaded.GetPriority())
+
+		var ability model.Ability
+		require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		require.NotNil(t, ability.Priority)
+		assert.Equal(t, reloaded.GetPriority(), *ability.Priority)
+
+		settings := reloaded.GetOtherSettings()
+		assert.Equal(t, now, settings.ChannelAutoPriorityLastAppliedAt)
+		require.NotNil(t, settings.ChannelAutoPriorityLastScore)
+		assert.Equal(t, reloaded.GetPriority(), settings.ChannelAutoPriorityLastScore.NewPriority)
+		assert.True(t, settings.ChannelAutoPriorityLastScore.Applied)
+		assert.Empty(t, settings.ChannelAutoPriorityLastScore.Reason)
+	}
+}
+
 func TestRunDueChannelAutoPriorityPersistsFiniteSnapshotForExtremeEffectiveCost(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_010_000)
