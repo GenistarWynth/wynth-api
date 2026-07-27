@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.60] - 2026-07-27
+
+### Fixed
+- Reconcile same-cohort auto-priority hysteresis so a clear computed-priority gap cannot retain a tie or inverted old ordering, while preserving 1-9 point jitter suppression, cohort isolation, unavailable-row truth, and 8x price dominance.
+
 ## [v1.0.0-rc.59] - 2026-07-26
 
 ### Added
