@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.61] - 2026-07-27
+
+### Fixed
+- Exhaust every eligible unattempted channel in the resolved group before honoring per-channel no-retry status policy, so 400-class, 504, and 524 failures still apply channel health/auto-disable handling but cannot terminate the downstream request while a same-group peer remains.
+
 ## [v1.0.0-rc.60] - 2026-07-27
 
 ### Fixed
