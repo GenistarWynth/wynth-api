@@ -223,6 +223,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 	firstAttempt := true
+	_, isFixedChannel := c.Get("specific_channel_id")
 
 	// The attempted-channel set bounds this loop by eligible candidates. A
 	// numeric retry budget must not stop same-group failover early.
@@ -264,7 +265,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = service.NormalizeViolationFeeError(channelErr)
 			relayInfo.LastError = newAPIError
 			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
-			if relayInfo.HasSendResponse() || c.Request.Context().Err() != nil || !shouldRetry(c, newAPIError) {
+			if !shouldContinueSameGroupFailover(c, relayInfo, isFixedChannel) {
 				break
 			}
 			retryParam.IncreaseRetry()
@@ -304,7 +305,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if relayInfo.HasSendResponse() || c.Request.Context().Err() != nil || !shouldRetry(c, newAPIError) {
+		if !shouldContinueSameGroupFailover(c, relayInfo, isFixedChannel) {
 			break
 		}
 		retryParam.IncreaseRetry()
@@ -376,6 +377,16 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return channel, newAPIError
 	}
 	return channel, nil
+}
+
+// shouldContinueSameGroupFailover applies Wynth's outer failover policy after
+// a channel-specific failure. Per-channel retry classifications do not stop
+// traversal; the selector decides termination by returning no eligible peer.
+func shouldContinueSameGroupFailover(c *gin.Context, info *relaycommon.RelayInfo, pinnedChannel bool) bool {
+	if pinnedChannel || c == nil || c.Request == nil || info == nil || info.HasSendResponse() {
+		return false
+	}
+	return c.Request.Context().Err() == nil
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError) bool {
@@ -671,10 +682,13 @@ func RelayTask(c *gin.Context) {
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
 				channelErr)
-			if c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
-				break
-			}
-			if isPinnedChannel && retryParam.GetRetry() >= lockedRetryLimit {
+			if isPinnedChannel {
+				if c.Request.Context().Err() != nil ||
+					!shouldRetryTaskRelay(c, taskErr) ||
+					retryParam.GetRetry() >= lockedRetryLimit {
+					break
+				}
+			} else if !shouldContinueSameGroupFailover(c, relayInfo, false) {
 				break
 			}
 			retryParam.IncreaseRetry()
@@ -704,10 +718,16 @@ func RelayTask(c *gin.Context) {
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
 		}
 
-		if c.Request.Context().Err() != nil || !shouldRetryTaskRelay(c, taskErr) {
+		if taskErr.LocalError {
 			break
 		}
-		if isPinnedChannel && retryParam.GetRetry() >= lockedRetryLimit {
+		if isPinnedChannel {
+			if c.Request.Context().Err() != nil ||
+				!shouldRetryTaskRelay(c, taskErr) ||
+				retryParam.GetRetry() >= lockedRetryLimit {
+				break
+			}
+		} else if !shouldContinueSameGroupFailover(c, relayInfo, false) {
 			break
 		}
 		retryParam.IncreaseRetry()

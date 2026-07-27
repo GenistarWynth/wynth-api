@@ -758,6 +758,41 @@ func TestRelayTaskDistributorNoKeyContinuesWithoutUpstreamRequest(t *testing.T) 
 	assert.EqualValues(t, 1, result.taskCount)
 }
 
+func TestRelayTaskChannelNoRetryStatusStillExhaustsSameGroup(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "bad request", statusCode: http.StatusBadRequest},
+		{name: "gateway timeout", statusCode: http.StatusGatewayTimeout},
+		{name: "cloudflare timeout", statusCode: 524},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runRelayTaskFailover(t, relayTaskFailoverOptions{
+				candidates: []relayTaskFailoverCandidate{
+					{id: 1, priority: 200},
+					{id: 2, priority: 100},
+				},
+				statuses: map[int][]int{
+					1: {test.statusCode},
+				},
+				initialChannelID: 1,
+				retryTimes:       0,
+			})
+
+			assert.Equal(t, http.StatusOK, result.statusCode)
+			assert.Contains(t, result.body, `"status":"queued"`)
+			assert.Equal(t, []int{1, 2}, result.attempts)
+			assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+			assert.EqualValues(t, 1, result.errorLogCount)
+			assert.EqualValues(t, 1, result.consumeLogCount)
+			assert.EqualValues(t, 1, result.taskCount)
+		})
+	}
+}
+
 func TestRelayTaskFixedDistributorNoKeyStaysPinnedWithinLegacyRetryLimit(t *testing.T) {
 	result := runRelayTaskFailover(t, relayTaskFailoverOptions{
 		candidates: []relayTaskFailoverCandidate{

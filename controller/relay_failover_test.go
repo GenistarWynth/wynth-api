@@ -39,6 +39,7 @@ type relayFailoverCandidate struct {
 	model          string
 	priority       int64
 	status         int
+	autoBan        int
 	abilityEnabled bool
 	channelType    int
 	supportedPath  string
@@ -87,6 +88,10 @@ type relayFailoverOptions struct {
 	requestContext    context.Context
 	contextSetup      func(*gin.Context)
 	responseBodies    map[int]string
+	requestID         string
+	automaticDisable  bool
+	disableRanges     []operation_setting.StatusCodeRange
+	waitDisabledID    int
 }
 
 type relayFailoverResult struct {
@@ -100,6 +105,9 @@ type relayFailoverResult struct {
 	userRequestCount int
 	errorLogContent  string
 	appLog           string
+	logRequestIDs    []string
+	logChannelIDs    []int
+	channelStatuses  map[int]int
 }
 
 func enabledRelayFailoverCandidate(id int, group string, priority int64) relayFailoverCandidate {
@@ -121,6 +129,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
 	previousMemoryCache := common.MemoryCacheEnabled
+	previousRedisEnabled := common.RedisEnabled
 	previousMainDBType := common.MainDatabaseType()
 	previousLogDBType := common.LogDatabaseType()
 	previousRetryTimes := common.RetryTimes
@@ -135,6 +144,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousAutoGroups := setting.AutoGroups2JsonString()
 	previousUserUsableGroups := setting.UserUsableGroups2JSONString()
 	previousRetryRanges := append([]operation_setting.StatusCodeRange(nil), operation_setting.AutomaticRetryStatusCodeRanges...)
+	previousDisableRanges := append([]operation_setting.StatusCodeRange(nil), operation_setting.AutomaticDisableStatusCodeRanges...)
 	previousFreeModelPreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
 
 	dsn := "file:" + url.QueryEscape(t.Name()) + "?mode=memory&cache=shared"
@@ -154,6 +164,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	model.DB = db
 	model.LOG_DB = db
 	common.MemoryCacheEnabled = true
+	common.RedisEnabled = false
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
 	common.RetryTimes = opts.retryTimes
@@ -161,13 +172,19 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	constant.StreamingTimeout = 30
 	constant.ErrorLogEnabled = true
 	common.LogConsumeEnabled = true
-	common.AutomaticDisableChannelEnabled = false
+	common.AutomaticDisableChannelEnabled = opts.automaticDisable
 	common.DataExportEnabled = false
 	service.ResetAccountPoolRuntimeForTest()
 	service.InitHttpClient()
 	operation_setting.AutomaticRetryStatusCodeRanges = opts.retryStatusRanges
 	if len(operation_setting.AutomaticRetryStatusCodeRanges) == 0 {
 		operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 599}}
+	}
+	if opts.disableRanges != nil {
+		operation_setting.AutomaticDisableStatusCodeRanges = append(
+			[]operation_setting.StatusCodeRange(nil),
+			opts.disableRanges...,
+		)
 	}
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.6-sol":2.5}`))
@@ -176,6 +193,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.MemoryCacheEnabled = previousMemoryCache
+		common.RedisEnabled = previousRedisEnabled
 		common.SetMainDatabaseType(previousMainDBType)
 		common.SetLogDatabaseType(previousLogDBType)
 		common.RetryTimes = previousRetryTimes
@@ -191,6 +209,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
 		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUserUsableGroups))
 		operation_setting.AutomaticRetryStatusCodeRanges = previousRetryRanges
+		operation_setting.AutomaticDisableStatusCodeRanges = previousDisableRanges
 		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = previousFreeModelPreConsume
 		model.InitChannelCache()
 		require.NoError(t, sqlDB.Close())
@@ -329,7 +348,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 			Models:   candidate.model,
 			Priority: &candidate.priority,
 			Weight:   common.GetPointer(uint(100)),
-			AutoBan:  common.GetPointer(0),
+			AutoBan:  common.GetPointer(candidate.autoBan),
 		}
 		if len(keys) > 1 || len(candidate.disabledKeys) > 0 {
 			channel.ChannelInfo = model.ChannelInfo{
@@ -393,6 +412,11 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	common.SetContextKey(c, constant.ContextKeyTokenUnlimited, false)
 	common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "wallet_only"})
 	common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+	requestID := opts.requestID
+	if requestID == "" {
+		requestID = "relay-failover-request"
+	}
+	c.Set(common.RequestIdKey, requestID)
 	c.Set("token_name", "relay-failover-token")
 	c.Set("username", "relay-failover-user")
 	if len(opts.autoGroups) > 0 {
@@ -418,6 +442,16 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	gin.DefaultErrorWriter = oldErrorWriter
 	common.LogWriterMu.Unlock()
 
+	if opts.waitDisabledID > 0 {
+		require.Eventually(t, func() bool {
+			var channel model.Channel
+			if err := db.Select("id", "status").First(&channel, opts.waitDisabledID).Error; err != nil {
+				return false
+			}
+			return channel.Status == common.ChannelStatusAutoDisabled
+		}, time.Second, 10*time.Millisecond)
+	}
+
 	var errorLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
 	var errorLog model.Log
@@ -428,6 +462,20 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogCount).Error)
 	var user model.User
 	require.NoError(t, db.First(&user, 1).Error)
+	var logs []model.Log
+	require.NoError(t, db.Order("id").Find(&logs).Error)
+	logRequestIDs := make([]string, 0, len(logs))
+	logChannelIDs := make([]int, 0, len(logs))
+	for _, logEntry := range logs {
+		logRequestIDs = append(logRequestIDs, logEntry.RequestId)
+		logChannelIDs = append(logChannelIDs, logEntry.ChannelId)
+	}
+	channelStatuses := make(map[int]int, len(opts.candidates))
+	for _, candidate := range opts.candidates {
+		var channel model.Channel
+		require.NoError(t, db.Select("id", "status").First(&channel, candidate.id).Error)
+		channelStatuses[channel.Id] = channel.Status
+	}
 
 	attemptsMu.Lock()
 	finalAttempts := append([]int(nil), attempts...)
@@ -443,6 +491,9 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		userRequestCount: user.RequestCount,
 		errorLogContent:  errorLog.Content,
 		appLog:           appLog.String(),
+		logRequestIDs:    logRequestIDs,
+		logChannelIDs:    logChannelIDs,
+		channelStatuses:  channelStatuses,
 	}
 }
 
@@ -460,6 +511,74 @@ func successfulResponsesStreamBody(channelID int) string {
 		relayFailoverModel,
 		channelID,
 	)
+}
+
+func successfulResponsesBody(channelID int) string {
+	return fmt.Sprintf(
+		`{"id":"resp-%d","status":"completed","model":"%s","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"channel-%d"}]}],"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`,
+		channelID,
+		relayFailoverModel,
+		channelID,
+	)
+}
+
+func TestRelayResponsesExhaustsSameGroupPastChannelNoRetryStatus(t *testing.T) {
+	candidates := []relayFailoverCandidate{
+		enabledRelayFailoverCandidate(180, "OpenAI", 400),
+		enabledRelayFailoverCandidate(150, "OpenAI", 300),
+		enabledRelayFailoverCandidate(199, "OpenAI", 200),
+		enabledRelayFailoverCandidate(198, "OpenAI", 100),
+	}
+	candidates[2].autoBan = 1
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: candidates,
+		upstreams: map[int]relayFailoverUpstream{
+			180: {statusCode: http.StatusTooManyRequests},
+			150: {statusCode: http.StatusBadGateway},
+			199: {statusCode: 524},
+			198: {stream: true},
+		},
+		initialChannelID: 180,
+		retryTimes:       0,
+		retryStatusRanges: []operation_setting.StatusCodeRange{
+			{Start: http.StatusTooManyRequests, End: http.StatusTooManyRequests},
+			{Start: http.StatusInternalServerError, End: 599},
+		},
+		usingGroup:  "OpenAI",
+		stream:      true,
+		relayFormat: types.RelayFormatOpenAIResponses,
+		requestPath: "/v1/responses",
+		requestBody: responsesFailoverRequestBody(true),
+		responseBodies: map[int]string{
+			198: successfulResponsesStreamBody(198),
+		},
+		requestID:        "req-responses-524-failover",
+		automaticDisable: true,
+		disableRanges: []operation_setting.StatusCodeRange{
+			{Start: 524, End: 524},
+		},
+		waitDisabledID: 199,
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{180, 150, 199, 198}, result.attempts)
+	assert.Equal(t, []string{"180", "150", "199", "198"}, result.usedChannels)
+	assert.Contains(t, result.body, "channel-198")
+	assert.NotContains(t, result.body, "channel-180-failed")
+	assert.NotContains(t, result.body, "channel-150-failed")
+	assert.NotContains(t, result.body, "channel-199-failed")
+	assert.NotContains(t, result.body, `"error"`)
+	assert.EqualValues(t, 3, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, []int{180, 150, 199, 198}, result.logChannelIDs)
+	assert.Equal(t, []string{
+		"req-responses-524-failover",
+		"req-responses-524-failover",
+		"req-responses-524-failover",
+		"req-responses-524-failover",
+	}, result.logRequestIDs)
+	assert.Equal(t, common.ChannelStatusAutoDisabled, result.channelStatuses[199])
 }
 
 func TestRelayResponsesSemanticFailureRetriesSameGroup(t *testing.T) {
@@ -665,9 +784,9 @@ func TestRelayReturnsFinalErrorOnlyAfterTotalExhaustion(t *testing.T) {
 		enabledRelayFailoverCandidate(3, "default", 100),
 	}
 	upstreams := map[int]relayFailoverUpstream{
-		1: {statusCode: http.StatusInternalServerError},
-		2: {statusCode: http.StatusInternalServerError},
-		3: {statusCode: http.StatusInternalServerError},
+		1: {statusCode: http.StatusBadRequest},
+		2: {statusCode: http.StatusGatewayTimeout},
+		3: {statusCode: 524},
 	}
 
 	result := runRelayFailover(t, relayFailoverOptions{
@@ -678,7 +797,7 @@ func TestRelayReturnsFinalErrorOnlyAfterTotalExhaustion(t *testing.T) {
 		usingGroup:       "default",
 	})
 
-	assert.Equal(t, http.StatusInternalServerError, result.statusCode)
+	assert.Equal(t, 524, result.statusCode)
 	assert.Contains(t, result.body, "channel-3-failed")
 	assert.NotContains(t, result.body, "channel-1-failed")
 	assert.Equal(t, []int{1, 2, 3}, result.attempts)
@@ -802,23 +921,63 @@ func TestRelayStaysInResolvedAutoGroup(t *testing.T) {
 	assert.Zero(t, result.consumeLogCount)
 }
 
-func TestRelayNonRetryableErrorDoesNotFanOut(t *testing.T) {
-	candidates := []relayFailoverCandidate{
-		enabledRelayFailoverCandidate(1, "default", 200),
-		enabledRelayFailoverCandidate(2, "default", 100),
+func TestRelayChannelNoRetryStatusStillExhaustsSameGroup(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "bad request", statusCode: http.StatusBadRequest},
+		{name: "gateway timeout", statusCode: http.StatusGatewayTimeout},
+		{name: "outside configured retry ranges", statusCode: http.StatusTeapot},
 	}
 
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := runRelayFailover(t, relayFailoverOptions{
+				candidates: []relayFailoverCandidate{
+					enabledRelayFailoverCandidate(1, "default", 200),
+					enabledRelayFailoverCandidate(2, "default", 100),
+				},
+				upstreams: map[int]relayFailoverUpstream{
+					1: {statusCode: test.statusCode},
+				},
+				initialChannelID: 1,
+				retryTimes:       10,
+				retryStatusRanges: []operation_setting.StatusCodeRange{
+					{Start: http.StatusInternalServerError, End: http.StatusServiceUnavailable},
+				},
+				usingGroup:  "default",
+				relayFormat: types.RelayFormatOpenAIResponses,
+				requestPath: "/v1/responses",
+				requestBody: responsesFailoverRequestBody(false),
+				responseBodies: map[int]string{
+					2: successfulResponsesBody(2),
+				},
+			})
+
+			assert.Equal(t, http.StatusOK, result.statusCode)
+			assert.Equal(t, []int{1, 2}, result.attempts)
+			assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+			assert.Contains(t, result.body, "channel-2")
+			assert.NotContains(t, result.body, "channel-1-failed")
+			assert.NotContains(t, result.body, `"error"`)
+			assert.EqualValues(t, 1, result.errorLogCount)
+			assert.EqualValues(t, 1, result.consumeLogCount)
+		})
+	}
+}
+
+func TestRelaySingleChannelNoRetryStatusReturnsFinalError(t *testing.T) {
 	result := runRelayFailover(t, relayFailoverOptions{
-		candidates: candidates,
-		upstreams: map[int]relayFailoverUpstream{
-			1: {statusCode: http.StatusBadRequest},
-		},
+		candidates:       []relayFailoverCandidate{enabledRelayFailoverCandidate(1, "default", 100)},
+		upstreams:        map[int]relayFailoverUpstream{1: {statusCode: 524}},
 		initialChannelID: 1,
 		retryTimes:       10,
 		usingGroup:       "default",
 	})
 
-	assert.Equal(t, http.StatusBadRequest, result.statusCode)
+	assert.Equal(t, 524, result.statusCode)
+	assert.Contains(t, result.body, "channel-1-failed")
 	assert.Equal(t, []int{1}, result.attempts)
 	assert.Equal(t, []string{"1"}, result.usedChannels)
 	assert.EqualValues(t, 1, result.errorLogCount)
