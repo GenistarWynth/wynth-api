@@ -57,6 +57,7 @@ func setupSystemInstanceRouteTest(t *testing.T) (*gorm.DB, int64) {
 	common.TranslateMessage = func(_ *gin.Context, key string, _ ...map[string]any) string { return key }
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() {
+		middleware.DrainAdminAuditJobs()
 		model.DB = oldDB
 		model.LOG_DB = oldLogDB
 		common.RedisEnabled = oldRedisEnabled
