@@ -674,6 +674,16 @@ func invalidWireRemoteCompactionV2StreamBody(channelID int) string {
 	)
 }
 
+func invalidUsageRemoteCompactionV2StreamBody(channelID int) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"cmp-invalid-usage-%d\",\"type\":\"compaction\",\"encrypted_content\":\"INVALID_USAGE_A_CONTENT\"}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-invalid-usage-%d\",\"status\":\"completed\",\"model\":\"%s\",\"usage\":{\"input_tokens\":-1,\"output_tokens\":20,\"total_tokens\":19}}}\n\n",
+		channelID,
+		channelID,
+		relayFailoverModel,
+	)
+}
+
 func responsesEventStream(events ...string) string {
 	var body strings.Builder
 	for _, event := range events {
@@ -827,6 +837,83 @@ func TestRelayRemoteCompactionV2RetriesInvalidCodexWireTypesWithoutLeakOrBilling
 	assert.Equal(t, expectedFinalQuota, result.userQuota)
 	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
 	assert.Equal(t, 1, result.userRequestCount)
+}
+
+func TestRelayRemoteCompactionV2RetriesInvalidUsageWithoutLeakOrBilling(t *testing.T) {
+	groupRatio := 1.0
+	expectedFinalQuota := 1_000_000 - 3175
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		groupRatio:         &groupRatio,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: invalidUsageRemoteCompactionV2StreamBody(1),
+			2: successfulRemoteCompactionV2StreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.NotContains(t, result.body, "INVALID_USAGE_A_CONTENT")
+	assert.NotContains(t, result.body, "resp-invalid-usage-1")
+	assert.Contains(t, result.body, `"encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2"`)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 2, result.consumeLogChannelID)
+	assert.Equal(t, 1200, result.consumeLogPromptTokens)
+	assert.Equal(t, 20, result.consumeLogCompletionTokens)
+	assert.Equal(t, 3175, result.consumeLogQuota)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
+	assert.Equal(t, 1, result.userRequestCount)
+	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
+	assert.Equal(t, result.consumeLogQuota, result.tokenUsedQuota)
+}
+
+func TestRelayRemoteCompactionV2OmitsRawRequestAndEventsFromDebugLogs(t *testing.T) {
+	previousDebugEnabled := common.DebugEnabled
+	common.DebugEnabled = true
+	t.Cleanup(func() {
+		common.DebugEnabled = previousDebugEnabled
+	})
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+		},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      remoteCompactionV2RequestBody(),
+		responseBodies: map[int]string{
+			1: successfulRemoteCompactionV2StreamBody(1),
+		},
+	})
+
+	assert.Contains(t, result.body, "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_1")
+	assert.NotContains(t, result.appLog, "Retained conversation text")
+	assert.NotContains(t, result.appLog, "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_1")
+	assert.Contains(t, result.appLog, "requestBody: [remote compaction request omitted]")
+	assert.Contains(t, result.appLog, "stream scanner data: [remote compaction event omitted]")
 }
 
 func TestRelayRemoteCompactionV2ExhaustionReturnsSanitizedError(t *testing.T) {
@@ -994,6 +1081,104 @@ func TestRelayResponsesClientGoneAfterMetadataDoesNotRetry(t *testing.T) {
 	assert.Equal(t, "error", streamStatus["status"])
 	assert.Equal(t, "client_gone", streamStatus["end_reason"])
 	assert.Equal(t, "context canceled", streamStatus["end_error"])
+}
+
+func TestRelayRemoteCompactionV2PrecommitCancellationDoesNotRetryOrSettle(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	expectedFinalQuota := 1_000_000
+	metadataPrelude := responsesEventStream(
+		`{"type":"response.created","response":{"id":"resp-compaction-client-gone","status":"in_progress","model":"gpt-5.6-sol"}}`,
+	)
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, abortAfterChunk: true, afterStreamWrite: cancel},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		requestContext:     requestContext,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: metadataPrelude,
+			2: successfulRemoteCompactionV2StreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.Empty(t, result.body)
+	assert.NotContains(t, result.body, "resp-compaction-client-gone")
+	assert.NotContains(t, result.body, "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2")
+	assert.Zero(t, result.errorLogCount)
+	assert.Zero(t, result.consumeLogCount)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Zero(t, result.userUsedQuota)
+	assert.Zero(t, result.userRequestCount)
+	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
+	assert.Zero(t, result.tokenUsedQuota)
+}
+
+func TestRelayRemoteCompactionV2DoesNotReplayAfterCommitWinsCancellationRace(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	groupRatio := 1.0
+	expectedFinalQuota := 1_000_000 - 3175
+	var cancelOnce sync.Once
+
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		requestContext:     requestContext,
+		groupRatio:         &groupRatio,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: successfulRemoteCompactionV2StreamBody(1),
+			2: successfulRemoteCompactionV2StreamBody(2),
+		},
+		contextSetup: func(c *gin.Context) {
+			c.Writer = &relayCommitSignalWriter{
+				ResponseWriter: c.Writer,
+				onWrite: func() {
+					cancelOnce.Do(cancel)
+				},
+			}
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.Contains(t, result.body, `"encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_1"`)
+	assert.NotContains(t, result.body, "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2")
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 1, result.consumeLogChannelID)
+	assert.Equal(t, 3175, result.consumeLogQuota)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
+	assert.Equal(t, 1, result.userRequestCount)
 }
 
 func TestRelayResponsesExhaustsSameGroupPastChannelNoRetryStatus(t *testing.T) {

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,13 +133,34 @@ func (b *overflowSignalingReadCloser) Close() error {
 type observingResponseWriter struct {
 	gin.ResponseWriter
 	beforeWrite func()
+	writeErr    error
 	writes      atomic.Int64
+	flushes     atomic.Int64
+}
+
+type errCallBarrierContext struct {
+	context.Context
+	target  int64
+	calls   atomic.Int64
+	reached chan struct{}
+	once    sync.Once
+}
+
+func (c *errCallBarrierContext) Err() error {
+	err := c.Context.Err()
+	if c.calls.Add(1) == c.target {
+		c.once.Do(func() { close(c.reached) })
+	}
+	return err
 }
 
 func (w *observingResponseWriter) Write(data []byte) (int, error) {
 	w.writes.Add(1)
 	if w.beforeWrite != nil {
 		w.beforeWrite()
+	}
+	if w.writeErr != nil {
+		return 0, w.writeErr
 	}
 	return w.ResponseWriter.Write(data)
 }
@@ -147,8 +169,14 @@ func (w *observingResponseWriter) WriteString(data string) (int, error) {
 	return w.Write([]byte(data))
 }
 
+func (w *observingResponseWriter) Flush() {
+	w.flushes.Add(1)
+	w.ResponseWriter.Flush()
+}
+
 type directResponsesStreamResult struct {
 	apiErr *types.NewAPIError
+	usage  *dto.Usage
 }
 
 func (b *cancelOnFirstReadBody) Read(data []byte) (int, error) {
@@ -226,8 +254,8 @@ func startDirectResponsesStreamWithBody(
 
 	done := make(chan directResponsesStreamResult, 1)
 	go func() {
-		_, apiErr := OaiResponsesStreamHandler(c, info, resp)
-		done <- directResponsesStreamResult{apiErr: apiErr}
+		usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+		done <- directResponsesStreamResult{apiErr: apiErr, usage: usage}
 	}()
 	return recorder, info, done
 }
@@ -318,6 +346,128 @@ func TestResponsesPreludeWriterBuffersHeartbeatUntilCommit(t *testing.T) {
 
 	require.NoError(t, writer.Commit())
 	assert.Equal(t, ": PING\n\n", recorder.Body.String())
+}
+
+func TestRemoteCompactionPreludeWriterCancellationWinsBeforeCommit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+	observedWriter := &observingResponseWriter{ResponseWriter: c.Writer}
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	writer := newRemoteCompactionPreludeWriter(observedWriter, 256, requestContext, info)
+	_, err := writer.WriteString("buffered remote compaction")
+	require.NoError(t, err)
+
+	cancel()
+	err = writer.Commit()
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, observedWriter.writes.Load())
+	assert.Zero(t, observedWriter.flushes.Load())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	assert.ErrorIs(t, info.StreamStatus.EndError, context.Canceled)
+}
+
+func TestRemoteCompactionPreludeWriterCommitWinsBeforeLaterCancellation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+	writeStarted := make(chan struct{})
+	allowWrite := make(chan struct{})
+	var writeOnce sync.Once
+	observedWriter := &observingResponseWriter{
+		ResponseWriter: c.Writer,
+		beforeWrite: func() {
+			writeOnce.Do(func() { close(writeStarted) })
+			<-allowWrite
+		},
+	}
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	writer := newRemoteCompactionPreludeWriter(observedWriter, 256, requestContext, info)
+	_, err := writer.WriteString("committed remote compaction")
+	require.NoError(t, err)
+
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- writer.Commit()
+	}()
+
+	select {
+	case <-writeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first underlying write")
+	}
+	assert.True(t, info.HasSendResponse(), "commit must be visible before the first underlying write")
+	cancel()
+	close(allowWrite)
+
+	select {
+	case err := <-commitDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for committed write")
+	}
+	assert.Equal(t, int64(1), observedWriter.writes.Load())
+	assert.Equal(t, int64(1), observedWriter.flushes.Load())
+	assert.Equal(t, "committed remote compaction", recorder.Body.String())
+	assert.True(t, info.HasSendResponse())
+}
+
+func TestRemoteCompactionPreludeWriterRejectsBufferedErrorBeforeCommit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	observedWriter := &observingResponseWriter{ResponseWriter: c.Writer}
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	writer := newRemoteCompactionPreludeWriter(observedWriter, 4, context.Background(), info)
+	_, writeErr := writer.WriteString("too large")
+	require.Error(t, writeErr)
+
+	commitErr := writer.Commit()
+
+	require.ErrorIs(t, commitErr, writeErr)
+	assert.Zero(t, observedWriter.writes.Load())
+	assert.Zero(t, observedWriter.flushes.Load())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+}
+
+func TestRemoteCompactionPreludeWriterWriteFailureRemainsCommitted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	underlyingErr := errors.New("downstream write failed")
+	observedWriter := &observingResponseWriter{ResponseWriter: c.Writer, writeErr: underlyingErr}
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	writer := newRemoteCompactionPreludeWriter(observedWriter, 256, context.Background(), info)
+	_, err := writer.WriteString("committed remote compaction")
+	require.NoError(t, err)
+
+	err = writer.Commit()
+	require.ErrorIs(t, err, underlyingErr)
+	assert.Equal(t, int64(1), observedWriter.writes.Load())
+	assert.Zero(t, observedWriter.flushes.Load())
+	assert.Empty(t, recorder.Body.String())
+	assert.True(t, info.HasSendResponse())
+
+	err = writer.Commit()
+	require.ErrorIs(t, err, underlyingErr)
+	assert.Equal(t, int64(1), observedWriter.writes.Load())
 }
 
 func TestOaiResponsesStreamHandlerClassifiesSemanticFailures(t *testing.T) {
@@ -619,6 +769,89 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2MatchesCodexWireTypes(t *tes
 	}
 }
 
+func TestOaiResponsesStreamHandlerRemoteCompactionV2ValidatesUsageBeforeCommit(t *testing.T) {
+	maxInt64 := int64(^uint64(0) >> 1)
+	maxSupportedInt := int64(^uint(0) >> 1)
+	tests := []struct {
+		name           string
+		usage          string
+		wantErr        bool
+		wantPrompt     int
+		wantCompletion int
+		wantTotal      int
+		wantCached     int
+		wantReasoning  int
+	}{
+		{name: "negative input tokens", usage: `{"input_tokens":-1,"output_tokens":1,"total_tokens":0}`, wantErr: true},
+		{name: "negative output tokens", usage: `{"input_tokens":1,"output_tokens":-1,"total_tokens":0}`, wantErr: true},
+		{name: "negative total tokens", usage: `{"input_tokens":0,"output_tokens":0,"total_tokens":-1}`, wantErr: true},
+		{name: "negative cached tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":-1},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "negative reasoning tokens", usage: `{"input_tokens":0,"output_tokens":1,"output_tokens_details":{"reasoning_tokens":-1},"total_tokens":1}`, wantErr: true},
+		{
+			name:    "input plus output overflows int64",
+			usage:   fmt.Sprintf(`{"input_tokens":%d,"output_tokens":1,"total_tokens":%d}`, maxInt64, maxInt64),
+			wantErr: true,
+		},
+		{name: "total tokens mismatch", usage: `{"input_tokens":1,"output_tokens":2,"total_tokens":4}`, wantErr: true},
+		{
+			name:          "valid zero usage",
+			usage:         `{"input_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0}`,
+			wantCached:    0,
+			wantReasoning: 0,
+		},
+		{
+			name:          "highest valid non-overflow boundary",
+			usage:         fmt.Sprintf(`{"input_tokens":%d,"input_tokens_details":{"cached_tokens":%d},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":%d}`, maxSupportedInt, maxSupportedInt, maxSupportedInt),
+			wantPrompt:    int(maxSupportedInt),
+			wantTotal:     int(maxSupportedInt),
+			wantCached:    int(maxSupportedInt),
+			wantReasoning: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := responsesSSE(
+				`{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-usage","type":"compaction","encrypted_content":"encrypted"}}`,
+				fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp-usage","status":"completed","usage":%s}}`, test.usage),
+			)
+			recorder, info, done := startDirectResponsesStreamWithBody(
+				t,
+				io.NopCloser(strings.NewReader(body)),
+				remoteCompactionV2Request(),
+				context.Background(),
+				nil,
+			)
+
+			var result directResponsesStreamResult
+			select {
+			case result = <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for usage validation")
+			}
+
+			if test.wantErr {
+				require.NotNil(t, result.apiErr)
+				assert.Equal(t, types.ErrorCodeBadResponse, result.apiErr.GetErrorCode())
+				assert.Equal(t, "upstream Responses compaction completion usage is invalid", result.apiErr.Error())
+				assert.Empty(t, recorder.Body.String())
+				assert.False(t, info.HasSendResponse())
+				return
+			}
+
+			require.Nil(t, result.apiErr)
+			require.NotNil(t, result.usage)
+			assert.Equal(t, test.wantPrompt, result.usage.PromptTokens)
+			assert.Equal(t, test.wantCompletion, result.usage.CompletionTokens)
+			assert.Equal(t, test.wantTotal, result.usage.TotalTokens)
+			assert.Equal(t, test.wantCached, result.usage.PromptTokensDetails.CachedTokens)
+			assert.Equal(t, test.wantReasoning, result.usage.CompletionTokenDetails.ReasoningTokens)
+			assert.NotEmpty(t, recorder.Body.String())
+			assert.True(t, info.HasSendResponse())
+		})
+	}
+}
+
 func TestOaiResponsesStreamHandlerRemoteCompactionV2WaitsForExactLimitTerminalConfirmation(t *testing.T) {
 	terminal := make(chan struct{})
 	body := &terminalControlledReadCloser{
@@ -627,8 +860,6 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2WaitsForExactLimitTerminalCo
 		probeStarted: make(chan struct{}),
 		closed:       make(chan struct{}),
 	}
-	writeStarted := make(chan struct{})
-	var writeOnce sync.Once
 	var observedWriter *observingResponseWriter
 	recorder, _, done := startDirectResponsesStreamWithBody(
 		t,
@@ -636,15 +867,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2WaitsForExactLimitTerminalCo
 		remoteCompactionV2Request(),
 		context.Background(),
 		func(writer gin.ResponseWriter) gin.ResponseWriter {
-			observedWriter = &observingResponseWriter{
-				ResponseWriter: writer,
-				beforeWrite: func() {
-					writeOnce.Do(func() {
-						close(writeStarted)
-					})
-					<-terminal
-				},
-			}
+			observedWriter = &observingResponseWriter{ResponseWriter: writer}
 			return observedWriter
 		},
 	)
@@ -654,12 +877,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2WaitsForExactLimitTerminalCo
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for exact-limit terminal probe")
 	}
-	committedBeforeTerminal := false
-	select {
-	case <-writeStarted:
-		committedBeforeTerminal = true
-	case <-time.After(100 * time.Millisecond):
-	}
+	assert.Zero(t, observedWriter.writes.Load())
 	close(terminal)
 
 	select {
@@ -668,7 +886,6 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2WaitsForExactLimitTerminalCo
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for terminal confirmation")
 	}
-	assert.False(t, committedBeforeTerminal)
 	assert.Equal(t, int64(1), observedWriter.writes.Load())
 	assert.Contains(t, recorder.Body.String(), `"id":"resp-limit"`)
 }
@@ -691,11 +908,17 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2RejectsExactLimitPlusOneBefo
 
 func TestOaiResponsesStreamHandlerRemoteCompactionV2RawOverflowPrecedesSemanticFailure(t *testing.T) {
 	overflowRead := make(chan struct{})
+	requestContext := &errCallBarrierContext{
+		Context: context.Background(),
+		target:  7,
+		reached: make(chan struct{}),
+	}
 	body := &overflowSignalingReadCloser{
 		reader: strings.NewReader(remoteCompactionEventsAtRawLimit(
 			t,
 			`{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"encrypted"}}`,
 			`{"type":"response.completed","response":{"id":"resp-invalid-end-turn","end_turn":"invalid"}}`,
+			`{"type":"response.created","response":{"id":"after-semantic-decision"}}`,
 		) + "x"),
 		probeStarted: make(chan struct{}),
 		allowRead:    make(chan struct{}),
@@ -707,7 +930,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2RawOverflowPrecedesSemanticF
 		t,
 		body,
 		remoteCompactionV2Request(),
-		context.Background(),
+		requestContext,
 		nil,
 	)
 
@@ -716,18 +939,18 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2RawOverflowPrecedesSemanticF
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for semantic overflow probe")
 	}
+	select {
+	case <-requestContext.reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for semantic decision barrier")
+	}
+	body.releaseOverflow()
 	var apiErr *types.NewAPIError
 	select {
 	case result := <-done:
 		apiErr = result.apiErr
-	case <-time.After(100 * time.Millisecond):
-		body.releaseOverflow()
-		select {
-		case result := <-done:
-			apiErr = result.apiErr
-		case <-time.After(5 * time.Second):
-			t.Fatal("timed out waiting for semantic overflow result")
-		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for semantic overflow result")
 	}
 
 	require.NotNil(t, apiErr)
@@ -738,34 +961,33 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2RawOverflowPrecedesSemanticF
 
 func TestOaiResponsesStreamHandlerRemoteCompactionV2DoesNotCommitWhileOverflowRacesCompletion(t *testing.T) {
 	overflowRead := make(chan struct{})
+	requestContext := &errCallBarrierContext{
+		Context: context.Background(),
+		target:  9,
+		reached: make(chan struct{}),
+	}
 	body := &overflowSignalingReadCloser{
-		reader:       strings.NewReader(remoteCompactionStreamAtRawLimit(t) + "x"),
+		reader: strings.NewReader(remoteCompactionEventsAtRawLimit(
+			t,
+			`{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"encrypted"}}`,
+			`{"type":"response.completed","response":{"id":"resp-limit","usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}`,
+			`{"type":"response.created","response":{"id":"after-completion-decision"}}`,
+		) + "x"),
 		probeStarted: make(chan struct{}),
 		allowRead:    make(chan struct{}),
 		overflowRead: overflowRead,
 		closed:       make(chan struct{}),
 	}
 	t.Cleanup(body.releaseOverflow)
-	writeStarted := make(chan struct{})
-	var writeOnce sync.Once
 	var observedWriter *observingResponseWriter
 
 	recorder, info, done := startDirectResponsesStreamWithBody(
 		t,
 		body,
 		remoteCompactionV2Request(),
-		context.Background(),
+		requestContext,
 		func(writer gin.ResponseWriter) gin.ResponseWriter {
-			observedWriter = &observingResponseWriter{
-				ResponseWriter: writer,
-				beforeWrite: func() {
-					writeOnce.Do(func() {
-						close(writeStarted)
-					})
-					body.releaseOverflow()
-					<-overflowRead
-				},
-			}
+			observedWriter = &observingResponseWriter{ResponseWriter: writer}
 			return observedWriter
 		},
 	)
@@ -776,10 +998,12 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2DoesNotCommitWhileOverflowRa
 		t.Fatal("timed out waiting for overflow probe")
 	}
 	select {
-	case <-writeStarted:
-	case <-time.After(100 * time.Millisecond):
-		body.releaseOverflow()
+	case <-requestContext.reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for completion decision barrier")
 	}
+	assert.Zero(t, observedWriter.writes.Load())
+	body.releaseOverflow()
 
 	select {
 	case result := <-done:
@@ -850,17 +1074,25 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2DoneTerminatesWithoutEOF(t *
 }
 
 func TestOaiResponsesStreamHandlerRemoteCompactionV2CancellationDuringFinalBufferingDoesNotCommit(t *testing.T) {
-	requestContext, cancel := context.WithCancel(context.Background())
+	baseContext, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	requestContext := &errCallBarrierContext{
+		Context: baseContext,
+		target:  9,
+		reached: make(chan struct{}),
+	}
 	terminal := make(chan struct{})
 	body := &terminalControlledReadCloser{
-		reader:       strings.NewReader(remoteCompactionStreamAtRawLimit(t)),
+		reader: strings.NewReader(remoteCompactionEventsAtRawLimit(
+			t,
+			`{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"encrypted"}}`,
+			`{"type":"response.completed","response":{"id":"resp-cancel-final","usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}`,
+			`{"type":"response.created","response":{"id":"after-cancel-decision"}}`,
+		)),
 		terminal:     terminal,
 		probeStarted: make(chan struct{}),
 		closed:       make(chan struct{}),
 	}
-	writeStarted := make(chan struct{})
-	var writeOnce sync.Once
 	var observedWriter *observingResponseWriter
 	recorder, info, done := startDirectResponsesStreamWithBody(
 		t,
@@ -868,15 +1100,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2CancellationDuringFinalBuffe
 		remoteCompactionV2Request(),
 		requestContext,
 		func(writer gin.ResponseWriter) gin.ResponseWriter {
-			observedWriter = &observingResponseWriter{
-				ResponseWriter: writer,
-				beforeWrite: func() {
-					writeOnce.Do(func() {
-						close(writeStarted)
-					})
-					<-requestContext.Done()
-				},
-			}
+			observedWriter = &observingResponseWriter{ResponseWriter: writer}
 			return observedWriter
 		},
 	)
@@ -887,9 +1111,11 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2CancellationDuringFinalBuffe
 		t.Fatal("timed out waiting for final buffer probe")
 	}
 	select {
-	case <-writeStarted:
-	case <-time.After(100 * time.Millisecond):
+	case <-requestContext.reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for final buffering decision barrier")
 	}
+	assert.Zero(t, observedWriter.writes.Load())
 	cancel()
 
 	select {
@@ -899,6 +1125,8 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2CancellationDuringFinalBuffe
 		t.Fatal("timed out waiting for cancellation")
 	}
 	assert.Empty(t, recorder.Body.String())
+	assert.Zero(t, observedWriter.writes.Load())
+	assert.Zero(t, observedWriter.flushes.Load())
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
 }

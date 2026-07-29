@@ -90,6 +90,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	defer func() {
 		common.SetContextKey(c, constant.ContextKeyRelaySucceeded, newAPIError == nil)
 		if newAPIError != nil {
+			if relayInfo != nil && relayInfo.StreamStatus != nil && relayInfo.StreamStatus.Termination().IsCancelled() {
+				return
+			}
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			if relayInfo != nil && relayInfo.HasSendResponse() {
 				return

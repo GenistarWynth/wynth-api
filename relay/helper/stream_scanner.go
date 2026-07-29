@@ -142,6 +142,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	generalSettings := operation_setting.GetGeneralSetting()
 	pingEnabled := generalSettings.PingIntervalEnabled && !info.DisablePing
 	pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
+	redactStreamData := false
+	if request, ok := info.Request.(interface{ IsRemoteCompactionV2() bool }); ok {
+		redactStreamData = request.IsRemoteCompactionV2()
+	}
 	if pingInterval <= 0 {
 		pingInterval = DefaultPingInterval
 	}
@@ -308,7 +312,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 			ticker.Reset(streamingTimeout)
 			data := scanner.Text()
-			logger.LogDebug(c, "stream scanner data: %s", data)
+			if redactStreamData {
+				logger.LogDebug(c, "stream scanner data: [remote compaction event omitted]")
+			} else {
+				logger.LogDebug(c, "stream scanner data: %s", data)
+			}
 
 			if len(data) < 6 {
 				continue

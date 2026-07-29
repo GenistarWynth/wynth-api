@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -113,7 +114,11 @@ func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayI
 			}
 		}
 
-		logger.LogDebug(c, "requestBody: %s", jsonData)
+		if request.IsRemoteCompactionV2() {
+			logger.LogDebug(c, "requestBody: [remote compaction request omitted]")
+		} else {
+			logger.LogDebug(c, "requestBody: %s", jsonData)
+		}
 		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -146,6 +151,20 @@ func responsesHelperWithRuntimeSelected(c *gin.Context, info *relaycommon.RelayI
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
+	if request.IsRemoteCompactionV2() && info != nil && !info.HasSendResponse() &&
+		info.StreamStatus != nil && info.StreamStatus.Termination().IsCancelled() {
+		cancellationErr := info.StreamStatus.EndError
+		if cancellationErr == nil {
+			cancellationErr = context.Canceled
+		}
+		return types.NewErrorWithStatusCode(
+			cancellationErr,
+			types.ErrorCodeBadResponse,
+			499,
+			types.ErrOptionWithSkipRetry(),
+			types.ErrOptionWithNoRecordErrorLog(),
+		)
+	}
 	if newAPIError == nil {
 		newAPIError = helper.StreamFailureError(info)
 	}

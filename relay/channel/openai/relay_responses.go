@@ -2,12 +2,12 @@ package openai
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +29,7 @@ const (
 	// are not copied into the buffered downstream response.
 	compactResponseStreamFramingAllowance = 64 << 10
 	compactResponseStreamReadLimit        = compactResponseBodyLimit + compactResponseStreamFramingAllowance
+	remoteCompactionInvalidUsageMessage   = "upstream Responses compaction completion usage is invalid"
 )
 
 var errRemoteCompactionStreamTooLarge = errors.New("upstream Responses compaction stream exceeds size limit")
@@ -134,12 +135,154 @@ type codexResponseCompletedUsage struct {
 	TotalTokens *int64 `json:"total_tokens"`
 }
 
+type remoteCompactionCommitState uint8
+
+const (
+	remoteCompactionPrecommit remoteCompactionCommitState = iota
+	remoteCompactionCancelled
+	remoteCompactionCommitting
+	remoteCompactionCommitted
+	remoteCompactionFailed
+)
+
+type remoteCompactionCommitGate struct {
+	mu               sync.Mutex
+	state            remoteCompactionCommitState
+	requestContext   context.Context
+	cancellationErr  error
+	commitErr        error
+	relayInfo        *relaycommon.RelayInfo
+	stopCancellation func() bool
+}
+
+func newRemoteCompactionCommitGate(requestContext context.Context, info *relaycommon.RelayInfo) *remoteCompactionCommitGate {
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	gate := &remoteCompactionCommitGate{
+		state:          remoteCompactionPrecommit,
+		requestContext: requestContext,
+		relayInfo:      info,
+	}
+	gate.stopCancellation = context.AfterFunc(requestContext, func() {
+		gate.cancel(requestContext.Err())
+	})
+	return gate
+}
+
+func (g *remoteCompactionCommitGate) cancel(err error) bool {
+	if g == nil {
+		return false
+	}
+	if err == nil {
+		err = context.Canceled
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.state != remoteCompactionPrecommit {
+		return false
+	}
+	g.state = remoteCompactionCancelled
+	g.cancellationErr = err
+	return true
+}
+
+func (g *remoteCompactionCommitGate) markClientGone(err error) {
+	if g == nil || g.relayInfo == nil {
+		return
+	}
+	status := relaycommon.NewStreamStatus()
+	status.SetEndReason(relaycommon.StreamEndReasonClientGone, err)
+	g.relayInfo.StreamStatus = status
+}
+
+func (g *remoteCompactionCommitGate) observeCancellation(err error) error {
+	if g == nil {
+		return nil
+	}
+
+	g.mu.Lock()
+	if g.state == remoteCompactionPrecommit {
+		if err == nil {
+			err = g.requestContext.Err()
+		}
+		if err != nil {
+			g.state = remoteCompactionCancelled
+			g.cancellationErr = err
+		}
+	}
+	if g.state == remoteCompactionCancelled {
+		err = g.cancellationErr
+	} else {
+		err = nil
+	}
+	g.mu.Unlock()
+
+	if err != nil {
+		g.markClientGone(err)
+	}
+	return err
+}
+
+func (g *remoteCompactionCommitGate) commit(write func() error) error {
+	if g == nil {
+		return write()
+	}
+
+	g.mu.Lock()
+	switch g.state {
+	case remoteCompactionCancelled:
+		err := g.cancellationErr
+		g.mu.Unlock()
+		g.markClientGone(err)
+		return err
+	case remoteCompactionCommitted:
+		g.mu.Unlock()
+		return nil
+	case remoteCompactionFailed:
+		err := g.commitErr
+		g.mu.Unlock()
+		return err
+	}
+
+	if err := g.requestContext.Err(); err != nil {
+		g.state = remoteCompactionCancelled
+		g.cancellationErr = err
+		g.mu.Unlock()
+		g.markClientGone(err)
+		return err
+	}
+
+	// This transition is the commit linearization point. Cancellation that has
+	// won the gate cannot cross it; cancellation racing after it is postcommit.
+	g.state = remoteCompactionCommitting
+	if g.relayInfo != nil {
+		g.relayInfo.MarkDownstreamCommitted()
+	}
+	err := write()
+	g.commitErr = err
+	if err != nil {
+		g.state = remoteCompactionFailed
+	} else {
+		g.state = remoteCompactionCommitted
+	}
+	g.mu.Unlock()
+	return err
+}
+
+func (g *remoteCompactionCommitGate) stop() {
+	if g != nil && g.stopCancellation != nil {
+		g.stopCancellation()
+	}
+}
+
 type responsesPreludeWriter struct {
 	gin.ResponseWriter
-	buffer    bytes.Buffer
-	limit     int
-	committed bool
-	err       error
+	buffer     bytes.Buffer
+	limit      int
+	committed  bool
+	err        error
+	commitGate *remoteCompactionCommitGate
 }
 
 func newResponsesPreludeWriter(writer gin.ResponseWriter, limit int) *responsesPreludeWriter {
@@ -147,6 +290,17 @@ func newResponsesPreludeWriter(writer gin.ResponseWriter, limit int) *responsesP
 		ResponseWriter: writer,
 		limit:          limit,
 	}
+}
+
+func newRemoteCompactionPreludeWriter(
+	writer gin.ResponseWriter,
+	limit int,
+	requestContext context.Context,
+	info *relaycommon.RelayInfo,
+) *responsesPreludeWriter {
+	preludeWriter := newResponsesPreludeWriter(writer, limit)
+	preludeWriter.commitGate = newRemoteCompactionCommitGate(requestContext, info)
+	return preludeWriter
 }
 
 func (w *responsesPreludeWriter) Write(data []byte) (int, error) {
@@ -180,6 +334,16 @@ func (w *responsesPreludeWriter) Commit() error {
 	if w.err != nil {
 		return w.err
 	}
+	if w.commitGate != nil {
+		return w.commitGate.commit(w.commit)
+	}
+	return w.commit()
+}
+
+func (w *responsesPreludeWriter) commit() error {
+	if w.err != nil {
+		return w.err
+	}
 	w.committed = true
 	if w.buffer.Len() > 0 {
 		data := w.buffer.Bytes()
@@ -194,6 +358,19 @@ func (w *responsesPreludeWriter) Commit() error {
 	}
 	w.ResponseWriter.Flush()
 	return nil
+}
+
+func (w *responsesPreludeWriter) stopCancellationWatch() {
+	if w != nil {
+		w.commitGate.stop()
+	}
+}
+
+func (w *responsesPreludeWriter) observeCancellation(err error) error {
+	if w == nil || w.commitGate == nil {
+		return nil
+	}
+	return w.commitGate.observeCancellation(err)
 }
 
 func (w *responsesPreludeWriter) Error() error {
@@ -285,10 +462,18 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	originalWriter := c.Writer
 	preludeWriter := newResponsesPreludeWriter(originalWriter, bufferLimit)
+	if isRemoteCompactionV2 {
+		requestContext := context.Background()
+		if c != nil && c.Request != nil {
+			requestContext = c.Request.Context()
+		}
+		preludeWriter = newRemoteCompactionPreludeWriter(originalWriter, bufferLimit, requestContext, info)
+	}
 	c.Writer = preludeWriter
 	defer func() {
 		c.Writer = originalWriter
 	}()
+	defer preludeWriter.stopCancellationWatch()
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
@@ -384,31 +569,40 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 						return
 					}
-					if strconv.IntSize == 32 {
-						wireIntegers := []*int64{
-							completedUsage.InputTokens,
-							completedUsage.OutputTokens,
-							completedUsage.TotalTokens,
+					wireIntegers := []*int64{
+						completedUsage.InputTokens,
+						completedUsage.OutputTokens,
+						completedUsage.TotalTokens,
+					}
+					if completedUsage.InputTokensDetails != nil {
+						wireIntegers = append(wireIntegers, completedUsage.InputTokensDetails.CachedTokens)
+					}
+					if completedUsage.OutputTokensDetails != nil {
+						wireIntegers = append(wireIntegers, completedUsage.OutputTokensDetails.ReasoningTokens)
+					}
+					maxSupportedInt := int64(^uint(0) >> 1)
+					for _, value := range wireIntegers {
+						if *value < 0 || *value > maxSupportedInt {
+							semanticError = responsesCompactionError(remoteCompactionInvalidUsageMessage)
+							compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+							return
 						}
-						if completedUsage.InputTokensDetails != nil {
-							wireIntegers = append(wireIntegers, completedUsage.InputTokensDetails.CachedTokens)
-						}
-						if completedUsage.OutputTokensDetails != nil {
-							wireIntegers = append(wireIntegers, completedUsage.OutputTokensDetails.ReasoningTokens)
-						}
-						for _, value := range wireIntegers {
-							if *value < -1<<31 || *value > 1<<31-1 {
-								semanticError = responsesCompactionError("upstream Responses compaction completion usage exceeds the supported integer range")
-								compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
-								return
-							}
-						}
+					}
+					const maxInt64 = int64(^uint64(0) >> 1)
+					if *completedUsage.InputTokens > maxInt64-*completedUsage.OutputTokens ||
+						*completedUsage.TotalTokens != *completedUsage.InputTokens+*completedUsage.OutputTokens {
+						semanticError = responsesCompactionError(remoteCompactionInvalidUsageMessage)
+						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+						return
 					}
 					usage.PromptTokens = int(*completedUsage.InputTokens)
 					usage.CompletionTokens = int(*completedUsage.OutputTokens)
 					usage.TotalTokens = int(*completedUsage.TotalTokens)
 					if completedUsage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = int(*completedUsage.InputTokensDetails.CachedTokens)
+					}
+					if completedUsage.OutputTokensDetails != nil {
+						usage.CompletionTokenDetails.ReasoningTokens = int(*completedUsage.OutputTokensDetails.ReasoningTokens)
 					}
 				}
 				if compactionOutputCount != 1 {
@@ -586,7 +780,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
-	if c != nil && c.Request != nil {
+	if !isRemoteCompactionV2 && c != nil && c.Request != nil {
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			info.StreamStatus = relaycommon.NewStreamStatus()
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestErr)
@@ -594,6 +788,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	}
 	if termination.IsCancelled() {
+		if isRemoteCompactionV2 {
+			preludeWriter.observeCancellation(termination.EndError)
+		}
+		return usage, nil
+	}
+	if isRemoteCompactionV2 && preludeWriter.observeCancellation(nil) != nil {
 		return usage, nil
 	}
 	if errors.Is(compactionStreamReader.TerminalError(), errRemoteCompactionStreamTooLarge) ||
@@ -614,6 +814,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	if isRemoteCompactionV2 {
 		if err := preludeWriter.Commit(); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return usage, nil
+			}
 			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
 	}

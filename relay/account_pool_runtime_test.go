@@ -3,9 +3,11 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -1214,6 +1217,88 @@ func TestAccountPoolRuntimeAttemptsResetEventStreamHeadersBeforeRetry(t *testing
 
 	require.Nil(t, newAPIError)
 	assert.Equal(t, []int{accountA.Id, accountB.Id}, selectedIDs)
+}
+
+func TestAccountPoolRuntimeAttemptsRetryInvalidRemoteCompactionUsageBeforeCommit(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	previousStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = previousStreamingTimeout
+	})
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	accountA := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "invalid-usage-account-a",
+		Priority: 100,
+	})
+	accountB := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "valid-usage-account-b",
+		Priority: 50,
+	})
+
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	baseRequest := &dto.OpenAIResponsesRequest{
+		Model:  "gpt-5",
+		Stream: common.GetPointer(true),
+		Input:  []byte(`[{"type":"compaction_trigger"}]`),
+		ClientMetadata: []byte(`{
+			"x-codex-turn-metadata":"{\"request_kind\":\"compaction\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+		}`),
+	}
+	info, genErr := relaycommon.GenRelayInfo(ctx, types.RelayFormatOpenAIResponses, baseRequest, nil)
+	require.NoError(t, genErr)
+	info.DisablePing = true
+	info.InitChannelMeta(ctx)
+
+	selectedIDs := make([]int, 0, 2)
+	var winningUsage *dto.Usage
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, copyErr := common.DeepCopy(baseRequest)
+		if copyErr != nil {
+			return nil, types.NewError(copyErr, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(dto.Request) *types.NewAPIError {
+		selectedAccountID := service.GetSelectedAccountPoolAccountID(ctx)
+		selectedIDs = append(selectedIDs, selectedAccountID)
+		usageJSON := `{"input_tokens":12,"output_tokens":3,"total_tokens":15}`
+		encryptedContent := "VALID_USAGE_B_CONTENT"
+		if selectedAccountID == accountA.Id {
+			usageJSON = `{"input_tokens":-1,"output_tokens":3,"total_tokens":2}`
+			encryptedContent = "INVALID_USAGE_A_CONTENT"
+		}
+		body := fmt.Sprintf(
+			"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":%q}}\n\n"+
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-%d\",\"usage\":%s}}\n\n",
+			encryptedContent,
+			selectedAccountID,
+			usageJSON,
+		)
+		usage, apiErr := openaichannel.OaiResponsesStreamHandler(ctx, info, &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		})
+		if apiErr == nil {
+			winningUsage = usage
+		}
+		return apiErr
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{accountA.Id, accountB.Id}, selectedIDs)
+	assert.NotContains(t, recorder.Body.String(), "INVALID_USAGE_A_CONTENT")
+	assert.Contains(t, recorder.Body.String(), "VALID_USAGE_B_CONTENT")
+	require.NotNil(t, winningUsage)
+	assert.Equal(t, 12, winningUsage.PromptTokens)
+	assert.Equal(t, 3, winningUsage.CompletionTokens)
+	assert.Equal(t, 15, winningUsage.TotalTokens)
 }
 
 func TestAccountPoolRuntimeAttemptsDoNotRetryAfterRequestCancellation(t *testing.T) {
