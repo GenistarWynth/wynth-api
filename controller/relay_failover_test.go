@@ -211,6 +211,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
 	previousModelRatios := ratio_setting.ModelRatio2JSONString()
 	previousCacheRatios := ratio_setting.CacheRatio2JSONString()
+	previousCreateCacheRatios := ratio_setting.CreateCacheRatio2JSONString()
 	previousAutoGroups := setting.AutoGroups2JsonString()
 	previousUserUsableGroups := setting.UserUsableGroups2JSONString()
 	previousRetryRanges := append([]operation_setting.StatusCodeRange(nil), operation_setting.AutomaticRetryStatusCodeRanges...)
@@ -262,6 +263,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.6-sol":2.5}`))
 	require.NoError(t, ratio_setting.UpdateCacheRatioByJSONString(`{"gpt-5.6-sol":0.1}`))
+	require.NoError(t, ratio_setting.UpdateCreateCacheRatioByJSONString(`{"gpt-5.6-sol":1.25}`))
 
 	t.Cleanup(func() {
 		model.DB = previousDB
@@ -283,6 +285,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
 		require.NoError(t, ratio_setting.UpdateCacheRatioByJSONString(previousCacheRatios))
+		require.NoError(t, ratio_setting.UpdateCreateCacheRatioByJSONString(previousCreateCacheRatios))
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
 		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUserUsableGroups))
 		operation_setting.AutomaticRetryStatusCodeRanges = previousRetryRanges
@@ -738,6 +741,30 @@ func invalidUsageRemoteCompactionV2StreamBody(channelID int) string {
 	)
 }
 
+func codex0146RemoteCompactionV2StreamBody(channelID int) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-0146-%d\",\"status\":\"in_progress\",\"model\":\"%s\"}}\n\n"+
+			"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"cmp-0146-%d\",\"type\":\"compaction\",\"encrypted_content\":\"CODEX_0146_ENCRYPTED_CONTEXT_%d\"}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-0146-%d\",\"status\":\"completed\",\"model\":\"%s\",\"usage\":{\"input_tokens\":102,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":60},\"output_tokens\":1,\"output_tokens_details\":{\"reasoning_tokens\":1},\"total_tokens\":103}}}\n\n",
+		channelID,
+		relayFailoverModel,
+		channelID,
+		channelID,
+		channelID,
+		relayFailoverModel,
+	)
+}
+
+func invalidCacheWriteRemoteCompactionV2StreamBody(channelID int) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"cmp-invalid-cache-write-%d\",\"type\":\"compaction\",\"encrypted_content\":\"INVALID_CACHE_WRITE_A_CONTENT\"}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-invalid-cache-write-%d\",\"status\":\"completed\",\"model\":\"%s\",\"usage\":{\"input_tokens\":102,\"input_tokens_details\":{\"cached_tokens\":40,\"cache_write_tokens\":-1},\"output_tokens\":1,\"total_tokens\":103}}}\n\n",
+		channelID,
+		channelID,
+		relayFailoverModel,
+	)
+}
+
 func responsesEventStream(events ...string) string {
 	var body strings.Builder
 	for _, event := range events {
@@ -931,6 +958,51 @@ func TestRelayRemoteCompactionV2RetriesInvalidUsageWithoutLeakOrBilling(t *testi
 	assert.Equal(t, 1200, result.consumeLogPromptTokens)
 	assert.Equal(t, 20, result.consumeLogCompletionTokens)
 	assert.Equal(t, 3175, result.consumeLogQuota)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
+	assert.Equal(t, 1, result.userRequestCount)
+	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
+	assert.Equal(t, result.consumeLogQuota, result.tokenUsedQuota)
+}
+
+func TestRelayRemoteCompactionV2RetriesInvalidCacheWriteAndBillsCodex0146Winner(t *testing.T) {
+	groupRatio := 1.0
+	expectedFinalQuota := 1_000_000 - 223
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      remoteCompactionV2RequestBody(),
+		groupRatio:       &groupRatio,
+		responseBodies: map[int]string{
+			1: invalidCacheWriteRemoteCompactionV2StreamBody(1),
+			2: codex0146RemoteCompactionV2StreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.NotContains(t, result.body, "INVALID_CACHE_WRITE_A_CONTENT")
+	assert.NotContains(t, result.body, "resp-invalid-cache-write-1")
+	assert.Contains(t, result.body, `"encrypted_content":"CODEX_0146_ENCRYPTED_CONTEXT_2"`)
+	assert.Contains(t, result.body, `"cache_write_tokens":60`)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 2, result.consumeLogChannelID)
+	assert.Equal(t, 102, result.consumeLogPromptTokens)
+	assert.Equal(t, 1, result.consumeLogCompletionTokens)
+	assert.Equal(t, 223, result.consumeLogQuota)
 	assert.Equal(t, expectedFinalQuota, result.userQuota)
 	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
 	assert.Equal(t, 1, result.userRequestCount)

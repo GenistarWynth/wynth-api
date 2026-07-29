@@ -1219,7 +1219,7 @@ func TestAccountPoolRuntimeAttemptsResetEventStreamHeadersBeforeRetry(t *testing
 	assert.Equal(t, []int{accountA.Id, accountB.Id}, selectedIDs)
 }
 
-func TestAccountPoolRuntimeAttemptsRetryInvalidRemoteCompactionUsageBeforeCommit(t *testing.T) {
+func TestAccountPoolRuntimeAttemptsRetryInvalidRemoteCompactionCacheWriteBeforeCommit(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	previousStreamingTimeout := constant.StreamingTimeout
 	constant.StreamingTimeout = 30
@@ -1267,11 +1267,11 @@ func TestAccountPoolRuntimeAttemptsRetryInvalidRemoteCompactionUsageBeforeCommit
 	}, func(dto.Request) *types.NewAPIError {
 		selectedAccountID := service.GetSelectedAccountPoolAccountID(ctx)
 		selectedIDs = append(selectedIDs, selectedAccountID)
-		usageJSON := `{"input_tokens":12,"output_tokens":3,"total_tokens":15}`
-		encryptedContent := "VALID_USAGE_B_CONTENT"
+		usageJSON := `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":60},"output_tokens":10,"output_tokens_details":{"reasoning_tokens":5},"total_tokens":110}`
+		encryptedContent := "VALID_CACHE_WRITE_B_CONTENT"
 		if selectedAccountID == accountA.Id {
-			usageJSON = `{"input_tokens":-1,"output_tokens":3,"total_tokens":2}`
-			encryptedContent = "INVALID_USAGE_A_CONTENT"
+			usageJSON = `{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":null},"output_tokens":10,"total_tokens":110}`
+			encryptedContent = "INVALID_CACHE_WRITE_A_CONTENT"
 		}
 		body := fmt.Sprintf(
 			"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":%q}}\n\n"+
@@ -1293,12 +1293,14 @@ func TestAccountPoolRuntimeAttemptsRetryInvalidRemoteCompactionUsageBeforeCommit
 
 	require.Nil(t, newAPIError)
 	assert.Equal(t, []int{accountA.Id, accountB.Id}, selectedIDs)
-	assert.NotContains(t, recorder.Body.String(), "INVALID_USAGE_A_CONTENT")
-	assert.Contains(t, recorder.Body.String(), "VALID_USAGE_B_CONTENT")
+	assert.NotContains(t, recorder.Body.String(), "INVALID_CACHE_WRITE_A_CONTENT")
+	assert.Contains(t, recorder.Body.String(), "VALID_CACHE_WRITE_B_CONTENT")
 	require.NotNil(t, winningUsage)
-	assert.Equal(t, 12, winningUsage.PromptTokens)
-	assert.Equal(t, 3, winningUsage.CompletionTokens)
-	assert.Equal(t, 15, winningUsage.TotalTokens)
+	assert.Equal(t, 100, winningUsage.PromptTokens)
+	assert.Equal(t, 10, winningUsage.CompletionTokens)
+	assert.Equal(t, 110, winningUsage.TotalTokens)
+	assert.Equal(t, 40, winningUsage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 60, winningUsage.PromptTokensDetails.CacheWriteTokens)
 }
 
 func TestAccountPoolRuntimeAttemptsDoNotRetryAfterRequestCancellation(t *testing.T) {

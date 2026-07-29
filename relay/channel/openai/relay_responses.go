@@ -126,7 +126,8 @@ type codexResponseCompleted struct {
 type codexResponseCompletedUsage struct {
 	InputTokens        *int64 `json:"input_tokens"`
 	InputTokensDetails *struct {
-		CachedTokens *int64 `json:"cached_tokens"`
+		CachedTokens     *int64          `json:"cached_tokens"`
+		CacheWriteTokens json.RawMessage `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokens        *int64 `json:"output_tokens"`
 	OutputTokensDetails *struct {
@@ -613,13 +614,25 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 						return
 					}
+					cacheWriteTokens := int64(0)
+					cacheWriteTokensPresent := completedUsage.InputTokensDetails != nil &&
+						len(completedUsage.InputTokensDetails.CacheWriteTokens) > 0
+					if cacheWriteTokensPresent {
+						cacheWriteTokensJSON := completedUsage.InputTokensDetails.CacheWriteTokens
+						if common.GetJsonType(cacheWriteTokensJSON) != "number" ||
+							common.Unmarshal(cacheWriteTokensJSON, &cacheWriteTokens) != nil {
+							semanticError = responsesCompactionError(remoteCompactionInvalidUsageMessage)
+							compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+							return
+						}
+					}
 					wireIntegers := []*int64{
 						completedUsage.InputTokens,
 						completedUsage.OutputTokens,
 						completedUsage.TotalTokens,
 					}
 					if completedUsage.InputTokensDetails != nil {
-						wireIntegers = append(wireIntegers, completedUsage.InputTokensDetails.CachedTokens)
+						wireIntegers = append(wireIntegers, completedUsage.InputTokensDetails.CachedTokens, &cacheWriteTokens)
 					}
 					if completedUsage.OutputTokensDetails != nil {
 						wireIntegers = append(wireIntegers, completedUsage.OutputTokensDetails.ReasoningTokens)
@@ -639,11 +652,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 						return
 					}
+					if cacheWriteTokensPresent &&
+						(*completedUsage.InputTokensDetails.CachedTokens > *completedUsage.InputTokens ||
+							cacheWriteTokens > *completedUsage.InputTokens-*completedUsage.InputTokensDetails.CachedTokens) {
+						semanticError = responsesCompactionError(remoteCompactionInvalidUsageMessage)
+						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+						return
+					}
 					usage.PromptTokens = int(*completedUsage.InputTokens)
 					usage.CompletionTokens = int(*completedUsage.OutputTokens)
 					usage.TotalTokens = int(*completedUsage.TotalTokens)
 					if completedUsage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = int(*completedUsage.InputTokensDetails.CachedTokens)
+						usage.PromptTokensDetails.CacheWriteTokens = int(cacheWriteTokens)
 					}
 					if completedUsage.OutputTokensDetails != nil {
 						usage.CompletionTokenDetails.ReasoningTokens = int(*completedUsage.OutputTokensDetails.ReasoningTokens)

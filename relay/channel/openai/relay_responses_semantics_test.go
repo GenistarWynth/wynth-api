@@ -1041,6 +1041,11 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2MatchesCodexWireTypes(t *tes
 			completion: `{"type":"response.completed","response":{"id":"resp-null-optionals","usage":null,"end_turn":null}}`,
 		},
 		{
+			name:       "completion accepts missing optional usage",
+			compaction: `{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"encrypted"}}`,
+			completion: `{"type":"response.completed","response":{"id":"resp-missing-usage"}}`,
+		},
+		{
 			name:       "compaction ignores unrelated fields",
 			compaction: `{"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"encrypted","role":7,"content":"ignored"}}`,
 			completion: validCompletion,
@@ -1135,10 +1140,32 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2MatchesCodexWireTypes(t *tes
 	}
 }
 
+func TestOaiResponsesStreamHandlerRemoteCompactionV2CapturesCodex0146CacheWriteTokens(t *testing.T) {
+	completed := `{"type":"response.completed","response":{"id":"resp-0146","status":"completed","model":"gpt-5.6-sol","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":60},"output_tokens":10,"output_tokens_details":{"reasoning_tokens":5},"total_tokens":110}}}`
+	body := responsesSSE(
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-0146","type":"compaction","encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"}}`,
+		completed,
+	)
+
+	recorder, _, done := startDirectResponsesStreamWithBody(
+		t,
+		io.NopCloser(strings.NewReader(body)),
+		remoteCompactionV2Request(),
+		context.Background(),
+		nil,
+	)
+	result := <-done
+
+	require.Nil(t, result.apiErr)
+	require.NotNil(t, result.usage)
+	assert.Equal(t, 60, result.usage.PromptTokensDetails.CacheWriteTokens)
+	assert.Contains(t, recorder.Body.String(), completed)
+}
+
 func TestOaiResponsesStreamHandlerRemoteCompactionV2ValidatesUsageBeforeCommit(t *testing.T) {
 	maxInt64 := int64(^uint64(0) >> 1)
 	maxSupportedInt := int64(^uint(0) >> 1)
-	tests := []struct {
+	type usageTest struct {
 		name           string
 		usage          string
 		wantErr        bool
@@ -1146,12 +1173,21 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2ValidatesUsageBeforeCommit(t
 		wantCompletion int
 		wantTotal      int
 		wantCached     int
+		wantCacheWrite int
 		wantReasoning  int
-	}{
+	}
+	tests := []usageTest{
 		{name: "negative input tokens", usage: `{"input_tokens":-1,"output_tokens":1,"total_tokens":0}`, wantErr: true},
 		{name: "negative output tokens", usage: `{"input_tokens":1,"output_tokens":-1,"total_tokens":0}`, wantErr: true},
 		{name: "negative total tokens", usage: `{"input_tokens":0,"output_tokens":0,"total_tokens":-1}`, wantErr: true},
 		{name: "negative cached tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":-1},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "negative cache write tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":-1},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "cache write tokens outside i64", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":9223372036854775808},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "null cache write tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":null},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "string cache write tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":"1"},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "float cache write tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":1.5},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "boolean cache write tokens", usage: `{"input_tokens":1,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":true},"output_tokens":0,"total_tokens":1}`, wantErr: true},
+		{name: "cache details exceed input tokens", usage: `{"input_tokens":10,"input_tokens_details":{"cached_tokens":6,"cache_write_tokens":5},"output_tokens":0,"total_tokens":10}`, wantErr: true},
 		{name: "negative reasoning tokens", usage: `{"input_tokens":0,"output_tokens":1,"output_tokens_details":{"reasoning_tokens":-1},"total_tokens":1}`, wantErr: true},
 		{
 			name:    "input plus output overflows int64",
@@ -1159,11 +1195,20 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2ValidatesUsageBeforeCommit(t
 			wantErr: true,
 		},
 		{name: "total tokens mismatch", usage: `{"input_tokens":1,"output_tokens":2,"total_tokens":4}`, wantErr: true},
+		{name: "optional input details null", usage: `{"input_tokens":1,"input_tokens_details":null,"output_tokens":0,"total_tokens":1}`, wantPrompt: 1, wantTotal: 1},
 		{
-			name:          "valid zero usage",
-			usage:         `{"input_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0}`,
-			wantCached:    0,
-			wantReasoning: 0,
+			name:           "Codex 0.144.6 absent cache write defaults zero",
+			usage:          `{"input_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0}`,
+			wantCached:     0,
+			wantCacheWrite: 0,
+			wantReasoning:  0,
+		},
+		{
+			name:           "Codex 0.146 explicit zero cache write",
+			usage:          `{"input_tokens":0,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0}`,
+			wantCached:     0,
+			wantCacheWrite: 0,
+			wantReasoning:  0,
 		},
 		{
 			name:          "highest valid non-overflow boundary",
@@ -1173,6 +1218,13 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2ValidatesUsageBeforeCommit(t
 			wantCached:    int(maxSupportedInt),
 			wantReasoning: 0,
 		},
+	}
+	if maxSupportedInt == 1<<31-1 {
+		tests = append(tests, usageTest{
+			name:    "cache write tokens overflow Go int",
+			usage:   `{"input_tokens":2147483648,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":2147483648},"output_tokens":0,"total_tokens":2147483648}`,
+			wantErr: true,
+		})
 	}
 
 	for _, test := range tests {
@@ -1211,6 +1263,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2ValidatesUsageBeforeCommit(t
 			assert.Equal(t, test.wantCompletion, result.usage.CompletionTokens)
 			assert.Equal(t, test.wantTotal, result.usage.TotalTokens)
 			assert.Equal(t, test.wantCached, result.usage.PromptTokensDetails.CachedTokens)
+			assert.Equal(t, test.wantCacheWrite, result.usage.PromptTokensDetails.CacheWriteTokens)
 			assert.Equal(t, test.wantReasoning, result.usage.CompletionTokenDetails.ReasoningTokens)
 			assert.NotEmpty(t, recorder.Body.String())
 			assert.True(t, info.HasSendResponse())
