@@ -664,6 +664,16 @@ func incompatibleRemoteCompactionV2StreamBody(channelID int, text string) string
 	)
 }
 
+func invalidWireRemoteCompactionV2StreamBody(channelID int) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"cmp-invalid-wire-%d\",\"type\":\"compaction\",\"encrypted_content\":\"INVALID_A_ENCRYPTED_CONTENT\",\"internal_chat_message_metadata_passthrough\":\"INVALID_A_METADATA\"}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-invalid-wire-%d\",\"status\":\"completed\",\"model\":\"%s\",\"usage\":{\"input_tokens\":9000,\"output_tokens\":8000,\"total_tokens\":17000}}}\n\n",
+		channelID,
+		channelID,
+		relayFailoverModel,
+	)
+}
+
 func responsesEventStream(events ...string) string {
 	var body strings.Builder
 	for _, event := range events {
@@ -773,6 +783,50 @@ func TestRelayRemoteCompactionV2RetriesIncompatibleMessageWithoutLeak(t *testing
 	assert.Equal(t, 1, result.userRequestCount)
 	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
 	assert.Equal(t, result.consumeLogQuota, result.tokenUsedQuota)
+}
+
+func TestRelayRemoteCompactionV2RetriesInvalidCodexWireTypesWithoutLeakOrBilling(t *testing.T) {
+	groupRatio := 1.0
+	expectedFinalQuota := 1_000_000 - 3175
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		groupRatio:         &groupRatio,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: invalidWireRemoteCompactionV2StreamBody(1),
+			2: successfulRemoteCompactionV2StreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.NotContains(t, result.body, "INVALID_A_ENCRYPTED_CONTENT")
+	assert.NotContains(t, result.body, "INVALID_A_METADATA")
+	assert.NotContains(t, result.body, "resp-invalid-wire-1")
+	assert.Contains(t, result.body, `"encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2"`)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 2, result.consumeLogChannelID)
+	assert.Equal(t, 1200, result.consumeLogPromptTokens)
+	assert.Equal(t, 20, result.consumeLogCompletionTokens)
+	assert.Equal(t, 3175, result.consumeLogQuota)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
+	assert.Equal(t, 1, result.userRequestCount)
 }
 
 func TestRelayRemoteCompactionV2ExhaustionReturnsSanitizedError(t *testing.T) {

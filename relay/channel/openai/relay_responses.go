@@ -2,12 +2,15 @@ package openai
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -35,6 +38,7 @@ type remoteCompactionStreamReader struct {
 	mu          sync.Mutex
 	remaining   int64
 	terminalErr error
+	exhausted   atomic.Bool
 }
 
 func (r *remoteCompactionStreamReader) Read(data []byte) (int, error) {
@@ -47,6 +51,7 @@ func (r *remoteCompactionStreamReader) Read(data []byte) (int, error) {
 		return 0, r.terminalErr
 	}
 	if r.remaining <= 0 {
+		r.exhausted.Store(true)
 		var sentinel [1]byte
 		// Tolerate transient empty reads without spinning forever on a broken Reader.
 		for range 100 {
@@ -68,10 +73,65 @@ func (r *remoteCompactionStreamReader) Read(data []byte) (int, error) {
 	}
 	n, err := r.ReadCloser.Read(data)
 	r.remaining -= int64(n)
-	if r.remaining <= 0 && err != nil {
-		r.terminalErr = err
+	if r.remaining <= 0 {
+		r.exhausted.Store(true)
+		if err != nil {
+			r.terminalErr = err
+		}
 	}
 	return n, err
+}
+
+func (r *remoteCompactionStreamReader) LimitExhausted() bool {
+	return r != nil && r.exhausted.Load()
+}
+
+func (r *remoteCompactionStreamReader) TerminalError() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.terminalErr
+}
+
+func (r *remoteCompactionStreamReader) StopUnlessLimitNeedsConfirmation(sr *helper.StreamResult, err error) {
+	if r == nil || !r.LimitExhausted() {
+		sr.Stop(err)
+	}
+}
+
+type codexRemoteCompactionStreamEvent struct {
+	Type     string          `json:"type"`
+	Item     json.RawMessage `json:"item"`
+	Response json.RawMessage `json:"response"`
+}
+
+type codexRemoteCompactionItem struct {
+	Type             string  `json:"type"`
+	ID               *string `json:"id"`
+	EncryptedContent *string `json:"encrypted_content"`
+	Metadata         *struct {
+		TurnID *string `json:"turn_id"`
+	} `json:"internal_chat_message_metadata_passthrough"`
+}
+
+type codexResponseCompleted struct {
+	ID      *string                      `json:"id"`
+	EndTurn *bool                        `json:"end_turn"`
+	Usage   *codexResponseCompletedUsage `json:"usage"`
+}
+
+type codexResponseCompletedUsage struct {
+	InputTokens        *int64 `json:"input_tokens"`
+	InputTokensDetails *struct {
+		CachedTokens *int64 `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokens        *int64 `json:"output_tokens"`
+	OutputTokensDetails *struct {
+		ReasoningTokens *int64 `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
+	TotalTokens *int64 `json:"total_tokens"`
 }
 
 type responsesPreludeWriter struct {
@@ -213,12 +273,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		isRemoteCompactionV2 = request.IsRemoteCompactionV2()
 	}
 	bufferLimit := responsesPreludeBufferLimit
+	var compactionStreamReader *remoteCompactionStreamReader
 	if isRemoteCompactionV2 {
 		bufferLimit = compactResponseBodyLimit
-		resp.Body = &remoteCompactionStreamReader{
+		compactionStreamReader = &remoteCompactionStreamReader{
 			ReadCloser: resp.Body,
 			remaining:  compactResponseStreamReadLimit,
 		}
+		resp.Body = compactionStreamReader
 	}
 
 	originalWriter := c.Writer
@@ -236,38 +298,60 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	outputItemCount := 0
 
 	termination := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		var streamResponse dto.ResponsesStreamResponse
-		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
-			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
-			if isRemoteCompactionV2 {
-				semanticError = responsesCompactionError("upstream Responses compaction stream returned invalid event JSON")
-				sr.Stop(semanticError)
-				return
-			}
-			sr.Error(err)
+		if isRemoteCompactionV2 && semanticError != nil {
 			return
 		}
-		if streamResponse.Response != nil {
-			info.SetActualResponseModel(streamResponse.Response.Model, relaycommon.ActualResponseModelSourceOpenAIResponses)
-		}
-
-		eventIsMeaningful := responsesStreamEventHasMeaningfulOutput(&streamResponse)
+		var streamResponse dto.ResponsesStreamResponse
+		eventIsMeaningful := false
 		if isRemoteCompactionV2 {
-			eventIsMeaningful = false
+			var remoteEvent codexRemoteCompactionStreamEvent
+			if err := common.UnmarshalJsonStr(data, &remoteEvent); err != nil {
+				semanticError = responsesCompactionError("upstream Responses compaction stream returned invalid event JSON")
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+				return
+			}
+			streamResponse.Type = remoteEvent.Type
+			if len(remoteEvent.Response) > 0 {
+				var responseMetadata struct {
+					Model any `json:"model"`
+				}
+				if common.Unmarshal(remoteEvent.Response, &responseMetadata) == nil {
+					if model, ok := responseMetadata.Model.(string); ok {
+						streamResponse.Response = &dto.OpenAIResponsesResponse{Model: model}
+					}
+				}
+			}
 			switch streamResponse.Type {
 			case dto.ResponsesOutputTypeItemDone:
 				outputItemCount++
-				if streamResponse.Item == nil {
+				trimmedItem := bytes.TrimSpace(remoteEvent.Item)
+				if len(trimmedItem) == 0 || bytes.Equal(trimmedItem, []byte("null")) {
 					semanticError = responsesCompactionError("upstream Responses compaction stream returned an output item without an item payload")
-					sr.Stop(semanticError)
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 					return
 				}
-				if streamResponse.Item.Type == "compaction" || streamResponse.Item.Type == "compaction_summary" {
-					if streamResponse.Item.EncryptedContent == nil {
-						semanticError = responsesCompactionError("upstream Responses compaction output is missing encrypted_content")
-						sr.Stop(semanticError)
+				var itemType struct {
+					Type string `json:"type"`
+				}
+				if common.Unmarshal(remoteEvent.Item, &itemType) == nil {
+					streamResponse.Item = &dto.ResponsesOutput{Type: itemType.Type}
+				}
+				if itemType.Type == "compaction" || itemType.Type == "compaction_summary" {
+					var item codexRemoteCompactionItem
+					if err := common.Unmarshal(remoteEvent.Item, &item); err != nil {
+						semanticError = responsesCompactionError("upstream Responses compaction output does not match the Codex wire schema")
+						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 						return
 					}
+					if item.EncryptedContent == nil {
+						semanticError = responsesCompactionError("upstream Responses compaction output is missing encrypted_content")
+						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+						return
+					}
+					if item.ID != nil {
+						streamResponse.Item.ID = *item.ID
+					}
+					streamResponse.Item.EncryptedContent = item.EncryptedContent
 					compactionOutputCount++
 					if compactionOutputCount > 1 {
 						semanticError = responsesCompactionError(fmt.Sprintf(
@@ -275,21 +359,57 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 							compactionOutputCount,
 							outputItemCount,
 						))
-						sr.Stop(semanticError)
+						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 						return
 					}
 				}
 			case "response.completed":
-				var completedEnvelope struct {
-					Response *struct {
-						ID *string `json:"id"`
-					} `json:"response"`
-				}
-				if err := common.UnmarshalJsonStr(data, &completedEnvelope); err != nil ||
-					completedEnvelope.Response == nil || completedEnvelope.Response.ID == nil {
-					semanticError = responsesCompactionError("upstream Responses compaction completion is missing response.id")
-					sr.Stop(semanticError)
+				var completed codexResponseCompleted
+				if err := common.Unmarshal(remoteEvent.Response, &completed); err != nil {
+					semanticError = responsesCompactionError("upstream Responses compaction completion does not match the Codex wire schema")
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 					return
+				}
+				if completed.ID == nil {
+					semanticError = responsesCompactionError("upstream Responses compaction completion is missing response.id")
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+					return
+				}
+				if completed.Usage != nil {
+					completedUsage := completed.Usage
+					if completedUsage.InputTokens == nil || completedUsage.OutputTokens == nil || completedUsage.TotalTokens == nil ||
+						(completedUsage.InputTokensDetails != nil && completedUsage.InputTokensDetails.CachedTokens == nil) ||
+						(completedUsage.OutputTokensDetails != nil && completedUsage.OutputTokensDetails.ReasoningTokens == nil) {
+						semanticError = responsesCompactionError("upstream Responses compaction completion usage does not match the Codex wire schema")
+						compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+						return
+					}
+					if strconv.IntSize == 32 {
+						wireIntegers := []*int64{
+							completedUsage.InputTokens,
+							completedUsage.OutputTokens,
+							completedUsage.TotalTokens,
+						}
+						if completedUsage.InputTokensDetails != nil {
+							wireIntegers = append(wireIntegers, completedUsage.InputTokensDetails.CachedTokens)
+						}
+						if completedUsage.OutputTokensDetails != nil {
+							wireIntegers = append(wireIntegers, completedUsage.OutputTokensDetails.ReasoningTokens)
+						}
+						for _, value := range wireIntegers {
+							if *value < -1<<31 || *value > 1<<31-1 {
+								semanticError = responsesCompactionError("upstream Responses compaction completion usage exceeds the supported integer range")
+								compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+								return
+							}
+						}
+					}
+					usage.PromptTokens = int(*completedUsage.InputTokens)
+					usage.CompletionTokens = int(*completedUsage.OutputTokens)
+					usage.TotalTokens = int(*completedUsage.TotalTokens)
+					if completedUsage.InputTokensDetails != nil {
+						usage.PromptTokensDetails.CachedTokens = int(*completedUsage.InputTokensDetails.CachedTokens)
+					}
 				}
 				if compactionOutputCount != 1 {
 					semanticError = responsesCompactionError(fmt.Sprintf(
@@ -297,15 +417,39 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 						compactionOutputCount,
 						outputItemCount,
 					))
-					sr.Stop(semanticError)
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 					return
+				}
+				model := ""
+				if streamResponse.Response != nil {
+					model = streamResponse.Response.Model
+				}
+				streamResponse.Response = &dto.OpenAIResponsesResponse{
+					ID:    *completed.ID,
+					Model: model,
 				}
 				eventIsMeaningful = true
 			case "response.incomplete":
 				semanticError = responsesCompactionError("upstream Responses compaction stream ended incomplete")
-				sr.Stop(semanticError)
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+				return
+			case "response.failed", "response.error":
+				if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+					semanticError = responsesCompactionError("upstream Responses compaction failure event is invalid")
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
+					return
+				}
+			}
+		} else {
+			if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+				logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
+				sr.Error(err)
 				return
 			}
+			eventIsMeaningful = responsesStreamEventHasMeaningfulOutput(&streamResponse)
+		}
+		if streamResponse.Response != nil {
+			info.SetActualResponseModel(streamResponse.Response.Model, relaycommon.ActualResponseModelSourceOpenAIResponses)
 		}
 		switch streamResponse.Type {
 		case "response.failed", "response.error":
@@ -316,34 +460,34 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			semanticError = responsesAPIError(oaiError, "upstream Responses stream failed")
 			if hasMeaningfulOutput {
 				if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
-					sr.Stop(err)
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, err)
 					return
 				}
 			}
-			sr.Stop(semanticError)
+			compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 			return
 		case "response.completed":
 			if !hasMeaningfulOutput && !eventIsMeaningful {
 				semanticError = responsesEmptyError("upstream Responses stream completed without meaningful output")
-				sr.Stop(semanticError)
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 				return
 			}
 		case "response.incomplete":
 			if !hasMeaningfulOutput && !eventIsMeaningful {
 				semanticError = responsesEmptyError("upstream Responses stream was incomplete without meaningful output")
-				sr.Stop(semanticError)
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 				return
 			}
 		}
 
 		if !hasMeaningfulOutput && !eventIsMeaningful {
 			if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
-				sr.Stop(err)
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, err)
 				return
 			}
 			if preludeWriter.Error() != nil {
 				semanticError = responsesBodyLimitError()
-				sr.Stop(semanticError)
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 				return
 			}
 			return
@@ -353,26 +497,28 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if !hasMeaningfulOutput {
 			if isRemoteCompactionV2 {
 				if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
-					sr.Stop(err)
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, err)
 					return
 				}
 				eventBuffered = true
 				if preludeWriter.Error() != nil {
 					semanticError = responsesBodyLimitError()
-					sr.Stop(semanticError)
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 					return
 				}
 			}
-			if err := preludeWriter.Commit(); err != nil {
-				sr.Stop(err)
-				return
+			if !isRemoteCompactionV2 {
+				if err := preludeWriter.Commit(); err != nil {
+					compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, err)
+					return
+				}
 			}
 			hasMeaningfulOutput = true
 		}
 
 		if !eventBuffered {
 			if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
-				sr.Stop(err)
+				compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, err)
 				return
 			}
 		}
@@ -402,10 +548,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
-			sr.Done()
+			if !isRemoteCompactionV2 || !compactionStreamReader.LimitExhausted() {
+				sr.Done()
+			}
 		case "response.incomplete":
 			semanticError = responsesIncompleteError(streamResponse.Response)
-			sr.Stop(semanticError)
+			compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 		case "response.output_text.delta":
 			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
@@ -448,7 +596,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if termination.IsCancelled() {
 		return usage, nil
 	}
-	if errors.Is(termination.EndError, errRemoteCompactionStreamTooLarge) {
+	if errors.Is(compactionStreamReader.TerminalError(), errRemoteCompactionStreamTooLarge) ||
+		errors.Is(termination.EndError, errRemoteCompactionStreamTooLarge) {
 		return usage, responsesBodyLimitError()
 	}
 	if semanticError != nil {
@@ -462,6 +611,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return usage, responsesCompactionError("upstream Responses compaction stream ended before response.completed")
 		}
 		return usage, responsesEmptyError("upstream Responses stream returned no meaningful output")
+	}
+	if isRemoteCompactionV2 {
+		if err := preludeWriter.Commit(); err != nil {
+			return usage, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+		}
 	}
 	return usage, nil
 }
