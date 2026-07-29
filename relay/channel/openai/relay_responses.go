@@ -32,21 +32,45 @@ var errRemoteCompactionStreamTooLarge = errors.New("upstream Responses compactio
 
 type remoteCompactionStreamReader struct {
 	io.ReadCloser
-	mu        sync.Mutex
-	remaining int64
+	mu          sync.Mutex
+	remaining   int64
+	terminalErr error
 }
 
 func (r *remoteCompactionStreamReader) Read(data []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(data) == 0 {
+		return 0, nil
+	}
+	if r.terminalErr != nil {
+		return 0, r.terminalErr
+	}
 	if r.remaining <= 0 {
-		return 0, errRemoteCompactionStreamTooLarge
+		var sentinel [1]byte
+		// Tolerate transient empty reads without spinning forever on a broken Reader.
+		for range 100 {
+			n, err := r.ReadCloser.Read(sentinel[:])
+			if n > 0 {
+				r.terminalErr = errRemoteCompactionStreamTooLarge
+				return 0, r.terminalErr
+			}
+			if err != nil {
+				r.terminalErr = err
+				return 0, r.terminalErr
+			}
+		}
+		r.terminalErr = io.ErrNoProgress
+		return 0, r.terminalErr
 	}
 	if int64(len(data)) > r.remaining {
 		data = data[:r.remaining]
 	}
 	n, err := r.ReadCloser.Read(data)
 	r.remaining -= int64(n)
+	if r.remaining <= 0 && err != nil {
+		r.terminalErr = err
+	}
 	return n, err
 }
 

@@ -399,7 +399,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2BoundsOneOversizedRawEvent(t
 	assert.NotContains(t, apiErr.Error(), secret)
 	assert.Empty(t, recorder.Body.String())
 	assert.False(t, info.HasSendResponse())
-	assert.LessOrEqual(t, body.bytesRead.Load(), int64(expectedRawReadLimit))
+	assert.LessOrEqual(t, body.bytesRead.Load(), int64(expectedRawReadLimit+1))
 }
 
 func TestOaiResponsesStreamHandlerRemoteCompactionV2BoundsCumulativeRawEvents(t *testing.T) {
@@ -425,7 +425,7 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2BoundsCumulativeRawEvents(t 
 	assert.Equal(t, types.ErrorCodeBadResponseBody, apiErr.GetErrorCode())
 	assert.Empty(t, recorder.Body.String())
 	assert.False(t, info.HasSendResponse())
-	assert.LessOrEqual(t, body.bytesRead.Load(), int64(expectedRawReadLimit))
+	assert.LessOrEqual(t, body.bytesRead.Load(), int64(expectedRawReadLimit+1))
 }
 
 func TestOaiResponsesStreamHandlerRemoteCompactionV2RejectsOversizedCompletionBeforeCommit(t *testing.T) {
