@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -53,6 +54,7 @@ type relayFailoverUpstream struct {
 	abortBeforeChunk bool
 	abortAfterChunk  bool
 	abortAfterWrite  <-chan struct{}
+	afterStreamWrite func()
 	onAttempt        func()
 }
 
@@ -74,40 +76,53 @@ func (w *relayCommitSignalWriter) WriteString(data string) (int, error) {
 }
 
 type relayFailoverOptions struct {
-	candidates        []relayFailoverCandidate
-	upstreams         map[int]relayFailoverUpstream
-	initialChannelID  int
-	retryTimes        int
-	retryStatusRanges []operation_setting.StatusCodeRange
-	usingGroup        string
-	autoGroups        []string
-	stream            bool
-	relayFormat       types.RelayFormat
-	requestPath       string
-	requestBody       string
-	requestContext    context.Context
-	contextSetup      func(*gin.Context)
-	responseBodies    map[int]string
-	requestID         string
-	automaticDisable  bool
-	disableRanges     []operation_setting.StatusCodeRange
-	waitDisabledID    int
+	candidates         []relayFailoverCandidate
+	upstreams          map[int]relayFailoverUpstream
+	initialChannelID   int
+	retryTimes         int
+	retryStatusRanges  []operation_setting.StatusCodeRange
+	usingGroup         string
+	autoGroups         []string
+	stream             bool
+	relayFormat        types.RelayFormat
+	requestPath        string
+	requestBody        string
+	requestContext     context.Context
+	groupRatio         *float64
+	expectedFinalQuota *int
+	contextSetup       func(*gin.Context)
+	responseBodies     map[int]string
+	requestID          string
+	automaticDisable   bool
+	disableRanges      []operation_setting.StatusCodeRange
+	waitDisabledID     int
 }
 
 type relayFailoverResult struct {
-	statusCode       int
-	body             string
-	headers          http.Header
-	attempts         []int
-	usedChannels     []string
-	errorLogCount    int64
-	consumeLogCount  int64
-	userRequestCount int
-	errorLogContent  string
-	appLog           string
-	logRequestIDs    []string
-	logChannelIDs    []int
-	channelStatuses  map[int]int
+	statusCode                 int
+	body                       string
+	headers                    http.Header
+	attempts                   []int
+	upstreamRequestPaths       []string
+	upstreamRequestBodies      []string
+	usedChannels               []string
+	errorLogCount              int64
+	consumeLogCount            int64
+	consumeLogQuota            int
+	consumeLogChannelID        int
+	consumeLogPromptTokens     int
+	consumeLogCompletionTokens int
+	consumeLogOther            string
+	userQuota                  int
+	userUsedQuota              int
+	tokenRemainQuota           int
+	tokenUsedQuota             int
+	userRequestCount           int
+	errorLogContent            string
+	appLog                     string
+	logRequestIDs              []string
+	logChannelIDs              []int
+	channelStatuses            map[int]int
 }
 
 func enabledRelayFailoverCandidate(id int, group string, priority int64) relayFailoverCandidate {
@@ -130,6 +145,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousLogDB := model.LOG_DB
 	previousMemoryCache := common.MemoryCacheEnabled
 	previousRedisEnabled := common.RedisEnabled
+	previousBatchUpdateEnabled := common.BatchUpdateEnabled
 	previousMainDBType := common.MainDatabaseType()
 	previousLogDBType := common.LogDatabaseType()
 	previousRetryTimes := common.RetryTimes
@@ -141,6 +157,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousDataExportEnabled := common.DataExportEnabled
 	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
 	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousCacheRatios := ratio_setting.CacheRatio2JSONString()
 	previousAutoGroups := setting.AutoGroups2JsonString()
 	previousUserUsableGroups := setting.UserUsableGroups2JSONString()
 	previousRetryRanges := append([]operation_setting.StatusCodeRange(nil), operation_setting.AutomaticRetryStatusCodeRanges...)
@@ -157,6 +174,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		&model.Channel{},
 		&model.Ability{},
 		&model.User{},
+		&model.Token{},
 		&model.Log{},
 		&model.AccountPoolChannelBinding{},
 	))
@@ -165,8 +183,10 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	model.LOG_DB = db
 	common.MemoryCacheEnabled = true
 	common.RedisEnabled = false
+	common.BatchUpdateEnabled = false
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.SetLogDatabaseType(common.DatabaseTypeSQLite)
+	model.InitCommonColumnsForTest()
 	common.RetryTimes = opts.retryTimes
 	constant.CountToken = false
 	constant.StreamingTimeout = 30
@@ -188,14 +208,17 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	}
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.6-sol":2.5}`))
+	require.NoError(t, ratio_setting.UpdateCacheRatioByJSONString(`{"gpt-5.6-sol":0.1}`))
 
 	t.Cleanup(func() {
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.MemoryCacheEnabled = previousMemoryCache
 		common.RedisEnabled = previousRedisEnabled
+		common.BatchUpdateEnabled = previousBatchUpdateEnabled
 		common.SetMainDatabaseType(previousMainDBType)
 		common.SetLogDatabaseType(previousLogDBType)
+		model.InitCommonColumnsForTest()
 		common.RetryTimes = previousRetryTimes
 		constant.CountToken = previousCountToken
 		constant.StreamingTimeout = previousStreamingTimeout
@@ -206,6 +229,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		service.ResetAccountPoolRuntimeForTest()
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateCacheRatioByJSONString(previousCacheRatios))
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))
 		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUserUsableGroups))
 		operation_setting.AutomaticRetryStatusCodeRanges = previousRetryRanges
@@ -217,7 +241,11 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 
 	groupRatios := ratio_setting.GetGroupRatioSetting().GroupRatio
 	for _, candidate := range opts.candidates {
-		groupRatios.Set(candidate.group, 0)
+		groupRatio := 0.0
+		if opts.groupRatio != nil {
+			groupRatio = *opts.groupRatio
+		}
+		groupRatios.Set(candidate.group, groupRatio)
 	}
 	if len(opts.autoGroups) > 0 {
 		autoGroupsJSON := `["` + strings.Join(opts.autoGroups, `","`) + `"]`
@@ -239,9 +267,21 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		Quota:    1_000_000,
 		Group:    "default",
 	}).Error)
+	require.NoError(t, db.Create(&model.Token{
+		Id:             1,
+		UserId:         1,
+		Key:            "test-token",
+		Status:         common.TokenStatusEnabled,
+		Name:           "relay-failover-token",
+		RemainQuota:    1_000_000,
+		UnlimitedQuota: false,
+		Group:          "default",
+	}).Error)
 
 	var attemptsMu sync.Mutex
 	attempts := make([]int, 0, len(opts.candidates))
+	upstreamRequestPaths := make([]string, 0, len(opts.candidates))
+	upstreamRequestBodies := make([]string, 0, len(opts.candidates))
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		if len(pathParts) < 2 || pathParts[0] != "channel" {
@@ -254,8 +294,16 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 			return
 		}
 
+		requestBody, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			http.Error(w, "failed to read request", http.StatusBadRequest)
+			return
+		}
+
 		attemptsMu.Lock()
 		attempts = append(attempts, channelID)
+		upstreamRequestPaths = append(upstreamRequestPaths, r.URL.Path)
+		upstreamRequestBodies = append(upstreamRequestBodies, string(requestBody))
 		attemptsMu.Unlock()
 
 		upstream := opts.upstreams[channelID]
@@ -302,11 +350,18 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 				// The OpenAI stream adapter buffers the latest upstream event so
 				// it can inspect final usage. Two events guarantee that the first
 				// one reached the downstream before the transport aborts.
+				streamBody := streamChunk + streamChunk
+				if body := opts.responseBodies[channelID]; body != "" {
+					streamBody = body
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				w.Header().Set("Content-Length", strconv.Itoa(len(streamChunk)*2+1024))
-				_, _ = fmt.Fprint(w, streamChunk, streamChunk)
+				w.Header().Set("Content-Length", strconv.Itoa(len(streamBody)+1024))
+				_, _ = fmt.Fprint(w, streamBody)
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
+				}
+				if upstream.afterStreamWrite != nil {
+					upstream.afterStreamWrite()
 				}
 				if upstream.abortAfterWrite != nil {
 					<-upstream.abortAfterWrite
@@ -451,6 +506,19 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 			return channel.Status == common.ChannelStatusAutoDisabled
 		}, time.Second, 10*time.Millisecond)
 	}
+	if opts.expectedFinalQuota != nil {
+		require.Eventually(t, func() bool {
+			var user model.User
+			if err := db.Select("id", "quota", "used_quota").First(&user, 1).Error; err != nil {
+				return false
+			}
+			var token model.Token
+			if err := db.Select("id", "remain_quota", "used_quota").First(&token, 1).Error; err != nil {
+				return false
+			}
+			return user.Quota == *opts.expectedFinalQuota && token.RemainQuota == *opts.expectedFinalQuota
+		}, time.Second, 10*time.Millisecond)
+	}
 
 	var errorLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
@@ -460,8 +528,14 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	}
 	var consumeLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogCount).Error)
+	var consumeLog model.Log
+	if consumeLogCount > 0 {
+		require.NoError(t, db.Where("type = ?", model.LogTypeConsume).Order("id desc").First(&consumeLog).Error)
+	}
 	var user model.User
 	require.NoError(t, db.First(&user, 1).Error)
+	var token model.Token
+	require.NoError(t, db.First(&token, 1).Error)
 	var logs []model.Log
 	require.NoError(t, db.Order("id").Find(&logs).Error)
 	logRequestIDs := make([]string, 0, len(logs))
@@ -481,19 +555,30 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	finalAttempts := append([]int(nil), attempts...)
 	attemptsMu.Unlock()
 	return relayFailoverResult{
-		statusCode:       recorder.Code,
-		body:             recorder.Body.String(),
-		headers:          recorder.Result().Header.Clone(),
-		attempts:         finalAttempts,
-		usedChannels:     append([]string(nil), c.GetStringSlice("use_channel")...),
-		errorLogCount:    errorLogCount,
-		consumeLogCount:  consumeLogCount,
-		userRequestCount: user.RequestCount,
-		errorLogContent:  errorLog.Content,
-		appLog:           appLog.String(),
-		logRequestIDs:    logRequestIDs,
-		logChannelIDs:    logChannelIDs,
-		channelStatuses:  channelStatuses,
+		statusCode:                 recorder.Code,
+		body:                       recorder.Body.String(),
+		headers:                    recorder.Result().Header.Clone(),
+		attempts:                   finalAttempts,
+		upstreamRequestPaths:       append([]string(nil), upstreamRequestPaths...),
+		upstreamRequestBodies:      append([]string(nil), upstreamRequestBodies...),
+		usedChannels:               append([]string(nil), c.GetStringSlice("use_channel")...),
+		errorLogCount:              errorLogCount,
+		consumeLogCount:            consumeLogCount,
+		consumeLogQuota:            consumeLog.Quota,
+		consumeLogChannelID:        consumeLog.ChannelId,
+		consumeLogPromptTokens:     consumeLog.PromptTokens,
+		consumeLogCompletionTokens: consumeLog.CompletionTokens,
+		consumeLogOther:            consumeLog.Other,
+		userQuota:                  user.Quota,
+		userUsedQuota:              user.UsedQuota,
+		tokenRemainQuota:           token.RemainQuota,
+		tokenUsedQuota:             token.UsedQuota,
+		userRequestCount:           user.RequestCount,
+		errorLogContent:            errorLog.Content,
+		appLog:                     appLog.String(),
+		logRequestIDs:              logRequestIDs,
+		logChannelIDs:              logChannelIDs,
+		channelStatuses:            channelStatuses,
 	}
 }
 
@@ -520,6 +605,341 @@ func successfulResponsesBody(channelID int) string {
 		relayFailoverModel,
 		channelID,
 	)
+}
+
+func remoteCompactionV2RequestBody() string {
+	return `{
+		"model":"gpt-5.6-sol",
+		"instructions":"You are Codex.",
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"Retained conversation text"}]},
+			{"type":"compaction_trigger"}
+		],
+		"tools":[],
+		"tool_choice":"auto",
+		"parallel_tool_calls":true,
+		"reasoning":{"effort":"high","summary":"auto"},
+		"store":false,
+		"stream":true,
+		"include":["reasoning.encrypted_content"],
+		"prompt_cache_key":"thread-test",
+		"client_metadata":{
+			"x-codex-installation-id":"install-test",
+			"session_id":"session-test",
+			"thread_id":"thread-test",
+			"turn_id":"turn-test",
+			"x-codex-window-id":"thread-test:0",
+			"x-codex-turn-metadata":"{\"installation_id\":\"install-test\",\"session_id\":\"session-test\",\"thread_id\":\"thread-test\",\"turn_id\":\"turn-test\",\"window_id\":\"thread-test:0\",\"request_kind\":\"compaction\",\"compaction\":{\"trigger\":\"manual\",\"reason\":\"user_requested\",\"implementation\":\"responses_compaction_v2\",\"phase\":\"standalone_turn\",\"strategy\":\"memento\"}}"
+		}
+	}`
+}
+
+func successfulRemoteCompactionV2StreamBody(channelID int) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-compact-%d\",\"status\":\"in_progress\",\"model\":\"%s\"}}\n\n"+
+			"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"cmp-%d\",\"type\":\"compaction\",\"encrypted_content\":\"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_%d\"}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-compact-%d\",\"status\":\"completed\",\"model\":\"%s\",\"usage\":{\"input_tokens\":1200,\"input_tokens_details\":{\"cached_tokens\":100},\"output_tokens\":20,\"total_tokens\":1220}}}\n\n",
+		channelID,
+		relayFailoverModel,
+		channelID,
+		channelID,
+		channelID,
+		relayFailoverModel,
+	)
+}
+
+func incompatibleRemoteCompactionV2StreamBody(channelID int, text string) string {
+	return fmt.Sprintf(
+		"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-incompatible-%d\",\"status\":\"in_progress\",\"model\":\"%s\"}}\n\n"+
+			"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg-%d\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}}\n\n"+
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-incompatible-%d\",\"status\":\"completed\",\"model\":\"%s\",\"output\":[{\"id\":\"msg-%d\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}],\"usage\":{\"input_tokens\":1200,\"output_tokens\":20,\"total_tokens\":1220}}}\n\n",
+		channelID,
+		relayFailoverModel,
+		channelID,
+		text,
+		channelID,
+		relayFailoverModel,
+		channelID,
+		text,
+	)
+}
+
+func responsesEventStream(events ...string) string {
+	var body strings.Builder
+	for _, event := range events {
+		body.WriteString("data: ")
+		body.WriteString(event)
+		body.WriteString("\n\n")
+	}
+	return body.String()
+}
+
+func assertRemoteCompactionV2OutboundRequest(t *testing.T, result relayFailoverResult, attempt int, channelID int) {
+	t.Helper()
+	require.Greater(t, len(result.upstreamRequestPaths), attempt)
+	require.Greater(t, len(result.upstreamRequestBodies), attempt)
+	assert.Equal(t, fmt.Sprintf("/channel/%d/v1/responses", channelID), result.upstreamRequestPaths[attempt])
+
+	var request dto.OpenAIResponsesRequest
+	require.NoError(t, common.UnmarshalJsonStr(result.upstreamRequestBodies[attempt], &request))
+	var input []map[string]any
+	require.NoError(t, common.Unmarshal(request.Input, &input))
+	require.NotEmpty(t, input)
+	assert.Equal(t, map[string]any{"type": "compaction_trigger"}, input[len(input)-1])
+	require.NotNil(t, request.Stream)
+	assert.True(t, *request.Stream)
+
+	var clientMetadata map[string]string
+	require.NoError(t, common.Unmarshal(request.ClientMetadata, &clientMetadata))
+	var turnMetadata map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(clientMetadata["x-codex-turn-metadata"], &turnMetadata))
+	assert.Equal(t, "compaction", turnMetadata["request_kind"])
+	compactionMetadata, ok := turnMetadata["compaction"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "responses_compaction_v2", compactionMetadata["implementation"])
+}
+
+func TestRelayRemoteCompactionV2AcceptsValidCompactionOutput(t *testing.T) {
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+		},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      remoteCompactionV2RequestBody(),
+		responseBodies: map[int]string{
+			1: successfulRemoteCompactionV2StreamBody(1),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assertRemoteCompactionV2OutboundRequest(t, result, 0, 1)
+	assert.Contains(t, result.body, `"type":"compaction"`)
+	assert.Contains(t, result.body, `"encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_1"`)
+	assert.Contains(t, result.body, `"type":"response.completed"`)
+	assert.EqualValues(t, 0, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+}
+
+func TestRelayRemoteCompactionV2RetriesIncompatibleMessageWithoutLeak(t *testing.T) {
+	groupRatio := 1.0
+	expectedFinalQuota := 1_000_000 - 3175
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		groupRatio:         &groupRatio,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: incompatibleRemoteCompactionV2StreamBody(1, "IGNORED_COMPACT_REPLY"),
+			2: successfulRemoteCompactionV2StreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assertRemoteCompactionV2OutboundRequest(t, result, 0, 1)
+	assertRemoteCompactionV2OutboundRequest(t, result, 1, 2)
+	assert.NotContains(t, result.body, "IGNORED_COMPACT_REPLY")
+	assert.NotContains(t, result.body, "resp-incompatible-1")
+	assert.Contains(t, result.body, `"encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2"`)
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+	assert.Equal(t, 2, result.consumeLogChannelID)
+	assert.Equal(t, 1200, result.consumeLogPromptTokens)
+	assert.Equal(t, 20, result.consumeLogCompletionTokens)
+	assert.Equal(t, 3175, result.consumeLogQuota)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Equal(t, result.consumeLogQuota, result.userUsedQuota)
+	assert.Equal(t, 1, result.userRequestCount)
+	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
+	assert.Equal(t, result.consumeLogQuota, result.tokenUsedQuota)
+}
+
+func TestRelayRemoteCompactionV2ExhaustionReturnsSanitizedError(t *testing.T) {
+	const secret = "sk-remote-compaction-secret"
+	groupRatio := 1.0
+	expectedFinalQuota := 1_000_000
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		groupRatio:         &groupRatio,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: incompatibleRemoteCompactionV2StreamBody(1, "Authorization: Bearer "+secret),
+			2: incompatibleRemoteCompactionV2StreamBody(2, "still not a compaction"),
+		},
+		requestID: "req-remote-compaction-exhausted",
+	})
+
+	assert.Equal(t, http.StatusBadGateway, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.Contains(t, result.body, "expected exactly one compaction output item")
+	assert.Equal(t, 1, strings.Count(result.body, `"error":`))
+	assert.NotContains(t, result.body, secret)
+	assert.NotContains(t, result.body, "still not a compaction")
+	assert.EqualValues(t, 2, result.errorLogCount)
+	assert.EqualValues(t, 0, result.consumeLogCount)
+	assert.Equal(t, []int{1, 2}, result.logChannelIDs)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Zero(t, result.userUsedQuota)
+	assert.Zero(t, result.userRequestCount)
+	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
+	assert.Zero(t, result.tokenUsedQuota)
+}
+
+func TestRelayResponsesMetadataPreludeTransportFailureRetriesSameGroup(t *testing.T) {
+	metadataPrelude := responsesEventStream(
+		`{"type":"response.created","response":{"id":"resp-metadata-only","status":"in_progress","model":"gpt-5.6-sol"}}`,
+		`{"type":"response.in_progress","response":{"id":"resp-metadata-only","status":"in_progress","model":"gpt-5.6-sol"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg-metadata-only","role":"assistant","content":[]}}`,
+	)
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, abortAfterChunk: true},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      responsesFailoverRequestBody(true),
+		responseBodies: map[int]string{
+			1: metadataPrelude,
+			2: successfulResponsesStreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.NotContains(t, result.body, "resp-metadata-only")
+	assert.NotContains(t, result.body, "msg-metadata-only")
+	assert.Contains(t, result.body, "channel-2")
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+}
+
+func TestRelayResponsesMetadataPreludeCleanEOFRetriesSameGroup(t *testing.T) {
+	metadataPrelude := responsesEventStream(
+		`{"type":"response.created","response":{"id":"resp-clean-eof","status":"in_progress","model":"gpt-5.6-sol"}}`,
+		`{"type":"response.in_progress","response":{"id":"resp-clean-eof","status":"in_progress","model":"gpt-5.6-sol"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg-clean-eof","role":"assistant","content":[]}}`,
+	)
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      responsesFailoverRequestBody(true),
+		responseBodies: map[int]string{
+			1: metadataPrelude,
+			2: successfulResponsesStreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1, 2}, result.attempts)
+	assert.Equal(t, []string{"1", "2"}, result.usedChannels)
+	assert.NotContains(t, result.body, "resp-clean-eof")
+	assert.NotContains(t, result.body, "msg-clean-eof")
+	assert.Contains(t, result.body, "channel-2")
+	assert.EqualValues(t, 1, result.errorLogCount)
+	assert.EqualValues(t, 1, result.consumeLogCount)
+}
+
+func TestRelayResponsesClientGoneAfterMetadataDoesNotRetry(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	metadataPrelude := responsesEventStream(
+		`{"type":"response.created","response":{"id":"resp-client-gone","status":"in_progress","model":"gpt-5.6-sol"}}`,
+		`{"type":"response.in_progress","response":{"id":"resp-client-gone","status":"in_progress","model":"gpt-5.6-sol"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg-client-gone","role":"assistant","content":[]}}`,
+	)
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, abortAfterChunk: true, afterStreamWrite: cancel},
+			2: {stream: true},
+		},
+		initialChannelID: 1,
+		usingGroup:       "default",
+		stream:           true,
+		relayFormat:      types.RelayFormatOpenAIResponses,
+		requestPath:      "/v1/responses",
+		requestBody:      responsesFailoverRequestBody(true),
+		requestContext:   requestContext,
+		responseBodies: map[int]string{
+			1: metadataPrelude,
+			2: successfulResponsesStreamBody(2),
+		},
+	})
+
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.Empty(t, result.body)
+	assert.NotContains(t, result.body, "resp-client-gone")
+	assert.NotContains(t, result.body, "channel-2")
+	assert.EqualValues(t, 0, result.errorLogCount)
+	require.EqualValues(t, 1, result.consumeLogCount)
+
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(result.consumeLogOther, &other))
+	streamStatus, ok := other["stream_status"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "error", streamStatus["status"])
+	assert.Equal(t, "client_gone", streamStatus["end_reason"])
+	assert.Equal(t, "context canceled", streamStatus["end_error"])
 }
 
 func TestRelayResponsesExhaustsSameGroupPastChannelNoRetryStatus(t *testing.T) {

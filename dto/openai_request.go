@@ -882,6 +882,19 @@ type OpenAIResponsesRequest struct {
 	Preset json.RawMessage `json:"preset,omitempty"`
 }
 
+func (r *OpenAIResponsesRequest) IsRemoteCompactionV2() bool {
+	if r == nil || len(r.Input) == 0 {
+		return false
+	}
+	var input []struct {
+		Type string `json:"type"`
+	}
+	if err := common.Unmarshal(r.Input, &input); err != nil || len(input) == 0 {
+		return false
+	}
+	return input[len(input)-1].Type == "compaction_trigger"
+}
+
 func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	var fileMeta = make([]*types.FileMeta, 0)
 	var texts = make([]string, 0)

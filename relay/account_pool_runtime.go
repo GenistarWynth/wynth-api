@@ -150,6 +150,9 @@ func runAccountPoolRuntimeAttempts(
 				types.ErrOptionWithSkipRetry(),
 			)
 		}
+		if c != nil {
+			c.Set("event_stream_headers_set", false)
+		}
 		// Pool-mode same-account retry: reuse the previously selected account
 		// without re-running selection. Restore from the post-selection snapshot
 		// so that the selected account's ApiKey/UpstreamModelName/RuntimeProxy/
@@ -182,7 +185,7 @@ func runAccountPoolRuntimeAttempts(
 					_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c), "")
 					service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 				}
-				if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
+				if !shouldRetryAccountPoolRuntimeAttempt(c, info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
 					return newAPIError
 				}
 				normalAttempts++
@@ -216,6 +219,9 @@ func runAccountPoolRuntimeAttempts(
 			}
 			return nil
 		}
+		if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+			return newAPIError
+		}
 
 		// FIX 1: Guard against nil info before calling info.HasSendResponse().
 		// shouldRecordAccountPoolRuntimeAttempt returns true when info==nil, so
@@ -245,7 +251,7 @@ func runAccountPoolRuntimeAttempts(
 			_ = service.RecordAccountPoolRuntimeAttemptFailure(selectedAccountID, newAPIError, common.GetTimestamp(), service.GetSelectedAccountPoolPlatform(c), upstreamModel)
 			service.ForgetSelectedAccountPoolRuntimeAffinity(c)
 		}
-		if !shouldRetryAccountPoolRuntimeAttempt(info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
+		if !shouldRetryAccountPoolRuntimeAttempt(c, info, selectedAccountID, accountRetryTimes, normalAttempts, newAPIError) {
 			return newAPIError
 		}
 		// FIX 2: Advance the normal (inter-account) retry counter only here.
@@ -350,8 +356,11 @@ func cloneAccountPoolRuntimeHeadersOverride(headers map[string]interface{}) map[
 	return cloned
 }
 
-func shouldRetryAccountPoolRuntimeAttempt(info *relaycommon.RelayInfo, selectedAccountID int, accountRetryTimes int, attemptIndex int, err *types.NewAPIError) bool {
+func shouldRetryAccountPoolRuntimeAttempt(c *gin.Context, info *relaycommon.RelayInfo, selectedAccountID int, accountRetryTimes int, attemptIndex int, err *types.NewAPIError) bool {
 	if err == nil || selectedAccountID <= 0 || accountRetryTimes <= 0 || attemptIndex >= accountRetryTimes {
+		return false
+	}
+	if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
 		return false
 	}
 	if types.IsSkipRetryError(err) {

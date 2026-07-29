@@ -155,8 +155,17 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	defer service.CloseResponseBodyGracefully(resp)
 
+	isRemoteCompactionV2 := false
+	if request, ok := info.Request.(*dto.OpenAIResponsesRequest); ok {
+		isRemoteCompactionV2 = request.IsRemoteCompactionV2()
+	}
+	bufferLimit := responsesPreludeBufferLimit
+	if isRemoteCompactionV2 {
+		bufferLimit = compactResponseBodyLimit
+	}
+
 	originalWriter := c.Writer
-	preludeWriter := newResponsesPreludeWriter(originalWriter, responsesPreludeBufferLimit)
+	preludeWriter := newResponsesPreludeWriter(originalWriter, bufferLimit)
 	c.Writer = preludeWriter
 	defer func() {
 		c.Writer = originalWriter
@@ -166,11 +175,18 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	var semanticError *types.NewAPIError
 	hasMeaningfulOutput := false
+	compactionOutputCount := 0
+	outputItemCount := 0
 
 	termination := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
+			if isRemoteCompactionV2 {
+				semanticError = responsesCompactionError("upstream Responses compaction stream returned invalid event JSON")
+				sr.Stop(semanticError)
+				return
+			}
 			sr.Error(err)
 			return
 		}
@@ -179,6 +195,61 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 
 		eventIsMeaningful := responsesStreamEventHasMeaningfulOutput(&streamResponse)
+		if isRemoteCompactionV2 {
+			eventIsMeaningful = false
+			switch streamResponse.Type {
+			case dto.ResponsesOutputTypeItemDone:
+				outputItemCount++
+				if streamResponse.Item == nil {
+					semanticError = responsesCompactionError("upstream Responses compaction stream returned an output item without an item payload")
+					sr.Stop(semanticError)
+					return
+				}
+				if streamResponse.Item.Type == "compaction" || streamResponse.Item.Type == "compaction_summary" {
+					if streamResponse.Item.EncryptedContent == nil {
+						semanticError = responsesCompactionError("upstream Responses compaction output is missing encrypted_content")
+						sr.Stop(semanticError)
+						return
+					}
+					compactionOutputCount++
+					if compactionOutputCount > 1 {
+						semanticError = responsesCompactionError(fmt.Sprintf(
+							"upstream Responses compaction expected exactly one compaction output item, got %d from %d output items",
+							compactionOutputCount,
+							outputItemCount,
+						))
+						sr.Stop(semanticError)
+						return
+					}
+				}
+			case "response.completed":
+				var completedEnvelope struct {
+					Response *struct {
+						ID *string `json:"id"`
+					} `json:"response"`
+				}
+				if err := common.UnmarshalJsonStr(data, &completedEnvelope); err != nil ||
+					completedEnvelope.Response == nil || completedEnvelope.Response.ID == nil {
+					semanticError = responsesCompactionError("upstream Responses compaction completion is missing response.id")
+					sr.Stop(semanticError)
+					return
+				}
+				if compactionOutputCount != 1 {
+					semanticError = responsesCompactionError(fmt.Sprintf(
+						"upstream Responses compaction expected exactly one compaction output item, got %d from %d output items",
+						compactionOutputCount,
+						outputItemCount,
+					))
+					sr.Stop(semanticError)
+					return
+				}
+				eventIsMeaningful = true
+			case "response.incomplete":
+				semanticError = responsesCompactionError("upstream Responses compaction stream ended incomplete")
+				sr.Stop(semanticError)
+				return
+			}
+		}
 		switch streamResponse.Type {
 		case "response.failed", "response.error":
 			oaiError := dto.GetOpenAIError(streamResponse.Error)
@@ -299,6 +370,16 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
+	if c != nil && c.Request != nil {
+		if requestErr := c.Request.Context().Err(); requestErr != nil {
+			info.StreamStatus = relaycommon.NewStreamStatus()
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, requestErr)
+			return usage, nil
+		}
+	}
+	if termination.IsCancelled() {
+		return usage, nil
+	}
 	if semanticError != nil {
 		return usage, semanticError
 	}
@@ -306,6 +387,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return usage, streamError
 	}
 	if !hasMeaningfulOutput {
+		if isRemoteCompactionV2 {
+			return usage, responsesCompactionError("upstream Responses compaction stream ended before response.completed")
+		}
 		return usage, responsesEmptyError("upstream Responses stream returned no meaningful output")
 	}
 	return usage, nil
@@ -442,6 +526,14 @@ func responsesEmptyError(message string) *types.NewAPIError {
 	return types.NewOpenAIError(
 		errors.New(common.SanitizeSecrets(message)),
 		types.ErrorCodeEmptyResponse,
+		http.StatusBadGateway,
+	)
+}
+
+func responsesCompactionError(message string) *types.NewAPIError {
+	return types.NewOpenAIError(
+		errors.New(common.SanitizeSecrets(message)),
+		types.ErrorCodeBadResponse,
 		http.StatusBadGateway,
 	)
 }

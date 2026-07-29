@@ -1,6 +1,8 @@
 package openai
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/types"
@@ -16,7 +19,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type cancelRequestOnCloseBody struct {
+	io.Reader
+	cancel context.CancelFunc
+}
+
+func (b *cancelRequestOnCloseBody) Close() error {
+	b.cancel()
+	return nil
+}
+
 func runDirectResponsesStream(t *testing.T, body string) (*httptest.ResponseRecorder, *relaycommon.RelayInfo, *types.NewAPIError) {
+	return runDirectResponsesStreamWithRequest(t, body, nil)
+}
+
+func runDirectResponsesStreamWithRequest(t *testing.T, body string, request dto.Request) (*httptest.ResponseRecorder, *relaycommon.RelayInfo, *types.NewAPIError) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -29,6 +46,7 @@ func runDirectResponsesStream(t *testing.T, body string) (*httptest.ResponseReco
 	}
 	info := &relaycommon.RelayInfo{
 		DisablePing: true,
+		Request:     request,
 		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.6-sol"},
 	}
 	previousTimeout := constant.StreamingTimeout
@@ -39,6 +57,16 @@ func runDirectResponsesStream(t *testing.T, body string) (*httptest.ResponseReco
 
 	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
 	return recorder, info, apiErr
+}
+
+func remoteCompactionV2Request() *dto.OpenAIResponsesRequest {
+	return &dto.OpenAIResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: []byte(`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"Retained conversation text"}]},
+			{"type":"compaction_trigger"}
+		]`),
+	}
 }
 
 func runDirectResponses(t *testing.T, body string) (*httptest.ResponseRecorder, *types.NewAPIError) {
@@ -155,6 +183,182 @@ func TestOaiResponsesStreamHandlerAcceptsMeaningfulTerminalResponses(t *testing.
 			assert.Contains(t, recorder.Body.String(), event)
 		})
 	}
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2Semantics(t *testing.T) {
+	validCompaction := `{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-1","type":"compaction","encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"}}`
+	emptyEncryptedCompaction := `{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-empty","type":"compaction","encrypted_content":""}}`
+	legacyCompactionAlias := `{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-legacy","type":"compaction_summary","encrypted_content":"LEGACY_ENCRYPTED_CONTEXT"}}`
+	normalMessage := `{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"IGNORED_COMPACT_REPLY"}]}}`
+	completed := `{"type":"response.completed","response":{"id":"resp-compact","status":"completed","model":"gpt-5.6-sol","usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`
+
+	tests := []struct {
+		name       string
+		events     []string
+		wantErr    bool
+		wantInBody string
+	}{
+		{
+			name:       "one compaction",
+			events:     []string{validCompaction, completed},
+			wantInBody: `"encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"`,
+		},
+		{
+			name:       "one compaction with an additional ordinary item",
+			events:     []string{normalMessage, validCompaction, completed},
+			wantInBody: `"type":"compaction"`,
+		},
+		{
+			name:       "legacy compaction summary alias",
+			events:     []string{legacyCompactionAlias, completed},
+			wantInBody: `"type":"compaction_summary"`,
+		},
+		{
+			name:       "empty encrypted content is still a compaction",
+			events:     []string{emptyEncryptedCompaction, completed},
+			wantInBody: `"encrypted_content":""`,
+		},
+		{
+			name: "empty response id is accepted by Codex",
+			events: []string{
+				validCompaction,
+				`{"type":"response.completed","response":{"id":"","status":"completed"}}`,
+			},
+			wantInBody: `"type":"response.completed"`,
+		},
+		{
+			name:    "ordinary message only",
+			events:  []string{normalMessage, completed},
+			wantErr: true,
+		},
+		{
+			name:    "multiple compactions",
+			events:  []string{validCompaction, legacyCompactionAlias, completed},
+			wantErr: true,
+		},
+		{
+			name:    "compaction without response completed",
+			events:  []string{validCompaction},
+			wantErr: true,
+		},
+		{
+			name: "response completed missing required id",
+			events: []string{
+				validCompaction,
+				`{"type":"response.completed","response":{"status":"completed"}}`,
+			},
+			wantErr: true,
+		},
+		{
+			name: "compaction missing encrypted content",
+			events: []string{
+				`{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-invalid","type":"compaction"}}`,
+				completed,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder, info, apiErr := runDirectResponsesStreamWithRequest(
+				t,
+				responsesSSE(test.events...),
+				remoteCompactionV2Request(),
+			)
+
+			if test.wantErr {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, types.ErrorCodeBadResponse, apiErr.GetErrorCode())
+				assert.Empty(t, recorder.Body.String())
+				assert.False(t, info.HasSendResponse())
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.Contains(t, recorder.Body.String(), test.wantInBody)
+		})
+	}
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2AllowsBoundedEncryptedPayloadAbovePreludeLimit(t *testing.T) {
+	encryptedContent := "BEGIN" + strings.Repeat("x", responsesPreludeBufferLimit) + "END"
+	compaction := fmt.Sprintf(
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-large","type":"compaction","encrypted_content":%q}}`,
+		encryptedContent,
+	)
+	completed := `{"type":"response.completed","response":{"id":"resp-large","status":"completed"}}`
+
+	recorder, _, apiErr := runDirectResponsesStreamWithRequest(
+		t,
+		responsesSSE(compaction, completed),
+		remoteCompactionV2Request(),
+	)
+
+	require.Nil(t, apiErr)
+	assert.Greater(t, recorder.Body.Len(), responsesPreludeBufferLimit)
+	assert.Contains(t, recorder.Body.String(), `"encrypted_content":"BEGIN`)
+	assert.Contains(t, recorder.Body.String(), `END"`)
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2RejectsPayloadAboveCompactLimit(t *testing.T) {
+	encryptedContent := strings.Repeat("x", compactResponseBodyLimit)
+	compaction := fmt.Sprintf(
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-too-large","type":"compaction","encrypted_content":%q}}`,
+		encryptedContent,
+	)
+	completed := `{"type":"response.completed","response":{"id":"resp-too-large","status":"completed"}}`
+
+	recorder, info, apiErr := runDirectResponsesStreamWithRequest(
+		t,
+		responsesSSE(compaction, completed),
+		remoteCompactionV2Request(),
+	)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeBadResponseBody, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2CancellationOverridesSemanticFailure(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	body := responsesSSE(
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-incompatible","type":"message","role":"assistant","content":[{"type":"output_text","text":"not a compaction"}]}}`,
+		`{"type":"response.completed","response":{"id":"resp-incompatible","status":"completed"}}`,
+	)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: &cancelRequestOnCloseBody{
+			Reader: strings.NewReader(body),
+			cancel: cancel,
+		},
+	}
+	info := &relaycommon.RelayInfo{
+		DisablePing: true,
+		Request:     remoteCompactionV2Request(),
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.6-sol"},
+	}
+	previousTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = previousTimeout
+	})
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.ErrorIs(t, requestContext.Err(), context.Canceled)
+	require.Nil(t, apiErr)
+	assert.Empty(t, recorder.Body.String())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	assert.ErrorIs(t, info.StreamStatus.EndError, context.Canceled)
 }
 
 func TestOaiResponsesStreamHandlerPreservesSuccessfulEventOrder(t *testing.T) {

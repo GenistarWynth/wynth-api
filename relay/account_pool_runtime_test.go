@@ -1164,6 +1164,106 @@ func TestAccountPoolRuntimeAttemptsResetFullLifecycleAfterZeroByteAbnormalStream
 	}
 }
 
+func TestAccountPoolRuntimeAttemptsResetEventStreamHeadersBeforeRetry(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx.Writer.Header().Set("X-Request-Baseline", "baseline")
+
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	accountA := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "responses-account-a",
+		Priority: 100,
+	})
+	accountB := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "responses-account-b",
+		Priority: 50,
+	})
+
+	setAccountPoolRelayChannelContext(ctx, channel.Id)
+	baseRequest := &dto.OpenAIResponsesRequest{Model: "gpt-5", Stream: common.GetPointer(true)}
+	info, genErr := relaycommon.GenRelayInfo(ctx, types.RelayFormatOpenAIResponses, baseRequest, nil)
+	require.NoError(t, genErr)
+	info.InitChannelMeta(ctx)
+
+	selectedIDs := make([]int, 0, 2)
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, copyErr := common.DeepCopy(baseRequest)
+		if copyErr != nil {
+			return nil, types.NewError(copyErr, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(dto.Request) *types.NewAPIError {
+		selectedAccountID := service.GetSelectedAccountPoolAccountID(ctx)
+		selectedIDs = append(selectedIDs, selectedAccountID)
+		helper.SetEventStreamHeaders(ctx)
+		if selectedAccountID == accountA.Id {
+			return types.NewErrorWithStatusCode(errors.New("incompatible compaction"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+		}
+		require.Equal(t, accountB.Id, selectedAccountID)
+		assert.Equal(t, "text/event-stream", ctx.Writer.Header().Get("Content-Type"))
+		assert.Equal(t, "no-cache", ctx.Writer.Header().Get("Cache-Control"))
+		assert.Equal(t, "keep-alive", ctx.Writer.Header().Get("Connection"))
+		assert.Equal(t, "chunked", ctx.Writer.Header().Get("Transfer-Encoding"))
+		assert.Equal(t, "no", ctx.Writer.Header().Get("X-Accel-Buffering"))
+		return nil
+	})
+
+	require.Nil(t, newAPIError)
+	assert.Equal(t, []int{accountA.Id, accountB.Id}, selectedIDs)
+}
+
+func TestAccountPoolRuntimeAttemptsDoNotRetryAfterRequestCancellation(t *testing.T) {
+	setupAccountPoolRelayTestDB(t)
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx := newAccountPoolRelayTestContext("/v1/responses")
+	ctx.Request = ctx.Request.WithContext(requestContext)
+	pool := createAccountPoolRelayTestPool(t)
+	channel := createAccountPoolRelayTestChannel(t)
+	createAccountPoolRelayTestEnabledBindingWithRetryTimes(t, pool.Id, channel.Id, 1)
+	first := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "cancelled-account",
+		Priority: 100,
+	})
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("id = ?", first.Id).
+		Update("runtime_options", `{"pool_mode":true,"pool_mode_retry_count":2,"pool_mode_retry_status_codes":[502]}`).Error)
+	second := createAccountPoolRelayTestAccount(t, pool.Id, service.AccountPoolAccountCreateParams{
+		Name:     "must-not-run-after-cancellation",
+		Priority: 50,
+	})
+	info := newAccountPoolRelayTestInfo(channel.Id, "client-gpt-5", "gpt-5")
+	baseRequest := &dto.OpenAIResponsesRequest{Model: "gpt-5", Stream: common.GetPointer(true)}
+	attempts := 0
+
+	newAPIError := runAccountPoolRuntimeAttempts(ctx, info, func() (dto.Request, *types.NewAPIError) {
+		request, copyErr := common.DeepCopy(baseRequest)
+		if copyErr != nil {
+			return nil, types.NewError(copyErr, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		return request, nil
+	}, func(dto.Request) *types.NewAPIError {
+		attempts++
+		cancel()
+		return types.NewErrorWithStatusCode(errors.New("request cancelled during upstream failure"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	})
+
+	require.NotNil(t, newAPIError)
+	assert.Equal(t, 1, attempts)
+	assert.ErrorIs(t, requestContext.Err(), context.Canceled)
+	var reloadedFirst model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloadedFirst, first.Id).Error)
+	assert.Zero(t, reloadedFirst.FailureCount)
+	var reloadedSecond model.AccountPoolAccount
+	require.NoError(t, model.DB.First(&reloadedSecond, second.Id).Error)
+	assert.Zero(t, reloadedSecond.SuccessCount)
+	assert.Zero(t, reloadedSecond.FailureCount)
+}
+
 func TestAccountPoolRuntimeAttemptsNeverRetryAfterPartialCommittedStream(t *testing.T) {
 	setupAccountPoolRelayTestDB(t)
 	recorder := httptest.NewRecorder()

@@ -350,18 +350,19 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id"`
-	Status    string                   `json:"status"`
-	Role      string                   `json:"role"`
-	Content   []ResponsesOutputContent `json:"content"`
-	Result    string                   `json:"result,omitempty"`
-	Quality   string                   `json:"quality"`
-	Size      string                   `json:"size"`
-	CallId    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Namespace string                   `json:"namespace,omitempty"`
-	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Type             string                   `json:"type"`
+	ID               string                   `json:"id"`
+	Status           string                   `json:"status"`
+	Role             string                   `json:"role"`
+	Content          []ResponsesOutputContent `json:"content"`
+	Result           string                   `json:"result,omitempty"`
+	EncryptedContent *string                  `json:"encrypted_content,omitempty"`
+	Quality          string                   `json:"quality"`
+	Size             string                   `json:"size"`
+	CallId           string                   `json:"call_id,omitempty"`
+	Name             string                   `json:"name,omitempty"`
+	Namespace        string                   `json:"namespace,omitempty"`
+	Arguments        json.RawMessage          `json:"arguments,omitempty"`
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
