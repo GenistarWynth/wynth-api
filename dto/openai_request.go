@@ -883,16 +883,45 @@ type OpenAIResponsesRequest struct {
 }
 
 func (r *OpenAIResponsesRequest) IsRemoteCompactionV2() bool {
-	if r == nil || len(r.Input) == 0 {
+	if r == nil || len(r.Input) == 0 || len(r.ClientMetadata) == 0 {
 		return false
 	}
-	var input []struct {
-		Type string `json:"type"`
-	}
+	var input []map[string]json.RawMessage
 	if err := common.Unmarshal(r.Input, &input); err != nil || len(input) == 0 {
 		return false
 	}
-	return input[len(input)-1].Type == "compaction_trigger"
+	finalInput := input[len(input)-1]
+	if len(finalInput) != 1 {
+		return false
+	}
+	var finalInputType string
+	if err := common.Unmarshal(finalInput["type"], &finalInputType); err != nil || finalInputType != "compaction_trigger" {
+		return false
+	}
+
+	var clientMetadata map[string]json.RawMessage
+	if err := common.Unmarshal(r.ClientMetadata, &clientMetadata); err != nil {
+		return false
+	}
+	turnMetadataValue, ok := clientMetadata["x-codex-turn-metadata"]
+	if !ok {
+		return false
+	}
+	var turnMetadataJSON string
+	if err := common.Unmarshal(turnMetadataValue, &turnMetadataJSON); err != nil {
+		return false
+	}
+	var turnMetadata struct {
+		RequestKind string `json:"request_kind"`
+		Compaction  *struct {
+			Implementation string `json:"implementation"`
+		} `json:"compaction"`
+	}
+	if err := common.UnmarshalJsonStr(turnMetadataJSON, &turnMetadata); err != nil || turnMetadata.Compaction == nil {
+		return false
+	}
+	return turnMetadata.RequestKind == "compaction" &&
+		turnMetadata.Compaction.Implementation == "responses_compaction_v2"
 }
 
 func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {

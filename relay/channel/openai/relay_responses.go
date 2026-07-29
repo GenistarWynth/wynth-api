@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -19,7 +20,35 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const responsesPreludeBufferLimit = 1 << 20
+const (
+	responsesPreludeBufferLimit = 1 << 20
+	// Upstream SSE can contain event names, comments, and blank-line framing that
+	// are not copied into the buffered downstream response.
+	compactResponseStreamFramingAllowance = 64 << 10
+	compactResponseStreamReadLimit        = compactResponseBodyLimit + compactResponseStreamFramingAllowance
+)
+
+var errRemoteCompactionStreamTooLarge = errors.New("upstream Responses compaction stream exceeds size limit")
+
+type remoteCompactionStreamReader struct {
+	io.ReadCloser
+	mu        sync.Mutex
+	remaining int64
+}
+
+func (r *remoteCompactionStreamReader) Read(data []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.remaining <= 0 {
+		return 0, errRemoteCompactionStreamTooLarge
+	}
+	if int64(len(data)) > r.remaining {
+		data = data[:r.remaining]
+	}
+	n, err := r.ReadCloser.Read(data)
+	r.remaining -= int64(n)
+	return n, err
+}
 
 type responsesPreludeWriter struct {
 	gin.ResponseWriter
@@ -162,6 +191,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	bufferLimit := responsesPreludeBufferLimit
 	if isRemoteCompactionV2 {
 		bufferLimit = compactResponseBodyLimit
+		resp.Body = &remoteCompactionStreamReader{
+			ReadCloser: resp.Body,
+			remaining:  compactResponseStreamReadLimit,
+		}
 	}
 
 	originalWriter := c.Writer
@@ -285,18 +318,27 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				return
 			}
 			if preludeWriter.Error() != nil {
-				semanticError = types.NewOpenAIError(
-					errors.New("upstream Responses stream prelude exceeds size limit"),
-					types.ErrorCodeBadResponseBody,
-					http.StatusBadGateway,
-				)
+				semanticError = responsesBodyLimitError()
 				sr.Stop(semanticError)
 				return
 			}
 			return
 		}
 
+		eventBuffered := false
 		if !hasMeaningfulOutput {
+			if isRemoteCompactionV2 {
+				if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
+					sr.Stop(err)
+					return
+				}
+				eventBuffered = true
+				if preludeWriter.Error() != nil {
+					semanticError = responsesBodyLimitError()
+					sr.Stop(semanticError)
+					return
+				}
+			}
 			if err := preludeWriter.Commit(); err != nil {
 				sr.Stop(err)
 				return
@@ -304,9 +346,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			hasMeaningfulOutput = true
 		}
 
-		if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
-			sr.Stop(err)
-			return
+		if !eventBuffered {
+			if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
+				sr.Stop(err)
+				return
+			}
 		}
 
 		switch streamResponse.Type {
@@ -379,6 +423,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	if termination.IsCancelled() {
 		return usage, nil
+	}
+	if errors.Is(termination.EndError, errRemoteCompactionStreamTooLarge) {
+		return usage, responsesBodyLimitError()
 	}
 	if semanticError != nil {
 		return usage, semanticError
@@ -534,6 +581,14 @@ func responsesCompactionError(message string) *types.NewAPIError {
 	return types.NewOpenAIError(
 		errors.New(common.SanitizeSecrets(message)),
 		types.ErrorCodeBadResponse,
+		http.StatusBadGateway,
+	)
+}
+
+func responsesBodyLimitError() *types.NewAPIError {
+	return types.NewOpenAIError(
+		errors.New("upstream Responses stream prelude exceeds size limit"),
+		types.ErrorCodeBadResponseBody,
 		http.StatusBadGateway,
 	)
 }

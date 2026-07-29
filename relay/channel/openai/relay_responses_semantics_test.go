@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -24,6 +26,39 @@ type cancelRequestOnCloseBody struct {
 	cancel context.CancelFunc
 }
 
+type countingReadCloser struct {
+	reader    io.Reader
+	bytesRead atomic.Int64
+}
+
+func (b *countingReadCloser) Read(data []byte) (int, error) {
+	n, err := b.reader.Read(data)
+	b.bytesRead.Add(int64(n))
+	return n, err
+}
+
+func (b *countingReadCloser) Close() error {
+	return nil
+}
+
+type cancelOnFirstReadBody struct {
+	reader io.Reader
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (b *cancelOnFirstReadBody) Read(data []byte) (int, error) {
+	n, err := b.reader.Read(data)
+	if n > 0 {
+		b.once.Do(b.cancel)
+	}
+	return n, err
+}
+
+func (b *cancelOnFirstReadBody) Close() error {
+	return nil
+}
+
 func (b *cancelRequestOnCloseBody) Close() error {
 	b.cancel()
 	return nil
@@ -34,15 +69,24 @@ func runDirectResponsesStream(t *testing.T, body string) (*httptest.ResponseReco
 }
 
 func runDirectResponsesStreamWithRequest(t *testing.T, body string, request dto.Request) (*httptest.ResponseRecorder, *relaycommon.RelayInfo, *types.NewAPIError) {
+	return runDirectResponsesStreamWithBody(t, io.NopCloser(strings.NewReader(body)), request, context.Background())
+}
+
+func runDirectResponsesStreamWithBody(
+	t *testing.T,
+	body io.ReadCloser,
+	request dto.Request,
+	requestContext context.Context,
+) (*httptest.ResponseRecorder, *relaycommon.RelayInfo, *types.NewAPIError) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(body)),
+		Body:       body,
 	}
 	info := &relaycommon.RelayInfo{
 		DisablePing: true,
@@ -64,6 +108,24 @@ func remoteCompactionV2Request() *dto.OpenAIResponsesRequest {
 		Model: "gpt-5.6-sol",
 		Input: []byte(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"Retained conversation text"}]},
+			{"type":"compaction_trigger"}
+		]`),
+		ClientMetadata: []byte(`{
+			"x-codex-installation-id":"install-test",
+			"session_id":"session-test",
+			"thread_id":"thread-test",
+			"turn_id":"turn-test",
+			"x-codex-window-id":"thread-test:0",
+			"x-codex-turn-metadata":"{\"installation_id\":\"install-test\",\"session_id\":\"session-test\",\"thread_id\":\"thread-test\",\"turn_id\":\"turn-test\",\"window_id\":\"thread-test:0\",\"request_kind\":\"compaction\",\"compaction\":{\"trigger\":\"manual\",\"reason\":\"user_requested\",\"implementation\":\"responses_compaction_v2\",\"phase\":\"standalone_turn\",\"strategy\":\"memento\"}}"
+		}`),
+	}
+}
+
+func compactionTriggerWithoutMetadataRequest() *dto.OpenAIResponsesRequest {
+	return &dto.OpenAIResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: []byte(`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"ordinary request"}]},
 			{"type":"compaction_trigger"}
 		]`),
 	}
@@ -185,6 +247,21 @@ func TestOaiResponsesStreamHandlerAcceptsMeaningfulTerminalResponses(t *testing.
 	}
 }
 
+func TestOaiResponsesStreamHandlerFinalTriggerWithoutMetadataUsesOrdinarySemantics(t *testing.T) {
+	normalMessage := `{"type":"response.output_item.done","output_index":0,"item":{"id":"msg-ordinary","type":"message","role":"assistant","content":[{"type":"output_text","text":"ordinary response"}]}}`
+	completed := `{"type":"response.completed","response":{"id":"resp-ordinary","status":"completed","model":"gpt-5.6-sol","output":[{"id":"msg-ordinary","type":"message","role":"assistant","content":[{"type":"output_text","text":"ordinary response"}]}],"usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4}}}`
+
+	recorder, _, apiErr := runDirectResponsesStreamWithRequest(
+		t,
+		responsesSSE(normalMessage, completed),
+		compactionTriggerWithoutMetadataRequest(),
+	)
+
+	require.Nil(t, apiErr)
+	assert.Contains(t, recorder.Body.String(), `"text":"ordinary response"`)
+	assert.Contains(t, recorder.Body.String(), `"type":"response.completed"`)
+}
+
 func TestOaiResponsesStreamHandlerRemoteCompactionV2Semantics(t *testing.T) {
 	validCompaction := `{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-1","type":"compaction","encrypted_content":"ENCRYPTED_CONTEXT_COMPACTION_SUMMARY"}}`
 	emptyEncryptedCompaction := `{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-empty","type":"compaction","encrypted_content":""}}`
@@ -298,6 +375,138 @@ func TestOaiResponsesStreamHandlerRemoteCompactionV2AllowsBoundedEncryptedPayloa
 	assert.Greater(t, recorder.Body.Len(), responsesPreludeBufferLimit)
 	assert.Contains(t, recorder.Body.String(), `"encrypted_content":"BEGIN`)
 	assert.Contains(t, recorder.Body.String(), `END"`)
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2BoundsOneOversizedRawEvent(t *testing.T) {
+	const expectedRawReadLimit = compactResponseBodyLimit + (64 << 10)
+	const secret = "sk-oversized-compaction-event-secret"
+	padding := secret + strings.Repeat("x", 2*compactResponseBodyLimit)
+	event := fmt.Sprintf(
+		`{"type":"response.created","response":{"id":"resp-oversized","status":"in_progress","padding":%q}}`,
+		padding,
+	)
+	body := &countingReadCloser{reader: strings.NewReader(responsesSSE(event))}
+
+	recorder, info, apiErr := runDirectResponsesStreamWithBody(
+		t,
+		body,
+		remoteCompactionV2Request(),
+		context.Background(),
+	)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeBadResponseBody, apiErr.GetErrorCode())
+	assert.NotContains(t, apiErr.Error(), secret)
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+	assert.LessOrEqual(t, body.bytesRead.Load(), int64(expectedRawReadLimit))
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2BoundsCumulativeRawEvents(t *testing.T) {
+	const expectedRawReadLimit = compactResponseBodyLimit + (64 << 10)
+	events := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		events = append(events, fmt.Sprintf(
+			`{"type":"response.created","response":{"id":"resp-part-%d","status":"in_progress","padding":%q}}`,
+			i,
+			strings.Repeat("x", 2<<20),
+		))
+	}
+	body := &countingReadCloser{reader: strings.NewReader(responsesSSE(events...))}
+
+	recorder, info, apiErr := runDirectResponsesStreamWithBody(
+		t,
+		body,
+		remoteCompactionV2Request(),
+		context.Background(),
+	)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeBadResponseBody, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+	assert.LessOrEqual(t, body.bytesRead.Load(), int64(expectedRawReadLimit))
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2RejectsOversizedCompletionBeforeCommit(t *testing.T) {
+	compaction := `{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-completion-limit","type":"compaction","encrypted_content":"encrypted"}}`
+	completed := fmt.Sprintf(
+		`{"type":"response.completed","response":{"id":"resp-completion-limit","status":"completed","padding":%q}}`,
+		strings.Repeat("x", compactResponseBodyLimit),
+	)
+
+	recorder, info, apiErr := runDirectResponsesStreamWithRequest(
+		t,
+		responsesSSE(compaction, completed),
+		remoteCompactionV2Request(),
+	)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeBadResponseBody, apiErr.GetErrorCode())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2AcceptsNearBoundaryEncryptedPayload(t *testing.T) {
+	encryptedContent := "BEGIN" + strings.Repeat("x", compactResponseBodyLimit-(4<<10)) + "END"
+	compaction := fmt.Sprintf(
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"cmp-near-limit","type":"compaction","encrypted_content":%q}}`,
+		encryptedContent,
+	)
+	completed := `{"type":"response.completed","response":{"id":"resp-near-limit","status":"completed"}}`
+
+	recorder, _, apiErr := runDirectResponsesStreamWithRequest(
+		t,
+		responsesSSE(compaction, completed),
+		remoteCompactionV2Request(),
+	)
+
+	require.Nil(t, apiErr)
+	assert.Greater(t, recorder.Body.Len(), compactResponseBodyLimit-(8<<10))
+	body := recorder.Body.String()
+	assert.Contains(t, body, `"encrypted_content":"BEGIN`)
+	assert.Contains(t, body, `END"`)
+	compactionIndex := strings.Index(body, `"type":"response.output_item.done"`)
+	completionIndex := strings.Index(body, `"type":"response.completed"`)
+	assert.GreaterOrEqual(t, compactionIndex, 0)
+	assert.Greater(t, completionIndex, compactionIndex)
+}
+
+func TestOaiResponsesStreamHandlerRemoteCompactionV2CancellationWhileBufferingWins(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	event := `{"type":"response.created","response":{"id":"resp-cancel-buffer","status":"in_progress"}}`
+	body := &cancelOnFirstReadBody{
+		reader: strings.NewReader(responsesSSE(event)),
+		cancel: cancel,
+	}
+
+	recorder, info, apiErr := runDirectResponsesStreamWithBody(
+		t,
+		body,
+		remoteCompactionV2Request(),
+		requestContext,
+	)
+
+	require.ErrorIs(t, requestContext.Err(), context.Canceled)
+	require.Nil(t, apiErr)
+	assert.Empty(t, recorder.Body.String())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+}
+
+func TestOaiResponsesStreamHandlerOrdinaryResponsesRetainsLargeCompletionBehavior(t *testing.T) {
+	text := strings.Repeat("x", compactResponseBodyLimit+(128<<10))
+	completed := fmt.Sprintf(
+		`{"type":"response.completed","response":{"id":"resp-ordinary-large","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":%q}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		text,
+	)
+
+	recorder, _, apiErr := runDirectResponsesStream(t, responsesSSE(completed))
+
+	require.Nil(t, apiErr)
+	assert.Greater(t, recorder.Body.Len(), compactResponseBodyLimit)
+	assert.Contains(t, recorder.Body.String(), `"id":"resp-ordinary-large"`)
 }
 
 func TestOaiResponsesStreamHandlerRemoteCompactionV2RejectsPayloadAboveCompactLimit(t *testing.T) {
