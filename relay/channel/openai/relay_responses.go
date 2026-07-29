@@ -310,6 +310,13 @@ func (g *remoteCompactionCommitGate) stop() {
 
 	if waitForCancellation {
 		<-cancellationDone
+		g.mu.Lock()
+		cancelled := g.state == remoteCompactionCancelled
+		cancellationErr := g.cancellationErr
+		g.mu.Unlock()
+		if cancelled {
+			g.markClientGone(cancellationErr)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,6 +62,58 @@ type relayFailoverUpstream struct {
 type relayCommitSignalWriter struct {
 	gin.ResponseWriter
 	onWrite func()
+}
+
+// Keep HTTP delivery alive while the private cancellation context drives the
+// gate callback across the handler's final pre-cleanup Err observation.
+type cancellationCallbackBarrierContext struct {
+	context.Context
+	cancellationContext context.Context
+	done                chan struct{}
+	decisionStarted     chan struct{}
+	callbackStarted     chan struct{}
+	finalObservation    chan struct{}
+	releaseCallback     chan struct{}
+	errCalls            atomic.Int64
+	cancellationCalls   atomic.Int64
+	callbackFinished    atomic.Bool
+}
+
+func (c *cancellationCallbackBarrierContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancellationCallbackBarrierContext) Err() error {
+	call := c.errCalls.Add(1)
+	err := c.cancellationContext.Err()
+	if err == nil {
+		if call == 11 {
+			close(c.decisionStarted)
+			<-c.callbackStarted
+		}
+		return nil
+	}
+	cancellationCall := c.cancellationCalls.Add(1)
+	if cancellationCall <= 2 {
+		return err
+	}
+	if cancellationCall == 3 {
+		close(c.callbackStarted)
+		<-c.releaseCallback
+		c.callbackFinished.Store(true)
+		return err
+	}
+	if c.callbackFinished.Load() {
+		return err
+	}
+	if call == 15 {
+		close(c.finalObservation)
+	}
+	return nil
+}
+
+func (c *cancellationCallbackBarrierContext) AfterFunc(f func()) func() bool {
+	return context.AfterFunc(c.cancellationContext, f)
 }
 
 func (w *relayCommitSignalWriter) Write(data []byte) (int, error) {
@@ -1120,6 +1173,86 @@ func TestRelayRemoteCompactionV2PrecommitCancellationDoesNotRetryOrSettle(t *tes
 	assert.Equal(t, []string{"1"}, result.usedChannels)
 	assert.Empty(t, result.body)
 	assert.NotContains(t, result.body, "resp-compaction-client-gone")
+	assert.NotContains(t, result.body, "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2")
+	assert.Zero(t, result.errorLogCount)
+	assert.Zero(t, result.consumeLogCount)
+	assert.Equal(t, expectedFinalQuota, result.userQuota)
+	assert.Zero(t, result.userUsedQuota)
+	assert.Zero(t, result.userRequestCount)
+	assert.Equal(t, expectedFinalQuota, result.tokenRemainQuota)
+	assert.Zero(t, result.tokenUsedQuota)
+}
+
+func TestRelayRemoteCompactionV2CancellationOwnedSemanticFailureDoesNotWriteRetryOrSettle(t *testing.T) {
+	cancellationContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	requestContext := &cancellationCallbackBarrierContext{
+		Context:             context.Background(),
+		cancellationContext: cancellationContext,
+		done:                make(chan struct{}),
+		decisionStarted:     make(chan struct{}),
+		callbackStarted:     make(chan struct{}),
+		finalObservation:    make(chan struct{}),
+		releaseCallback:     make(chan struct{}),
+	}
+	coordinationDone := make(chan error, 1)
+	go func() {
+		defer close(requestContext.releaseCallback)
+		select {
+		case <-requestContext.decisionStarted:
+		case <-time.After(5 * time.Second):
+			coordinationDone <- fmt.Errorf("timed out waiting for semantic failure cancellation gap")
+			return
+		}
+		cancel()
+		select {
+		case <-requestContext.callbackStarted:
+		case <-time.After(5 * time.Second):
+			coordinationDone <- fmt.Errorf("timed out waiting for cancellation callback ownership")
+			return
+		}
+		select {
+		case <-requestContext.finalObservation:
+			coordinationDone <- nil
+		case <-time.After(5 * time.Second):
+			coordinationDone <- fmt.Errorf("timed out waiting for final semantic failure observation")
+		}
+	}()
+
+	expectedFinalQuota := 1_000_000
+	result := runRelayFailover(t, relayFailoverOptions{
+		candidates: []relayFailoverCandidate{
+			enabledRelayFailoverCandidate(1, "default", 200),
+			enabledRelayFailoverCandidate(2, "default", 100),
+		},
+		upstreams: map[int]relayFailoverUpstream{
+			1: {stream: true, onAttempt: func() { requestContext.errCalls.Store(0) }},
+			2: {stream: true},
+		},
+		initialChannelID:   1,
+		usingGroup:         "default",
+		stream:             true,
+		relayFormat:        types.RelayFormatOpenAIResponses,
+		requestPath:        "/v1/responses",
+		requestBody:        remoteCompactionV2RequestBody(),
+		requestContext:     requestContext,
+		expectedFinalQuota: &expectedFinalQuota,
+		responseBodies: map[int]string{
+			1: incompatibleRemoteCompactionV2StreamBody(1, "not a compaction"),
+			2: successfulRemoteCompactionV2StreamBody(2),
+		},
+	})
+
+	select {
+	case err := <-coordinationDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancellation test coordination")
+	}
+	assert.Equal(t, http.StatusOK, result.statusCode)
+	assert.Equal(t, []int{1}, result.attempts)
+	assert.Equal(t, []string{"1"}, result.usedChannels)
+	assert.Empty(t, result.body)
 	assert.NotContains(t, result.body, "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY_2")
 	assert.Zero(t, result.errorLogCount)
 	assert.Zero(t, result.consumeLogCount)
