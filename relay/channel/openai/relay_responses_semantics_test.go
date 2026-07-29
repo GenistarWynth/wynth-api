@@ -146,12 +146,77 @@ type errCallBarrierContext struct {
 	once    sync.Once
 }
 
+type commitErrGapContext struct {
+	context.Context
+	armed    atomic.Bool
+	observed chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+type cancellationCallbackBarrierContext struct {
+	context.Context
+	callbackStarted chan struct{}
+	commitObserved  chan struct{}
+	releaseCallback chan struct{}
+	errCalls        atomic.Int64
+}
+
+type trackedAfterFuncContext struct {
+	context.Context
+	registered   chan struct{}
+	stopped      chan struct{}
+	registerOnce sync.Once
+	stopOnce     sync.Once
+}
+
 func (c *errCallBarrierContext) Err() error {
 	err := c.Context.Err()
 	if c.calls.Add(1) == c.target {
 		c.once.Do(func() { close(c.reached) })
 	}
 	return err
+}
+
+func (c *commitErrGapContext) Err() error {
+	err := c.Context.Err()
+	if err == nil && c.armed.CompareAndSwap(true, false) {
+		c.once.Do(func() { close(c.observed) })
+		<-c.release
+	}
+	return err
+}
+
+func (c *cancellationCallbackBarrierContext) Err() error {
+	err := c.Context.Err()
+	if err == nil {
+		return nil
+	}
+	switch c.errCalls.Add(1) {
+	case 1:
+		close(c.callbackStarted)
+		<-c.releaseCallback
+	case 2:
+		close(c.commitObserved)
+	}
+	return err
+}
+
+func (c *trackedAfterFuncContext) AfterFunc(_ func()) func() bool {
+	c.registerOnce.Do(func() { close(c.registered) })
+	var once sync.Once
+	return func() bool {
+		stopped := false
+		once.Do(func() {
+			stopped = true
+			c.stopOnce.Do(func() { close(c.stopped) })
+		})
+		return stopped
+	}
+}
+
+func (c *trackedAfterFuncContext) Value(any) any {
+	return nil
 }
 
 func (w *observingResponseWriter) Write(data []byte) (int, error) {
@@ -375,6 +440,103 @@ func TestRemoteCompactionPreludeWriterCancellationWinsBeforeCommit(t *testing.T)
 	assert.ErrorIs(t, info.StreamStatus.EndError, context.Canceled)
 }
 
+func TestRemoteCompactionPreludeWriterCancellationWinsAfterErrObservation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	baseContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	requestContext := &commitErrGapContext{
+		Context:  baseContext,
+		observed: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+	observedWriter := &observingResponseWriter{ResponseWriter: c.Writer}
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	writer := newRemoteCompactionPreludeWriter(observedWriter, 256, requestContext, info)
+	_, err := writer.WriteString("buffered remote compaction")
+	require.NoError(t, err)
+
+	requestContext.armed.Store(true)
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- writer.Commit()
+	}()
+
+	select {
+	case <-requestContext.observed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the precommit context observation")
+	}
+	cancel()
+	close(requestContext.release)
+
+	select {
+	case err := <-commitDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancellation arbitration")
+	}
+	assert.Zero(t, observedWriter.writes.Load())
+	assert.Zero(t, observedWriter.flushes.Load())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+	require.NotNil(t, info.StreamStatus)
+	assert.Equal(t, relaycommon.StreamEndReasonClientGone, info.StreamStatus.EndReason)
+	assert.ErrorIs(t, info.StreamStatus.EndError, context.Canceled)
+}
+
+func TestRemoteCompactionPreludeWriterWaitsForCancellationCallbackWithoutDeadlock(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	baseContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	requestContext := &cancellationCallbackBarrierContext{
+		Context:         baseContext,
+		callbackStarted: make(chan struct{}),
+		commitObserved:  make(chan struct{}),
+		releaseCallback: make(chan struct{}),
+	}
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+	observedWriter := &observingResponseWriter{ResponseWriter: c.Writer}
+	info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+	writer := newRemoteCompactionPreludeWriter(observedWriter, 256, requestContext, info)
+	_, err := writer.WriteString("buffered remote compaction")
+	require.NoError(t, err)
+
+	cancel()
+	select {
+	case <-requestContext.callbackStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancellation callback ownership")
+	}
+	commitDone := make(chan error, 1)
+	go func() {
+		commitDone <- writer.Commit()
+	}()
+	select {
+	case <-requestContext.commitObserved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for commit to observe cancellation")
+	}
+	close(requestContext.releaseCallback)
+
+	select {
+	case err := <-commitDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancellation callback completion")
+	}
+	assert.Zero(t, observedWriter.writes.Load())
+	assert.Zero(t, observedWriter.flushes.Load())
+	assert.Empty(t, recorder.Body.String())
+	assert.False(t, info.HasSendResponse())
+}
+
 func TestRemoteCompactionPreludeWriterCommitWinsBeforeLaterCancellation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -468,6 +630,123 @@ func TestRemoteCompactionPreludeWriterWriteFailureRemainsCommitted(t *testing.T)
 	err = writer.Commit()
 	require.ErrorIs(t, err, underlyingErr)
 	assert.Equal(t, int64(1), observedWriter.writes.Load())
+}
+
+func TestRemoteCompactionPreludeWriterConcurrentCancellationArbitration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	deadline := time.After(10 * time.Second)
+	for range 32 {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		requestContext, cancel := context.WithCancel(context.Background())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+		observedWriter := &observingResponseWriter{ResponseWriter: c.Writer}
+		info := &relaycommon.RelayInfo{StreamStatus: relaycommon.NewStreamStatus()}
+		writer := newRemoteCompactionPreludeWriter(observedWriter, 256, requestContext, info)
+		_, err := writer.WriteString("remote compaction arbitration")
+		require.NoError(t, err)
+
+		start := make(chan struct{})
+		cancelDone := make(chan struct{})
+		commitDone := make(chan error, 1)
+		go func() {
+			<-start
+			cancel()
+			close(cancelDone)
+		}()
+		go func() {
+			<-start
+			commitDone <- writer.Commit()
+		}()
+		close(start)
+
+		select {
+		case <-cancelDone:
+		case <-deadline:
+			t.Fatal("timed out waiting for concurrent cancellation")
+		}
+		select {
+		case err := <-commitDone:
+			if errors.Is(err, context.Canceled) {
+				assert.Zero(t, observedWriter.writes.Load())
+				assert.Zero(t, observedWriter.flushes.Load())
+				assert.Empty(t, recorder.Body.String())
+				assert.False(t, info.HasSendResponse())
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, int64(1), observedWriter.writes.Load())
+				assert.Equal(t, int64(1), observedWriter.flushes.Load())
+				assert.Equal(t, "remote compaction arbitration", recorder.Body.String())
+				assert.True(t, info.HasSendResponse())
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for concurrent commit")
+		}
+		writer.stopCancellationWatch()
+	}
+}
+
+func TestRemoteCompactionSemanticFailureStopsCancellationWatch(t *testing.T) {
+	baseContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	requestContext := &trackedAfterFuncContext{
+		Context:    baseContext,
+		registered: make(chan struct{}),
+		stopped:    make(chan struct{}),
+	}
+	_, _, apiErr := runDirectResponsesStreamWithBody(
+		t,
+		io.NopCloser(strings.NewReader(responsesSSE(
+			`{"type":"response.completed","response":{"id":"resp-semantic-failure","usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}`,
+		))),
+		remoteCompactionV2Request(),
+		requestContext,
+	)
+
+	require.NotNil(t, apiErr)
+	select {
+	case <-requestContext.registered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation watch was not registered")
+	}
+	select {
+	case <-requestContext.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("semantic failure retained its cancellation watch")
+	}
+}
+
+func TestRemoteCompactionCancellationWatchCleanupIsIdempotent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	baseContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	requestContext := &trackedAfterFuncContext{
+		Context:    baseContext,
+		registered: make(chan struct{}),
+		stopped:    make(chan struct{}),
+	}
+	writer := newRemoteCompactionPreludeWriter(c.Writer, 256, requestContext, &relaycommon.RelayInfo{})
+
+	cleanupDone := make(chan struct{})
+	go func() {
+		writer.stopCancellationWatch()
+		writer.stopCancellationWatch()
+		close(cleanupDone)
+	}()
+
+	select {
+	case <-cleanupDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("repeated cancellation cleanup deadlocked")
+	}
+	select {
+	case <-requestContext.stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation watch was not stopped")
+	}
 }
 
 func TestOaiResponsesStreamHandlerClassifiesSemanticFailures(t *testing.T) {

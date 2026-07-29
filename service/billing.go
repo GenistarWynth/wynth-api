@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -14,6 +15,8 @@ const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
 )
+
+const billingSessionContextKey = "billing_session"
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
 // 会话存储在 relayInfo.Billing 上，供后续 Settle / Refund 使用。
@@ -39,7 +42,28 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 		return apiErr
 	}
 	relayInfo.Billing = session
+	if c != nil {
+		c.Set(billingSessionContextKey, session)
+	}
 	return nil
+}
+
+// WaitForBillingRefund waits for refund work associated with the current
+// request. It returns immediately when the request has no billing session or no
+// refund was scheduled before the call.
+func WaitForBillingRefund(ctx context.Context, c *gin.Context) error {
+	if c == nil {
+		return nil
+	}
+	value, exists := c.Get(billingSessionContextKey)
+	if !exists {
+		return nil
+	}
+	session, ok := value.(*BillingSession)
+	if !ok {
+		return nil
+	}
+	return session.WaitRefund(ctx)
 }
 
 // ---------------------------------------------------------------------------

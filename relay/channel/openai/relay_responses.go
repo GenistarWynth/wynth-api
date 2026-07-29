@@ -146,13 +146,16 @@ const (
 )
 
 type remoteCompactionCommitGate struct {
-	mu               sync.Mutex
-	state            remoteCompactionCommitState
-	requestContext   context.Context
-	cancellationErr  error
-	commitErr        error
-	relayInfo        *relaycommon.RelayInfo
-	stopCancellation func() bool
+	mu                  sync.Mutex
+	state               remoteCompactionCommitState
+	requestContext      context.Context
+	cancellationErr     error
+	cancellationDone    chan struct{}
+	commitErr           error
+	relayInfo           *relaycommon.RelayInfo
+	stopCancellation    func() bool
+	stopCalled          bool
+	cancellationStopped bool
 }
 
 func newRemoteCompactionCommitGate(requestContext context.Context, info *relaycommon.RelayInfo) *remoteCompactionCommitGate {
@@ -160,11 +163,13 @@ func newRemoteCompactionCommitGate(requestContext context.Context, info *relayco
 		requestContext = context.Background()
 	}
 	gate := &remoteCompactionCommitGate{
-		state:          remoteCompactionPrecommit,
-		requestContext: requestContext,
-		relayInfo:      info,
+		state:            remoteCompactionPrecommit,
+		requestContext:   requestContext,
+		cancellationDone: make(chan struct{}),
+		relayInfo:        info,
 	}
 	gate.stopCancellation = context.AfterFunc(requestContext, func() {
+		defer close(gate.cancellationDone)
 		gate.cancel(requestContext.Err())
 	})
 	return gate
@@ -234,6 +239,7 @@ func (g *remoteCompactionCommitGate) commit(write func() error) error {
 	case remoteCompactionCancelled:
 		err := g.cancellationErr
 		g.mu.Unlock()
+		g.stop()
 		g.markClientGone(err)
 		return err
 	case remoteCompactionCommitted:
@@ -245,16 +251,34 @@ func (g *remoteCompactionCommitGate) commit(write func() error) error {
 		return err
 	}
 
-	if err := g.requestContext.Err(); err != nil {
-		g.state = remoteCompactionCancelled
-		g.cancellationErr = err
+	requestErr := g.requestContext.Err()
+	if !g.stopCalled {
+		g.cancellationStopped = g.stopCancellation()
+		g.stopCalled = true
+	}
+	if !g.cancellationStopped {
+		cancellationDone := g.cancellationDone
+		g.mu.Unlock()
+		// A false stop result means the callback owns cancellation. It may be
+		// waiting for g.mu, so wait only after releasing the gate.
+		<-cancellationDone
+
+		g.mu.Lock()
+		err := g.cancellationErr
+		if err == nil {
+			err = requestErr
+		}
+		if err == nil {
+			err = context.Canceled
+		}
 		g.mu.Unlock()
 		g.markClientGone(err)
 		return err
 	}
 
-	// This transition is the commit linearization point. Cancellation that has
-	// won the gate cannot cross it; cancellation racing after it is postcommit.
+	// The successful stopCancellation return above is the commit linearization
+	// point: it proves the cancellation callback cannot start. The state change
+	// records that ownership before the first downstream write.
 	g.state = remoteCompactionCommitting
 	if g.relayInfo != nil {
 		g.relayInfo.MarkDownstreamCommitted()
@@ -271,8 +295,21 @@ func (g *remoteCompactionCommitGate) commit(write func() error) error {
 }
 
 func (g *remoteCompactionCommitGate) stop() {
-	if g != nil && g.stopCancellation != nil {
-		g.stopCancellation()
+	if g == nil || g.stopCancellation == nil {
+		return
+	}
+
+	g.mu.Lock()
+	if !g.stopCalled {
+		g.cancellationStopped = g.stopCancellation()
+		g.stopCalled = true
+	}
+	waitForCancellation := !g.cancellationStopped
+	cancellationDone := g.cancellationDone
+	g.mu.Unlock()
+
+	if waitForCancellation {
+		<-cancellationDone
 	}
 }
 

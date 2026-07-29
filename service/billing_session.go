@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,6 +33,7 @@ type BillingSession struct {
 	fundingSettled   bool // funding.Settle 已成功，资金来源已提交
 	settled          bool // Settle 全部完成（资金 + 令牌）
 	refunded         bool // Refund 已调用
+	refundDone       chan struct{}
 	mu               sync.Mutex
 }
 
@@ -86,6 +88,8 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		return
 	}
 	s.refunded = true
+	s.refundDone = make(chan struct{})
+	refundDone := s.refundDone
 	s.mu.Unlock()
 
 	logger.LogInfo(c, fmt.Sprintf("用户 %d 请求失败, 返还预扣费（token_quota=%s, funding=%s）",
@@ -104,6 +108,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	funding := s.funding
 
 	gopool.Go(func() {
+		defer close(refundDone)
 		// 1) 退还资金来源
 		if err := funding.Refund(); err != nil {
 			common.SysLog("error refunding billing source: " + err.Error())
@@ -120,6 +125,30 @@ func (s *BillingSession) Refund(c *gin.Context) {
 			}
 		}
 	})
+}
+
+// WaitRefund waits for the refund scheduled before this call to finish. It
+// returns immediately when Refund has not scheduled work, and does not wait for
+// a future Refund call. A nil context is treated as context.Background().
+func (s *BillingSession) WaitRefund(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	refundDone := s.refundDone
+	s.mu.Unlock()
+	if refundDone == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-refundDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // NeedsRefund 返回是否存在需要退还的预扣状态。

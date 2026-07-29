@@ -493,6 +493,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	gin.DefaultErrorWriter = &appLog
 	common.LogWriterMu.Unlock()
 	Relay(c, relayFormat)
+	require.NoError(t, service.WaitForBillingRefund(context.Background(), c))
 	common.LogWriterMu.Lock()
 	gin.DefaultErrorWriter = oldErrorWriter
 	common.LogWriterMu.Unlock()
