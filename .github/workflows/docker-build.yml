@@ -12,9 +12,17 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: docker-release-final-tags
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/genistarwynth/wynth-api
+  STAGING_PREFIX: staging-${{ github.run_id }}-${{ github.run_attempt }}
+
 jobs:
   build_single_arch:
-    name: Build & push (${{ matrix.arch }})
+    name: Build, stage, and sign (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +69,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Check cosign readiness
+        run: cosign version
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
         with:
@@ -72,37 +86,32 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/genistarwynth/wynth-api
+          images: ${{ env.IMAGE }}
 
-      - name: Build & push
+      - name: Build and push staged image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ghcr.io/genistarwynth/wynth-api:${{ env.TAG }}-${{ matrix.arch }}
-            ghcr.io/genistarwynth/wynth-api:latest-${{ matrix.arch }}
+          tags: ${{ env.IMAGE }}:${{ env.STAGING_PREFIX }}-${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign staged image digest
+        run: cosign sign --yes "${{ env.IMAGE }}@${{ steps.build.outputs.digest }}"
 
-      - name: Sign image with cosign
-        run: cosign sign --yes ghcr.io/genistarwynth/wynth-api@${{ steps.build.outputs.digest }}
-
-      - name: Image summary
+      - name: Staged image summary
         run: |
-          echo "### Docker Image Digest (${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "ghcr.io/genistarwynth/wynth-api:${TAG}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "### Staged Docker Image Digest (${{ matrix.arch }})" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${IMAGE}:${STAGING_PREFIX}-${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   create_manifests:
     name: Create multi-arch manifests
@@ -112,13 +121,20 @@ jobs:
 
     permissions:
       packages: write
-      contents: read
-
       id-token: write
 
+    env:
+      TAG: ${{ needs.build_single_arch.outputs.tag }}
+
     steps:
-      - name: Set version
-        run: echo "TAG=${{ needs.build_single_arch.outputs.tag }}" >> $GITHUB_ENV
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Check cosign readiness
+        run: cosign version
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
@@ -127,31 +143,118 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create & push manifest (version)
+      - name: Resolve and verify staged architecture digests
         run: |
+          set -euo pipefail
+          AMD64_DIGEST=$(docker buildx imagetools inspect \
+            "$IMAGE:$STAGING_PREFIX-amd64" \
+            --format '{{.Manifest.Digest}}')
+          ARM64_DIGEST=$(docker buildx imagetools inspect \
+            "$IMAGE:$STAGING_PREFIX-arm64" \
+            --format '{{.Manifest.Digest}}')
+
+          for DIGEST in "$AMD64_DIGEST" "$ARM64_DIGEST"; do
+            if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Invalid staged image digest: $DIGEST"
+              exit 1
+            fi
+          done
+
+          CERTIFICATE_IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/docker-build.yml@${GITHUB_REF}"
+          cosign verify \
+            --certificate-identity "$CERTIFICATE_IDENTITY" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$IMAGE@$AMD64_DIGEST"
+          cosign verify \
+            --certificate-identity "$CERTIFICATE_IDENTITY" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$IMAGE@$ARM64_DIGEST"
+
+          echo "AMD64_DIGEST=$AMD64_DIGEST" >> "$GITHUB_ENV"
+          echo "ARM64_DIGEST=$ARM64_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Create staged multi-arch manifest
+        run: |
+          set -euo pipefail
           docker buildx imagetools create \
-            -t ghcr.io/genistarwynth/wynth-api:${TAG} \
-            ghcr.io/genistarwynth/wynth-api:${TAG}-amd64 \
-            ghcr.io/genistarwynth/wynth-api:${TAG}-arm64
+            -t "$IMAGE:$STAGING_PREFIX-manifest" \
+            "$IMAGE@$AMD64_DIGEST" \
+            "$IMAGE@$ARM64_DIGEST"
 
-      - name: Create & push manifest (latest)
+          MANIFEST_DIGEST=$(docker buildx imagetools inspect \
+            "$IMAGE:$STAGING_PREFIX-manifest" \
+            --format '{{.Manifest.Digest}}')
+          if ! [[ "$MANIFEST_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid staged manifest digest: $MANIFEST_DIGEST"
+            exit 1
+          fi
+          echo "MANIFEST_DIGEST=$MANIFEST_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Sign and verify staged manifest digest
         run: |
-          docker buildx imagetools create \
-            -t ghcr.io/genistarwynth/wynth-api:latest \
-            ghcr.io/genistarwynth/wynth-api:latest-amd64 \
-            ghcr.io/genistarwynth/wynth-api:latest-arm64
+          set -euo pipefail
+          cosign sign --yes "$IMAGE@$MANIFEST_DIGEST"
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+          CERTIFICATE_IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/docker-build.yml@${GITHUB_REF}"
+          cosign verify \
+            --certificate-identity "$CERTIFICATE_IDENTITY" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$IMAGE@$MANIFEST_DIGEST"
 
-      - name: Sign manifests with cosign
+      - name: Validate digest-preserving promotion
         run: |
-          cosign sign --yes ghcr.io/genistarwynth/wynth-api:${TAG}
-          cosign sign --yes ghcr.io/genistarwynth/wynth-api:latest
+          set -euo pipefail
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$STAGING_PREFIX-promote-amd64" \
+            "$IMAGE@$AMD64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$STAGING_PREFIX-promote-arm64" \
+            "$IMAGE@$ARM64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$STAGING_PREFIX-promote-manifest" \
+            "$IMAGE@$MANIFEST_DIGEST"
+
+          test "$(docker buildx imagetools inspect "$IMAGE:$STAGING_PREFIX-promote-amd64" --format '{{.Manifest.Digest}}')" = "$AMD64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$STAGING_PREFIX-promote-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$STAGING_PREFIX-promote-manifest" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
+
+      - name: Promote signed version digests
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$TAG-amd64" \
+            "$IMAGE@$AMD64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$TAG-arm64" \
+            "$IMAGE@$ARM64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$TAG" \
+            "$IMAGE@$MANIFEST_DIGEST"
+
+          test "$(docker buildx imagetools inspect "$IMAGE:$TAG-amd64" --format '{{.Manifest.Digest}}')" = "$AMD64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$TAG-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
+
+      - name: Promote signed latest digests
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:latest-amd64" \
+            "$IMAGE@$AMD64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:latest-arm64" \
+            "$IMAGE@$ARM64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:latest" \
+            "$IMAGE@$MANIFEST_DIGEST"
+
+          test "$(docker buildx imagetools inspect "$IMAGE:latest-amd64" --format '{{.Manifest.Digest}}')" = "$AMD64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:latest-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
 
       - name: Manifest summary
         run: |
-          echo "### Multi-arch Manifest" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect ghcr.io/genistarwynth/wynth-api:${TAG} >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "### Multi-arch Manifest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "$IMAGE:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
