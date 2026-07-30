@@ -25,6 +25,8 @@ const (
 	authTokenAudience     = "new-api-dashboard"
 )
 
+const SecurityProofScopeAccountPoolCredentialsExport = "account_pool.credentials.export"
+
 var (
 	ErrAuthTokenInvalid = errors.New("authentication token is invalid")
 	ErrAuthTokenExpired = errors.New("authentication token has expired")

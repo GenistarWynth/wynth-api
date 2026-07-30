@@ -573,7 +573,7 @@ func TestAccountPoolAPICreateGrokWebCookieCredential(t *testing.T) {
 	assert.Equal(t, "cf-create-secret", credential.CFClearance)
 }
 
-func TestAccountPoolAPIExportRedactsByDefaultAndIncludesSecretsOnRequest(t *testing.T) {
+func TestAccountPoolAPIExportRedactsByDefaultAndRejectsAdminSecretRequest(t *testing.T) {
 	setupAccountPoolAPITestDB(t)
 	router := accountPoolAPIRouter()
 
@@ -603,11 +603,12 @@ func TestAccountPoolAPIExportRedactsByDefaultAndIncludesSecretsOnRequest(t *test
 	assert.NotContains(t, string(redacted.Raw), "at-export-secret")
 	assert.Contains(t, string(redacted.Raw), "code_assist")
 
-	// include_secrets=true returns the real credentials (admin migration/backup path).
+	// An ordinary admin cannot turn the redacted export into a credential backup.
 	full := accountPoolAPIRequest[map[string]any](t, router, http.MethodGet, "/api/account_pools/"+poolID+"/accounts/export?include_secrets=true", nil)
-	require.True(t, full.Response.Success, full.Response.Message)
-	assert.Contains(t, string(full.Raw), "rt-export-secret")
-	assert.Contains(t, string(full.Raw), "at-export-secret")
+	assert.Equal(t, http.StatusForbidden, full.Code)
+	assert.False(t, full.Response.Success)
+	assert.False(t, strings.Contains(string(full.Raw), "rt-export-secret"))
+	assert.False(t, strings.Contains(string(full.Raw), "at-export-secret"))
 }
 
 func TestAccountPoolAPIUpdateAndDeleteAccount(t *testing.T) {

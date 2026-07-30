@@ -43,6 +43,10 @@ func TestParsePasskeyFinishRequestDoesNotRewriteRequestBody(t *testing.T) {
 	assert.Equal(t, int64(len(bodyText)), context.Request.ContentLength)
 }
 
+func TestAccountPoolCredentialsExportIsAllowedSecurityProofScope(t *testing.T) {
+	assert.True(t, isAllowedSecurityProofScope(service.SecurityProofScopeAccountPoolCredentialsExport))
+}
+
 func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *testing.T) {
 	previousDB := model.DB
 	previousType := common.MainDatabaseType()

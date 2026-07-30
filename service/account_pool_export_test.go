@@ -98,6 +98,67 @@ func TestAccountPoolServiceExportRoundTripsThroughImport(t *testing.T) {
 	assert.Equal(t, "psecret", proxyAuth.Password)
 }
 
+func TestAccountPoolServiceExportRoundTripsGeminiServiceAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	svc := AccountPoolService{}
+	sourcePool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	serviceAccountJSON, _ := newTestServiceAccountJSON(t, "https://oauth2.invalid/token")
+	location := "europe-west1"
+
+	_, err := svc.CreateAccount(AccountPoolAccountCreateParams{
+		PoolID: sourcePool.Id,
+		Name:   "gemini-service-account-fixture",
+		Credential: AccountPoolCredentialConfig{
+			Type:               AccountPoolCredentialTypeServiceAccount,
+			ServiceAccountJSON: serviceAccountJSON,
+			Location:           location,
+		},
+	})
+	require.NoError(t, err)
+
+	redacted, skipped, err := svc.ExportAccounts(sourcePool.Id, false)
+	require.NoError(t, err)
+	assert.Zero(t, skipped)
+	require.Len(t, redacted.Accounts, 1)
+	assert.NotContains(t, redacted.Accounts[0].Credentials, "service_account_json")
+	assert.NotContains(t, redacted.Accounts[0].Credentials, "location")
+	redactedJSON, err := common.Marshal(redacted)
+	require.NoError(t, err)
+	assert.False(t, strings.Contains(string(redactedJSON), serviceAccountJSON))
+
+	backup, skipped, err := svc.ExportAccounts(sourcePool.Id, true)
+	require.NoError(t, err)
+	assert.Zero(t, skipped)
+	require.Len(t, backup.Accounts, 1)
+	assert.True(t, backup.Accounts[0].Credentials["service_account_json"] == serviceAccountJSON)
+	assert.Equal(t, location, backup.Accounts[0].Credentials["location"])
+
+	content, err := common.Marshal(backup)
+	require.NoError(t, err)
+	destinationPool := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  destinationPool.Id,
+		Format:  "sub2api",
+		Content: string(content),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Zero(t, result.Skipped)
+	assert.Zero(t, result.Failed)
+	assert.Empty(t, result.Errors)
+	require.Len(t, result.Accounts, 1)
+
+	imported := accountByNameInPool(t, destinationPool.Id, "gemini-service-account-fixture")
+	credential, err := DecryptAccountPoolCredentialConfig(imported.CredentialConfig)
+	require.NoError(t, err)
+	assert.Equal(t, AccountPoolCredentialTypeServiceAccount, credential.Type)
+	assert.True(t, credential.ServiceAccountJSON == serviceAccountJSON)
+	assert.Equal(t, location, credential.Location)
+	serviceAccountInfo, err := ExtractVertexServiceAccountInfo([]byte(credential.ServiceAccountJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "test-project-123", serviceAccountInfo.ProjectID)
+}
+
 // A grok.com web-cookie account stores its sso token in APIKey and an optional
 // cf_clearance — both secret. A full export must emit them under the importer-read
 // names ("sso"/"cf_clearance") so it round-trips, and a redacted export must mask

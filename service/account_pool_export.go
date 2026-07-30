@@ -283,6 +283,14 @@ func exportAccountPoolAccount(account model.AccountPoolAccount, platform string,
 	emitSecret("refresh_token", refreshToken)
 	emitSecret("access_token", accessToken)
 	emitSecret("id_token", idToken)
+	if includeSecrets && strings.EqualFold(credentialType, AccountPoolCredentialTypeServiceAccount) {
+		if serviceAccountJSON := strings.TrimSpace(credential.ServiceAccountJSON); serviceAccountJSON != "" {
+			exported.Credentials["service_account_json"] = serviceAccountJSON
+		}
+		if location := strings.TrimSpace(credential.Location); location != "" {
+			exported.Credentials["location"] = location
+		}
+	}
 	if includeSecrets && tokenState.ExpiresAt > 0 {
 		exported.Credentials["expires_at"] = tokenState.ExpiresAt
 	}

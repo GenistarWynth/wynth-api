@@ -9,16 +9,31 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SecureVerificationRequired protects channel key disclosure. Other sensitive
-// operations validate their narrower proof scopes in their controller.
+// SecureVerificationRequired preserves the channel-key proof scope used by
+// existing callers.
 func SecureVerificationRequired() gin.HandlerFunc {
+	return SecureVerificationRequiredForScope("channel.key.read")
+}
+
+// SecureVerificationRequiredForScope protects a route with an action-specific
+// proof scope.
+func SecureVerificationRequiredForScope(requiredScope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !RequireSecurityProof(c, "channel.key.read", []string{"2fa", "passkey"}) {
+		if !RequireSecureVerification(c, requiredScope) {
 			return
 		}
-		c.Set("secure_verified", true)
 		c.Next()
 	}
+}
+
+// RequireSecureVerification validates an action-specific proof and marks the
+// authenticated request as step-up verified.
+func RequireSecureVerification(c *gin.Context, requiredScope string) bool {
+	if !RequireSecurityProof(c, requiredScope, []string{"2fa", "passkey"}) {
+		return false
+	}
+	c.Set("secure_verified", true)
+	return true
 }
 
 // RequireSecurityProof validates a proof against the authenticated dashboard

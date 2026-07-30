@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 
@@ -191,7 +193,8 @@ func ImportAccountPoolAccounts(c *gin.Context) {
 // ExportAccountPoolAccounts serializes a pool's accounts (and the proxies they
 // reference) into the same sub2api-data shape the importer consumes, so a full
 // export round-trips through import. Secrets are REDACTED unless include_secrets=true
-// is passed (admin-only route; the request is audit-logged, never the secrets).
+// is passed by a root session with an action-specific proof. The request is
+// audit-logged, never the secrets.
 func ExportAccountPoolAccounts(c *gin.Context) {
 	poolID, ok := accountPoolIDFromParam(c)
 	if !ok {
@@ -199,6 +202,19 @@ func ExportAccountPoolAccounts(c *gin.Context) {
 	}
 	includeSecretsRaw := c.Query("include_secrets")
 	includeSecrets := includeSecretsRaw == "true" || includeSecretsRaw == "1"
+	if includeSecrets {
+		if c.GetInt("role") < common.RoleRootUser {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"code":    "AUTH_INSUFFICIENT_PRIVILEGE",
+				"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
+			})
+			return
+		}
+		if !middleware.RequireSecureVerification(c, service.SecurityProofScopeAccountPoolCredentialsExport) {
+			return
+		}
+	}
 	payload, skipped, err := (&service.AccountPoolService{}).ExportAccounts(poolID, includeSecrets)
 	if err != nil {
 		common.ApiError(c, err)

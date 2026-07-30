@@ -312,7 +312,12 @@ func SetApiRouter(router *gin.Engine) {
 			accountPoolRoute.GET("/:id/accounts", controller.ListAccountPoolAccounts)
 			accountPoolRoute.POST("/:id/accounts", controller.CreateAccountPoolAccount)
 			accountPoolRoute.POST("/:id/accounts/import", controller.ImportAccountPoolAccounts)
-			accountPoolRoute.GET("/:id/accounts/export", controller.ExportAccountPoolAccounts)
+			accountPoolRoute.GET(
+				"/:id/accounts/export",
+				middleware.CriticalRateLimit(),
+				middleware.DisableCache(),
+				controller.ExportAccountPoolAccounts,
+			)
 			accountPoolRoute.POST("/:id/xai/oauth/authorize", controller.GenerateAccountPoolXAIOAuthAuthorization)
 			accountPoolRoute.POST("/:id/xai/oauth/exchange", controller.ExchangeAccountPoolXAIOAuthCode)
 			accountPoolRoute.POST("/:id/accounts/xai/sso_import", controller.ImportAccountPoolXAISSOAccounts)
