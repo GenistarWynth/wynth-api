@@ -17,13 +17,14 @@ const passkeyFlowTTL = 5 * time.Minute
 type flowPayload struct {
 	SessionData webauthn.SessionData `json:"session_data"`
 	Scope       string               `json:"scope,omitempty"`
+	Resource    string               `json:"resource,omitempty"`
 }
 
-func CreateSessionDataFlow(purpose string, userID int, sessionID, scope string, data *webauthn.SessionData) (string, int64, error) {
+func CreateSessionDataFlow(purpose string, userID int, sessionID, scope, resource string, data *webauthn.SessionData) (string, int64, error) {
 	if data == nil {
 		return "", 0, errors.New("Passkey 会话数据不能为空")
 	}
-	payload, err := common.Marshal(flowPayload{SessionData: *data, Scope: scope})
+	payload, err := common.Marshal(flowPayload{SessionData: *data, Scope: scope, Resource: resource})
 	if err != nil {
 		return "", 0, err
 	}
@@ -41,7 +42,7 @@ func CreateSessionDataFlow(purpose string, userID int, sessionID, scope string, 
 	return token, expiresAt.Unix(), nil
 }
 
-func PopSessionDataFlow(token, purpose string, userID int, sessionID string) (*webauthn.SessionData, string, error) {
+func PopSessionDataFlow(token, purpose string, userID int, sessionID string) (*webauthn.SessionData, string, string, error) {
 	flow, err := model.ConsumeAuthFlow(token, model.AuthFlowMatch{
 		Purpose:   purpose,
 		UserId:    userID,
@@ -49,13 +50,13 @@ func PopSessionDataFlow(token, purpose string, userID int, sessionID string) (*w
 	})
 	if err != nil {
 		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
-			return nil, "", errSessionNotFound
+			return nil, "", "", errSessionNotFound
 		}
-		return nil, "", err
+		return nil, "", "", err
 	}
 	var payload flowPayload
 	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	return &payload.SessionData, payload.Scope, nil
+	return &payload.SessionData, payload.Scope, payload.Resource, nil
 }

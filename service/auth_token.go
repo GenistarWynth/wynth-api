@@ -50,6 +50,7 @@ type authClaims struct {
 	SessionVersion  int64    `json:"sv"`
 	Method          string   `json:"method,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
+	Resource        string   `json:"resource,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -138,6 +139,14 @@ func IssueSecurityProof(identity AuthIdentity, method string, scopes []string) (
 	}
 	now := time.Now()
 	expiresAt := now.Add(SecurityProofTTL)
+	tokenID := uuid.NewString()
+	resource, replayToken, err := registerAccountPoolCredentialsExportProof(identity, method, scopes, expiresAt)
+	if err != nil {
+		return "", 0, err
+	}
+	if replayToken != "" {
+		tokenID = replayToken
+	}
 	claims := authClaims{
 		TokenUse:        securityProofTokenUse,
 		SessionID:       identity.SessionID,
@@ -145,6 +154,7 @@ func IssueSecurityProof(identity AuthIdentity, method string, scopes []string) (
 		SessionVersion:  identity.SessionVersion,
 		Method:          method,
 		Scopes:          append([]string(nil), scopes...),
+		Resource:        resource,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    authTokenIssuer,
 			Subject:   strconv.Itoa(identity.UserID),
@@ -152,7 +162,7 @@ func IssueSecurityProof(identity AuthIdentity, method string, scopes []string) (
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)),
 			IssuedAt:  jwt.NewNumericDate(now),
-			ID:        uuid.NewString(),
+			ID:        tokenID,
 		},
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(authSigningKey(securityProofTokenUse))
@@ -160,13 +170,21 @@ func IssueSecurityProof(identity AuthIdentity, method string, scopes []string) (
 }
 
 func VerifySecurityProof(raw string, identity AuthIdentity, requiredScope string, allowedMethods []string) (string, error) {
-	claims, err := parseAuthClaims(raw, securityProofTokenUse, authSigningKey(securityProofTokenUse))
+	claims, err := verifySecurityProofClaims(raw, identity, requiredScope, allowedMethods)
 	if err != nil {
 		return "", err
 	}
+	return claims.Method, nil
+}
+
+func verifySecurityProofClaims(raw string, identity AuthIdentity, requiredScope string, allowedMethods []string) (*authClaims, error) {
+	claims, err := parseAuthClaims(raw, securityProofTokenUse, authSigningKey(securityProofTokenUse))
+	if err != nil {
+		return nil, err
+	}
 	userID, err := strconv.Atoi(claims.Subject)
 	if err != nil || userID != identity.UserID || claims.SessionID != identity.SessionID || claims.UserAuthVersion != identity.UserAuthVersion || claims.SessionVersion != identity.SessionVersion {
-		return "", ErrAuthTokenInvalid
+		return nil, ErrAuthTokenInvalid
 	}
 	methodAllowed := len(allowedMethods) == 0
 	for _, method := range allowedMethods {
@@ -176,7 +194,7 @@ func VerifySecurityProof(raw string, identity AuthIdentity, requiredScope string
 		}
 	}
 	if !methodAllowed {
-		return "", ErrProofMethod
+		return nil, ErrProofMethod
 	}
 	if requiredScope != "" {
 		found := false
@@ -187,10 +205,10 @@ func VerifySecurityProof(raw string, identity AuthIdentity, requiredScope string
 			}
 		}
 		if !found {
-			return "", ErrProofScope
+			return nil, ErrProofScope
 		}
 	}
-	return claims.Method, nil
+	return claims, nil
 }
 
 func parseAuthClaims(raw, expectedUse string, key []byte) (*authClaims, error) {

@@ -22,12 +22,14 @@ export type SecurityProofScope =
   | 'channel.key.read'
   | 'passkey.register'
   | 'passkey.delete'
+  | 'account_pool.credentials.export'
 
 export interface SecurityProof {
   proof_token: string
   expires_at: number
   method: VerificationMethod
   scope: SecurityProofScope
+  resource?: string
 }
 
 export interface VerificationMethods {
@@ -39,6 +41,8 @@ export interface VerificationMethods {
 export interface SecureVerificationState {
   method: VerificationMethod | null
   scope?: SecurityProofScope
+  resource?: string
+  allowedMethods?: VerificationMethod[]
   loading: boolean
   code: string
   title?: string
@@ -54,6 +58,8 @@ export interface UseSecureVerificationOptions {
 
 export interface StartVerificationOptions {
   scope: SecurityProofScope
+  resource?: string
+  allowedMethods?: VerificationMethod[]
   preferredMethod?: VerificationMethod
   title?: string
   description?: string

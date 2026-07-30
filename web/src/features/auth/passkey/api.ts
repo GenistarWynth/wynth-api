@@ -90,11 +90,12 @@ export async function finishPasskeyLogin(
 }
 
 export async function beginPasskeyVerification(
-  scope: SecurityProofScope
+  scope: SecurityProofScope,
+  resource?: string
 ): Promise<ApiResponse<PasskeyOptionsPayload>> {
   const res = await api.post<ApiResponse<PasskeyOptionsPayload>>(
     '/api/user/passkey/verify/begin',
-    { scope }
+    resource ? { scope, resource } : { scope }
   )
   return res.data
 }

@@ -39,7 +39,7 @@ func UniversalVerify(c *gin.Context) {
 		common.ApiError(c, errors.New("Passkey 验证必须使用 Passkey verify 流程"))
 		return
 	}
-	if !isAllowedSecurityProofScope(request.Scope) {
+	if !isAllowedTwoFASecurityProofScope(request.Scope) {
 		common.ApiError(c, errors.New("不支持的安全验证范围"))
 		return
 	}
@@ -76,6 +76,17 @@ func UniversalVerify(c *gin.Context) {
 			"scope":       request.Scope,
 		},
 	})
+}
+
+func isAllowedTwoFASecurityProofScope(scope string) bool {
+	switch scope {
+	case securityProofScopeChannelKeyRead,
+		securityProofScopePasskeyRegister,
+		securityProofScopePasskeyDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func isAllowedSecurityProofScope(scope string) bool {

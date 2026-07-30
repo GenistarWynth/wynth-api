@@ -126,6 +126,10 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+} from '@/features/auth/secure-verification'
 import { getChannels } from '@/features/channels/api'
 import {
   CHANNEL_TYPES,
@@ -136,6 +140,7 @@ import type { Channel } from '@/features/channels/types'
 import { useMediaQuery } from '@/hooks'
 import { getUserModels } from '@/lib/api'
 import { formatTimestamp } from '@/lib/format'
+import { isVerificationRequiredError } from '@/lib/secure-verification'
 import { cn } from '@/lib/utils'
 
 import {
@@ -887,6 +892,17 @@ export function AccountPools() {
   >({})
   const [bindingFormResetVersion, setBindingFormResetVersion] = useState(0)
 
+  const {
+    open: verificationOpen,
+    methods: verificationMethods,
+    state: verificationState,
+    executeVerification,
+    withVerification,
+    cancel: cancelVerification,
+    setCode: setVerificationCode,
+    switchMethod: switchVerificationMethod,
+  } = useSecureVerification()
+
   const poolsQuery = useQuery({
     queryKey: accountPoolsQueryKeys.list(),
     queryFn: async () => {
@@ -1242,15 +1258,17 @@ export function AccountPools() {
   })
 
   const exportAccountsMutation = useMutation({
-    mutationFn: async (includeSecrets: boolean) => {
-      if (!selectedPoolID) {
-        throw new Error(t('Select an account pool first'))
-      }
+    mutationFn: async (request: {
+      poolID: number
+      includeSecrets: boolean
+      proofToken?: string
+    }) => {
       const payload = await exportAccountPoolAccounts(
-        selectedPoolID,
-        includeSecrets
+        request.poolID,
+        request.includeSecrets,
+        request.proofToken
       )
-      return { payload, poolID: selectedPoolID }
+      return { payload, poolID: request.poolID }
     },
     onSuccess: ({ payload, poolID }) => {
       const json = JSON.stringify(payload, null, 2)
@@ -1267,9 +1285,41 @@ export function AccountPools() {
       toast.success(t('Accounts exported'))
     },
     onError: (error) => {
+      if (isVerificationRequiredError(error)) return
       toast.error(error instanceof Error ? error.message : t('Request failed'))
     },
   })
+
+  const handleExportAccountsWithSecrets = async () => {
+    const poolID = selectedPoolID
+    if (!poolID) {
+      toast.error(t('Select an account pool first'))
+      return
+    }
+    setExportSecretsConfirmOpen(false)
+    try {
+      await withVerification(
+        (proofToken) =>
+          exportAccountsMutation.mutateAsync({
+            poolID,
+            includeSecrets: true,
+            proofToken,
+          }),
+        {
+          scope: 'account_pool.credentials.export',
+          resource: String(poolID),
+          preferredMethod: 'passkey',
+          allowedMethods: ['passkey'],
+          title: t('Export accounts with secrets?'),
+          description: t(
+            'The exported file will contain plaintext credentials (API keys, tokens, refresh tokens). Store it securely and delete it when no longer needed.'
+          ),
+        }
+      )
+    } catch {
+      return
+    }
+  }
 
   const createProxyMutation = useMutation({
     mutationFn: async (values: AccountPoolProxyFormValues) =>
@@ -1602,7 +1652,17 @@ export function AccountPools() {
           setAccountSheetOpen(true)
         }}
         onImportAccounts={() => setAccountImportOpen(true)}
-        onExportAccounts={() => exportAccountsMutation.mutate(false)}
+        onExportAccounts={() => {
+          const poolID = selectedPoolID
+          if (!poolID) {
+            toast.error(t('Select an account pool first'))
+            return
+          }
+          exportAccountsMutation.mutate({
+            poolID,
+            includeSecrets: false,
+          })
+        }}
         onExportAccountsWithSecrets={() => setExportSecretsConfirmOpen(true)}
         exportingAccounts={exportAccountsMutation.isPending}
         onEditAccount={(account) => {
@@ -1760,7 +1820,23 @@ export function AccountPools() {
         destructive
         confirmText={t('Export with secrets')}
         isLoading={exportAccountsMutation.isPending}
-        handleConfirm={() => exportAccountsMutation.mutate(true)}
+        handleConfirm={() => {
+          void handleExportAccountsWithSecrets()
+        }}
+      />
+      <SecureVerificationDialog
+        open={verificationOpen}
+        onOpenChange={(open) => {
+          if (!open) cancelVerification()
+        }}
+        methods={verificationMethods}
+        state={verificationState}
+        onVerify={async (method, code) => {
+          await executeVerification(method, code)
+        }}
+        onCancel={cancelVerification}
+        onCodeChange={setVerificationCode}
+        onMethodChange={switchVerificationMethod}
       />
       <CapabilityDetectDialog
         open={capabilityDialogOpen}

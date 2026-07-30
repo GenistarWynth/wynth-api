@@ -32,7 +32,8 @@ type passkeyFinishRequest struct {
 }
 
 type passkeyVerifyBeginRequest struct {
-	Scope string `json:"scope"`
+	Scope    string `json:"scope"`
+	Resource string `json:"resource,omitempty"`
 }
 
 func parsePasskeyFinishRequest(c *gin.Context) (*passkeyFinishRequest, error) {
@@ -106,6 +107,7 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		user.Id,
 		identity.SessionID,
 		securityProofScopePasskeyRegister,
+		"",
 		sessionData,
 	)
 	if err != nil {
@@ -176,7 +178,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		common.ApiError(c, errors.New("当前认证方式不支持安全验证"))
 		return
 	}
-	sessionData, _, err := passkeysvc.PopSessionDataFlow(
+	sessionData, _, _, err := passkeysvc.PopSessionDataFlow(
 		request.FlowToken,
 		model.AuthFlowPurposePasskeyRegister,
 		user.Id,
@@ -319,6 +321,7 @@ func PasskeyLoginBegin(c *gin.Context) {
 		0,
 		"",
 		"",
+		"",
 		sessionData,
 	)
 	if err != nil {
@@ -363,7 +366,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 		return
 	}
 
-	sessionData, _, err := passkeysvc.PopSessionDataFlow(
+	sessionData, _, _, err := passkeysvc.PopSessionDataFlow(
 		request.FlowToken,
 		model.AuthFlowPurposePasskeyLogin,
 		0,
@@ -510,6 +513,24 @@ func PasskeyVerifyBegin(c *gin.Context) {
 		common.ApiError(c, errors.New("不支持的安全验证范围"))
 		return
 	}
+	resource := request.Resource
+	if request.Scope == service.SecurityProofScopeAccountPoolCredentialsExport {
+		if user.Role < common.RoleRootUser {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "权限不足",
+			})
+			return
+		}
+		poolID, err := strconv.Atoi(resource)
+		if err != nil || poolID <= 0 || resource != strconv.Itoa(poolID) {
+			common.ApiError(c, errors.New("无效的账户池验证资源"))
+			return
+		}
+	} else if resource != "" {
+		common.ApiError(c, errors.New("该安全验证范围不接受资源参数"))
+		return
+	}
 
 	credential, err := model.GetPasskeyByUserID(user.Id)
 	if err != nil {
@@ -543,6 +564,7 @@ func PasskeyVerifyBegin(c *gin.Context) {
 		user.Id,
 		identity.SessionID,
 		request.Scope,
+		resource,
 		sessionData,
 	)
 	if err != nil {
@@ -610,7 +632,7 @@ func PasskeyVerifyFinish(c *gin.Context) {
 		common.ApiError(c, errors.New("当前认证方式不支持安全验证"))
 		return
 	}
-	sessionData, scope, err := passkeysvc.PopSessionDataFlow(
+	sessionData, scope, resource, err := passkeysvc.PopSessionDataFlow(
 		request.FlowToken,
 		model.AuthFlowPurposePasskeyStepUp,
 		user.Id,
@@ -618,6 +640,24 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	poolID := 0
+	if scope == service.SecurityProofScopeAccountPoolCredentialsExport {
+		if user.Role < common.RoleRootUser {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "权限不足",
+			})
+			return
+		}
+		poolID, err = strconv.Atoi(resource)
+		if err != nil || poolID <= 0 || resource != strconv.Itoa(poolID) {
+			common.ApiError(c, errors.New("无效的账户池验证资源"))
+			return
+		}
+	} else if resource != "" {
+		common.ApiError(c, errors.New("安全验证资源无效"))
 		return
 	}
 
@@ -633,7 +673,11 @@ func PasskeyVerifyFinish(c *gin.Context) {
 		return
 	}
 
-	proofToken, proofExpiresAt, err := service.IssueSecurityProof(identity, secureVerificationMethodPasskey, []string{scope})
+	proofScopes := []string{scope}
+	if poolID > 0 {
+		proofScopes = append(proofScopes, service.AccountPoolCredentialsExportResourceScope(poolID))
+	}
+	proofToken, proofExpiresAt, err := service.IssueSecurityProof(identity, secureVerificationMethodPasskey, proofScopes)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -647,6 +691,7 @@ func PasskeyVerifyFinish(c *gin.Context) {
 			"expires_at":  proofExpiresAt,
 			"method":      secureVerificationMethodPasskey,
 			"scope":       scope,
+			"resource":    resource,
 		},
 	})
 }

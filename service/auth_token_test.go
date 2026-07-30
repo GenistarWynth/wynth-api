@@ -2,13 +2,18 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/glebarez/sqlite"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func useTestSessionSecret(t *testing.T) {
@@ -126,6 +131,9 @@ func TestSecurityProofBindsIdentityMethodAndScope(t *testing.T) {
 	method, err := VerifySecurityProof(proof, identity, "channel.key.read", []string{"2fa", "passkey"})
 	require.NoError(t, err)
 	assert.Equal(t, "2fa", method)
+	method, err = VerifySecurityProof(proof, identity, "channel.key.read", []string{"2fa", "passkey"})
+	require.NoError(t, err)
+	assert.Equal(t, "2fa", method, "unrelated generic proofs retain their existing reusable semantics")
 
 	_, err = VerifySecurityProof(proof, identity, "passkey.delete", []string{"2fa"})
 	assert.ErrorIs(t, err, ErrProofScope)
@@ -137,4 +145,68 @@ func TestSecurityProofBindsIdentityMethodAndScope(t *testing.T) {
 	otherSession.SessionID = "session-2"
 	_, err = VerifySecurityProof(proof, otherSession, "channel.key.read", []string{"2fa"})
 	assert.True(t, errors.Is(err, ErrAuthTokenInvalid))
+}
+
+func TestAccountPoolExportProofIsResourceBoundAndConsumedOnce(t *testing.T) {
+	useTestSessionSecret(t)
+	previousDB := model.DB
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.AuthFlow{}))
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = previousDB
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	identity := AuthIdentity{UserID: 42, SessionID: "session-1", UserAuthVersion: 3, SessionVersion: 2}
+	proof, _, err := IssueSecurityProof(identity, "passkey", []string{
+		SecurityProofScopeAccountPoolCredentialsExport,
+		SecurityProofScopeAccountPoolCredentialsExport + ":pool:7",
+	})
+	require.NoError(t, err)
+
+	err = ConsumeAccountPoolCredentialsExportProof(proof, identity, 8)
+	assert.ErrorIs(t, err, ErrProofResource)
+	model.DB = nil
+	assert.ErrorIs(t, ConsumeAccountPoolCredentialsExportProof(proof, identity, 7), ErrProofStore)
+	model.DB = db
+	require.NoError(t, ConsumeAccountPoolCredentialsExportProof(proof, identity, 7))
+	assert.ErrorIs(t, ConsumeAccountPoolCredentialsExportProof(proof, identity, 7), ErrProofConsumed)
+}
+
+func TestAccountPoolExportProofIssuanceRequiresPasskeyAndExactResource(t *testing.T) {
+	useTestSessionSecret(t)
+	identity := AuthIdentity{UserID: 42, SessionID: "session-1", UserAuthVersion: 3, SessionVersion: 2}
+
+	_, _, err := IssueSecurityProof(identity, "2fa", []string{
+		SecurityProofScopeAccountPoolCredentialsExport,
+		AccountPoolCredentialsExportResourceScope(7),
+	})
+	assert.ErrorIs(t, err, ErrProofMethod)
+
+	_, _, err = IssueSecurityProof(identity, "passkey", []string{
+		SecurityProofScopeAccountPoolCredentialsExport,
+	})
+	assert.ErrorIs(t, err, ErrProofResource)
+}
+
+func TestAccountPoolExportProofIssuanceFailsClosedWithoutReplayStore(t *testing.T) {
+	useTestSessionSecret(t)
+	previousDB := model.DB
+	model.DB = nil
+	t.Cleanup(func() {
+		model.DB = previousDB
+	})
+
+	identity := AuthIdentity{UserID: 42, SessionID: "session-1", UserAuthVersion: 3, SessionVersion: 2}
+	_, _, err := IssueSecurityProof(identity, "passkey", []string{
+		SecurityProofScopeAccountPoolCredentialsExport,
+		AccountPoolCredentialsExportResourceScope(7),
+	})
+	assert.ErrorIs(t, err, ErrProofStore)
 }

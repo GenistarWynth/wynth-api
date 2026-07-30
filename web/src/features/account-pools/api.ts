@@ -232,13 +232,18 @@ export async function importAccountPoolAccounts(
 
 export async function exportAccountPoolAccounts(
   poolID: number,
-  includeSecrets = false
+  includeSecrets = false,
+  proofToken?: string
 ): Promise<unknown> {
   const res = await api.get(
     `/api/account_pools/${poolID}/accounts/export${
       includeSecrets ? '?include_secrets=true' : ''
     }`,
-    accountPoolActionConfig()
+    accountPoolActionConfig(
+      includeSecrets && proofToken
+        ? { headers: { 'X-Security-Proof': proofToken } }
+        : undefined
+    )
   )
   return res.data
 }

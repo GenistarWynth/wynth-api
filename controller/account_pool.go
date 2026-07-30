@@ -211,7 +211,7 @@ func ExportAccountPoolAccounts(c *gin.Context) {
 			})
 			return
 		}
-		if !middleware.RequireSecureVerification(c, service.SecurityProofScopeAccountPoolCredentialsExport) {
+		if !middleware.RequireAccountPoolCredentialsExportProof(c, poolID) {
 			return
 		}
 	}

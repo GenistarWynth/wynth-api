@@ -46,6 +46,18 @@ const defaultMethods: VerificationMethods = {
   passkeySupported: false,
 }
 
+function filterVerificationMethods(
+  methods: VerificationMethods,
+  allowedMethods?: VerificationMethod[]
+): VerificationMethods {
+  if (!allowedMethods) return methods
+  return {
+    has2FA: methods.has2FA && allowedMethods.includes('2fa'),
+    hasPasskey: methods.hasPasskey && allowedMethods.includes('passkey'),
+    passkeySupported: methods.passkeySupported,
+  }
+}
+
 const initialState: InternalState = {
   method: null,
   loading: false,
@@ -84,8 +96,18 @@ export function useSecureVerification(
       apiCall: (proofToken?: string) => Promise<unknown>,
       config: StartVerificationOptions
     ) => {
-      const { preferredMethod, scope, title, description } = config
-      const availableMethods = await fetchVerificationMethods()
+      const {
+        preferredMethod,
+        scope,
+        resource,
+        allowedMethods,
+        title,
+        description,
+      } = config
+      const availableMethods = filterVerificationMethods(
+        await fetchVerificationMethods(),
+        allowedMethods
+      )
 
       if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
         toast.error(
@@ -123,6 +145,8 @@ export function useSecureVerification(
         apiCall,
         method: defaultMethod,
         scope,
+        resource,
+        allowedMethods,
         title,
         description,
       }))
@@ -154,7 +178,8 @@ export function useSecureVerification(
         const proof = await verify(
           actualMethod,
           state.scope,
-          code ?? state.code
+          code ?? state.code,
+          state.resource
         )
         const result = await state.apiCall(proof.proof_token)
 
@@ -216,27 +241,34 @@ export function useSecureVerification(
     [startVerification]
   )
 
+  const visibleMethods = useMemo(
+    () => filterVerificationMethods(methods, state.allowedMethods),
+    [methods, state.allowedMethods]
+  )
+
   const canUseMethod = useCallback(
     (method: VerificationMethod) => {
-      if (method === '2fa') return methods.has2FA
+      if (method === '2fa') return visibleMethods.has2FA
       if (method === 'passkey') {
-        return methods.hasPasskey && methods.passkeySupported
+        return visibleMethods.hasPasskey && visibleMethods.passkeySupported
       }
       return false
     },
-    [methods]
+    [visibleMethods]
   )
 
   const recommendedMethod = useMemo<VerificationMethod | null>(() => {
-    if (methods.hasPasskey && methods.passkeySupported) return 'passkey'
-    if (methods.has2FA) return '2fa'
+    if (visibleMethods.hasPasskey && visibleMethods.passkeySupported) {
+      return 'passkey'
+    }
+    if (visibleMethods.has2FA) return '2fa'
     return null
-  }, [methods])
+  }, [visibleMethods])
 
   return {
     open,
     setOpen,
-    methods,
+    methods: visibleMethods,
     state,
     startVerification,
     executeVerification,
