@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { channelMonitorInfoSchema } from '../types'
+import { channelMonitorInfoSchema } from '../../types'
 import {
   buildMonitorHistoryBars,
   monitorRefreshText,
   monitorStatusText,
-} from './channel-monitor'
+} from '../channel-monitor'
 
 describe('channel monitor history helpers', () => {
   test('builds fixed-width visual bars from newest detail records', () => {
@@ -60,11 +60,11 @@ describe('channel monitor history helpers', () => {
     assert.equal(bars[4].tone, 'danger')
     assert.ok(bars[2].heightPercent >= 25)
     assert.ok(bars[3].heightPercent > bars[2].heightPercent)
-    assert.equal((bars[2] as any).model, 'gpt-4o-mini')
-    assert.equal((bars[2] as any).firstTokenLatencyMS, 500)
-    assert.equal((bars[2] as any).promptTokens, 92)
-    assert.equal((bars[2] as any).completionTokens, 156)
-    assert.equal((bars[2] as any).message, 'ok')
+    assert.equal(bars[2].model, 'gpt-4o-mini')
+    assert.equal(bars[2].firstTokenLatencyMS, 500)
+    assert.equal(bars[2].promptTokens, 92)
+    assert.equal(bars[2].completionTokens, 156)
+    assert.equal(bars[2].message, 'ok')
     assert.equal(bars[4].message, 'upstream timeout')
   })
 
@@ -73,7 +73,7 @@ describe('channel monitor history helpers', () => {
       enabled: true,
       interval_minutes: 10,
       latest_model: 'gpt-4o-mini',
-    }) as any
+    })
 
     assert.equal(parsed.latest_model, 'gpt-4o-mini')
   })
