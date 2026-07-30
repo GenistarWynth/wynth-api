@@ -108,7 +108,14 @@ func TestApplyAccountPoolRuntimeSelection_VertexServiceAccountExcludesOAuthFlag(
 	channel := createAccountPoolServiceTestChannelWithType(t, constant.ChannelTypeGemini, common.ChannelStatusManuallyDisabled)
 	createEnabledAccountPoolSchedulerBinding(t, pool.Id, channel.Id, AccountPoolAccountFilterConfig{}, AccountPoolModelPolicy{})
 
-	saJSON := `{"type":"service_account","project_id":"vertex-proj","client_email":"sa@vertex-proj.iam.gserviceaccount.com","token_uri":"https://oauth2.googleapis.com/token","private_key":"-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"}`
+	saJSON, _ := newTestServiceAccountJSON(t, "https://oauth2.googleapis.com/token")
+	var serviceAccount map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(saJSON, &serviceAccount))
+	serviceAccount["project_id"] = "vertex-proj"
+	serviceAccount["client_email"] = "sa@vertex-proj.iam.gserviceaccount.com"
+	encodedServiceAccount, err := common.Marshal(serviceAccount)
+	require.NoError(t, err)
+	saJSON = string(encodedServiceAccount)
 	createAccountPoolSchedulerAccount(t, svc, pool.Id, AccountPoolAccountCreateParams{
 		Name: "vertex-sa-cached",
 		Credential: AccountPoolCredentialConfig{
@@ -132,7 +139,7 @@ func TestApplyAccountPoolRuntimeSelection_VertexServiceAccountExcludesOAuthFlag(
 		},
 	}
 
-	err := ApplyAccountPoolRuntimeSelection(ctx, info, nil)
+	err = ApplyAccountPoolRuntimeSelection(ctx, info, nil)
 	require.NoError(t, err)
 	defer ReleaseAccountPoolRuntimeSelection(ctx)
 

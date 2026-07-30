@@ -125,6 +125,22 @@ func TestAccountPoolServiceExportRoundTripsGeminiServiceAccount(t *testing.T) {
 	redactedJSON, err := common.Marshal(redacted)
 	require.NoError(t, err)
 	assert.False(t, strings.Contains(string(redactedJSON), serviceAccountJSON))
+	redactedDestination := createAccountPoolServiceTestPoolWithPlatform(t, svc, model.AccountPoolPlatformGemini)
+	redactedResult, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  redactedDestination.Id,
+		Format:  "sub2api",
+		Content: string(redactedJSON),
+	})
+	require.NoError(t, err)
+	assert.Zero(t, redactedResult.Imported)
+	assert.Equal(t, 1, redactedResult.Skipped)
+	assert.Zero(t, redactedResult.Failed)
+	require.Len(t, redactedResult.Errors, 1)
+
+	var redactedImportCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("pool_id = ?", redactedDestination.Id).Count(&redactedImportCount).Error)
+	assert.Zero(t, redactedImportCount)
 
 	backup, skipped, err := svc.ExportAccounts(sourcePool.Id, true)
 	require.NoError(t, err)
@@ -157,6 +173,18 @@ func TestAccountPoolServiceExportRoundTripsGeminiServiceAccount(t *testing.T) {
 	serviceAccountInfo, err := ExtractVertexServiceAccountInfo([]byte(credential.ServiceAccountJSON))
 	require.NoError(t, err)
 	assert.Equal(t, "test-project-123", serviceAccountInfo.ProjectID)
+
+	duplicateResult, err := svc.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  destinationPool.Id,
+		Format:  "sub2api",
+		Content: string(content),
+	})
+	require.NoError(t, err)
+	assert.Zero(t, duplicateResult.Imported)
+	assert.Equal(t, 1, duplicateResult.Skipped)
+	assert.Zero(t, duplicateResult.Failed)
+	require.Len(t, duplicateResult.Errors, 1)
+	assert.Equal(t, "duplicate account skipped", duplicateResult.Errors[0].Message)
 }
 
 // A grok.com web-cookie account stores its sso token in APIKey and an optional

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strings"
 	"time"
@@ -69,10 +70,10 @@ type VertexServiceAccountInfo struct {
 	ClientEmail string
 }
 
-// ExtractVertexServiceAccountInfo parses a service-account JSON and returns its
-// project_id, token_uri (falling back to the default endpoint) and client_email.
+// ExtractVertexServiceAccountInfo validates a service-account JSON and returns
+// its project_id, token_uri (falling back to the default endpoint) and client_email.
 func ExtractVertexServiceAccountInfo(saJSON []byte) (VertexServiceAccountInfo, error) {
-	sa, err := parseVertexServiceAccount(saJSON)
+	sa, _, err := parseVertexServiceAccount(saJSON)
 	if err != nil {
 		return VertexServiceAccountInfo{}, err
 	}
@@ -87,24 +88,39 @@ func ExtractVertexServiceAccountInfo(saJSON []byte) (VertexServiceAccountInfo, e
 	}, nil
 }
 
-func parseVertexServiceAccount(saJSON []byte) (vertexServiceAccount, error) {
+func parseVertexServiceAccount(saJSON []byte) (vertexServiceAccount, *rsa.PrivateKey, error) {
 	var sa vertexServiceAccount
 	if len(strings.TrimSpace(string(saJSON))) == 0 {
-		return sa, errors.New("vertex service account json is empty")
+		return sa, nil, errors.New("vertex service account json is empty")
+	}
+	if common.GetJsonType(saJSON) != "object" {
+		return sa, nil, errors.New("vertex service account json must be an object")
 	}
 	if err := common.Unmarshal(saJSON, &sa); err != nil {
-		return sa, fmt.Errorf("parse vertex service account json: %w", err)
+		return sa, nil, fmt.Errorf("parse vertex service account json: %w", err)
 	}
-	if strings.TrimSpace(sa.ClientEmail) == "" {
-		return sa, errors.New("vertex service account json missing client_email")
+	if strings.TrimSpace(sa.Type) != "service_account" {
+		return sa, nil, errors.New("vertex service account json has invalid type")
+	}
+	clientEmail := strings.TrimSpace(sa.ClientEmail)
+	if clientEmail == "" {
+		return sa, nil, errors.New("vertex service account json missing client_email")
+	}
+	address, err := mail.ParseAddress(clientEmail)
+	if err != nil || address.Address != clientEmail {
+		return sa, nil, errors.New("vertex service account json has invalid client_email")
 	}
 	if strings.TrimSpace(sa.PrivateKey) == "" {
-		return sa, errors.New("vertex service account json missing private_key")
+		return sa, nil, errors.New("vertex service account json missing private_key")
 	}
 	if strings.TrimSpace(sa.ProjectID) == "" {
-		return sa, errors.New("vertex service account json missing project_id")
+		return sa, nil, errors.New("vertex service account json missing project_id")
 	}
-	return sa, nil
+	privateKey, err := parseVertexRSAPrivateKey(sa.PrivateKey)
+	if err != nil {
+		return sa, nil, err
+	}
+	return sa, privateKey, nil
 }
 
 // MintVertexServiceAccountToken performs the standard service-account
@@ -116,12 +132,7 @@ func MintVertexServiceAccountToken(ctx context.Context, saJSON []byte, proxyURL 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	sa, err := parseVertexServiceAccount(saJSON)
-	if err != nil {
-		return nil, err
-	}
-
-	privateKey, err := parseVertexRSAPrivateKey(sa.PrivateKey)
+	sa, privateKey, err := parseVertexServiceAccount(saJSON)
 	if err != nil {
 		return nil, err
 	}

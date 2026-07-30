@@ -192,6 +192,17 @@ func (s AccountPoolService) ImportAccounts(params AccountPoolAccountImportParams
 	for _, candidate := range candidates {
 		accountPoolApplyImportDefaults(&candidate.Params, params.Defaults)
 		accountPoolNormalizeImportAccountParams(&candidate.Params)
+		if candidate.Params.Credential.Type == AccountPoolCredentialTypeServiceAccount {
+			if _, validationErr := ExtractVertexServiceAccountInfo([]byte(candidate.Params.Credential.ServiceAccountJSON)); validationErr != nil {
+				result.Failed++
+				result.Errors = append(result.Errors, AccountPoolAccountImportError{
+					Index:   candidate.Index,
+					Name:    candidate.Name,
+					Message: "service_account_json is invalid",
+				})
+				continue
+			}
+		}
 		duplicateKeys := accountPoolImportDuplicateKeys(candidate.Params)
 		if len(duplicateKeys) == 0 {
 			result.Skipped++
@@ -1352,9 +1363,10 @@ func accountPoolImportServiceAccountJSON(values map[string]any, keys ...string) 
 				return trimmed
 			}
 		case map[string]any:
-			if len(typed) == 0 {
-				continue
+			if data, err := common.Marshal(typed); err == nil {
+				return string(data)
 			}
+		default:
 			if data, err := common.Marshal(typed); err == nil {
 				return string(data)
 			}

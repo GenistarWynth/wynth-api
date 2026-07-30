@@ -353,24 +353,27 @@ func TestAccountPoolServiceImportSub2APIGeminiServiceAccount(t *testing.T) {
 	pool := createAccountPoolServiceTestPool(t, svc)
 	require.NoError(t, model.DB.Model(&model.AccountPool{}).Where("id = ?", pool.Id).
 		Update("platform", model.AccountPoolPlatformGemini).Error)
+	serviceAccountJSON, _ := newTestServiceAccountJSON(t, "https://oauth2.invalid/token")
+	content, err := common.Marshal(accountPoolSub2APIDataPayload{
+		Type: "sub2api-data",
+		Accounts: []accountPoolSub2APIAccount{
+			{
+				Name:     "gemini-vertex-sa",
+				Platform: model.AccountPoolPlatformGemini,
+				Type:     AccountPoolCredentialTypeServiceAccount,
+				Credentials: map[string]any{
+					"service_account_json": serviceAccountJSON,
+					"location":             "europe-west1",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
 
 	result, err := svc.ImportAccounts(AccountPoolAccountImportParams{
-		PoolID: pool.Id,
-		Format: "sub2api",
-		Content: `{
-			"type": "sub2api-data",
-			"accounts": [
-				{
-					"name": "gemini-vertex-sa",
-					"platform": "gemini",
-					"type": "service_account",
-					"credentials": {
-						"service_account_json": "{\"type\":\"service_account\",\"project_id\":\"vertex-proj\",\"client_email\":\"svc@vertex-proj.iam\",\"private_key\":\"pk\"}",
-						"location": "europe-west1"
-					}
-				}
-			]
-		}`,
+		PoolID:  pool.Id,
+		Format:  "sub2api",
+		Content: string(content),
 	})
 
 	require.NoError(t, err)
@@ -381,12 +384,168 @@ func TestAccountPoolServiceImportSub2APIGeminiServiceAccount(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, AccountPoolCredentialTypeServiceAccount, cred.Type)
 	assert.Equal(t, "europe-west1", cred.Location)
-	assert.Contains(t, cred.ServiceAccountJSON, "vertex-proj")
+	assert.Equal(t, serviceAccountJSON, cred.ServiceAccountJSON)
 
 	// project_id must be extractable from the imported SA JSON.
 	saInfo, err := ExtractVertexServiceAccountInfo([]byte(cred.ServiceAccountJSON))
 	require.NoError(t, err)
-	assert.Equal(t, "vertex-proj", saInfo.ProjectID)
+	assert.Equal(t, "test-project-123", saInfo.ProjectID)
+}
+
+func TestAccountPoolServiceImportSub2APIRejectsMalformedServiceAccounts(t *testing.T) {
+	validServiceAccountJSON, _ := newTestServiceAccountJSON(t, "https://oauth2.invalid/token")
+	var validServiceAccount map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(validServiceAccountJSON, &validServiceAccount))
+	validPrivateKey, ok := validServiceAccount["private_key"].(string)
+	require.True(t, ok)
+
+	tests := []struct {
+		name               string
+		serviceAccountJSON any
+	}{
+		{name: "invalid JSON syntax", serviceAccountJSON: "not-json"},
+		{name: "JSON string scalar", serviceAccountJSON: `"do-not-echo-json-scalar"`},
+		{name: "empty object", serviceAccountJSON: map[string]any{}},
+		{name: "wrong field types", serviceAccountJSON: map[string]any{
+			"type": "service_account", "project_id": 123, "client_email": true, "private_key": []any{"do-not-echo-private-key"},
+		}},
+		{name: "missing type", serviceAccountJSON: map[string]any{
+			"project_id": "test-project-123", "client_email": "svc@test-project-123.iam.gserviceaccount.com", "private_key": validPrivateKey,
+		}},
+		{name: "missing project id", serviceAccountJSON: map[string]any{
+			"type": "service_account", "client_email": "svc@test-project-123.iam.gserviceaccount.com", "private_key": validPrivateKey,
+		}},
+		{name: "missing client email", serviceAccountJSON: map[string]any{
+			"type": "service_account", "project_id": "test-project-123", "private_key": validPrivateKey,
+		}},
+		{name: "missing private key", serviceAccountJSON: map[string]any{
+			"type": "service_account", "project_id": "test-project-123", "client_email": "svc@test-project-123.iam.gserviceaccount.com",
+		}},
+		{name: "invalid client email", serviceAccountJSON: map[string]any{
+			"type": "service_account", "project_id": "test-project-123", "client_email": "do-not-echo-invalid-email", "private_key": validPrivateKey,
+		}},
+		{name: "invalid private key", serviceAccountJSON: map[string]any{
+			"type": "service_account", "project_id": "test-project-123", "client_email": "svc@test-project-123.iam.gserviceaccount.com", "private_key": "do-not-echo-private-key",
+		}},
+		{name: "wrong credential type", serviceAccountJSON: map[string]any{
+			"type": "authorized_user", "project_id": "test-project-123", "client_email": "svc@test-project-123.iam.gserviceaccount.com", "private_key": validPrivateKey,
+		}},
+	}
+
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupAccountPoolServiceTestDB(t)
+			service := AccountPoolService{}
+			pool := createAccountPoolServiceTestPoolWithPlatform(t, service, model.AccountPoolPlatformGemini)
+			malformedName := fmt.Sprintf("malformed-service-account-%d", index)
+
+			content, err := common.Marshal(accountPoolSub2APIDataPayload{
+				Type: "sub2api-data",
+				Accounts: []accountPoolSub2APIAccount{
+					{
+						Name:     malformedName,
+						Platform: model.AccountPoolPlatformGemini,
+						Type:     AccountPoolCredentialTypeServiceAccount,
+						Credentials: map[string]any{
+							"service_account_json": test.serviceAccountJSON,
+							"location":             "us-central1",
+						},
+					},
+					{
+						Name:     "unaffected-api-key",
+						Platform: model.AccountPoolPlatformGemini,
+						Type:     AccountPoolCredentialTypeAPIKey,
+						Credentials: map[string]any{
+							"api_key": "sk-unaffected-sibling",
+						},
+					},
+				},
+			})
+			require.NoError(t, err)
+
+			result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+				PoolID:  pool.Id,
+				Format:  "sub2api",
+				Content: string(content),
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Imported)
+			assert.Zero(t, result.Skipped)
+			assert.Equal(t, 1, result.Failed)
+			require.Len(t, result.Errors, 1)
+			assert.Contains(t, result.Errors[0].Message, "service_account_json is invalid")
+			assert.Equal(t, "unaffected-api-key", accountByNameInPool(t, pool.Id, "unaffected-api-key").Name)
+
+			var malformedCount int64
+			require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+				Where("pool_id = ? AND name = ?", pool.Id, malformedName).Count(&malformedCount).Error)
+			assert.Zero(t, malformedCount)
+
+			errorJSON, err := common.Marshal(result.Errors)
+			require.NoError(t, err)
+			credentialJSON, err := common.Marshal(test.serviceAccountJSON)
+			require.NoError(t, err)
+			for _, secret := range []string{
+				string(content),
+				string(credentialJSON),
+				validPrivateKey,
+				"-----BEGIN PRIVATE KEY-----",
+				"do-not-echo-json-scalar",
+				"do-not-echo-invalid-email",
+				"do-not-echo-private-key",
+				"sk-unaffected-sibling",
+			} {
+				assert.NotContains(t, string(errorJSON), secret)
+			}
+		})
+	}
+}
+
+func TestAccountPoolServiceImportCPARejectsMalformedVertexServiceAccount(t *testing.T) {
+	setupAccountPoolServiceTestDB(t)
+	service := AccountPoolService{}
+	pool := createAccountPoolServiceTestPoolWithPlatform(t, service, model.AccountPoolPlatformGemini)
+	malformedPrivateKey := "do-not-echo-cpa-private-key"
+	content := fmt.Sprintf(`[
+		{
+			"type": "vertex",
+			"email": "vertex@example.com",
+			"project_id": "vertex-project",
+			"service_account": {
+				"type": "service_account",
+				"project_id": "vertex-project",
+				"client_email": "vertex@example.com",
+				"private_key": %q
+			}
+		},
+		{
+			"type": "gemini",
+			"email": "unaffected@example.com",
+			"access_token": "unaffected-access-token"
+		}
+	]`, malformedPrivateKey)
+
+	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
+		PoolID:  pool.Id,
+		Format:  "cpa",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Zero(t, result.Skipped)
+	assert.Equal(t, 1, result.Failed)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Message, "service_account_json is invalid")
+	assert.NotContains(t, result.Errors[0].Message, malformedPrivateKey)
+	assert.NotContains(t, result.Errors[0].Message, content)
+	assert.Equal(t, "unaffected@example.com", accountByNameInPool(t, pool.Id, "unaffected@example.com").Name)
+
+	var malformedCount int64
+	require.NoError(t, model.DB.Model(&model.AccountPoolAccount{}).
+		Where("pool_id = ? AND name = ?", pool.Id, "vertex@example.com").Count(&malformedCount).Error)
+	assert.Zero(t, malformedCount)
 }
 
 func TestAccountPoolServiceImportSub2APIGeminiAntigravityOAuthType(t *testing.T) {
@@ -922,6 +1081,16 @@ func TestAccountPoolServiceImportCPAVertexAuthSingleObject(t *testing.T) {
 	pool := createAccountPoolServiceTestPoolWithPlatform(t, service, model.AccountPoolPlatformGemini)
 	fixture, err := os.ReadFile("testdata/cpa/vertex-auth.json")
 	require.NoError(t, err)
+	var vertexAuth map[string]any
+	require.NoError(t, common.Unmarshal(fixture, &vertexAuth))
+	serviceAccountJSON, _ := newTestServiceAccountJSON(t, "https://oauth2.invalid/token")
+	var serviceAccount map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(serviceAccountJSON, &serviceAccount))
+	serviceAccount["project_id"] = "vertex-project"
+	serviceAccount["client_email"] = "vertex@example.com"
+	vertexAuth["service_account"] = serviceAccount
+	fixture, err = common.Marshal(vertexAuth)
+	require.NoError(t, err)
 
 	result, err := service.ImportAccounts(AccountPoolAccountImportParams{
 		PoolID:  pool.Id,
@@ -937,10 +1106,10 @@ func TestAccountPoolServiceImportCPAVertexAuthSingleObject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, AccountPoolCredentialTypeServiceAccount, credential.Type)
 	assert.Equal(t, "us-east5", credential.Location)
-	var serviceAccount map[string]any
-	require.NoError(t, common.UnmarshalJsonStr(credential.ServiceAccountJSON, &serviceAccount))
-	assert.Equal(t, "vertex-project", serviceAccount["project_id"])
-	assert.Equal(t, "vertex@example.com", serviceAccount["client_email"])
+	var storedServiceAccount map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(credential.ServiceAccountJSON, &storedServiceAccount))
+	assert.Equal(t, "vertex-project", storedServiceAccount["project_id"])
+	assert.Equal(t, "vertex@example.com", storedServiceAccount["client_email"])
 	tokenState, err := DecryptAccountPoolTokenState(account.TokenState)
 	require.NoError(t, err)
 	assert.Empty(t, tokenState.AccessToken)
