@@ -6,9 +6,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -210,4 +211,19 @@ func newCodexHeaderTestContext() *gin.Context {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	return ctx
+}
+
+func TestGetRequestURLAlphaSearch(t *testing.T) {
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:    constant.ChannelTypeCodex,
+			ChannelBaseUrl: "https://chatgpt.com",
+		},
+		RelayMode: relayconstant.RelayModeAlphaSearch,
+	}
+
+	url, err := adaptor.GetRequestURL(info)
+	require.NoError(t, err)
+	assert.Equal(t, "https://chatgpt.com/backend-api/codex/alpha/search", url)
 }

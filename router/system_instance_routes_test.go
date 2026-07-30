@@ -8,13 +8,11 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +29,11 @@ type systemInstanceRouteResponse struct {
 	Data    struct {
 		DeletedCount int64 `json:"deleted_count"`
 	} `json:"data"`
+}
+
+type systemInstanceRouteAuth struct {
+	accessToken   string
+	securityProof string
 }
 
 func setupSystemInstanceRouteTest(t *testing.T) (*gorm.DB, int64) {
@@ -68,7 +71,7 @@ func setupSystemInstanceRouteTest(t *testing.T) (*gorm.DB, int64) {
 		require.NoError(t, sqlDB.Close())
 	})
 
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SystemInstance{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.SystemInstance{}, &model.Log{}))
 	users := []model.User{
 		{Id: 1, Username: "root", Password: "password", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "instance-route-root"},
 		{Id: 2, Username: "admin", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "instance-route-admin"},
@@ -84,38 +87,30 @@ func setupSystemInstanceRouteTest(t *testing.T) (*gorm.DB, int64) {
 	return db, now
 }
 
-func systemInstanceRouteEngine(actor model.User, verified bool) (*gin.Engine, []*http.Cookie) {
+func systemInstanceRouteEngine(t *testing.T, actor model.User, verified bool) (*gin.Engine, systemInstanceRouteAuth) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("system-instance-route-test"))))
-	engine.GET("/test-login", func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", actor.Username)
-		session.Set("role", actor.Role)
-		session.Set("id", actor.Id)
-		session.Set("status", actor.Status)
-		session.Set("group", actor.Group)
-		if verified {
-			session.Set(middleware.SecureVerificationSessionKey, time.Now().Unix())
-		}
-		if err := session.Save(); err != nil {
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		c.Status(http.StatusNoContent)
-	})
 	SetApiRouter(engine)
-	recorder := httptest.NewRecorder()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/test-login", nil))
-	return engine, recorder.Result().Cookies()
+	bundle, err := service.CreateLoginSession(actor.Id, "password", "127.0.0.1", "system-instance-route-test")
+	require.NoError(t, err)
+	auth := systemInstanceRouteAuth{accessToken: bundle.AccessToken}
+	if verified {
+		identity, err := service.ParseAccessToken(bundle.AccessToken)
+		require.NoError(t, err)
+		auth.securityProof, _, err = service.IssueSecurityProof(identity, "2fa", []string{"channel.key.read"})
+		require.NoError(t, err)
+	}
+	return engine, auth
 }
 
-func systemInstanceRouteRequest(t *testing.T, engine *gin.Engine, cookies []*http.Cookie, actorID int, target string) (*httptest.ResponseRecorder, systemInstanceRouteResponse) {
+func systemInstanceRouteRequest(t *testing.T, engine *gin.Engine, auth systemInstanceRouteAuth, actorID int, target string) (*httptest.ResponseRecorder, systemInstanceRouteResponse) {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodDelete, target, nil)
 	request.Header.Set("New-Api-User", strconv.Itoa(actorID))
-	for _, value := range cookies {
-		request.AddCookie(value)
+	request.Header.Set("Authorization", "Bearer "+auth.accessToken)
+	if auth.securityProof != "" {
+		request.Header.Set("X-Security-Proof", auth.securityProof)
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -137,7 +132,7 @@ func TestSystemInstanceDeleteRouteRejectsAdmin(t *testing.T) {
 	db, _ := setupSystemInstanceRouteTest(t)
 	admin, err := model.GetUserById(2, false)
 	require.NoError(t, err)
-	engine, cookies := systemInstanceRouteEngine(*admin, true)
+	engine, cookies := systemInstanceRouteEngine(t, *admin, true)
 
 	_, response := systemInstanceRouteRequest(t, engine, cookies, admin.Id, "/api/system-info/stale-instances")
 
@@ -149,12 +144,12 @@ func TestSystemInstanceDeleteRouteRequiresStepUpBeforeMutation(t *testing.T) {
 	db, _ := setupSystemInstanceRouteTest(t)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := systemInstanceRouteEngine(*root, false)
+	engine, cookies := systemInstanceRouteEngine(t, *root, false)
 
 	recorder, response := systemInstanceRouteRequest(t, engine, cookies, root.Id, "/api/system-info/instances/stale-a")
 
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.Equal(t, "VERIFICATION_REQUIRED", response.Code)
+	assert.Equal(t, "SECURITY_PROOF_REQUIRED", response.Code)
 	assert.EqualValues(t, 3, countSystemInstances(t, db))
 }
 
@@ -162,7 +157,7 @@ func TestSystemInstanceDeleteRouteDeletesOneStaleRowAndAuditsOperator(t *testing
 	db, _ := setupSystemInstanceRouteTest(t)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := systemInstanceRouteEngine(*root, true)
+	engine, cookies := systemInstanceRouteEngine(t, *root, true)
 
 	_, response := systemInstanceRouteRequest(t, engine, cookies, root.Id, "/api/system-info/instances/stale-a")
 
@@ -181,7 +176,7 @@ func TestSystemInstanceDeleteRouteSupportsEncodedNodeNames(t *testing.T) {
 	}).Error)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := systemInstanceRouteEngine(*root, true)
+	engine, cookies := systemInstanceRouteEngine(t, *root, true)
 
 	target := "/api/system-info/instances/" + url.PathEscape(nodeName)
 	recorder, response := systemInstanceRouteRequest(t, engine, cookies, root.Id, target)
@@ -198,7 +193,7 @@ func TestSystemInstanceDeleteAllStaleRouteReturnsExactCountAndAuditsOperator(t *
 	db, _ := setupSystemInstanceRouteTest(t)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := systemInstanceRouteEngine(*root, true)
+	engine, cookies := systemInstanceRouteEngine(t, *root, true)
 
 	_, response := systemInstanceRouteRequest(t, engine, cookies, root.Id, "/api/system-info/stale-instances")
 

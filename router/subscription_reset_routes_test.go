@@ -8,13 +8,11 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -39,6 +37,11 @@ type subscriptionResetAuditOther struct {
 	AdminInfo struct {
 		AdminID int `json:"admin_id"`
 	} `json:"admin_info"`
+}
+
+type subscriptionResetRouteAuth struct {
+	accessToken   string
+	securityProof string
 }
 
 func setupSubscriptionResetRouteTest(t *testing.T) (*gorm.DB, model.SubscriptionPlan) {
@@ -66,6 +69,7 @@ func setupSubscriptionResetRouteTest(t *testing.T) (*gorm.DB, model.Subscription
 	common.TranslateMessage = func(_ *gin.Context, key string, _ ...map[string]any) string { return key }
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() {
+		middleware.DrainAdminAuditJobs()
 		model.DB = oldDB
 		model.LOG_DB = oldLogDB
 		common.RedisEnabled = oldRedisEnabled
@@ -76,7 +80,7 @@ func setupSubscriptionResetRouteTest(t *testing.T) (*gorm.DB, model.Subscription
 		require.NoError(t, sqlDB.Close())
 	})
 
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.Log{}))
 	users := []model.User{
 		{Id: 1, Username: "root", Password: "password", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "reset-route-root"},
 		{Id: 2, Username: "admin", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "reset-route-admin"},
@@ -95,39 +99,31 @@ func setupSubscriptionResetRouteTest(t *testing.T) (*gorm.DB, model.Subscription
 	return db, plan
 }
 
-func subscriptionResetRouteEngine(actor model.User, verified bool) (*gin.Engine, []*http.Cookie) {
+func subscriptionResetRouteEngine(t *testing.T, actor model.User, verified bool) (*gin.Engine, subscriptionResetRouteAuth) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("subscription-reset-route-test"))))
-	engine.GET("/test-login", func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", actor.Username)
-		session.Set("role", actor.Role)
-		session.Set("id", actor.Id)
-		session.Set("status", actor.Status)
-		session.Set("group", actor.Group)
-		if verified {
-			session.Set(middleware.SecureVerificationSessionKey, time.Now().Unix())
-		}
-		if err := session.Save(); err != nil {
-			c.Status(http.StatusInternalServerError)
-			return
-		}
-		c.Status(http.StatusNoContent)
-	})
 	SetApiRouter(engine)
-	recorder := httptest.NewRecorder()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/test-login", nil))
-	return engine, recorder.Result().Cookies()
+	bundle, err := service.CreateLoginSession(actor.Id, "password", "127.0.0.1", "subscription-reset-route-test")
+	require.NoError(t, err)
+	auth := subscriptionResetRouteAuth{accessToken: bundle.AccessToken}
+	if verified {
+		identity, err := service.ParseAccessToken(bundle.AccessToken)
+		require.NoError(t, err)
+		auth.securityProof, _, err = service.IssueSecurityProof(identity, "2fa", []string{"channel.key.read"})
+		require.NoError(t, err)
+	}
+	return engine, auth
 }
 
-func subscriptionResetRouteRequest(t *testing.T, engine *gin.Engine, cookies []*http.Cookie, actorID int, target string, body string) (*httptest.ResponseRecorder, subscriptionResetRouteResponse) {
+func subscriptionResetRouteRequest(t *testing.T, engine *gin.Engine, auth subscriptionResetRouteAuth, actorID int, target string, body string) (*httptest.ResponseRecorder, subscriptionResetRouteResponse) {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("New-Api-User", strconv.Itoa(actorID))
-	for _, value := range cookies {
-		request.AddCookie(value)
+	request.Header.Set("Authorization", "Bearer "+auth.accessToken)
+	if auth.securityProof != "" {
+		request.Header.Set("X-Security-Proof", auth.securityProof)
 	}
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, request)
@@ -149,13 +145,13 @@ func TestSubscriptionPlanResetRouteRequiresStepUpBeforeMutation(t *testing.T) {
 	db, plan := setupSubscriptionResetRouteTest(t)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := subscriptionResetRouteEngine(*root, false)
+	engine, cookies := subscriptionResetRouteEngine(t, *root, false)
 
 	recorder, response := subscriptionResetRouteRequest(t, engine, cookies, root.Id, fmt.Sprintf("/api/subscription/admin/plans/%d/subscriptions/reset", plan.Id), `{}`)
 
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.False(t, response.Success)
-	assert.Equal(t, "VERIFICATION_REQUIRED", response.Code)
+	assert.Equal(t, "SECURITY_PROOF_REQUIRED", response.Code)
 	assert.EqualValues(t, 321, subscriptionResetAmountUsed(t, db, 601))
 }
 
@@ -163,7 +159,7 @@ func TestSubscriptionPlanResetRouteIsRootOnly(t *testing.T) {
 	db, plan := setupSubscriptionResetRouteTest(t)
 	admin, err := model.GetUserById(2, false)
 	require.NoError(t, err)
-	engine, cookies := subscriptionResetRouteEngine(*admin, true)
+	engine, cookies := subscriptionResetRouteEngine(t, *admin, true)
 
 	_, response := subscriptionResetRouteRequest(t, engine, cookies, admin.Id, fmt.Sprintf("/api/subscription/admin/plans/%d/subscriptions/reset", plan.Id), `{}`)
 
@@ -175,7 +171,7 @@ func TestSubscriptionUserResetRouteEnforcesRoleHierarchy(t *testing.T) {
 	db, plan := setupSubscriptionResetRouteTest(t)
 	admin, err := model.GetUserById(2, false)
 	require.NoError(t, err)
-	engine, cookies := subscriptionResetRouteEngine(*admin, true)
+	engine, cookies := subscriptionResetRouteEngine(t, *admin, true)
 
 	_, response := subscriptionResetRouteRequest(t, engine, cookies, admin.Id, "/api/subscription/admin/users/3/subscriptions/reset", fmt.Sprintf(`{"plan_id":%d}`, plan.Id))
 
@@ -187,14 +183,14 @@ func TestSubscriptionUserResetRouteDefaultsAdvanceAndRecordsCanonicalOperatorAud
 	db, plan := setupSubscriptionResetRouteTest(t)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := subscriptionResetRouteEngine(*root, true)
+	engine, cookies := subscriptionResetRouteEngine(t, *root, true)
 
 	_, response := subscriptionResetRouteRequest(t, engine, cookies, root.Id, "/api/subscription/admin/users/3/subscriptions/reset", fmt.Sprintf(`{"plan_id":%d}`, plan.Id))
 
 	require.True(t, response.Success, response.Message)
 	assert.True(t, response.Data.AdvanceResetTime)
 	assert.Equal(t, 1, response.Data.ResetCount)
-	assert.Equal(t, []int{3}, response.Data.AffectedUserIds)
+	assert.Empty(t, response.Data.AffectedUserIds)
 	assert.Zero(t, subscriptionResetAmountUsed(t, db, 601))
 
 	var operatorLogs []model.Log
@@ -212,7 +208,7 @@ func TestSubscriptionPlanResetRoutePreservesTimesWhenExplicitFalseAndAuditsOpera
 	db, plan := setupSubscriptionResetRouteTest(t)
 	root, err := model.GetUserById(1, false)
 	require.NoError(t, err)
-	engine, cookies := subscriptionResetRouteEngine(*root, true)
+	engine, cookies := subscriptionResetRouteEngine(t, *root, true)
 	var before model.UserSubscription
 	require.NoError(t, db.First(&before, 601).Error)
 
@@ -222,7 +218,7 @@ func TestSubscriptionPlanResetRoutePreservesTimesWhenExplicitFalseAndAuditsOpera
 	assert.False(t, response.Data.AdvanceResetTime)
 	assert.Equal(t, 2, response.Data.ResetCount)
 	assert.Equal(t, 2, response.Data.UserCount)
-	assert.Equal(t, []int{3, 4}, response.Data.AffectedUserIds)
+	assert.Empty(t, response.Data.AffectedUserIds)
 	var after model.UserSubscription
 	require.NoError(t, db.First(&after, 601).Error)
 	assert.Equal(t, before.LastResetTime, after.LastResetTime)

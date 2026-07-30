@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 type upstreamSourceAutoPriorityMappingLoader func(ctx context.Context, source model.UpstreamSource) ([]model.UpstreamSourceChannelMapping, error)
@@ -212,7 +213,7 @@ func (s *UpstreamSourceService) RunDueUpstreamSourceAutoPriority(ctx context.Con
 		logger.LogWarn(ctx, fmt.Sprintf("upstream source auto-priority: load completed channels failed: %v", err))
 		return nil
 	}
-	settingsByChannelID := make(map[int]dto.ChannelOtherSettings, len(channels))
+	settingsByChannelID := make(map[int]relaydto.ChannelOtherSettings, len(channels))
 	for _, channel := range channels {
 		settings, ok := readChannelOtherSettingsForAutoPriorityDue(channel)
 		if !ok {
@@ -326,13 +327,13 @@ func upstreamSourceMappingAutoPriorityDue(source model.UpstreamSource, config up
 	return now-lastRunAt >= int64(intervalMinutes)*60
 }
 
-func readChannelOtherSettingsForAutoPriorityDue(channel model.Channel) (dto.ChannelOtherSettings, bool) {
-	settings := dto.ChannelOtherSettings{}
+func readChannelOtherSettingsForAutoPriorityDue(channel model.Channel) (relaydto.ChannelOtherSettings, bool) {
+	settings := relaydto.ChannelOtherSettings{}
 	if strings.TrimSpace(channel.OtherSettings) == "" {
 		return settings, true
 	}
 	if err := common.UnmarshalJsonStr(channel.OtherSettings, &settings); err != nil {
-		return dto.ChannelOtherSettings{}, false
+		return relaydto.ChannelOtherSettings{}, false
 	}
 	return settings, true
 }

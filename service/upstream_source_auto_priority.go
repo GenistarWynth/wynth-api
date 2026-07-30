@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 
 	"gorm.io/gorm"
 )
@@ -24,7 +25,7 @@ type autoPriorityUsageStatsCollector func(ctx context.Context, channelIDs []int,
 type upstreamSourceAutoPriorityCandidate struct {
 	mapping                 model.UpstreamSourceChannelMapping
 	channel                 model.Channel
-	settings                dto.ChannelOtherSettings
+	settings                relaydto.ChannelOtherSettings
 	resolution              upstreamSourceRuleResolution
 	scoreInput              AutoPriorityScoreInput
 	windowStart             int64
@@ -242,7 +243,7 @@ func (s *UpstreamSourceService) runAutoPriority(ctx context.Context, sourceID in
 	for i := range pending {
 		availabilityWindowHours := groupAvailabilityWindowHours[pending[i].scoreInput.LocalGroup]
 		if availabilityWindowHours == 0 {
-			availabilityWindowHours = dto.NormalizeChannelAutoPriorityWindowHours(
+			availabilityWindowHours = relaydto.NormalizeChannelAutoPriorityWindowHours(
 				pending[i].resolution.AutoPriorityAvailabilityWindowHours,
 			)
 		}
@@ -410,7 +411,7 @@ func autoPriorityLocalGroupAvailabilityWindowHours(ctx context.Context, groups [
 
 	windowHoursByGroup := make(map[string]int, len(dedupedGroups))
 	for _, row := range settingsRows {
-		settings := dto.ChannelOtherSettings{}
+		settings := relaydto.ChannelOtherSettings{}
 		if strings.TrimSpace(row.OtherSettings) != "" {
 			if err := common.UnmarshalJsonStr(row.OtherSettings, &settings); err != nil {
 				continue
@@ -423,7 +424,7 @@ func autoPriorityLocalGroupAvailabilityWindowHours(ctx context.Context, groups [
 		if !exists {
 			continue
 		}
-		windowHours := dto.NormalizeChannelAutoPriorityWindowHours(
+		windowHours := relaydto.NormalizeChannelAutoPriorityWindowHours(
 			settings.ChannelAutoPriorityAvailabilityWindowHours,
 		)
 		if windowHours > windowHoursByGroup[localGroup] {
@@ -526,7 +527,7 @@ func autoPriorityLocalGroupCostBounds(ctx context.Context, groups []string, type
 		if !ok {
 			continue
 		}
-		settings := dto.ChannelOtherSettings{}
+		settings := relaydto.ChannelOtherSettings{}
 		if strings.TrimSpace(row.OtherSettings) != "" {
 			if err := common.UnmarshalJsonStr(row.OtherSettings, &settings); err != nil {
 				continue
@@ -567,14 +568,14 @@ func autoPriorityLocalGroupCostBounds(ctx context.Context, groups []string, type
 	return bounds, nil
 }
 
-func previousAutoPriorityEffectiveCostMultiplier(settings dto.ChannelOtherSettings) float64 {
+func previousAutoPriorityEffectiveCostMultiplier(settings relaydto.ChannelOtherSettings) float64 {
 	if settings.ChannelAutoPriorityLastScore == nil {
 		return 0
 	}
 	return settings.ChannelAutoPriorityLastScore.EffectiveCostMultiplier
 }
 
-func previousAutoPriorityCacheAdjustedCostFactor(settings dto.ChannelOtherSettings) float64 {
+func previousAutoPriorityCacheAdjustedCostFactor(settings relaydto.ChannelOtherSettings) float64 {
 	if settings.ChannelAutoPriorityLastScore == nil {
 		return 0
 	}
@@ -794,7 +795,7 @@ func loadChannelByIDWithContext(ctx context.Context, channelID int) (*model.Chan
 	return &channel, nil
 }
 
-func isGeneratedChannelMetadataMatching(settings *dto.ChannelOtherSettings, sourceID int, mappingID int) bool {
+func isGeneratedChannelMetadataMatching(settings *relaydto.ChannelOtherSettings, sourceID int, mappingID int) bool {
 	if settings == nil {
 		return false
 	}
@@ -802,8 +803,8 @@ func isGeneratedChannelMetadataMatching(settings *dto.ChannelOtherSettings, sour
 		settings.GeneratedByUpstreamMappingID == mappingID
 }
 
-func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, windowStart int64, windowEnd int64) *dto.ChannelAutoPriorityScore {
-	return &dto.ChannelAutoPriorityScore{
+func buildChannelAutoPriorityScoreSnapshot(score AutoPriorityScoreResult, windowStart int64, windowEnd int64) *relaydto.ChannelAutoPriorityScore {
+	return &relaydto.ChannelAutoPriorityScore{
 		Version:                   upstreamSourceAutoPriorityScoreVersion,
 		ComputedAt:                windowEnd,
 		WindowStart:               windowStart,

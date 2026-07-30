@@ -70,6 +70,9 @@ func VideoProxy(c *gin.Context) {
 	proxy := channel.GetSetting().Proxy
 	client := service.GetSSRFProtectedHTTPClient()
 	if proxy != "" {
+		// 渠道代理路径的连接由代理侧建立，无法做拨号时逐 IP 校验，
+		// 因此后面对 videoURL 保留请求前的一次性 SSRF 校验。
+
 		client, err = service.GetHttpClientWithProxy(proxy)
 		if err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to create proxy client for task %s: %s", taskID, err.Error()))
@@ -138,6 +141,7 @@ func VideoProxy(c *gin.Context) {
 	} else {
 		// A configured channel proxy owns the final connection, so retain the
 		// request-time destination validation for this path.
+
 		fetchSetting := system_setting.GetFetchSetting()
 		validateErr = common.ValidateURLWithFetchSetting(videoURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain)
 	}

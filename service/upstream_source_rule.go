@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 const (
@@ -232,7 +233,7 @@ func normalizeUpstreamSourceSyncConfig(config upstreamSourceSyncConfig) upstream
 	config.AutoPriorityIntervalMinutes = normalizeUpstreamSourceAutoPriorityInterval(config.AutoPriorityIntervalMinutes)
 	config.AutoPriorityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityWindowHours)
 	config.AutoPriorityAvailabilityWindowHours = normalizeUpstreamSourceAutoPriorityWindow(config.AutoPriorityAvailabilityWindowHours)
-	config.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
+	config.CodexImageGenerationBridgePolicy = relaydto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
 	config.ModelStrategy = normalizeUpstreamSourceFallbackModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceFixedModels(config.FixedModels)
 	config.LocalGroupRules = normalizeUpstreamSourceLocalGroupRules(config.LocalGroupRules)
@@ -315,7 +316,7 @@ func normalizeUpstreamSourceRuleCodexImageGenerationBridgePolicy(policy string) 
 	if strings.TrimSpace(policy) == "" {
 		return ""
 	}
-	return dto.NormalizeCodexImageGenerationBridgePolicy(policy)
+	return relaydto.NormalizeCodexImageGenerationBridgePolicy(policy)
 }
 
 func NormalizeUpstreamSourceLocalGroupRulesForConfig(rules []dto.UpstreamSourceLocalGroupRule) []dto.UpstreamSourceLocalGroupRule {
@@ -455,7 +456,7 @@ func upstreamSourceRuleFallbackResolution(config upstreamSourceSyncConfig) upstr
 		AutoPriorityIntervalMinutes:         upstreamSourceAutoPriorityDefaultIntervalMinutes,
 		AutoPriorityWindowHours:             upstreamSourceAutoPriorityDefaultWindowHours,
 		AutoPriorityAvailabilityWindowHours: upstreamSourceAutoPriorityDefaultWindowHours,
-		CodexImageGenerationBridgePolicy:    dto.CodexImageGenerationBridgePolicyFollow,
+		CodexImageGenerationBridgePolicy:    relaydto.CodexImageGenerationBridgePolicyFollow,
 		ModelStrategy:                       upstreamSourceModelStrategyAllUpstream,
 		FixedModels:                         nil,
 	}
@@ -575,7 +576,7 @@ func resolveUpstreamSourceMatchedRule(config upstreamSourceSyncConfig, rule dto.
 		}
 	}
 	if strings.TrimSpace(rule.CodexImageGenerationBridgePolicy) != "" {
-		resolution.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(rule.CodexImageGenerationBridgePolicy)
+		resolution.CodexImageGenerationBridgePolicy = relaydto.NormalizeCodexImageGenerationBridgePolicy(rule.CodexImageGenerationBridgePolicy)
 	}
 	if modelStrategy := normalizeUpstreamSourceRuleModelStrategy(rule.ModelStrategy); modelStrategy != "" {
 		resolution.ModelStrategy = modelStrategy

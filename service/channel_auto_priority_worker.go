@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -295,7 +296,7 @@ func runChannelAutoPriorityGroupsForSourceMappings(
 
 type configuredAutoPriorityChannel struct {
 	channel        model.Channel
-	settings       dto.ChannelOtherSettings
+	settings       relaydto.ChannelOtherSettings
 	localGroup     string
 	rateMultiplier float64
 	invalidReason  string
@@ -453,7 +454,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 	type channelWithSettings struct {
 		channel    model.Channel
-		settings   dto.ChannelOtherSettings
+		settings   relaydto.ChannelOtherSettings
 		localGroup string
 	}
 	channelsWithSettings := make([]channelWithSettings, 0, len(channels))
@@ -562,7 +563,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		} else if schedule.lastRunAt != 0 && (configuredChannel.settings.ChannelAutoPriorityLastRunAt == 0 || configuredChannel.settings.ChannelAutoPriorityLastRunAt < schedule.lastRunAt) {
 			schedule.lastRunAt = configuredChannel.settings.ChannelAutoPriorityLastRunAt
 		}
-		intervalMinutes := dto.NormalizeChannelAutoPriorityInterval(configuredChannel.settings.ChannelAutoPriorityIntervalMinutes)
+		intervalMinutes := relaydto.NormalizeChannelAutoPriorityInterval(configuredChannel.settings.ChannelAutoPriorityIntervalMinutes)
 		if intervalMinutes > schedule.intervalMinutes {
 			schedule.intervalMinutes = intervalMinutes
 		}
@@ -602,7 +603,7 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 
 	groupAvailabilityWindowHours := make(map[string]int, len(selectedGroups))
 	for _, configuredChannel := range configuredChannels {
-		windowHours := dto.NormalizeChannelAutoPriorityWindowHours(
+		windowHours := relaydto.NormalizeChannelAutoPriorityWindowHours(
 			configuredChannel.settings.ChannelAutoPriorityAvailabilityWindowHours,
 		)
 		if windowHours > groupAvailabilityWindowHours[configuredChannel.localGroup] {
@@ -622,10 +623,10 @@ func runChannelAutoPriority(ctx context.Context, now int64, localGroupFilter map
 		for _, configuredChannel := range schedule.members {
 			channel := configuredChannel.channel
 			settings := configuredChannel.settings
-			windowHours := dto.NormalizeChannelAutoPriorityWindowHours(settings.ChannelAutoPriorityWindowHours)
+			windowHours := relaydto.NormalizeChannelAutoPriorityWindowHours(settings.ChannelAutoPriorityWindowHours)
 			availabilityWindowHours := groupAvailabilityWindowHours[configuredChannel.localGroup]
 			if availabilityWindowHours == 0 {
-				availabilityWindowHours = dto.NormalizeChannelAutoPriorityWindowHours(
+				availabilityWindowHours = relaydto.NormalizeChannelAutoPriorityWindowHours(
 					settings.ChannelAutoPriorityAvailabilityWindowHours,
 				)
 			}

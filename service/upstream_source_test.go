@@ -12,8 +12,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	sourcedto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -510,7 +511,7 @@ func TestDiscoverUpstreamSourceSetsSyncEnabledFromRuleEligibility(t *testing.T) 
 
 	require.NoError(t, err)
 	require.Len(t, result.Mappings, 2)
-	mappingByID := make(map[string]dto.UpstreamSourceMappingResponse, len(result.Mappings))
+	mappingByID := make(map[string]sourcedto.UpstreamSourceMappingResponse, len(result.Mappings))
 	for _, mapping := range result.Mappings {
 		mappingByID[mapping.UpstreamGroupID] = mapping
 	}
@@ -1530,9 +1531,9 @@ func TestSyncUpstreamSourceUsesRuleLocalGroupAndMonitorOverrides(t *testing.T) {
 func TestBuildGeneratedChannelWritesMonitorModel(t *testing.T) {
 	enabled := true
 	cfg := normalizeUpstreamSourceSyncConfig(upstreamSourceSyncConfig{
-		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{{
+		LocalGroupRules: []sourcedto.UpstreamSourceLocalGroupRule{{
 			Name: "r", NameContains: []string{"gpt"},
-			Monitor: &dto.UpstreamSourceRuleMonitor{Enabled: &enabled, IntervalMinutes: 2, Model: "gpt-4o-mini"},
+			Monitor: &sourcedto.UpstreamSourceRuleMonitor{Enabled: &enabled, IntervalMinutes: 2, Model: "gpt-4o-mini"},
 		}},
 	})
 	mapping := &model.UpstreamSourceChannelMapping{Id: 1, SyncEnabled: true, DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive, UpstreamGroupName: "gpt-pro"}
@@ -3149,11 +3150,11 @@ func TestListDueUpstreamSourcesForAutoSyncUsesRuleIntervals(t *testing.T) {
 	autoSyncEnabled := true
 	source := createAutoSyncTestSource(t, "rule-due", model.UpstreamSourceStatusEnabled, map[string]any{
 		"auto_sync_enabled": false,
-		"local_group_rules": []dto.UpstreamSourceLocalGroupRule{{
+		"local_group_rules": []sourcedto.UpstreamSourceLocalGroupRule{{
 			Name:       "OpenAI",
 			LocalGroup: "default",
 			Platforms:  []string{"openai"},
-			AutoSync:   &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: 10},
+			AutoSync:   &sourcedto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: 10},
 		}},
 	}, 0, "", 0)
 	rate := 1.0
@@ -3179,11 +3180,11 @@ func TestRunDueUpstreamSourceAutoSyncSyncsOnlyDueMappings(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	autoSyncEnabled := true
 	source := createAutoSyncTestSource(t, "rule-due", model.UpstreamSourceStatusEnabled, map[string]any{
-		"local_group_rules": []dto.UpstreamSourceLocalGroupRule{{
+		"local_group_rules": []sourcedto.UpstreamSourceLocalGroupRule{{
 			Name:       "OpenAI",
 			LocalGroup: "default",
 			Platforms:  []string{"openai"},
-			AutoSync:   &dto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: 10},
+			AutoSync:   &sourcedto.UpstreamSourceRuleAutoSync{Enabled: &autoSyncEnabled, IntervalMinutes: 10},
 		}},
 	}, 0, "", 0)
 	rate := 1.0

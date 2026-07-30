@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 // invalidCredentialMarkers are substrings that indicate the SSO token / account

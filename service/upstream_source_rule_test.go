@@ -5,8 +5,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	sourcedto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -352,13 +353,13 @@ func TestResolveUpstreamSourceRuleMatchesPlatformAndKeywords(t *testing.T) {
 }
 
 func TestUpstreamSourceRuleMatchesPlatformGateHandlesUnknownPlatform(t *testing.T) {
-	platformKeyword := dto.UpstreamSourceLocalGroupRule{Platforms: []string{"openai"}, NameContains: []string{"对接"}}
-	platformOnly := dto.UpstreamSourceLocalGroupRule{Platforms: []string{"openai"}}
-	nameOnly := dto.UpstreamSourceLocalGroupRule{NameContains: []string{"对接"}}
+	platformKeyword := sourcedto.UpstreamSourceLocalGroupRule{Platforms: []string{"openai"}, NameContains: []string{"对接"}}
+	platformOnly := sourcedto.UpstreamSourceLocalGroupRule{Platforms: []string{"openai"}}
+	nameOnly := sourcedto.UpstreamSourceLocalGroupRule{NameContains: []string{"对接"}}
 
 	cases := []struct {
 		name         string
-		rule         dto.UpstreamSourceLocalGroupRule
+		rule         sourcedto.UpstreamSourceLocalGroupRule
 		platform     string
 		groupName    string
 		wantMatch    bool
@@ -390,7 +391,7 @@ func TestResolveMatchedRuleOverridesChannelTypePriorityWeight(t *testing.T) {
 	weight := uint(9)
 	cfg := upstreamSourceSyncConfig{
 		ChannelType: constant.ChannelTypeOpenAI, DefaultPriority: 1, DefaultWeight: 2,
-		LocalGroupRules: []dto.UpstreamSourceLocalGroupRule{{
+		LocalGroupRules: []sourcedto.UpstreamSourceLocalGroupRule{{
 			Name: "r", NameContains: []string{"gpt"},
 			ChannelType: constant.ChannelTypeAnthropic, Priority: &priority, Weight: &weight,
 		}},

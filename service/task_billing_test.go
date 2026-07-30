@@ -12,7 +12,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -143,6 +145,59 @@ func makeTask(userId, channelId, quota, tokenId int, billingSource string, subsc
 	}
 }
 
+func TestPriceDataOtherRatiosFilterAndSnapshot(t *testing.T) {
+	priceData := types.PriceData{}
+
+	priceData.AddOtherRatio("zero", 0)
+	priceData.AddOtherRatio("negative", -0.5)
+	priceData.AddOtherRatio("nan", math.NaN())
+	priceData.AddOtherRatio("inf", math.Inf(1))
+	priceData.AddOtherRatio("one", 1)
+	priceData.AddOtherRatio("positive", 2.5)
+
+	ratios := priceData.OtherRatios()
+	require.Len(t, ratios, 2)
+	assert.Equal(t, 1.0, ratios["one"])
+	assert.Equal(t, 2.5, ratios["positive"])
+	assert.True(t, priceData.HasOtherRatio("one"))
+	assert.False(t, priceData.HasOtherRatio("zero"))
+
+	ratios["positive"] = 99
+	ratios["new"] = 3
+	nextSnapshot := priceData.OtherRatios()
+	assert.Equal(t, 2.5, nextSnapshot["positive"])
+	assert.NotContains(t, nextSnapshot, "new")
+}
+
+func TestPriceDataReplaceAndApplyOtherRatios(t *testing.T) {
+	priceData := types.PriceData{}
+
+	replaced := priceData.ReplaceOtherRatios(map[string]float64{
+		"zero":     0,
+		"negative": -3,
+		"nan":      math.NaN(),
+		"inf":      math.Inf(1),
+		"one":      1,
+		"duration": 2,
+		"size":     1.5,
+	})
+
+	require.True(t, replaced)
+	assert.Equal(t, 3.0, priceData.OtherRatioMultiplier())
+	assert.Equal(t, 30.0, priceData.ApplyOtherRatiosToFloat(10))
+	assert.Equal(t, 10.0, priceData.RemoveOtherRatiosFromFloat(30))
+	assert.True(t, decimal.NewFromInt(30).Equal(priceData.ApplyOtherRatiosToDecimal(decimal.NewFromInt(10))))
+
+	replaced = priceData.ReplaceOtherRatios(map[string]float64{
+		"zero": 0,
+		"nan":  math.NaN(),
+	})
+
+	require.False(t, replaced)
+	assert.Nil(t, priceData.OtherRatios())
+	assert.Equal(t, 1.0, priceData.OtherRatioMultiplier())
+}
+
 func TestTaskBillingOtherFiltersHistoricalOtherRatios(t *testing.T) {
 	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
 	task.PrivateData.BillingContext.OtherRatios = map[string]float64{
@@ -225,6 +280,13 @@ func getSubscriptionUsed(t *testing.T, id int) int64 {
 	return sub.AmountUsed
 }
 
+func getTaskQuota(t *testing.T, id int64) int {
+	t.Helper()
+	var task model.Task
+	require.NoError(t, model.DB.Select("quota").Where("id = ?", id).First(&task).Error)
+	return task.Quota
+}
+
 func getLastLog(t *testing.T) *model.Log {
 	t.Helper()
 	var log model.Log
@@ -266,8 +328,9 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
 
-	RefundTaskQuota(ctx, task, "task failed: upstream error")
+	assert.True(t, RefundTaskQuota(ctx, task, "task failed: upstream error"))
 
 	// User quota should increase by preConsumed
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
@@ -282,6 +345,8 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 	assert.Equal(t, preConsumed, log.Quota)
 	assert.Equal(t, "test-model", log.ModelName)
+	assert.Zero(t, task.Quota)
+	assert.Zero(t, getTaskQuota(t, task.ID))
 }
 
 func TestRefundTaskQuota_Subscription(t *testing.T) {
@@ -299,8 +364,9 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	seedSubscription(t, subID, userID, subTotal, subUsed)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+	require.NoError(t, model.DB.Create(task).Error)
 
-	RefundTaskQuota(ctx, task, "subscription task failed")
+	assert.True(t, RefundTaskQuota(ctx, task, "subscription task failed"))
 
 	// Subscription used should decrease by preConsumed
 	assert.Equal(t, subUsed-int64(preConsumed), getSubscriptionUsed(t, subID))
@@ -311,6 +377,7 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Zero(t, getTaskQuota(t, task.ID))
 }
 
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
@@ -322,7 +389,7 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 
 	task := makeTask(userID, 0, 0, 0, BillingSourceWallet, 0)
 
-	RefundTaskQuota(ctx, task, "zero quota task")
+	assert.True(t, RefundTaskQuota(ctx, task, "zero quota task"))
 
 	// No change to user quota
 	assert.Equal(t, 5000, getUserQuota(t, userID))
@@ -342,8 +409,9 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0) // TokenId=0
+	require.NoError(t, model.DB.Create(task).Error)
 
-	RefundTaskQuota(ctx, task, "no token task failed")
+	assert.True(t, RefundTaskQuota(ctx, task, "no token task failed"))
 
 	// User quota refunded
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
@@ -352,6 +420,23 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Zero(t, getTaskQuota(t, task.ID))
+}
+
+func TestRefundTaskQuota_FundingFailureKeepsPendingMarker(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, preConsumed = 5, 1200
+	seedUser(t, userID, 5000)
+	task := makeTask(userID, 0, preConsumed, 0, BillingSourceSubscription, 9999)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.False(t, RefundTaskQuota(ctx, task, "subscription missing"))
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, preConsumed, getTaskQuota(t, task.ID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 // ===========================================================================
@@ -602,6 +687,7 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
+	assert.Zero(t, reloaded.Quota)
 
 	// Refund should have happened
 	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))

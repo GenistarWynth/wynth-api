@@ -5,7 +5,7 @@ package grokweb
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 // grokChatRequest is the JSON body POSTed to grok.com's

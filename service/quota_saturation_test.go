@@ -1,13 +1,12 @@
 package service
 
 import (
-	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -93,8 +92,9 @@ func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {
 	require.NotNil(t, apiErr)
 	require.Equal(t, types.ErrorCodeModelPriceError, apiErr.GetErrorCode())
 	require.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	require.Same(t, info.QuotaClamp, apiErr.Err)
 	var clamp *common.QuotaClamp
-	require.True(t, errors.As(apiErr, &clamp))
+	require.ErrorAs(t, apiErr, &clamp)
 	require.Same(t, info.QuotaClamp, clamp)
 	require.Nil(t, info.Billing)
 }

@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -446,12 +446,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		info.SetActualResponseModel(responsesResponse.Model, relaycommon.ActualResponseModelSourceOpenAIResponses)
 	}
 
-	if responsesResponse.HasImageGenerationCall() {
-		c.Set("image_generation_call", true)
-		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
-		c.Set("image_generation_call_size", responsesResponse.GetSize())
-	}
-
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
@@ -464,21 +458,31 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if responsesResponse.Usage.InputTokensDetails != nil {
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 			usage.PromptTokensDetails.CachedCreationTokens = responsesResponse.Usage.InputTokensDetails.CachedCreationTokens
+
 			usage.PromptTokensDetails.CacheWriteTokens = responsesResponse.Usage.InputTokensDetails.CacheWriteTokens
 		}
 	}
-	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
-		return &usage, nil
-	}
-	// 解析 Tools 用量
-	for _, tool := range responsesResponse.Tools {
-		buildToolinfo, ok := info.ResponsesUsageInfo.BuiltInTools[common.Interface2String(tool["type"])]
-		if !ok || buildToolinfo == nil {
-			logger.LogError(c, fmt.Sprintf("BuiltInTools not found for tool type: %v", tool["type"]))
-			continue
+	// Count actual tool invocations from Output (not tool declarations).
+	for _, output := range responsesResponse.Output {
+		switch output.Type {
+		case dto.BuildInCallWebSearchCall:
+			info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+		case dto.BuildInCallFileSearchCall:
+			info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
+		case dto.BuildInCallFunctionCall:
+			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
 		}
-		buildToolinfo.CallCount++
 	}
+
+	imageCounter := &relaycommon.ImageGenerationCallCounter{}
+	if !relaycommon.IsNonBillableResponsesStatus(responsesResponse.Status) {
+		for i := range responsesResponse.Output {
+			idx := i
+			imageCounter.Observe(&responsesResponse.Output[i], &idx)
+		}
+	}
+	imageCounter.Commit(info)
+
 	return &usage, nil
 }
 
@@ -526,6 +530,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	hasMeaningfulOutput := false
 	compactionOutputCount := 0
 	outputItemCount := 0
+	imageCounter := &relaycommon.ImageGenerationCallCounter{}
+	imageCommitted := false
 
 	termination := helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if isRemoteCompactionV2 && semanticError != nil {
@@ -783,7 +789,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 
 		switch streamResponse.Type {
-		case "response.completed":
+		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -798,19 +804,43 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					if streamResponse.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
 						usage.PromptTokensDetails.CachedCreationTokens = streamResponse.Response.Usage.InputTokensDetails.CachedCreationTokens
+
 						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
 					}
 				}
-				if streamResponse.Response.HasImageGenerationCall() {
-					c.Set("image_generation_call", true)
-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
+				if !imageCommitted {
+					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
+						imageCounter.Reset()
+						imageCounter.Commit(info)
+						imageCommitted = true
+					} else {
+						for i := range streamResponse.Response.Output {
+							idx := i
+							imageCounter.Observe(&streamResponse.Response.Output[i], &idx)
+						}
+						imageCounter.Commit(info)
+						imageCommitted = true
+					}
 				}
+			} else if !imageCommitted {
+				imageCounter.Commit(info)
+				imageCommitted = true
+			}
+		case "response.failed", "response.cancelled", "response.canceled":
+			if !imageCommitted {
+				imageCounter.Reset()
+				imageCounter.Commit(info)
+				imageCommitted = true
 			}
 			if !isRemoteCompactionV2 || !compactionStreamReader.LimitExhausted() {
 				sr.Done()
 			}
 		case "response.incomplete":
+			if !imageCommitted {
+				imageCounter.Reset()
+				imageCounter.Commit(info)
+				imageCommitted = true
+			}
 			semanticError = responsesIncompleteError(streamResponse.Response)
 			compactionStreamReader.StopUnlessLimitNeedsConfirmation(sr, semanticError)
 		case "response.output_text.delta":
@@ -819,10 +849,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			if streamResponse.Item != nil {
 				switch streamResponse.Item.Type {
 				case dto.BuildInCallWebSearchCall:
-					if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
-						if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
-							webSearchTool.CallCount++
-						}
+					info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+				case dto.BuildInCallFileSearchCall:
+					info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
+				case dto.BuildInCallFunctionCall:
+					info.CountBillableToolCall(dto.BuildInCallFunctionCall, streamResponse.Item.Name)
+				case dto.ResponsesOutputTypeImageGenerationCall:
+					if !imageCommitted {
+						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
 					}
 				}
 			}

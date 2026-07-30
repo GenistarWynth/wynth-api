@@ -17,14 +17,14 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -210,6 +210,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	previousDataExportEnabled := common.DataExportEnabled
 	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
 	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousCompletionRatios := ratio_setting.CompletionRatio2JSONString()
 	previousCacheRatios := ratio_setting.CacheRatio2JSONString()
 	previousCreateCacheRatios := ratio_setting.CreateCacheRatio2JSONString()
 	previousAutoGroups := setting.AutoGroups2JsonString()
@@ -262,6 +263,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	}
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.6-sol":2.5}`))
+	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"gpt-5.6-sol":8}`))
 	require.NoError(t, ratio_setting.UpdateCacheRatioByJSONString(`{"gpt-5.6-sol":0.1}`))
 	require.NoError(t, ratio_setting.UpdateCreateCacheRatioByJSONString(`{"gpt-5.6-sol":1.25}`))
 
@@ -284,6 +286,7 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 		service.ResetAccountPoolRuntimeForTest()
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
 		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(previousCompletionRatios))
 		require.NoError(t, ratio_setting.UpdateCacheRatioByJSONString(previousCacheRatios))
 		require.NoError(t, ratio_setting.UpdateCreateCacheRatioByJSONString(previousCreateCacheRatios))
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(previousAutoGroups))

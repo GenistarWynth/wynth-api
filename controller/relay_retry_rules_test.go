@@ -11,8 +11,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 )
 
 func TestShouldRetryUsesChannelOnlyStatusCode(t *testing.T) {
@@ -21,7 +22,7 @@ func TestShouldRetryUsesChannelOnlyStatusCode(t *testing.T) {
 	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 503}}
 
 	c, _ := gin.CreateTestContext(nil)
-	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{
+	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, relaydto.ChannelOtherSettings{
 		ChannelRetryStatusCodes: "404, 502-504",
 	})
 	err := types.NewErrorWithStatusCode(errors.New("model not found"), types.ErrorCodeBadResponse, 404)
@@ -35,7 +36,7 @@ func TestShouldRetryEmptyChannelRulesUseGlobalOnly(t *testing.T) {
 	operation_setting.AutomaticRetryStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 500, End: 503}}
 
 	c, _ := gin.CreateTestContext(nil)
-	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, dto.ChannelOtherSettings{})
+	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, relaydto.ChannelOtherSettings{})
 	err := types.NewErrorWithStatusCode(errors.New("model not found"), types.ErrorCodeBadResponse, 404)
 
 	require.False(t, shouldRetry(c, err))

@@ -20,10 +20,10 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -43,12 +43,12 @@ func buildGrokImageRequest(prompt, modeID string, count int) *grokChatRequest {
 		count = defaultImageGenerationCount
 	}
 	return &grokChatRequest{
-		Message:               prompt,
-		ModeID:                modeID,
-		CollectionIDs:         []string{},
-		Connectors:            []string{},
-		FileAttachments:       []string{},
-		ImageAttachments:      []string{},
+		Message:          prompt,
+		ModeID:           modeID,
+		CollectionIDs:    []string{},
+		Connectors:       []string{},
+		FileAttachments:  []string{},
+		ImageAttachments: []string{},
 		DeviceEnvInfo: grokDeviceEnvInfo{
 			DarkModeEnabled:  false,
 			DevicePixelRatio: 2,
@@ -57,9 +57,9 @@ func buildGrokImageRequest(prompt, modeID string, count int) *grokChatRequest {
 			ViewportHeight:   1083,
 			ViewportWidth:    2056,
 		},
-		ToolOverrides:         grokToolOverrides{},
-		ResponseMetadata:      map[string]any{},
-		DisableMemory:         true,
+		ToolOverrides:    grokToolOverrides{},
+		ResponseMetadata: map[string]any{},
+		DisableMemory:    true,
 		// Image generation must not be diluted by web search.
 		DisableSearch:         true,
 		EnableImageGeneration: true,

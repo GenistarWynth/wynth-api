@@ -85,7 +85,8 @@ var defaultCacheRatio = map[string]float64{
 }
 
 var defaultCreateCacheRatio = map[string]float64{
-	"gpt-5.6":                             1.25,
+	"gpt-5.6": 1.25,
+
 	"gpt-5.6-sol":                         1.25,
 	"gpt-5.6-terra":                       1.25,
 	"gpt-5.6-luna":                        1.25,

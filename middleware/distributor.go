@@ -12,15 +12,16 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -128,7 +129,7 @@ func Distribute() func(c *gin.Context) {
 						affinityUsable := false
 						preferred, err := model.CacheGetChannel(preferredChannelID)
 						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-							channelSupportsRequestPath(preferred, c.Request.URL.Path) {
+							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
 							if usingGroup == "auto" {
 								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 								autoGroups := service.GetUserAutoGroup(userGroup)
@@ -205,7 +206,7 @@ func Distribute() func(c *gin.Context) {
 // channelSupportsRequestPath reports whether a channel can serve the request path.
 // Only Advanced Custom (type 58) channels are path-checked; all other channel types
 // always pass. A type-58 channel is usable only when one of its routes matches.
-func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool {
+func channelSupportsRequestPath(channel *model.Channel, requestPath string, requestModel string) bool {
 	if channel == nil {
 		return false
 	}
@@ -213,7 +214,7 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool
 		return true
 	}
 	config := channel.GetOtherSettings().AdvancedCustom
-	return config != nil && config.SupportsPath(requestPath)
+	return config != nil && config.SupportsPathForModel(requestPath, requestModel)
 }
 
 // resolveTokenChannelOverride applies an admin-configured runtime channel override for
@@ -256,7 +257,7 @@ func resolveTokenChannelOverride(c *gin.Context, modelName, usingGroup string) (
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d disabled; falling back (override kept)", tokenId, ov.ChannelId))
 		return nil, "", false
 	}
-	if !channelSupportsRequestPath(ch, c.Request.URL.Path) {
+	if !channelSupportsRequestPath(ch, c.Request.URL.Path, modelName) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("[token-channel-override] token=%d channel=%d does not support path %q; falling back", tokenId, ov.ChannelId, c.Request.URL.Path))
 		return nil, "", false
 	}
@@ -359,7 +360,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			relayMode == relayconstant.RelayModeMidjourneyTaskImageSeed {
 			shouldSelectChannel = false
 		} else {
-			midjourneyRequest := dto.MidjourneyRequest{}
+			midjourneyRequest := taskdto.MidjourneyRequest{}
 			err = common.UnmarshalBodyReusable(c, &midjourneyRequest)
 			if err != nil {
 				return nil, false, errors.New(i18n.T(c, i18n.MsgDistributorInvalidMidjourney, map[string]any{"Error": err.Error()}))

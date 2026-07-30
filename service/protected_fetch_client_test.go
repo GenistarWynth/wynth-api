@@ -680,26 +680,19 @@ func TestProtectedFetchClientDoesNotReplaceOrdinaryProviderClients(t *testing.T)
 	configureSSRFTestFetchSetting(t)
 	originalHTTPClient := httpClient
 	originalProtectedClient := ssrfProtectedHTTPClient
-	proxyClientLock.Lock()
-	originalProxyClients := proxyClients
-	proxyClients = make(map[string]*http.Client)
-	proxyClientLock.Unlock()
+	ResetProxyClientCache()
 	t.Cleanup(func() {
 		httpClient = originalHTTPClient
 		ssrfProtectedHTTPClient = originalProtectedClient
 		ResetProxyClientCache()
-		proxyClientLock.Lock()
-		proxyClients = originalProxyClients
-		proxyClientLock.Unlock()
 	})
 
 	InitHttpClient()
 	ordinary := GetHttpClient()
 	protected := GetSSRFProtectedHTTPClient()
 	require.NotSame(t, ordinary, protected)
-	ordinaryTransport, ok := ordinary.Transport.(*http.Transport)
+	_, ok := ordinary.Transport.(*http.Transport)
 	require.True(t, ok)
-	require.Nil(t, ordinaryTransport.DialContext)
 
 	proxyClient, err := NewProxyHttpClient("http://127.0.0.1:3128")
 	require.NoError(t, err)

@@ -18,8 +18,6 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -110,33 +108,21 @@ func setupAccountPoolAPITestDB(t *testing.T) {
 	// Mirror the production SQLite migration path: GORM AutoMigrate does not reliably
 	// add the not-null oauth_type column on SQLite, so run the ensure-columns helper.
 	require.NoError(t, model.EnsureAccountPoolAccountColumnsSQLite())
-	require.NoError(t, db.Create(&model.User{
+	admin := &model.User{
 		Id:       1,
 		Username: "admin",
 		Password: "password",
 		Role:     common.RoleAdminUser,
 		Status:   common.UserStatusEnabled,
 		Group:    "default",
-	}).Error)
+	}
+	admin.SetAccessToken("account-pool-api-test-token")
+	require.NoError(t, db.Create(admin).Error)
 }
 
 func accountPoolAPIRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("account-pool-api-test"))))
-	router.GET("/login", func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", "admin")
-		session.Set("role", common.RoleAdminUser)
-		session.Set("id", 1)
-		session.Set("status", common.UserStatusEnabled)
-		session.Set("group", "default")
-		if err := session.Save(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false})
-			return
-		}
-		c.Status(http.StatusNoContent)
-	})
 	group := router.Group("/api/account_pools")
 	group.Use(middleware.AdminAuth())
 	{
@@ -310,18 +296,11 @@ func accountPoolAPIRequest[T any](t *testing.T, router *gin.Engine, method strin
 		reader = bytes.NewReader(payload)
 	}
 
-	loginRecorder := httptest.NewRecorder()
-	loginRequest := httptest.NewRequest(http.MethodGet, "/login", nil)
-	router.ServeHTTP(loginRecorder, loginRequest)
-	require.Equal(t, http.StatusNoContent, loginRecorder.Code)
-
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(method, target, reader)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("New-Api-User", "1")
-	for _, cookie := range loginRecorder.Result().Cookies() {
-		request.AddCookie(cookie)
-	}
+	request.Header.Set("Authorization", "Bearer account-pool-api-test-token")
 	router.ServeHTTP(recorder, request)
 
 	raw := recorder.Body.Bytes()

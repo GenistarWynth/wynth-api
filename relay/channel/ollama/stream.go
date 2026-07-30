@@ -10,12 +10,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -46,7 +46,6 @@ func ollamaToolCallsToOpenAI(toolCalls []OllamaToolCall, startIndex int, include
 	if len(toolCalls) == 0 {
 		return nil, startIndex
 	}
-
 	result := make([]dto.ToolCallResponse, 0, len(toolCalls))
 	for _, toolCall := range toolCalls {
 		arguments := []byte("{}")
@@ -70,7 +69,6 @@ func ollamaToolCallsToOpenAI(toolCalls []OllamaToolCall, startIndex int, include
 		result = append(result, converted)
 		startIndex++
 	}
-
 	return result, startIndex
 }
 

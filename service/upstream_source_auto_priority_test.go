@@ -7,8 +7,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	sourcedto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -516,7 +517,7 @@ func TestRunUpstreamSourceAutoPriorityUsesPerCandidateWindows(t *testing.T) {
 	require.NotNil(t, result)
 	require.Len(t, result.Results, 2)
 
-	var longResult, shortResult *dto.UpstreamSourceAutoPriorityChannelResult
+	var longResult, shortResult *sourcedto.UpstreamSourceAutoPriorityChannelResult
 	for i := range result.Results {
 		switch result.Results[i].MappingID {
 		case longMapping.Id:
@@ -1238,8 +1239,8 @@ func TestFillAutoPriorityScoreInputsForWindowMarksStatsFailure(t *testing.T) {
 		resultIndex: 0,
 	}
 	pending := []upstreamSourceAutoPriorityCandidate{candidate}
-	resultSlots := make([]*dto.UpstreamSourceAutoPriorityChannelResult, 1)
-	result := &dto.UpstreamSourceAutoPriorityResult{}
+	resultSlots := make([]*sourcedto.UpstreamSourceAutoPriorityChannelResult, 1)
+	result := &sourcedto.UpstreamSourceAutoPriorityResult{}
 	scoreInputs := make([]AutoPriorityScoreInput, 1)
 
 	err := fillAutoPriorityScoreInputsForWindow(
@@ -1282,8 +1283,8 @@ func TestFillAutoPriorityScoreInputsForWindowMarksUsageStatsFailure(t *testing.T
 		resultIndex: 0,
 	}
 	pending := []upstreamSourceAutoPriorityCandidate{candidate}
-	resultSlots := make([]*dto.UpstreamSourceAutoPriorityChannelResult, 1)
-	result := &dto.UpstreamSourceAutoPriorityResult{}
+	resultSlots := make([]*sourcedto.UpstreamSourceAutoPriorityChannelResult, 1)
+	result := &sourcedto.UpstreamSourceAutoPriorityResult{}
 	scoreInputs := make([]AutoPriorityScoreInput, 1)
 
 	err := fillAutoPriorityScoreInputsForWindow(

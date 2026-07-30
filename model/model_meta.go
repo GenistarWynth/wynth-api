@@ -229,7 +229,9 @@ func applyModelSearchFilters(db *gorm.DB, keyword string, vendor string, status 
 	return db
 }
 
-func parseModelStatusFilter(status string) (int, bool) {
+// parseModelStatusFilter maps UI/API status values to the models.status column.
+// Returns ok=false when no status filter should be applied.
+func parseModelStatusFilter(status string) (value int, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "", "all":
 		return 0, false
@@ -238,12 +240,17 @@ func parseModelStatusFilter(status string) (int, bool) {
 	case "disabled", "0":
 		return 0, true
 	default:
-		value, err := strconv.Atoi(status)
-		return value, err == nil
+		n, err := strconv.Atoi(status)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
 	}
 }
 
-func parseModelSyncFilter(syncOfficial string) (int, bool) {
+// parseModelSyncFilter maps UI/API sync values to the models.sync_official column.
+// Returns ok=false when no sync filter should be applied.
+func parseModelSyncFilter(syncOfficial string) (value int, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(syncOfficial)) {
 	case "", "all":
 		return 0, false
@@ -252,7 +259,10 @@ func parseModelSyncFilter(syncOfficial string) (int, bool) {
 	case "no", "0":
 		return 0, true
 	default:
-		value, err := strconv.Atoi(syncOfficial)
-		return value, err == nil
+		n, err := strconv.Atoi(syncOfficial)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
 	}
 }

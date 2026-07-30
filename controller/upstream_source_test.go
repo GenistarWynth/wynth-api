@@ -12,10 +12,9 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -78,33 +77,21 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		&model.Log{},
 		&model.ChannelMonitorLog{},
 	))
-	require.NoError(t, db.Create(&model.User{
+	admin := &model.User{
 		Id:       1,
 		Username: "admin",
 		Password: "password",
 		Role:     common.RoleAdminUser,
 		Status:   common.UserStatusEnabled,
 		Group:    "default",
-	}).Error)
+	}
+	admin.SetAccessToken("upstream-source-api-test-token")
+	require.NoError(t, db.Create(admin).Error)
 }
 
 func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("upstream-source-api-test"))))
-	router.GET("/login", func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", "admin")
-		session.Set("role", common.RoleAdminUser)
-		session.Set("id", 1)
-		session.Set("status", common.UserStatusEnabled)
-		session.Set("group", "default")
-		if err := session.Save(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false})
-			return
-		}
-		c.Status(http.StatusNoContent)
-	})
 	group := router.Group("/api/upstream_sources")
 	group.Use(middleware.AdminAuth())
 	{
@@ -133,11 +120,6 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.POST("/:id/sync", SyncUpstreamSource)
 		group.GET("/:id/sync_result", GetUpstreamSourceSyncResult)
 		group.POST("/:id/auto_priority/run", RunUpstreamSourceAutoPriority)
-	}
-	if authenticated {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/login", nil)
-		router.ServeHTTP(recorder, request)
 	}
 	return router
 }
@@ -364,13 +346,7 @@ func upstreamSourceAPIRequest[T any](t *testing.T, router *gin.Engine, method st
 	request.Header.Set("Content-Type", "application/json")
 	if authenticated {
 		request.Header.Set("New-Api-User", "1")
-		loginRecorder := httptest.NewRecorder()
-		loginRequest := httptest.NewRequest(http.MethodGet, "/login", nil)
-		router.ServeHTTP(loginRecorder, loginRequest)
-		require.Equal(t, http.StatusNoContent, loginRecorder.Code)
-		for _, cookie := range loginRecorder.Result().Cookies() {
-			request.AddCookie(cookie)
-		}
+		request.Header.Set("Authorization", "Bearer upstream-source-api-test-token")
 	}
 	router.ServeHTTP(recorder, request)
 
@@ -653,7 +629,7 @@ func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.
 				LocalGroup:                       "paid",
 				ChannelType:                      constant.ChannelTypeCodex,
 				Platforms:                        []string{"openai"},
-				CodexImageGenerationBridgePolicy: dto.CodexImageGenerationBridgePolicyDisabled,
+				CodexImageGenerationBridgePolicy: relaydto.CodexImageGenerationBridgePolicyDisabled,
 			},
 		},
 	}
@@ -662,7 +638,7 @@ func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.
 
 	require.True(t, response.Success, response.Message)
 	require.Len(t, response.Data.LocalGroupRules, 1)
-	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, response.Data.LocalGroupRules[0].CodexImageGenerationBridgePolicy)
+	assert.Equal(t, relaydto.CodexImageGenerationBridgePolicyDisabled, response.Data.LocalGroupRules[0].CodexImageGenerationBridgePolicy)
 
 	var reloaded model.UpstreamSource
 	require.NoError(t, model.DB.First(&reloaded, response.Data.Id).Error)
@@ -673,12 +649,12 @@ func TestUpstreamSourceAPIRoundTripsCodexImageGenerationBridgePolicy(t *testing.
 	require.Len(t, rules, 1)
 	rule, ok := rules[0].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, dto.CodexImageGenerationBridgePolicyDisabled, rule["codex_image_generation_bridge_policy"])
+	assert.Equal(t, relaydto.CodexImageGenerationBridgePolicyDisabled, rule["codex_image_generation_bridge_policy"])
 }
 
 func TestChannelAutoPriorityScoreSerializesZeroValues(t *testing.T) {
-	snapshot := dto.ChannelOtherSettings{
-		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+	snapshot := relaydto.ChannelOtherSettings{
+		ChannelAutoPriorityLastScore: &relaydto.ChannelAutoPriorityScore{
 			OldPriority: 0,
 			NewPriority: 0,
 			Applied:     false,
@@ -861,7 +837,7 @@ func TestUpstreamSourceAPIUpdateRefreshesGeneratedChannelConnection(t *testing.T
 		BaseURL: &oldBaseURL, Models: "gpt-4o", Group: "paid", Status: common.ChannelStatusEnabled,
 		Priority: common.GetPointer(int64(10)), Weight: common.GetPointer(uint(1)), Tag: common.GetPointer("source-a"),
 	}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
+	channel.SetOtherSettings(relaydto.ChannelOtherSettings{
 		GeneratedByUpstreamSourceID: source.Id, GeneratedByUpstreamMappingID: mapping.Id,
 	})
 	require.NoError(t, model.DB.Create(&channel).Error)
@@ -925,7 +901,7 @@ func TestUpstreamSourceAPIUpdateRollsBackWhenGeneratedChannelRefreshFails(t *tes
 	require.NoError(t, model.DB.Create(&mapping).Error)
 	oldBaseURL := "https://relay.example.com"
 	channel := model.Channel{Name: "source-a / 1.000x", Type: constant.ChannelTypeOpenAI, Key: "sk-existing", BaseURL: &oldBaseURL}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{GeneratedByUpstreamSourceID: source.Id, GeneratedByUpstreamMappingID: mapping.Id})
+	channel.SetOtherSettings(relaydto.ChannelOtherSettings{GeneratedByUpstreamSourceID: source.Id, GeneratedByUpstreamMappingID: mapping.Id})
 	require.NoError(t, model.DB.Create(&channel).Error)
 	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).Where("id = ?", mapping.Id).Update("local_channel_id", channel.Id).Error)
 	require.NoError(t, model.DB.Exec(`CREATE TRIGGER fail_generated_channel_refresh BEFORE UPDATE OF base_url ON channels BEGIN SELECT RAISE(FAIL, 'refresh failed'); END`).Error)
@@ -1083,7 +1059,7 @@ func TestUpstreamSourceAPIRunAutoPriorityReturnsResults(t *testing.T) {
 		OtherInfo:     "{}",
 		OtherSettings: "{}",
 	}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
+	channel.SetOtherSettings(relaydto.ChannelOtherSettings{
 		ChannelAutoPriorityEnabled:   true,
 		GeneratedByUpstreamSourceID:  source.Id,
 		GeneratedByUpstreamMappingID: mapping.Id,
@@ -1111,7 +1087,7 @@ func TestUpstreamSourceAPIRunAutoPriorityReturnsResults(t *testing.T) {
 		OtherInfo:     "{}",
 		OtherSettings: "{}",
 	}
-	manualChannel.SetOtherSettings(dto.ChannelOtherSettings{ChannelAutoPriorityEnabled: true})
+	manualChannel.SetOtherSettings(relaydto.ChannelOtherSettings{ChannelAutoPriorityEnabled: true})
 	require.NoError(t, model.DB.Create(&manualChannel).Error)
 	require.NoError(t, model.DB.Create(&model.Ability{
 		Group:     manualChannel.Group,

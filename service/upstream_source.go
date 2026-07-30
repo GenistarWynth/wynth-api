@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 
 	"gorm.io/gorm"
 )
@@ -990,14 +991,14 @@ func buildGeneratedChannel(source *model.UpstreamSource, mapping *model.Upstream
 		Tag:      common.GetPointer(strings.TrimSpace(source.Name)),
 		Remark:   upstreamSourceGeneratedChannelRemark(mapping),
 	}
-	channel.SetOtherSettings(dto.ChannelOtherSettings{
+	channel.SetOtherSettings(relaydto.ChannelOtherSettings{
 		ChannelMonitorEnabled:                      resolution.MonitorEnabled,
 		ChannelMonitorIntervalMinutes:              resolution.MonitorIntervalMinutes,
 		ChannelMonitorModel:                        resolution.MonitorModel,
 		ChannelAutoPriorityEnabled:                 resolution.AutoPriorityEnabled,
 		ChannelAutoPriorityIntervalMinutes:         resolution.AutoPriorityIntervalMinutes,
 		ChannelAutoPriorityWindowHours:             resolution.AutoPriorityWindowHours,
-		ChannelAutoPriorityAvailabilityWindowHours: dto.ChannelAutoPriorityDefaultWindowHours,
+		ChannelAutoPriorityAvailabilityWindowHours: relaydto.ChannelAutoPriorityDefaultWindowHours,
 		CodexImageGenerationBridgePolicy:           upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution),
 		GeneratedByUpstreamSourceID:                source.Id,
 		GeneratedByUpstreamMappingID:               mapping.Id,
@@ -1032,7 +1033,7 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 		settings.ChannelAutoPriorityIntervalMinutes = resolution.AutoPriorityIntervalMinutes
 	}
 	if settings.ChannelAutoPriorityAvailabilityWindowHours == 0 {
-		settings.ChannelAutoPriorityAvailabilityWindowHours = dto.ChannelAutoPriorityDefaultWindowHours
+		settings.ChannelAutoPriorityAvailabilityWindowHours = relaydto.ChannelAutoPriorityDefaultWindowHours
 	}
 	settings.CodexImageGenerationBridgePolicy = upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution)
 	if source != nil {
@@ -1045,8 +1046,8 @@ func mergeGeneratedChannelOtherSettings(channel *model.Channel, existingChannel 
 }
 
 func upstreamSourceGeneratedCodexImageGenerationBridgePolicy(resolution upstreamSourceRuleResolution) string {
-	policy := dto.NormalizeCodexImageGenerationBridgePolicy(resolution.CodexImageGenerationBridgePolicy)
-	if policy == dto.CodexImageGenerationBridgePolicyFollow {
+	policy := relaydto.NormalizeCodexImageGenerationBridgePolicy(resolution.CodexImageGenerationBridgePolicy)
+	if policy == relaydto.CodexImageGenerationBridgePolicyFollow {
 		return ""
 	}
 	return policy

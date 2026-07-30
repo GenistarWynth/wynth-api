@@ -11,8 +11,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -67,7 +65,6 @@ func TestUpdateSelfUsesCriticalRateLimit(t *testing.T) {
 	clientRemoteAddr := fmt.Sprintf("192.0.2.%d:1234", criticalRateLimitTestClientCounter.Add(1))
 
 	engine := gin.New()
-	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("api-router-test"))))
 	SetApiRouter(engine)
 
 	warmupRequest := httptest.NewRequest(http.MethodPut, "/api/user/self", bytes.NewBufferString(`{"username":"rate-user-updated"}`))

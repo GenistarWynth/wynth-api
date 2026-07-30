@@ -66,7 +66,7 @@ func GetChannel(group string, model string, retry int, requestPath string, attem
 	if err != nil {
 		return nil, err
 	}
-	channels = filterRelayEligibleChannels(channels, requestPath, attempted)
+	channels = filterRelayEligibleChannels(channels, requestPath, model, attempted)
 
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
@@ -75,7 +75,7 @@ func GetChannel(group string, model string, retry int, requestPath string, attem
 			if err != nil {
 				return nil, err
 			}
-			channels = filterRelayEligibleChannels(channels, requestPath, attempted)
+			channels = filterRelayEligibleChannels(channels, requestPath, model, attempted)
 		}
 	}
 	if len(channels) == 0 {
@@ -113,7 +113,7 @@ func findRelayEligibleChannels(group string, modelName string) ([]*Channel, erro
 	return channels, err
 }
 
-func filterRelayEligibleChannels(channels []*Channel, requestPath string, attempted map[int]struct{}) []*Channel {
+func filterRelayEligibleChannels(channels []*Channel, requestPath string, model string, attempted map[int]struct{}) []*Channel {
 	if len(channels) == 0 {
 		return channels
 	}
@@ -128,7 +128,7 @@ func filterRelayEligibleChannels(channels []*Channel, requestPath string, attemp
 		}
 		if requestPath != "" && channel.Type == constant.ChannelTypeAdvancedCustom {
 			config := channel.GetOtherSettings().AdvancedCustom
-			if config == nil || !config.SupportsPath(requestPath) {
+			if config == nil || !config.SupportsPathForModel(requestPath, model) {
 				continue
 			}
 		}

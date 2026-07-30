@@ -15,9 +15,9 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 
@@ -220,6 +220,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 								abort()
 							}
 						}()
+
 						ExtendWriteDeadline(c)
 						err = PingData(c)
 					}()
@@ -229,6 +230,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 							info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPingFail, err)
 							abort()
 						}
+
 						return
 					}
 					logger.LogDebug(c, "ping data sent")
@@ -259,6 +261,8 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			} else {
 				stop()
 			}
+			stop()
+
 			wg.Done()
 		}()
 		sr := newStreamResult(info.StreamStatus)
@@ -296,6 +300,8 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			} else {
 				stop()
 			}
+			stop()
+
 			logger.LogDebug(c, "scanner goroutine exited")
 			wg.Done()
 		}()

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
 	codexidentity "github.com/QuantumNous/new-api/relay/channel/codex/identity"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/require"
 )
 

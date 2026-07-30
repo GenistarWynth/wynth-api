@@ -30,16 +30,33 @@ func TestAdminResetUserSubscriptionsByPlanResetsAllActiveMatchesAndAdvancesTime(
 	truncateTables(t)
 
 	now := GetDBTimestamp()
-	plan := &SubscriptionPlan{Id: 9101, Title: "Pro", PriceAmount: 10, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 1000, QuotaResetPeriod: SubscriptionResetDaily}
-	otherPlan := &SubscriptionPlan{Id: 9102, Title: "Basic", PriceAmount: 1, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 100, QuotaResetPeriod: SubscriptionResetDaily}
+	plan := &SubscriptionPlan{
+		Id:               9101,
+		Title:            "Pro",
+		PriceAmount:      10,
+		DurationUnit:     SubscriptionDurationMonth,
+		DurationValue:    1,
+		TotalAmount:      1000,
+		QuotaResetPeriod: SubscriptionResetDaily,
+	}
+	otherPlan := &SubscriptionPlan{
+		Id:               9102,
+		Title:            "Basic",
+		PriceAmount:      1,
+		DurationUnit:     SubscriptionDurationMonth,
+		DurationValue:    1,
+		TotalAmount:      100,
+		QuotaResetPeriod: SubscriptionResetDaily,
+	}
 	seedSubscriptionResetPlan(t, plan)
 	seedSubscriptionResetPlan(t, otherPlan)
 
 	activeEnd := now + 30*24*3600
+	expiredEnd := now - 1
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9201, UserId: 101, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 300, StartTime: now - 3600, EndTime: activeEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now + 120})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9202, UserId: 101, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 500, StartTime: now - 3600, EndTime: activeEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now + 120})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9203, UserId: 101, PlanId: otherPlan.Id, AmountTotal: 100, AmountUsed: 60, StartTime: now - 3600, EndTime: activeEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now + 120})
-	seedSubscriptionResetSub(t, &UserSubscription{Id: 9204, UserId: 101, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 700, StartTime: now - 7200, EndTime: now - 1, Status: "active", LastResetTime: now - 3600, NextResetTime: now - 10})
+	seedSubscriptionResetSub(t, &UserSubscription{Id: 9204, UserId: 101, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 700, StartTime: now - 7200, EndTime: expiredEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now - 10})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9205, UserId: 102, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 800, StartTime: now - 3600, EndTime: activeEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now + 120})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9206, UserId: 101, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 900, StartTime: now - 3600, EndTime: activeEnd, Status: "cancelled", LastResetTime: now - 3600, NextResetTime: now + 120})
 
@@ -55,6 +72,7 @@ func TestAdminResetUserSubscriptionsByPlanResetsAllActiveMatchesAndAdvancesTime(
 	assert.Equal(t, 1, result.UserCount)
 	assert.Equal(t, []int{101}, result.AffectedUserIds)
 	assert.True(t, result.AdvanceResetTime)
+
 	for _, id := range []int{9201, 9202} {
 		sub := getSubscriptionResetSub(t, id)
 		assert.Zero(t, sub.AmountUsed)
@@ -72,8 +90,17 @@ func TestAdminResetUserSubscriptionsByPlanKeepsResetTimes(t *testing.T) {
 	truncateTables(t)
 
 	now := GetDBTimestamp()
-	plan := &SubscriptionPlan{Id: 9301, Title: "Team", PriceAmount: 20, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 2000, QuotaResetPeriod: SubscriptionResetMonthly}
+	plan := &SubscriptionPlan{
+		Id:               9301,
+		Title:            "Team",
+		PriceAmount:      20,
+		DurationUnit:     SubscriptionDurationMonth,
+		DurationValue:    1,
+		TotalAmount:      2000,
+		QuotaResetPeriod: SubscriptionResetMonthly,
+	}
 	seedSubscriptionResetPlan(t, plan)
+
 	lastReset := now - 86400
 	nextReset := now + 86400
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9302, UserId: 201, PlanId: plan.Id, AmountTotal: 2000, AmountUsed: 1200, StartTime: now - 172800, EndTime: now + 30*24*3600, Status: "active", LastResetTime: lastReset, NextResetTime: nextReset})
@@ -92,7 +119,14 @@ func TestAdminResetUserSubscriptionsByPlanNoActiveMatchReturnsError(t *testing.T
 	truncateTables(t)
 
 	now := GetDBTimestamp()
-	plan := &SubscriptionPlan{Id: 9401, Title: "Expired", PriceAmount: 10, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 1000}
+	plan := &SubscriptionPlan{
+		Id:            9401,
+		Title:         "Expired",
+		PriceAmount:   10,
+		DurationUnit:  SubscriptionDurationMonth,
+		DurationValue: 1,
+		TotalAmount:   1000,
+	}
 	seedSubscriptionResetPlan(t, plan)
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9402, UserId: 301, PlanId: plan.Id, AmountTotal: 1000, AmountUsed: 500, StartTime: now - 7200, EndTime: now - 1, Status: "active"})
 
@@ -107,8 +141,17 @@ func TestAdminResetPlanSubscriptionsResetsAllActiveUsers(t *testing.T) {
 	truncateTables(t)
 
 	now := GetDBTimestamp()
-	plan := &SubscriptionPlan{Id: 9501, Title: "Business", PriceAmount: 30, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 3000, QuotaResetPeriod: SubscriptionResetNever}
+	plan := &SubscriptionPlan{
+		Id:               9501,
+		Title:            "Business",
+		PriceAmount:      30,
+		DurationUnit:     SubscriptionDurationMonth,
+		DurationValue:    1,
+		TotalAmount:      3000,
+		QuotaResetPeriod: SubscriptionResetNever,
+	}
 	seedSubscriptionResetPlan(t, plan)
+
 	activeEnd := now + 30*24*3600
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9502, UserId: 401, PlanId: plan.Id, AmountTotal: 3000, AmountUsed: 1000, StartTime: now - 3600, EndTime: activeEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now + 10})
 	seedSubscriptionResetSub(t, &UserSubscription{Id: 9503, UserId: 401, PlanId: plan.Id, AmountTotal: 3000, AmountUsed: 1100, StartTime: now - 3500, EndTime: activeEnd, Status: "active", LastResetTime: now - 3600, NextResetTime: now + 10})
@@ -137,7 +180,14 @@ func TestAdminResetPlanSubscriptionsResetsAllActiveUsers(t *testing.T) {
 func TestAdminResetPlanSubscriptionsNoMatchSucceeds(t *testing.T) {
 	truncateTables(t)
 
-	plan := &SubscriptionPlan{Id: 9601, Title: "Empty", PriceAmount: 10, DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 1000}
+	plan := &SubscriptionPlan{
+		Id:            9601,
+		Title:         "Empty",
+		PriceAmount:   10,
+		DurationUnit:  SubscriptionDurationMonth,
+		DurationValue: 1,
+		TotalAmount:   1000,
+	}
 	seedSubscriptionResetPlan(t, plan)
 
 	result, err := AdminResetPlanSubscriptions(plan.Id, true)

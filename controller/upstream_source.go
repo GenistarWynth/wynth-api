@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
@@ -753,7 +754,7 @@ func normalizeUpstreamSourceControllerSyncConfig(config upstreamSourceController
 	}
 	config.ModelStrategy = normalizeUpstreamSourceControllerModelStrategy(config.ModelStrategy, config.AutoSyncModels)
 	config.FixedModels = normalizeUpstreamSourceControllerFixedModels(config.FixedModels)
-	config.CodexImageGenerationBridgePolicy = dto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
+	config.CodexImageGenerationBridgePolicy = relaydto.NormalizeCodexImageGenerationBridgePolicy(config.CodexImageGenerationBridgePolicy)
 	config.LocalGroupRules = service.NormalizeUpstreamSourceLocalGroupRulesForConfig(config.LocalGroupRules)
 	return config
 }
@@ -766,7 +767,7 @@ func defaultUpstreamSourceControllerSyncConfig() upstreamSourceControllerSyncCon
 		AutoPriorityIntervalMinutes:         30,
 		AutoPriorityWindowHours:             24,
 		AutoPriorityAvailabilityWindowHours: 24,
-		CodexImageGenerationBridgePolicy:    dto.CodexImageGenerationBridgePolicyFollow,
+		CodexImageGenerationBridgePolicy:    relaydto.CodexImageGenerationBridgePolicyFollow,
 		ModelStrategy:                       upstreamSourceControllerModelStrategyAllUpstream,
 		// DefaultLocalGroup is intentionally left empty here (not seeded to
 		// "default") so normalizeUpstreamSourceControllerSyncConfig's

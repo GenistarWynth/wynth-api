@@ -90,7 +90,7 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 	}
 	current := user.GetSetting()
 	current.BillingPreference = pref
-	if err := model.UpdateUserSetting(userId, current); err != nil {
+	if err := model.UpdateUserSetting(user.Id, current); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -464,12 +464,13 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 	}
 	recordSubscriptionResetUserLogs(result, auditOperatorInfo(c))
 	recordManageAuditFor(c, targetUser.Id, "subscription.user_plan_reset", map[string]interface{}{
-		"target_user_id":     targetUser.Id,
-		"plan_id":            result.PlanId,
-		"plan_title":         result.PlanTitle,
-		"reset_count":        result.ResetCount,
-		"user_count":         result.UserCount,
-		"affected_user_ids":  result.AffectedUserIds,
+		"target_user_id":    targetUser.Id,
+		"plan_id":           result.PlanId,
+		"plan_title":        result.PlanTitle,
+		"reset_count":       result.ResetCount,
+		"user_count":        result.UserCount,
+		"affected_user_ids": result.AffectedUserIds,
+
 		"advance_reset_time": result.AdvanceResetTime,
 	})
 	common.ApiSuccess(c, result)
@@ -493,12 +494,16 @@ func AdminResetPlanSubscriptions(c *gin.Context) {
 		return
 	}
 	recordSubscriptionResetUserLogs(result, auditOperatorInfo(c))
+	common.SysLog(fmt.Sprintf("admin reset subscription plan %d quota: reset_count=%d user_count=%d advance_reset_time=%t",
+		result.PlanId, result.ResetCount, result.UserCount, result.AdvanceResetTime))
+
 	recordManageAudit(c, "subscription.plan_reset", map[string]interface{}{
-		"plan_id":            result.PlanId,
-		"plan_title":         result.PlanTitle,
-		"reset_count":        result.ResetCount,
-		"user_count":         result.UserCount,
-		"affected_user_ids":  result.AffectedUserIds,
+		"plan_id":           result.PlanId,
+		"plan_title":        result.PlanTitle,
+		"reset_count":       result.ResetCount,
+		"user_count":        result.UserCount,
+		"affected_user_ids": result.AffectedUserIds,
+
 		"advance_reset_time": result.AdvanceResetTime,
 	})
 	common.ApiSuccess(c, result)

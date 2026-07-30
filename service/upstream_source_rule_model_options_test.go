@@ -6,8 +6,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	sourcedto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,7 @@ func TestResolveRuleModelOptionsIntersectsMatchedGroupModels(t *testing.T) {
 		},
 	}
 
-	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []dto.UpstreamSourceLocalGroupRule{
+	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []sourcedto.UpstreamSourceLocalGroupRule{
 		{
 			Name:                "OpenAI",
 			LocalGroup:          "default",
@@ -101,7 +102,7 @@ func TestResolveRuleModelOptionsReadsExistingMappingKeyWithoutMutation(t *testin
 		},
 	}
 
-	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []dto.UpstreamSourceLocalGroupRule{
+	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []sourcedto.UpstreamSourceLocalGroupRule{
 		{
 			LocalGroup:      "default",
 			ModelStrategy:   upstreamSourceModelStrategyAllUpstream,
@@ -147,7 +148,7 @@ func TestResolveRuleModelOptionsDoesNotMutateKeyWhenReadOnlyLookupFails(t *testi
 		},
 	}
 
-	_, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []dto.UpstreamSourceLocalGroupRule{
+	_, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []sourcedto.UpstreamSourceLocalGroupRule{
 		{
 			LocalGroup:      "default",
 			ModelStrategy:   upstreamSourceModelStrategyAllUpstream,
@@ -184,7 +185,7 @@ func TestResolveRuleModelOptionsUsesCurrentRuleChannelType(t *testing.T) {
 		},
 	}
 
-	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []dto.UpstreamSourceLocalGroupRule{
+	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []sourcedto.UpstreamSourceLocalGroupRule{
 		{
 			LocalGroup:      "default",
 			ChannelType:     constant.ChannelTypeGemini,
@@ -224,7 +225,7 @@ func TestResolveRuleModelOptionsMatchesSubmittedRulesBeforeEligibilityIsPersiste
 		},
 	}
 
-	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []dto.UpstreamSourceLocalGroupRule{
+	result, err := service.ResolveRuleModelOptions(context.Background(), source.Id, []sourcedto.UpstreamSourceLocalGroupRule{
 		{
 			LocalGroup:      "default",
 			NameContains:    []string{"newly matched"},

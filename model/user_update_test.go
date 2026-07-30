@@ -1,126 +1,20 @@
 package model
 
 import (
-	"database/sql"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
-
-func TestNormalizedEmailLockName(t *testing.T) {
-	first := normalizedEmailLockName(" User@Example.COM ")
-	assert.LessOrEqual(t, len(first), 64)
-	assert.Equal(t, first, normalizedEmailLockName("user@example.com"))
-	assert.NotEqual(t, first, normalizedEmailLockName("other@example.com"))
-	assert.Contains(t, first, "new-api:email:")
-}
-
-func TestCompleteLockedTransactionReleasesAfterCompletion(t *testing.T) {
-	transactionErr := errors.New("transaction failed")
-	releaseErr := errors.New("release failed")
-	tests := []struct {
-		name            string
-		transactionErr  error
-		releaseErr      error
-		wantTransaction bool
-		wantRelease     bool
-	}{
-		{name: "commit then release"},
-		{name: "rollback then release", transactionErr: transactionErr, wantTransaction: true},
-		{name: "release failure after commit", releaseErr: releaseErr, wantRelease: true},
-		{name: "transaction error stays primary and release error is retained", transactionErr: transactionErr, releaseErr: releaseErr, wantTransaction: true, wantRelease: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			events := make([]string, 0, 2)
-			err := completeLockedTransaction(func() error {
-				events = append(events, "transaction complete")
-				return tt.transactionErr
-			}, func() error {
-				events = append(events, "release")
-				return tt.releaseErr
-			})
-			assert.Equal(t, []string{"transaction complete", "release"}, events)
-			assert.Equal(t, tt.wantTransaction, errors.Is(err, transactionErr))
-			assert.Equal(t, tt.wantRelease, errors.Is(err, releaseErr))
-		})
-	}
-}
-
-func TestCompleteLockedTransactionReleasesAfterPanic(t *testing.T) {
-	events := make([]string, 0, 2)
-	panicValue := &struct{ message string }{message: "transaction panic"}
-
-	var recovered any
-	func() {
-		defer func() {
-			recovered = recover()
-		}()
-		_ = completeLockedTransaction(func() error {
-			events = append(events, "completion")
-			panic(panicValue)
-		}, func() error {
-			events = append(events, "release")
-			return nil
-		})
-	}()
-
-	assert.Equal(t, []string{"completion", "release"}, events)
-	assert.Same(t, panicValue, recovered)
-}
-
-func TestCompleteLockedTransactionObservesReleaseFailureAfterPanic(t *testing.T) {
-	panicValue := &struct{ message string }{message: "transaction panic"}
-	releaseErr := errors.New("release failed")
-	oldReport := reportLockedTransactionReleaseError
-	var reported string
-	reportLockedTransactionReleaseError = func(message string) { reported = message }
-	t.Cleanup(func() { reportLockedTransactionReleaseError = oldReport })
-
-	var recovered any
-	func() {
-		defer func() { recovered = recover() }()
-		_ = completeLockedTransaction(
-			func() error { panic(panicValue) },
-			func() error { return releaseErr },
-		)
-	}()
-
-	assert.ErrorContains(t, errors.New(reported), "release normalized email lock")
-	assert.ErrorContains(t, errors.New(reported), releaseErr.Error())
-	assert.Same(t, panicValue, recovered)
-}
-
-func TestClassifyMySQLGetLockResult(t *testing.T) {
-	tests := []struct {
-		name    string
-		result  sql.NullInt64
-		wantErr string
-	}{
-		{name: "NULL", result: sql.NullInt64{}, wantErr: "GET_LOCK returned NULL"},
-		{name: "timeout", result: sql.NullInt64{Int64: 0, Valid: true}, wantErr: "timed out acquiring normalized email lock"},
-		{name: "success", result: sql.NullInt64{Int64: 1, Valid: true}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := classifyMySQLGetLockResult(tt.result)
-			if tt.wantErr == "" {
-				require.NoError(t, err)
-				return
-			}
-			assert.EqualError(t, err, tt.wantErr)
-		})
-	}
-}
 
 func setupUserUpdateTestState(t *testing.T) {
 	t.Helper()
@@ -164,67 +58,65 @@ func TestUserUpdateDoesNotOverwriteAccountingFields(t *testing.T) {
 	setupUserUpdateTestState(t)
 
 	user := User{
-		Username:     "stale-profile",
-		DisplayName:  "Before",
-		Password:     "password-hash",
-		Quota:        100,
-		UsedQuota:    10,
-		RequestCount: 2,
+		Id:           1,
+		Username:     "quota-race-user",
+		Password:     "password",
+		DisplayName:  "before",
 		Status:       common.UserStatusEnabled,
+		Quota:        1000,
+		UsedQuota:    20,
+		RequestCount: 3,
 	}
 	require.NoError(t, DB.Create(&user).Error)
-	stale := user
 
-	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
-		"quota":         175,
-		"used_quota":    35,
-		"request_count": 8,
+	staleUser, err := GetUserById(user.Id, true)
+	require.NoError(t, err)
+
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota - ?", 400),
+		"used_quota":    gorm.Expr("used_quota + ?", 400),
+		"request_count": gorm.Expr("request_count + ?", 1),
 	}).Error)
 
-	stale.Username = "fresh-profile"
-	stale.DisplayName = "After"
-	require.NoError(t, stale.Update(false))
+	staleUser.DisplayName = "after"
+	require.NoError(t, staleUser.Update(false))
 
-	var stored User
-	require.NoError(t, DB.First(&stored, user.Id).Error)
-	assert.Equal(t, 175, stored.Quota)
-	assert.Equal(t, 35, stored.UsedQuota)
-	assert.Equal(t, 8, stored.RequestCount)
-	assert.Equal(t, "fresh-profile", stored.Username)
-	assert.Equal(t, "After", stored.DisplayName)
-	assert.Equal(t, stored.Quota, stale.Quota)
-	assert.Equal(t, stored.UsedQuota, stale.UsedQuota)
-	assert.Equal(t, stored.RequestCount, stale.RequestCount)
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, "after", got.DisplayName)
+	assert.Equal(t, 600, got.Quota)
+	assert.Equal(t, 420, got.UsedQuota)
+	assert.Equal(t, 4, got.RequestCount)
 }
 
 func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	setupUserUpdateTestState(t)
 
 	user := User{
-		Username:     "setting-only",
-		Password:     "password-hash",
-		Quota:        200,
+		Id:           2,
+		Username:     "setting-user",
+		Password:     "password",
+		Status:       common.UserStatusEnabled,
+		Quota:        1000,
 		UsedQuota:    20,
 		RequestCount: 3,
-		Status:       common.UserStatusEnabled,
 	}
-	user.SetSetting(dto.UserSetting{Language: "en"})
 	require.NoError(t, DB.Create(&user).Error)
 
-	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
-		"quota":         260,
-		"used_quota":    45,
-		"request_count": 11,
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+		"quota":         gorm.Expr("quota - ?", 250),
+		"used_quota":    gorm.Expr("used_quota + ?", 250),
+		"request_count": gorm.Expr("request_count + ?", 1),
 	}).Error)
 
 	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
 
-	var stored User
-	require.NoError(t, DB.First(&stored, user.Id).Error)
-	assert.Equal(t, 260, stored.Quota)
-	assert.Equal(t, 45, stored.UsedQuota)
-	assert.Equal(t, 11, stored.RequestCount)
-	assert.Equal(t, "zh", stored.GetSetting().Language)
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, 750, got.Quota)
+	assert.Equal(t, 270, got.UsedQuota)
+	assert.Equal(t, 4, got.RequestCount)
+	assert.Equal(t, "zh", got.GetSetting().Language)
 }
 
 func TestUserUpdatePreservesAtomicQuotaInRedisCache(t *testing.T) {

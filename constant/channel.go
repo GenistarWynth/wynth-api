@@ -57,7 +57,9 @@ const (
 	ChannelTypeCodex          = 57
 	ChannelTypeAdvancedCustom = 58
 	ChannelTypeGrokWeb        = 59 // grok.com web reverse-proxy (distinct from api.x.ai xAI=48)
-	ChannelTypeDummy               // this one is only for count, do not add any channel after this
+	ChannelTypeNewAPI         = 60
+	ChannelTypeSub2API        = 61
+	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
 
@@ -122,6 +124,8 @@ var ChannelBaseURLs = []string{
 	"https://chatgpt.com",                       //57
 	"",                                          //58
 	"https://grok.com",                          //59
+	"",                                          //60
+	"",                                          //61
 }
 
 var ChannelTypeNames = map[int]string{
@@ -181,6 +185,8 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeCodex:          "ChatGPT Subscription (Codex)",
 	ChannelTypeAdvancedCustom: "Advanced Custom",
 	ChannelTypeGrokWeb:        "Grok (Web)",
+	ChannelTypeNewAPI:         "New API",
+	ChannelTypeSub2API:        "Sub2API",
 }
 
 func GetChannelTypeName(channelType int) string {
