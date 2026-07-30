@@ -1,9 +1,11 @@
+import http.client
 import io
 import importlib.util
 import json
 import os
 from pathlib import Path
 import tempfile
+import traceback
 import unittest
 from unittest import mock
 import urllib.error
@@ -312,6 +314,116 @@ class ReconcileLatestTest(unittest.TestCase):
                 marker_step_conclusions={expired_higher["id"]: "success"},
             )
 
+    def test_equal_semver_alias_with_newer_run_blocks_retention_gap(self):
+        selected = release_candidate(9161, 800, "v8.0.0")
+        missing_marker = workflow_run(9162, 801, tag="8.0.0")
+
+        with self.assertRaisesRegex(
+            reconcile_latest.ReconcileError,
+            "newer completed immutable release",
+        ):
+            self.elect(
+                [selected],
+                workflow_runs=[missing_marker],
+                job_conclusions={missing_marker["id"]: "success"},
+                marker_step_conclusions={missing_marker["id"]: "success"},
+            )
+
+    def test_equal_semver_newer_run_blocks_retention_gap(self):
+        selected = release_candidate(9171, 802, "v8.1.0")
+        missing_marker = workflow_run(9172, 803, tag="v8.1.0")
+
+        with self.assertRaisesRegex(
+            reconcile_latest.ReconcileError,
+            "newer completed immutable release",
+        ):
+            self.elect(
+                [selected],
+                workflow_runs=[missing_marker],
+                job_conclusions={missing_marker["id"]: "success"},
+                marker_step_conclusions={missing_marker["id"]: "success"},
+            )
+
+    def test_equal_semver_newer_attempt_blocks_retention_gap(self):
+        selected = release_candidate(9181, 804, "v8.2.0", run_attempt=1)
+        newer_attempt = workflow_run(9181, 804, run_attempt=2, tag="v8.2.0")
+        successful_attempt_one = {
+            "id": selected["run_id"] * 10 + 1,
+            "name": reconcile_latest.IMMUTABLE_JOB_NAME,
+            "conclusion": "success",
+            "run_attempt": 1,
+            "steps": [
+                {
+                    "name": reconcile_latest.IMMUTABLE_MARKER_STEP_NAME,
+                    "conclusion": "success",
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            reconcile_latest.ReconcileError,
+            "newer completed immutable release",
+        ):
+            self.elect(
+                [selected],
+                job_conclusions={newer_attempt["id"]: "success"},
+                marker_step_conclusions={newer_attempt["id"]: "success"},
+                historical_jobs={selected["run_id"]: [successful_attempt_one]},
+                attempt_overrides={(selected["run_id"], 2): newer_attempt},
+            )
+
+    def test_failed_newer_attempt_does_not_create_retention_gap(self):
+        selected = release_candidate(9183, 804, "v8.2.1", run_attempt=1)
+        newer_attempt = workflow_run(9183, 804, run_attempt=2, tag="v8.2.1")
+        successful_attempt_one = {
+            "id": selected["run_id"] * 10 + 1,
+            "name": reconcile_latest.IMMUTABLE_JOB_NAME,
+            "conclusion": "success",
+            "run_attempt": 1,
+            "steps": [
+                {
+                    "name": reconcile_latest.IMMUTABLE_MARKER_STEP_NAME,
+                    "conclusion": "success",
+                }
+            ],
+        }
+
+        elected = self.elect(
+            [selected],
+            job_conclusions={newer_attempt["id"]: "failure"},
+            marker_step_conclusions={newer_attempt["id"]: "failure"},
+            historical_jobs={selected["run_id"]: [successful_attempt_one]},
+            attempt_overrides={(selected["run_id"], 2): newer_attempt},
+        )
+
+        self.assertEqual(selected, elected.as_dict())
+
+    def test_older_or_lower_missing_marker_does_not_block_newer_candidate(self):
+        selected = release_candidate(9191, 805, "v8.3.0")
+        scenarios = [
+            ("older equal version", workflow_run(9192, 804, tag="8.3.0")),
+            ("later lower version", workflow_run(9193, 806, tag="v8.2.9")),
+        ]
+
+        for name, missing_marker in scenarios:
+            with self.subTest(name=name):
+                elected = self.elect(
+                    [selected],
+                    workflow_runs=[missing_marker],
+                    job_conclusions={missing_marker["id"]: "success"},
+                    marker_step_conclusions={missing_marker["id"]: "success"},
+                )
+
+                self.assertEqual(selected, elected.as_dict())
+
+    def test_present_equal_semver_candidates_elect_by_authoritative_order(self):
+        older_alias = release_candidate(9201, 806, "v8.4.0")
+        newer_alias = release_candidate(9202, 807, "8.4.0")
+
+        elected = self.elect([older_alias, newer_alias])
+
+        self.assertEqual(newer_alias, elected.as_dict())
+
     def test_candidate_order_must_match_authoritative_run_metadata(self):
         forged = release_candidate(9201, 999, "v3.2.0")
         authoritative = workflow_run(9201, 303, tag="v3.2.0")
@@ -492,17 +604,20 @@ class ReconcileLatestTest(unittest.TestCase):
             )
 
     def test_rate_limit_api_error_fails_closed(self):
+        reason_sentinel = "api-error-reason-do-not-log-385ca7"
+        body_sentinel = "api-error-body-do-not-log-7c2e14"
+
         def rate_limit_open(request, *, timeout):
             self.assertEqual(1, timeout)
             raise urllib.error.HTTPError(
                 request.full_url,
                 403,
-                "rate limit",
+                reason_sentinel,
                 {"x-ratelimit-remaining": "0"},
-                None,
+                FakeResponse(body_sentinel.encode()),
             )
 
-        with self.assertRaisesRegex(reconcile_latest.ReconcileError, "HTTP 403"):
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
             reconcile_latest.elect_candidate(
                 API_URL,
                 REPOSITORY,
@@ -510,6 +625,103 @@ class ReconcileLatestTest(unittest.TestCase):
                 timeout_seconds=1,
                 open_url=rate_limit_open,
             )
+
+        self.assertEqual("GitHub API returned an HTTP error", str(raised.exception))
+        self.assertNotIn(reason_sentinel, str(raised.exception))
+        self.assertNotIn(body_sentinel, str(raised.exception))
+        formatted_error = "".join(traceback.format_exception(raised.exception))
+        self.assertNotIn(reason_sentinel, formatted_error)
+        self.assertNotIn(body_sentinel, formatted_error)
+
+    def test_malformed_api_json_redacts_response_body(self):
+        body_sentinel = "api-body-do-not-log-9d122b"
+
+        def malformed_json_open(_request, *, timeout):
+            self.assertEqual(1, timeout)
+            return FakeResponse(f'{{"secret":"{body_sentinel}"'.encode())
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.request_json(
+                f"{API_URL}/malformed",
+                "fixture-token",
+                1,
+                malformed_json_open,
+            )
+
+        self.assertEqual("GitHub API returned invalid JSON", str(raised.exception))
+        self.assertNotIn(body_sentinel, str(raised.exception))
+        self.assertNotIn(
+            body_sentinel,
+            "".join(traceback.format_exception(raised.exception)),
+        )
+
+    def test_api_error_body_is_redacted(self):
+        body_sentinel = "api-error-body-do-not-log-4e8c07"
+
+        def api_error_open(_request, *, timeout):
+            self.assertEqual(1, timeout)
+            response = FakeResponse(body_sentinel.encode())
+            response.status = 503
+            return response
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.request_bytes(
+                f"{API_URL}/error",
+                "fixture-token",
+                1,
+                api_error_open,
+            )
+
+        self.assertIn("HTTP", str(raised.exception))
+        self.assertNotIn(body_sentinel, str(raised.exception))
+
+    def test_api_transport_error_details_are_redacted(self):
+        detail_sentinel = "api-error-detail-do-not-log-f2d93a"
+
+        def api_error_open(_request, *, timeout):
+            self.assertEqual(1, timeout)
+            raise urllib.error.URLError(
+                f"response body {detail_sentinel}; url=?token={detail_sentinel}"
+            )
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.request_bytes(
+                f"{API_URL}/error",
+                "fixture-token",
+                1,
+                api_error_open,
+            )
+
+        self.assertEqual("GitHub API request failed", str(raised.exception))
+        self.assertNotIn(detail_sentinel, str(raised.exception))
+        self.assertNotIn(
+            detail_sentinel,
+            "".join(traceback.format_exception(raised.exception)),
+        )
+
+    def test_api_protocol_error_details_are_redacted(self):
+        detail_sentinel = "api-protocol-detail-do-not-log-71d82f"
+
+        def api_error_open(_request, *, timeout):
+            self.assertEqual(1, timeout)
+            raise http.client.InvalidURL(
+                f"invalid path?credential={detail_sentinel}"
+            )
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.request_bytes(
+                f"{API_URL}/error",
+                "fixture-token",
+                1,
+                api_error_open,
+            )
+
+        self.assertEqual("GitHub API request failed", str(raised.exception))
+        self.assertNotIn(detail_sentinel, str(raised.exception))
+        self.assertNotIn(
+            detail_sentinel,
+            "".join(traceback.format_exception(raised.exception)),
+        )
 
     def test_workflow_history_over_limit_fails_closed(self):
         candidate_payload = release_candidate(12001, 600, "v6.0.0")
@@ -628,20 +840,25 @@ class ReconcileLatestTest(unittest.TestCase):
 
     def test_artifact_redirects_reject_untrusted_hosts_and_strip_token(self):
         handler = reconcile_latest.SafeRedirectHandler()
+        redirect_sentinel = "redirect-token-do-not-log-96c8b4"
         request = urllib.request.Request(
             f"{API_URL}/artifact",
             headers={"Authorization": "Bearer fixture-token"},
         )
 
-        with self.assertRaisesRegex(reconcile_latest.ReconcileError, "redirect host"):
+        with self.assertRaisesRegex(
+            reconcile_latest.ReconcileError,
+            "redirect host",
+        ) as raised:
             handler.redirect_request(
                 request,
                 None,
                 302,
                 "Found",
                 {},
-                "https://127.0.0.1/private",
+                f"https://{redirect_sentinel}.invalid/private?token={redirect_sentinel}",
             )
+        self.assertNotIn(redirect_sentinel, str(raised.exception))
 
         redirected = handler.redirect_request(
             request,
@@ -654,6 +871,56 @@ class ReconcileLatestTest(unittest.TestCase):
         self.assertIsNotNone(redirected)
         self.assertIsNone(redirected.get_header("Authorization"))
 
+    def test_malformed_redirect_url_is_redacted(self):
+        redirect_sentinel = "redirect-url-do-not-log-c6fd21"
+        handler = reconcile_latest.SafeRedirectHandler()
+        request = urllib.request.Request(f"{API_URL}/artifact")
+        malformed_url = (
+            f"https://evil\uff0f{redirect_sentinel}.invalid/"
+            f"path?credential={redirect_sentinel}"
+        )
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {},
+                malformed_url,
+            )
+
+        self.assertEqual("artifact redirect URL is invalid", str(raised.exception))
+        self.assertNotIn(redirect_sentinel, str(raised.exception))
+        self.assertNotIn(
+            redirect_sentinel,
+            "".join(traceback.format_exception(raised.exception)),
+        )
+
+    def test_malformed_artifact_url_is_redacted(self):
+        url_sentinel = "artifact-url-do-not-log-f087ac"
+        candidate = release_candidate(10000, 399, "v3.9.9")
+        api = ArtifactAPI([candidate])
+        api.artifacts[0]["archive_download_url"] = (
+            f"https://api.github.test\uff0f{url_sentinel}.invalid/"
+            f"download?token={url_sentinel}"
+        )
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.elect_candidate(
+                API_URL,
+                REPOSITORY,
+                "fixture-token",
+                timeout_seconds=3,
+                open_url=api.open,
+            )
+
+        self.assertEqual(
+            "candidate artifact download URL has an unexpected origin",
+            str(raised.exception),
+        )
+        self.assertNotIn(url_sentinel, str(raised.exception))
+
     def test_malformed_candidate_fails_closed(self):
         malformed = release_candidate(10001, 400, "v4.0.0")
         malformed["manifest_digest"] = "latest"
@@ -663,13 +930,19 @@ class ReconcileLatestTest(unittest.TestCase):
 
     def test_candidate_json_rejects_duplicate_fields(self):
         candidate = release_candidate(10002, 401, "v4.0.1")
+        key_sentinel = "artifact-token-do-not-log-7f38c9"
+        value_sentinel = "private-key-value-do-not-log-23a915"
         encoded = json.dumps(candidate)
-        duplicate_tag = encoded[:-1] + f', "tag": "{candidate["tag"]}"}}'
+        duplicate_field = (
+            encoded[:-1]
+            + f', "{key_sentinel}": "{value_sentinel}"'
+            + f', "{key_sentinel}": "second-{value_sentinel}"}}'
+        )
         api = ArtifactAPI([candidate])
         archive_url = api.artifacts[0]["archive_download_url"]
-        api.archives[archive_url] = candidate_archive_json(duplicate_tag)
+        api.archives[archive_url] = candidate_archive_json(duplicate_field)
 
-        with self.assertRaisesRegex(reconcile_latest.ReconcileError, "duplicate field"):
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
             reconcile_latest.elect_candidate(
                 API_URL,
                 REPOSITORY,
@@ -677,6 +950,99 @@ class ReconcileLatestTest(unittest.TestCase):
                 timeout_seconds=3,
                 open_url=api.open,
             )
+
+        self.assertEqual("JSON contains duplicate fields", str(raised.exception))
+        self.assertNotIn(key_sentinel, str(raised.exception))
+        self.assertNotIn(value_sentinel, str(raised.exception))
+
+    def test_malformed_candidate_json_redacts_archive_content(self):
+        content_sentinel = "artifact-content-do-not-log-cb7241"
+        candidate = release_candidate(10005, 404, "v4.0.4")
+        api = ArtifactAPI([candidate])
+        archive_url = api.artifacts[0]["archive_download_url"]
+        api.archives[archive_url] = candidate_archive_json(
+            f'{{"secret":"{content_sentinel}"'
+        )
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.elect_candidate(
+                API_URL,
+                REPOSITORY,
+                "fixture-token",
+                timeout_seconds=3,
+                open_url=api.open,
+            )
+
+        self.assertEqual("candidate.json contains invalid JSON", str(raised.exception))
+        self.assertNotIn(content_sentinel, str(raised.exception))
+        self.assertNotIn(
+            content_sentinel,
+            "".join(traceback.format_exception(raised.exception)),
+        )
+
+    def test_api_nonstandard_json_number_is_redacted(self):
+        def nonstandard_json_open(_request, *, timeout):
+            self.assertEqual(1, timeout)
+            return FakeResponse(b'{"value":NaN}')
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.request_json(
+                f"{API_URL}/nonstandard",
+                "fixture-token",
+                1,
+                nonstandard_json_open,
+            )
+
+        self.assertEqual("JSON contains a non-standard number", str(raised.exception))
+        self.assertNotIn("NaN", str(raised.exception))
+
+    def test_candidate_nonstandard_json_number_is_redacted(self):
+        candidate = release_candidate(10006, 405, "v4.0.5")
+        encoded = json.dumps(candidate)
+        api = ArtifactAPI([candidate])
+        archive_url = api.artifacts[0]["archive_download_url"]
+        api.archives[archive_url] = candidate_archive_json(
+            encoded[:-1] + ', "extra": NaN}'
+        )
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.elect_candidate(
+                API_URL,
+                REPOSITORY,
+                "fixture-token",
+                timeout_seconds=3,
+                open_url=api.open,
+            )
+
+        self.assertEqual("JSON contains a non-standard number", str(raised.exception))
+        self.assertNotIn("NaN", str(raised.exception))
+
+    def test_unsafe_archive_member_name_is_redacted(self):
+        name_sentinel = "archive-name-do-not-log-ea12f4"
+        value_sentinel = "archive-value-do-not-log-5b9d43"
+        candidate = release_candidate(10004, 403, "v4.0.3")
+        api = ArtifactAPI([candidate])
+        archive_url = api.artifacts[0]["archive_download_url"]
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(f"../{name_sentinel}", value_sentinel)
+        api.archives[archive_url] = buffer.getvalue()
+
+        with self.assertRaises(reconcile_latest.ReconcileError) as raised:
+            reconcile_latest.elect_candidate(
+                API_URL,
+                REPOSITORY,
+                "fixture-token",
+                timeout_seconds=3,
+                open_url=api.open,
+            )
+
+        self.assertEqual(
+            "candidate artifact must contain exactly one candidate.json",
+            str(raised.exception),
+        )
+        self.assertNotIn(name_sentinel, str(raised.exception))
+        self.assertNotIn(value_sentinel, str(raised.exception))
 
     def test_artifact_metadata_requires_boolean_expiration_state(self):
         candidate = release_candidate(10003, 402, "v4.0.2")
@@ -803,6 +1169,71 @@ class ReconcileLatestTest(unittest.TestCase):
                 open_url=api.open,
                 allow_empty=True,
             )
+
+    def test_main_redacts_duplicate_api_fields(self):
+        key_sentinel = "artifact-token-do-not-log-7f38c9"
+        value_sentinel = "api-private-key-do-not-log-6a10c2"
+        duplicate_body = (
+            '{"total_count":0,"artifacts":[],'
+            + f'"{key_sentinel}":"{value_sentinel}",'
+            + f'"{key_sentinel}":"second-{value_sentinel}"}}'
+        ).encode()
+
+        def duplicate_api_open(_request, *, timeout):
+            self.assertEqual(10, timeout)
+            return FakeResponse(duplicate_body)
+
+        opener = mock.Mock(open=duplicate_api_open)
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "github-output"
+            environment = {
+                "CURRENT_TAG": "v8.0.0",
+                "GITHUB_API_URL": API_URL,
+                "GITHUB_REPOSITORY": REPOSITORY,
+                "GITHUB_TOKEN": "fixture-token",
+                "GITHUB_OUTPUT": str(output_path),
+            }
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+                reconcile_latest.urllib.request,
+                "build_opener",
+                return_value=opener,
+            ), mock.patch.object(reconcile_latest.sys, "stderr", stderr):
+                result = reconcile_latest.main()
+
+        self.assertEqual(1, result)
+        self.assertIn(
+            "::error::Latest reconciliation failed: JSON contains duplicate fields",
+            stderr.getvalue(),
+        )
+        self.assertNotIn(key_sentinel, stderr.getvalue())
+        self.assertNotIn(value_sentinel, stderr.getvalue())
+
+    def test_main_redacts_unexpected_value_errors(self):
+        value_sentinel = "value-error-do-not-log-278bc3"
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "github-output"
+            environment = {
+                "CURRENT_TAG": "v8.0.0",
+                "GITHUB_API_URL": API_URL,
+                "GITHUB_REPOSITORY": REPOSITORY,
+                "GITHUB_TOKEN": "fixture-token",
+                "GITHUB_OUTPUT": str(output_path),
+            }
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, environment, clear=True), mock.patch.object(
+                reconcile_latest,
+                "elect_candidate",
+                side_effect=ValueError(value_sentinel),
+            ), mock.patch.object(reconcile_latest.sys, "stderr", stderr):
+                result = reconcile_latest.main()
+
+        self.assertEqual(1, result)
+        self.assertIn(
+            "::error::Latest reconciliation failed: invalid reconciliation input",
+            stderr.getvalue(),
+        )
+        self.assertNotIn(value_sentinel, stderr.getvalue())
 
     def test_main_fails_closed_when_current_tag_is_missing(self):
         with tempfile.TemporaryDirectory() as directory:

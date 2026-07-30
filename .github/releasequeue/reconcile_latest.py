@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import http.client
 import io
 import json
 import os
@@ -45,13 +46,13 @@ def unique_json_object(pairs):
     payload = {}
     for key, value in pairs:
         if key in payload:
-            raise ReconcileError(f"JSON contains duplicate field {key!r}")
+            raise ReconcileError("JSON contains duplicate fields")
         payload[key] = value
     return payload
 
 
-def reject_json_constant(value):
-    raise ReconcileError(f"JSON contains non-standard number {value}")
+def reject_json_constant(_value):
+    raise ReconcileError("JSON contains a non-standard number")
 
 
 class Candidate(NamedTuple):
@@ -74,12 +75,12 @@ class Candidate(NamedTuple):
 
 class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
-        old_url = urllib.parse.urlsplit(request.full_url)
-        redirected_url = urllib.parse.urlsplit(new_url)
         try:
+            old_url = urllib.parse.urlsplit(request.full_url)
+            redirected_url = urllib.parse.urlsplit(new_url)
             redirected_port = redirected_url.port
-        except ValueError as error:
-            raise ReconcileError("artifact redirect host is invalid") from error
+        except ValueError:
+            raise ReconcileError("artifact redirect URL is invalid") from None
         cross_origin = old_url[:2] != redirected_url[:2]
         redirected_host = redirected_url.hostname
         trusted_cross_origin = (
@@ -102,9 +103,12 @@ class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         ):
             raise ReconcileError("artifact redirect host is not trusted")
 
-        redirected = super().redirect_request(
-            request, file_pointer, code, message, headers, new_url
-        )
+        try:
+            redirected = super().redirect_request(
+                request, file_pointer, code, message, headers, new_url
+            )
+        except ValueError:
+            raise ReconcileError("artifact redirect URL is invalid") from None
         if redirected is None:
             return None
         if cross_origin:
@@ -122,11 +126,11 @@ def elect_candidate(
 ):
     if not isinstance(api_url, str) or not isinstance(token, str) or not token:
         raise ReconcileError("GitHub API URL, repository, and token are required")
-    api = urllib.parse.urlsplit(api_url)
     try:
+        api = urllib.parse.urlsplit(api_url)
         api_port = api.port
-    except ValueError as error:
-        raise ReconcileError("GitHub API URL is invalid") from error
+    except ValueError:
+        raise ReconcileError("GitHub API URL is invalid") from None
     if (
         api.scheme != "https"
         or not api.hostname
@@ -213,13 +217,15 @@ def elect_candidate(
         previous = candidates_by_order.get(order)
         if previous is not None and previous != candidate:
             raise ReconcileError(
-                "conflicting release candidates for "
-                f"run {candidate.run_number} attempt {candidate.run_attempt}"
+                "conflicting release candidates for the same run attempt"
             )
         candidates_by_order[order] = candidate
-        version = semantic_version(candidate.tag)
-        if version is not None:
-            candidates.append((version, candidate))
+        if release_order_key(
+            candidate.tag,
+            candidate.run_number,
+            candidate.run_attempt,
+        ) is not None:
+            candidates.append(candidate)
 
     if not candidates:
         if allow_empty:
@@ -233,9 +239,13 @@ def elect_candidate(
             )
             return None
         raise ReconcileError("no latest-eligible immutable release candidate is available")
-    _, selected = max(
+    selected = max(
         candidates,
-        key=lambda item: (item[0], item[1].run_number, item[1].run_attempt),
+        key=lambda candidate: release_order_key(
+            candidate.tag,
+            candidate.run_number,
+            candidate.run_attempt,
+        ),
     )
     ensure_no_unrepresented_newer_release(
         api_url,
@@ -267,7 +277,7 @@ def list_candidate_artifacts(api_url, repository, token, timeout_seconds, open_u
             raise ReconcileError("GitHub artifact response has an invalid shape")
         if total_count > MAX_ARTIFACTS:
             raise ReconcileError(
-                f"GitHub returned {total_count} candidates; limit is {MAX_ARTIFACTS}"
+                "GitHub artifact count exceeds the reconciliation limit"
             )
         if expected_total is None:
             expected_total = total_count
@@ -373,10 +383,14 @@ def ensure_no_unrepresented_newer_release(
 ):
     repository_path = urllib.parse.quote(repository, safe="/")
     workflow_path = urllib.parse.quote(WORKFLOW_NAME, safe="")
-    selected_version = None
+    selected_order = None
     if selected is not None:
-        selected_version = semantic_version(selected.tag)
-        if selected_version is None:
+        selected_order = release_order_key(
+            selected.tag,
+            selected.run_number,
+            selected.run_attempt,
+        )
+        if selected_order is None:
             raise ReconcileError("selected release is not latest-eligible")
     previous_run_number = None
     inspected_runs = 0
@@ -399,8 +413,7 @@ def ensure_no_unrepresented_newer_release(
             raise ReconcileError("GitHub workflow-run response has an invalid shape")
         if total_count > MAX_WORKFLOW_RUNS:
             raise ReconcileError(
-                f"GitHub returned {total_count} workflow runs; "
-                f"limit is {MAX_WORKFLOW_RUNS}"
+                "GitHub workflow-run count exceeds the reconciliation limit"
             )
         if expected_total is None:
             expected_total = total_count
@@ -428,7 +441,7 @@ def ensure_no_unrepresented_newer_release(
 
             try:
                 run_tag = workflow_run_tag(workflow_run)
-            except ReconcileError as error:
+            except ReconcileError:
                 if immutable_publication_succeeded(
                     api_url,
                     repository,
@@ -440,19 +453,26 @@ def ensure_no_unrepresented_newer_release(
                 ):
                     raise ReconcileError(
                         "completed immutable release marker has no authoritative tag"
-                    ) from error
+                    ) from None
                 continue
 
-            run_version = semantic_version(run_tag)
-            is_unrepresented_release = run_version is not None and (
-                selected_version is None or run_version > selected_version
+            run_order = release_order_key(
+                run_tag,
+                workflow_run["run_number"],
+                workflow_run["run_attempt"],
             )
+            is_unrepresented_release = run_order is not None and (
+                selected_order is None or run_order > selected_order
+            )
+            minimum_attempt = 1
+            if selected is not None and run_id == selected.run_id:
+                minimum_attempt = selected.run_attempt + 1
             if is_unrepresented_release and immutable_publication_succeeded(
                 api_url,
                 repository,
                 token,
                 run_id,
-                1,
+                minimum_attempt,
                 timeout_seconds,
                 open_url,
             ):
@@ -460,8 +480,13 @@ def ensure_no_unrepresented_newer_release(
                     raise ReconcileError(
                         "completed immutable release has no available candidate marker"
                     )
+                if run_order[0] > selected_order[0]:
+                    raise ReconcileError(
+                        "newer completed immutable release with a higher semantic "
+                        "version has no available candidate marker"
+                    )
                 raise ReconcileError(
-                    "newer completed immutable release with a higher semantic version "
+                    "newer completed immutable release with an equal semantic version "
                     "has no available candidate marker"
                 )
 
@@ -505,7 +530,7 @@ def immutable_publication_succeeded(
         if not is_int(total_count) or total_count < 0 or not isinstance(jobs, list):
             raise ReconcileError("GitHub jobs response has an invalid shape")
         if total_count > MAX_JOBS:
-            raise ReconcileError(f"workflow run has more than {MAX_JOBS} jobs")
+            raise ReconcileError("workflow run job count exceeds the reconciliation limit")
         if expected_total is None:
             expected_total = total_count
         elif expected_total != total_count:
@@ -593,37 +618,45 @@ def request_json(url, token, timeout_seconds, open_url):
             object_pairs_hook=unique_json_object,
             parse_constant=reject_json_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ReconcileError("GitHub API returned invalid JSON") from error
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ReconcileError("GitHub API returned invalid JSON") from None
     if not isinstance(payload, dict):
         raise ReconcileError("GitHub API returned a non-object response")
     return payload
 
 
 def request_bytes(url, token, timeout_seconds, open_url):
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "docker-release-latest-reconciler",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
     try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "docker-release-latest-reconciler",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
         with open_url(request, timeout=timeout_seconds) as response:
             status = getattr(response, "status", 200)
+            if not is_int(status):
+                raise ReconcileError("GitHub API returned an invalid HTTP status")
             if status < 200 or status >= 300:
-                raise ReconcileError(f"GitHub API returned HTTP {status}")
+                raise ReconcileError("GitHub API returned an HTTP error")
             body = response.read(MAX_RESPONSE_BYTES + 1)
-    except urllib.error.HTTPError as error:
-        raise ReconcileError(f"GitHub API returned HTTP {error.code}") from error
-    except (TimeoutError, socket.timeout) as error:
-        raise ReconcileError("GitHub API request timed out") from error
+    except urllib.error.HTTPError:
+        raise ReconcileError("GitHub API returned an HTTP error") from None
+    except (TimeoutError, socket.timeout):
+        raise ReconcileError("GitHub API request timed out") from None
     except urllib.error.URLError as error:
         if isinstance(error.reason, (TimeoutError, socket.timeout)):
-            raise ReconcileError("GitHub API request timed out") from error
-        raise ReconcileError(f"GitHub API request failed: {error.reason}") from error
+            raise ReconcileError("GitHub API request timed out") from None
+        raise ReconcileError("GitHub API request failed") from None
+    except ValueError:
+        raise ReconcileError("GitHub API request is invalid") from None
+    except http.client.HTTPException:
+        raise ReconcileError("GitHub API request failed") from None
+    except OSError:
+        raise ReconcileError("GitHub API request failed") from None
     if len(body) > MAX_RESPONSE_BYTES:
         raise ReconcileError("GitHub API response exceeded the size limit")
     return body
@@ -661,8 +694,8 @@ def download_candidate(
             if matching_files[0].file_size > MAX_RESPONSE_BYTES:
                 raise ReconcileError("candidate.json exceeded the size limit")
             candidate_data = archive.read(matching_files[0])
-    except zipfile.BadZipFile as error:
-        raise ReconcileError("candidate artifact is not a valid ZIP archive") from error
+    except zipfile.BadZipFile:
+        raise ReconcileError("candidate artifact is not a valid ZIP archive") from None
 
     try:
         payload = json.loads(
@@ -670,8 +703,8 @@ def download_candidate(
             object_pairs_hook=unique_json_object,
             parse_constant=reject_json_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ReconcileError("candidate.json contains invalid JSON") from error
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ReconcileError("candidate.json contains invalid JSON") from None
     return validate_candidate(repository, workflow_run_id, payload)
 
 
@@ -742,8 +775,11 @@ def write_github_outputs(output_path, candidate):
 
 
 def same_origin(left, right):
-    left_url = urllib.parse.urlsplit(left)
-    right_url = urllib.parse.urlsplit(right)
+    try:
+        left_url = urllib.parse.urlsplit(left)
+        right_url = urllib.parse.urlsplit(right)
+    except ValueError:
+        return False
     return left_url.scheme == right_url.scheme and left_url.netloc == right_url.netloc
 
 
@@ -778,6 +814,13 @@ def semantic_version(tag):
     )
 
 
+def release_order_key(tag, run_number, run_attempt):
+    version = semantic_version(tag)
+    if version is None:
+        return None
+    return version, run_number, run_attempt
+
+
 def main():
     try:
         output_path = os.environ.get("GITHUB_OUTPUT")
@@ -807,8 +850,14 @@ def main():
             f"attempt {candidate.run_attempt}"
         )
         return 0
-    except (ReconcileError, ValueError) as error:
+    except ReconcileError as error:
         print(f"::error::Latest reconciliation failed: {error}", file=sys.stderr)
+        return 1
+    except ValueError:
+        print(
+            "::error::Latest reconciliation failed: invalid reconciliation input",
+            file=sys.stderr,
+        )
         return 1
 
 
