@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	buildSingleArchJob = "build_single_arch"
-	createManifestsJob = "create_manifests"
+	buildSingleArchJob       = "build_single_arch"
+	createManifestsJob       = "create_manifests"
+	promoteLatestJob         = "promote_latest"
+	releaseCandidateArtifact = "docker-build-release-candidate"
 )
 
 var (
@@ -25,19 +27,26 @@ var (
 )
 
 type dockerBuildWorkflow struct {
-	Concurrency dockerBuildConcurrency    `yaml:"concurrency"`
+	Concurrency *dockerBuildConcurrency   `yaml:"concurrency"`
 	Jobs        map[string]dockerBuildJob `yaml:"jobs"`
+	RunName     string                    `yaml:"run-name"`
 }
 
 type dockerBuildConcurrency struct {
 	Group            string `yaml:"group"`
-	CancelInProgress bool   `yaml:"cancel-in-progress"`
+	CancelInProgress *bool  `yaml:"cancel-in-progress"`
 }
 
 type dockerBuildJob struct {
-	Needs       []string          `yaml:"needs"`
-	Permissions map[string]string `yaml:"permissions"`
-	Steps       []dockerBuildStep `yaml:"steps"`
+	Name           string                  `yaml:"name"`
+	Needs          []string                `yaml:"needs"`
+	Concurrency    *dockerBuildConcurrency `yaml:"concurrency"`
+	Env            map[string]string       `yaml:"env"`
+	If             string                  `yaml:"if"`
+	Outputs        map[string]string       `yaml:"outputs"`
+	Permissions    map[string]string       `yaml:"permissions"`
+	Steps          []dockerBuildStep       `yaml:"steps"`
+	TimeoutMinutes int                     `yaml:"timeout-minutes"`
 }
 
 type dockerBuildStep struct {
@@ -95,6 +104,39 @@ func TestArchitectureBuildStagesAndSignsImmutableDigest(t *testing.T) {
 		"architecture signing must address the immutable build digest")
 }
 
+func TestVersionTagNamespaceCannotOverlapSharedOrSiblingTags(t *testing.T) {
+	workflow := loadDockerBuildWorkflow(t)
+	job := requireJob(t, workflow, buildSingleArchJob)
+	resolveIndex := stepIndex(job, func(step dockerBuildStep) bool {
+		return strings.Contains(step.Name, "Resolve tag")
+	})
+	require.NotEqual(t, -1, resolveIndex, "architecture build must validate its version tag")
+	validation := job.Steps[resolveIndex].Run
+	assert.Contains(t, validation, `^[a-z0-9_][a-z0-9_.-]{0,121}$`,
+		"version tags must leave room for architecture suffixes")
+	for _, reserved := range []string{"latest", "staging-*", "*-amd64", "*-arm64"} {
+		assert.Contains(t, validation, reserved,
+			"version tag validation must reject reserved namespace %s", reserved)
+	}
+}
+
+func TestWorkflowRunNameBindsManualDispatchToItsReleaseTag(t *testing.T) {
+	workflow := loadDockerBuildWorkflow(t)
+	assert.Equal(t, "Publish Docker image ${{ github.event.inputs.tag || github.ref_name }}", workflow.RunName,
+		"the run API must expose the same tag used by push and workflow_dispatch releases")
+}
+
+func TestReleaseCandidateRecordsAuthoritativeWorkflowSHA(t *testing.T) {
+	job := requireJob(t, loadDockerBuildWorkflow(t), createManifestsJob)
+	recordIndex := stepIndex(job, func(step dockerBuildStep) bool {
+		return step.Name == "Record immutable release candidate"
+	})
+	require.NotEqual(t, -1, recordIndex)
+	recordScript := job.Steps[recordIndex].Run
+	assert.Contains(t, recordScript, `--arg head_sha "$GITHUB_SHA"`)
+	assert.Contains(t, recordScript, `head_sha: $head_sha`)
+}
+
 func TestManifestStagesSignedDigestsBeforeFinalPromotion(t *testing.T) {
 	workflow := loadDockerBuildWorkflow(t)
 	job := requireJob(t, workflow, createManifestsJob)
@@ -138,12 +180,9 @@ func TestManifestStagesSignedDigestsBeforeFinalPromotion(t *testing.T) {
 	assert.Less(t, stagedManifest.StepIndex, signManifestIndex, "the staged index digest must exist before signing")
 
 	expectedPromotions := map[string]string{
-		"$IMAGE:$TAG-amd64":   "$IMAGE@$AMD64_DIGEST",
-		"$IMAGE:$TAG-arm64":   "$IMAGE@$ARM64_DIGEST",
-		"$IMAGE:$TAG":         "$IMAGE@$MANIFEST_DIGEST",
-		"$IMAGE:latest-amd64": "$IMAGE@$AMD64_DIGEST",
-		"$IMAGE:latest-arm64": "$IMAGE@$ARM64_DIGEST",
-		"$IMAGE:latest":       "$IMAGE@$MANIFEST_DIGEST",
+		"$IMAGE:$TAG-amd64": "$IMAGE@$AMD64_DIGEST",
+		"$IMAGE:$TAG-arm64": "$IMAGE@$ARM64_DIGEST",
+		"$IMAGE:$TAG":       "$IMAGE@$MANIFEST_DIGEST",
 	}
 	for target, signedDigest := range expectedPromotions {
 		promotion, ok := finalTargets[target]
@@ -153,18 +192,169 @@ func TestManifestStagesSignedDigestsBeforeFinalPromotion(t *testing.T) {
 		assert.Less(t, signManifestIndex, promotion.StepIndex,
 			"final target %s must not be published before multi-arch signing succeeds", target)
 	}
-	assert.Len(t, finalTargets, len(expectedPromotions), "only the expected architecture and manifest tags may be promoted")
+	assert.Len(t, finalTargets, len(expectedPromotions), "immutable publication may promote only version tags")
+
+	versionPromotion := finalTargets["$IMAGE:$TAG"]
+	promotionScript := job.Steps[versionPromotion.StepIndex].Run
+	firstInspect := strings.Index(promotionScript, "docker buildx imagetools inspect")
+	firstCreate := strings.Index(promotionScript, "docker buildx imagetools create")
+	require.NotEqual(t, -1, firstInspect, "version promotion must inspect an existing tag before mutation")
+	require.NotEqual(t, -1, firstCreate, "version promotion must create missing immutable tags")
+	assert.Less(t, firstInspect, firstCreate, "existing immutable tags must be checked before any overwrite")
+	assert.Contains(t, promotionScript, "manifest unknown", "only an authoritative missing-tag response may permit creation")
+	assert.Contains(t, promotionScript, "Refusing to overwrite immutable version tag")
 }
 
-func TestReleaseConcurrencySerializesSharedTagsWithoutCancellation(t *testing.T) {
+func TestImmutablePublicationIsOutsideReplaceableSharedConcurrency(t *testing.T) {
 	workflow := loadDockerBuildWorkflow(t)
-	require.NotEmpty(t, workflow.Concurrency.Group, "release publication needs a shared concurrency group")
-	assert.False(t, workflow.Concurrency.CancelInProgress, "an in-progress release must not be cancelled during publication")
+	assert.Nil(t, workflow.Concurrency,
+		"workflow-level concurrency can replace pending releases before immutable publication")
+	assert.Nil(t, requireJob(t, workflow, buildSingleArchJob).Concurrency,
+		"architecture staging must not enter a shared native concurrency queue")
+	versionConcurrency := requireJob(t, workflow, createManifestsJob).Concurrency
+	require.NotNil(t, versionConcurrency, "duplicate publication of one version tag must be serialized")
+	require.NotNil(t, versionConcurrency.CancelInProgress)
+	assert.False(t, *versionConcurrency.CancelInProgress,
+		"a running immutable version publication must not be cancelled")
+	assert.Contains(t, versionConcurrency.Group, "needs.build_single_arch.outputs.tag",
+		"distinct version tags must never share a replaceable pending queue")
 
-	group := workflow.Concurrency.Group
+	for jobName, job := range workflow.Jobs {
+		if jobName == promoteLatestJob {
+			continue
+		}
+		for _, create := range imageToolsCreates(job) {
+			for _, target := range create.Targets {
+				assert.False(t, isLatestRef(target),
+					"%s must finish without mutating shared latest tag %s", jobName, target)
+			}
+		}
+	}
+}
+
+func TestLatestPromotionIsSerializedAfterImmutablePublication(t *testing.T) {
+	workflow := loadDockerBuildWorkflow(t)
+	versionJob := requireJob(t, workflow, createManifestsJob)
+	latestJob := requireJob(t, workflow, promoteLatestJob)
+	assert.Equal(t, "Create multi-arch manifests", versionJob.Name,
+		"the reconciliation helper binds immutable success to this GitHub job name")
+
+	assert.Equal(t, []string{createManifestsJob}, latestJob.Needs,
+		"latest reconciliation must run only after successful immutable publication")
+	assert.Empty(t, latestJob.If, "latest reconciliation must retain the default successful-needs gate")
+	require.NotNil(t, latestJob.Concurrency, "only latest reconciliation needs a shared concurrency group")
+	require.NotNil(t, latestJob.Concurrency.CancelInProgress,
+		"latest reconciliation must explicitly preserve the running critical section")
+	assert.False(t, *latestJob.Concurrency.CancelInProgress,
+		"a running latest reconciliation must not be cancelled mid-promotion")
+	require.NotEmpty(t, latestJob.Concurrency.Group)
 	for _, runSpecificValue := range []string{"github.ref", "github.sha", "github.run_id", "github.run_attempt", "inputs.tag"} {
-		assert.NotContains(t, group, runSpecificValue,
-			"the concurrency group must be shared by releases that can mutate latest")
+		assert.NotContains(t, latestJob.Concurrency.Group, runSpecificValue,
+			"the latest concurrency group must be shared by every release")
+	}
+	assert.Positive(t, latestJob.TimeoutMinutes, "latest reconciliation must have a bounded timeout")
+	assert.LessOrEqual(t, latestJob.TimeoutMinutes, 15, "latest reconciliation must fail instead of waiting indefinitely")
+
+	lastVersionPromotion := lastTargetIndex(versionJob, isVersionRef)
+	require.NotEqual(t, -1, lastVersionPromotion, "create_manifests must publish immutable version tags")
+	markerIndex := stepIndex(versionJob, func(step dockerBuildStep) bool {
+		return strings.HasPrefix(step.Uses, "actions/upload-artifact@")
+	})
+	require.NotEqual(t, -1, markerIndex, "immutable publication must record a reconciliation candidate")
+	assert.Less(t, lastVersionPromotion, markerIndex,
+		"a release may become eligible for latest only after every immutable version tag is published")
+	markerStep := versionJob.Steps[markerIndex]
+	assert.Equal(t, "Publish immutable release candidate marker", markerStep.Name,
+		"the reconciliation helper binds cancellation recovery to this GitHub step name")
+	assert.Empty(t, markerStep.If, "candidate marker upload must stop when immutable publication fails")
+	assert.Equal(t, releaseCandidateArtifact, markerStep.With["name"],
+		"the publisher and reconciler must share one candidate artifact name")
+	assert.Equal(t, "error", markerStep.With["if-no-files-found"],
+		"a missing completion marker must fail closed")
+	markerPath, ok := markerStep.With["path"].(string)
+	require.True(t, ok, "candidate marker path must be a string")
+	assert.True(t, strings.HasSuffix(markerPath, "/candidate.json"),
+		"candidate marker must contain the helper's expected candidate.json")
+
+	electionIndex := stepIndex(latestJob, func(step dockerBuildStep) bool {
+		return strings.Contains(step.Run, ".github/releasequeue/reconcile_latest.py")
+	})
+	require.NotEqual(t, -1, electionIndex, "latest reconciliation must re-elect the newest completed release")
+	firstLatestPromotion := firstTargetIndex(latestJob, isLatestRef)
+	require.NotEqual(t, -1, firstLatestPromotion, "promote_latest must publish shared latest tags")
+	assert.Less(t, electionIndex, firstLatestPromotion,
+		"newest-candidate election must succeed before any shared latest mutation")
+
+	expectedPromotions := map[string]string{
+		"$IMAGE:latest-amd64": "$IMAGE@$AMD64_DIGEST",
+		"$IMAGE:latest-arm64": "$IMAGE@$ARM64_DIGEST",
+		"$IMAGE:latest":       "$IMAGE@$MANIFEST_DIGEST",
+	}
+	actualPromotions := make(map[string]imageToolsCreate)
+	for _, create := range imageToolsCreates(latestJob) {
+		for _, target := range create.Targets {
+			if isLatestRef(target) {
+				actualPromotions[target] = create
+				assert.Equal(t, "steps.candidate.outputs.latest_eligible == 'true'", latestJob.Steps[create.StepIndex].If,
+					"latest mutation must require a successful eligible election")
+			}
+			assert.False(t, isVersionRef(target), "latest reconciliation must not rewrite immutable version tag %s", target)
+		}
+	}
+	for target, digest := range expectedPromotions {
+		promotion, ok := actualPromotions[target]
+		require.True(t, ok, "missing latest promotion target %s", target)
+		assert.Equal(t, []string{digest}, promotion.Sources,
+			"latest target %s must use the elected release's signed digest", target)
+	}
+	assert.Len(t, actualPromotions, len(expectedPromotions), "only the expected latest aliases may be reconciled")
+}
+
+func TestLatestEligibilityIsKnownBeforeRegistryWork(t *testing.T) {
+	workflow := loadDockerBuildWorkflow(t)
+	versionJob := requireJob(t, workflow, createManifestsJob)
+	latestJob := requireJob(t, workflow, promoteLatestJob)
+	assert.Equal(t, "${{ needs.build_single_arch.outputs.tag }}", versionJob.Outputs["tag"])
+	assert.Equal(t, "${{ needs.create_manifests.outputs.tag }}", latestJob.Env["CURRENT_TAG"])
+
+	electionIndex := stepIndex(latestJob, func(step dockerBuildStep) bool {
+		return strings.Contains(step.Run, ".github/releasequeue/reconcile_latest.py")
+	})
+	require.NotEqual(t, -1, electionIndex)
+	registrySetupIndex := stepIndex(latestJob, func(step dockerBuildStep) bool {
+		return strings.HasPrefix(step.Uses, "docker/setup-buildx-action@")
+	})
+	require.NotEqual(t, -1, registrySetupIndex)
+	assert.Less(t, electionIndex, registrySetupIndex,
+		"latest eligibility must be known before registry and signing setup")
+	guard := "steps.candidate.outputs.latest_eligible == 'true'"
+	for index := electionIndex + 1; index < len(latestJob.Steps); index++ {
+		assert.Equal(t, guard, latestJob.Steps[index].If,
+			"latest step %q must be skipped for a non-SemVer tag", latestJob.Steps[index].Name)
+	}
+}
+
+func TestConcurrencyUsesActionlintSupportedSyntax(t *testing.T) {
+	data := readDockerBuildWorkflow(t)
+	var document yaml.Node
+	require.NoError(t, yaml.Unmarshal(data, &document))
+
+	var unsupportedPaths []string
+	findUnsupportedConcurrencyKeys(&document, nil, &unsupportedPaths)
+	assert.Empty(t, unsupportedPaths, "concurrency contains unsupported keys; queue is not valid GitHub Actions syntax")
+}
+
+func TestReleaseJobsHaveBoundedTimeouts(t *testing.T) {
+	workflow := loadDockerBuildWorkflow(t)
+	maximumTimeouts := map[string]int{
+		buildSingleArchJob: 180,
+		createManifestsJob: 60,
+		promoteLatestJob:   15,
+	}
+	for jobName, maximum := range maximumTimeouts {
+		job := requireJob(t, workflow, jobName)
+		assert.Positive(t, job.TimeoutMinutes, "%s must not consume a runner indefinitely", jobName)
+		assert.LessOrEqual(t, job.TimeoutMinutes, maximum, "%s timeout exceeds its bounded release window", jobName)
 	}
 }
 
@@ -193,34 +383,24 @@ func TestReleaseActionsAreImmutableAndPermissionsAreBounded(t *testing.T) {
 		"packages": "write",
 		"id-token": "write",
 	}, requireJob(t, workflow, createManifestsJob).Permissions)
+	assert.Equal(t, map[string]string{
+		"actions":  "read",
+		"contents": "read",
+		"packages": "write",
+	}, requireJob(t, workflow, promoteLatestJob).Permissions)
 }
 
-func TestAllPrerequisitesPrecedeGHCRFinalPublication(t *testing.T) {
+func TestAllPrerequisitesPrecedeConsumerTagMutation(t *testing.T) {
 	workflow := loadDockerBuildWorkflow(t)
-	job := requireJob(t, workflow, createManifestsJob)
-	firstFinalPublication := len(job.Steps)
-	for _, create := range imageToolsCreates(job) {
-		for _, target := range create.Targets {
-			if isFinalRef(target) && create.StepIndex < firstFinalPublication {
-				firstFinalPublication = create.StepIndex
-			}
-		}
-	}
-	require.Less(t, firstFinalPublication, len(job.Steps), "create_manifests must promote final GHCR tags")
+	versionJob := requireJob(t, workflow, createManifestsJob)
+	latestJob := requireJob(t, workflow, promoteLatestJob)
+	require.Contains(t, latestJob.Needs, createManifestsJob,
+		"signing and immutable publication failures must prevent latest reconciliation")
 
-	for index, step := range job.Steps {
-		stepText := strings.ToLower(step.Name + "\n" + step.Uses + "\n" + step.If + "\n" + step.Run + "\n" + fmt.Sprint(step.With))
-		isPrerequisite := strings.HasPrefix(step.Uses, "docker/login-action@") ||
-			strings.HasPrefix(step.Uses, "docker/setup-buildx-action@") ||
-			strings.HasPrefix(step.Uses, "sigstore/cosign-installer@") ||
-			strings.Contains(stepText, "cosign version") ||
-			strings.Contains(stepText, "cosign verify")
-		if isPrerequisite {
-			assert.Less(t, index, firstFinalPublication,
-				"registry and signing prerequisites must finish before GHCR final publication")
-		}
-
-	}
+	assertPrerequisitesBeforeTargetMutation(t, versionJob, isVersionRef,
+		"registry and signing prerequisites must finish before immutable version publication")
+	assertPrerequisitesBeforeTargetMutation(t, latestJob, isLatestRef,
+		"candidate election, signature verification, and registry prerequisites must finish before latest promotion")
 
 	for jobName, candidateJob := range workflow.Jobs {
 		for index, step := range candidateJob.Steps {
@@ -230,9 +410,10 @@ func TestAllPrerequisitesPrecedeGHCRFinalPublication(t *testing.T) {
 				continue
 			}
 			assert.NotEmpty(t, step.If, "%s step %d must be guarded when Docker Hub credentials are absent", jobName, index)
-			if jobName == createManifestsJob {
-				assert.Less(t, index, firstFinalPublication,
-					"optional Docker Hub work cannot fail after GHCR final publication")
+			firstMutation := firstConsumerTagIndex(candidateJob)
+			if firstMutation != -1 {
+				assert.Less(t, index, firstMutation,
+					"optional Docker Hub work cannot fail after GHCR consumer-tag publication")
 			}
 		}
 	}
@@ -241,14 +422,19 @@ func TestAllPrerequisitesPrecedeGHCRFinalPublication(t *testing.T) {
 func loadDockerBuildWorkflow(t *testing.T) dockerBuildWorkflow {
 	t.Helper()
 
-	workflowPath := filepath.Join("..", "workflows", "docker-build.yml")
-	data, err := os.ReadFile(workflowPath)
-	require.NoError(t, err)
-
+	data := readDockerBuildWorkflow(t)
 	var workflow dockerBuildWorkflow
 	require.NoError(t, yaml.Unmarshal(data, &workflow))
 	require.NotEmpty(t, workflow.Jobs)
 	return workflow
+}
+
+func readDockerBuildWorkflow(t *testing.T) []byte {
+	t.Helper()
+	workflowPath := filepath.Join("..", "workflows", "docker-build.yml")
+	data, err := os.ReadFile(workflowPath)
+	require.NoError(t, err)
+	return data
 }
 
 func requireJob(t *testing.T, workflow dockerBuildWorkflow, name string) dockerBuildJob {
@@ -265,6 +451,85 @@ func stepIndex(job dockerBuildJob, matches func(dockerBuildStep) bool) int {
 		}
 	}
 	return -1
+}
+
+func firstTargetIndex(job dockerBuildJob, matches func(string) bool) int {
+	first := -1
+	for _, create := range imageToolsCreates(job) {
+		for _, target := range create.Targets {
+			if matches(target) && (first == -1 || create.StepIndex < first) {
+				first = create.StepIndex
+			}
+		}
+	}
+	return first
+}
+
+func lastTargetIndex(job dockerBuildJob, matches func(string) bool) int {
+	last := -1
+	for _, create := range imageToolsCreates(job) {
+		for _, target := range create.Targets {
+			if matches(target) && create.StepIndex > last {
+				last = create.StepIndex
+			}
+		}
+	}
+	return last
+}
+
+func firstConsumerTagIndex(job dockerBuildJob) int {
+	return firstTargetIndex(job, func(target string) bool {
+		return isVersionRef(target) || isLatestRef(target)
+	})
+}
+
+func assertPrerequisitesBeforeTargetMutation(
+	t *testing.T,
+	job dockerBuildJob,
+	targetMatches func(string) bool,
+	message string,
+) {
+	t.Helper()
+	firstMutation := firstTargetIndex(job, targetMatches)
+	require.NotEqual(t, -1, firstMutation, "job must mutate its expected consumer tags")
+
+	for index, step := range job.Steps {
+		stepText := strings.ToLower(step.Name + "\n" + step.Uses + "\n" + step.If + "\n" + step.Run + "\n" + fmt.Sprint(step.With))
+		isPrerequisite := strings.HasPrefix(step.Uses, "docker/login-action@") ||
+			strings.HasPrefix(step.Uses, "docker/setup-buildx-action@") ||
+			strings.HasPrefix(step.Uses, "sigstore/cosign-installer@") ||
+			strings.Contains(stepText, "cosign version") ||
+			strings.Contains(stepText, "cosign verify") ||
+			strings.Contains(stepText, "reconcile_latest.py") ||
+			strings.Contains(strings.ToLower(step.Name), "validate digest-preserving")
+		if isPrerequisite {
+			assert.Less(t, index, firstMutation, message)
+		}
+	}
+}
+
+func findUnsupportedConcurrencyKeys(node *yaml.Node, path []string, unsupportedPaths *[]string) {
+	if node.Kind == yaml.MappingNode {
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			key := node.Content[index]
+			value := node.Content[index+1]
+			nextPath := append(append([]string(nil), path...), key.Value)
+			if key.Value == "concurrency" && value.Kind == yaml.MappingNode {
+				for childIndex := 0; childIndex+1 < len(value.Content); childIndex += 2 {
+					childKey := value.Content[childIndex].Value
+					if childKey != "group" && childKey != "cancel-in-progress" {
+						*unsupportedPaths = append(*unsupportedPaths, strings.Join(append(nextPath, childKey), "."))
+					}
+				}
+			}
+			findUnsupportedConcurrencyKeys(value, nextPath, unsupportedPaths)
+		}
+		return
+	}
+
+	for _, child := range node.Content {
+		findUnsupportedConcurrencyKeys(child, path, unsupportedPaths)
+	}
 }
 
 func imageToolsCreates(job dockerBuildJob) []imageToolsCreate {
@@ -352,11 +617,17 @@ func isStagingRef(ref string) bool {
 	return strings.Contains(ref, "STAGING_PREFIX")
 }
 
-func isFinalRef(ref string) bool {
+func isVersionRef(ref string) bool {
 	if isStagingRef(ref) {
 		return false
 	}
-	return strings.Contains(ref, ":$TAG") ||
-		strings.Contains(ref, ":${TAG}") ||
-		strings.Contains(ref, ":latest")
+	return strings.Contains(ref, ":$TAG") || strings.Contains(ref, ":${TAG}")
+}
+
+func isLatestRef(ref string) bool {
+	return !isStagingRef(ref) && strings.Contains(ref, ":latest")
+}
+
+func isFinalRef(ref string) bool {
+	return isVersionRef(ref) || isLatestRef(ref)
 }

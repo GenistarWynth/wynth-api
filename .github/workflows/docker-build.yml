@@ -1,4 +1,5 @@
 name: Publish Docker image (Multi-arch)
+run-name: Publish Docker image ${{ github.event.inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -11,10 +12,6 @@ on:
         description: 'Tag name to build (e.g., v0.10.8-alpha.3)'
         required: true
         type: string
-
-concurrency:
-  group: docker-release-final-tags
-  cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/genistarwynth/wynth-api
@@ -34,6 +31,7 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
     outputs:
       tag: ${{ steps.version.outputs.tag }}
 
@@ -51,18 +49,33 @@ jobs:
 
       - name: Resolve tag & write VERSION
         id: version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
             if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
               echo "::error::Tag '$TAG' does not exist"
               exit 1
             fi
           else
-            TAG=${GITHUB_REF#refs/tags/}
+            TAG="${GITHUB_REF#refs/tags/}"
           fi
-          echo "TAG=${TAG}" >> $GITHUB_ENV
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+          if ! [[ "$TAG" =~ ^[a-z0-9_][a-z0-9_.-]{0,121}$ ]]; then
+            echo "::error::Tag '$TAG' is not a valid release container tag"
+            exit 1
+          fi
+          case "$TAG" in
+            latest|latest-amd64|latest-arm64|staging-*|*-amd64|*-arm64)
+              echo "::error::Tag '$TAG' overlaps a reserved release tag namespace"
+              exit 1
+              ;;
+          esac
+
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "${TAG}" > VERSION
           echo "Building tag: ${TAG} for ${{ matrix.arch }}"
 
@@ -117,7 +130,14 @@ jobs:
     name: Create multi-arch manifests
     needs: [build_single_arch]
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      tag: ${{ needs.build_single_arch.outputs.tag }}
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+
+    concurrency:
+      group: docker-release-version-${{ needs.build_single_arch.outputs.tag }}
+      cancel-in-progress: false
 
     permissions:
       packages: write
@@ -221,21 +241,209 @@ jobs:
       - name: Promote signed version digests
         run: |
           set -euo pipefail
-          docker buildx imagetools create --prefer-index=false \
-            -t "$IMAGE:$TAG-amd64" \
-            "$IMAGE@$AMD64_DIGEST"
-          docker buildx imagetools create --prefer-index=false \
-            -t "$IMAGE:$TAG-arm64" \
-            "$IMAGE@$ARM64_DIGEST"
-          docker buildx imagetools create --prefer-index=false \
-            -t "$IMAGE:$TAG" \
-            "$IMAGE@$MANIFEST_DIGEST"
+
+          AMD64_MISSING=false
+          ARM64_MISSING=false
+          MANIFEST_MISSING=false
+          check_immutable_tag() {
+            local TARGET="$1"
+            local EXPECTED_DIGEST="$2"
+            local MISSING_VARIABLE="$3"
+            local INSPECT_OUTPUT
+            local NORMALIZED_ERROR
+
+            if INSPECT_OUTPUT=$(docker buildx imagetools inspect \
+              "$TARGET" --format '{{.Manifest.Digest}}' 2>&1); then
+              if [ "$INSPECT_OUTPUT" != "$EXPECTED_DIGEST" ]; then
+                echo "::error::Refusing to overwrite immutable version tag $TARGET"
+                exit 1
+              fi
+              return
+            fi
+
+            NORMALIZED_ERROR="${INSPECT_OUTPUT,,}"
+            if [[ "$NORMALIZED_ERROR" != *"manifest unknown"* && "$NORMALIZED_ERROR" != *": not found"* ]]; then
+              echo "::error::Unable to verify whether immutable version tag $TARGET exists"
+              printf '%s\n' "$INSPECT_OUTPUT" >&2
+              exit 1
+            fi
+            printf -v "$MISSING_VARIABLE" '%s' true
+          }
+
+          check_immutable_tag "$IMAGE:$TAG-amd64" "$AMD64_DIGEST" AMD64_MISSING
+          check_immutable_tag "$IMAGE:$TAG-arm64" "$ARM64_DIGEST" ARM64_MISSING
+          check_immutable_tag "$IMAGE:$TAG" "$MANIFEST_DIGEST" MANIFEST_MISSING
+
+          if [ "$AMD64_MISSING" = true ]; then
+            docker buildx imagetools create --prefer-index=false \
+              -t "$IMAGE:$TAG-amd64" \
+              "$IMAGE@$AMD64_DIGEST"
+          fi
+          if [ "$ARM64_MISSING" = true ]; then
+            docker buildx imagetools create --prefer-index=false \
+              -t "$IMAGE:$TAG-arm64" \
+              "$IMAGE@$ARM64_DIGEST"
+          fi
+          if [ "$MANIFEST_MISSING" = true ]; then
+            docker buildx imagetools create --prefer-index=false \
+              -t "$IMAGE:$TAG" \
+              "$IMAGE@$MANIFEST_DIGEST"
+          fi
 
           test "$(docker buildx imagetools inspect "$IMAGE:$TAG-amd64" --format '{{.Manifest.Digest}}')" = "$AMD64_DIGEST"
           test "$(docker buildx imagetools inspect "$IMAGE:$TAG-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
           test "$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
 
-      - name: Promote signed latest digests
+      - name: Manifest summary
+        run: |
+          echo "### Multi-arch Manifest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          docker buildx imagetools inspect "$IMAGE:$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record immutable release candidate
+        run: |
+          set -euo pipefail
+          CANDIDATE_DIR="$RUNNER_TEMP/docker-release-candidate"
+          mkdir -p "$CANDIDATE_DIR"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg workflow "docker-build.yml" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_number "$GITHUB_RUN_NUMBER" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg head_sha "$GITHUB_SHA" \
+            --arg tag "$TAG" \
+            --arg amd64_digest "$AMD64_DIGEST" \
+            --arg arm64_digest "$ARM64_DIGEST" \
+            --arg manifest_digest "$MANIFEST_DIGEST" \
+            --arg certificate_identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/docker-build.yml@${GITHUB_REF}" \
+            '{
+              schema: 1,
+              repository: $repository,
+              workflow: $workflow,
+              run_id: $run_id,
+              run_number: $run_number,
+              run_attempt: $run_attempt,
+              head_sha: $head_sha,
+              tag: $tag,
+              amd64_digest: $amd64_digest,
+              arm64_digest: $arm64_digest,
+              manifest_digest: $manifest_digest,
+              certificate_identity: $certificate_identity
+            }' > "$CANDIDATE_DIR/candidate.json"
+
+      - name: Publish immutable release candidate marker
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docker-build-release-candidate
+          path: ${{ runner.temp }}/docker-release-candidate/candidate.json
+          if-no-files-found: error
+          retention-days: 7
+
+  promote_latest:
+    name: Reconcile signed latest tags
+    needs: [create_manifests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    concurrency:
+      group: docker-release-latest
+      cancel-in-progress: false
+
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+
+    env:
+      CURRENT_TAG: ${{ needs.create_manifests.outputs.tag }}
+
+    steps:
+      - name: Check out release queue helper
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Elect newest completed immutable release
+        id: candidate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_QUEUE_TIMEOUT_SECONDS: '10'
+        run: python3 .github/releasequeue/reconcile_latest.py
+
+      - name: Set up Docker Buildx
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install cosign
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Check cosign readiness
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        run: cosign version
+
+      - name: Log in to GitHub Container Registry
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify elected signed version digests
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        env:
+          TAG: ${{ steps.candidate.outputs.tag }}
+          AMD64_DIGEST: ${{ steps.candidate.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidate.outputs.arm64_digest }}
+          MANIFEST_DIGEST: ${{ steps.candidate.outputs.manifest_digest }}
+          CERTIFICATE_IDENTITY: ${{ steps.candidate.outputs.certificate_identity }}
+        run: |
+          set -euo pipefail
+          for DIGEST in "$AMD64_DIGEST" "$ARM64_DIGEST" "$MANIFEST_DIGEST"; do
+            if ! [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Invalid elected image digest: $DIGEST"
+              exit 1
+            fi
+            cosign verify \
+              --certificate-identity "$CERTIFICATE_IDENTITY" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "$IMAGE@$DIGEST"
+          done
+
+          test "$(docker buildx imagetools inspect "$IMAGE:$TAG-amd64" --format '{{.Manifest.Digest}}')" = "$AMD64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$TAG-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
+
+      - name: Validate digest-preserving latest promotion
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        env:
+          AMD64_DIGEST: ${{ steps.candidate.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidate.outputs.arm64_digest }}
+          MANIFEST_DIGEST: ${{ steps.candidate.outputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$STAGING_PREFIX-latest-amd64" \
+            "$IMAGE@$AMD64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$STAGING_PREFIX-latest-arm64" \
+            "$IMAGE@$ARM64_DIGEST"
+          docker buildx imagetools create --prefer-index=false \
+            -t "$IMAGE:$STAGING_PREFIX-latest-manifest" \
+            "$IMAGE@$MANIFEST_DIGEST"
+
+          test "$(docker buildx imagetools inspect "$IMAGE:$STAGING_PREFIX-latest-amd64" --format '{{.Manifest.Digest}}')" = "$AMD64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$STAGING_PREFIX-latest-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
+          test "$(docker buildx imagetools inspect "$IMAGE:$STAGING_PREFIX-latest-manifest" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
+
+      # Registry tag writes are non-transactional, so publish the canonical manifest alias last.
+      - name: Promote elected signed latest digests
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        env:
+          AMD64_DIGEST: ${{ steps.candidate.outputs.amd64_digest }}
+          ARM64_DIGEST: ${{ steps.candidate.outputs.arm64_digest }}
+          MANIFEST_DIGEST: ${{ steps.candidate.outputs.manifest_digest }}
         run: |
           set -euo pipefail
           docker buildx imagetools create --prefer-index=false \
@@ -252,9 +460,13 @@ jobs:
           test "$(docker buildx imagetools inspect "$IMAGE:latest-arm64" --format '{{.Manifest.Digest}}')" = "$ARM64_DIGEST"
           test "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{.Manifest.Digest}}')" = "$MANIFEST_DIGEST"
 
-      - name: Manifest summary
+      - name: Latest reconciliation summary
+        if: steps.candidate.outputs.latest_eligible == 'true'
+        env:
+          TAG: ${{ steps.candidate.outputs.tag }}
+          RUN_NUMBER: ${{ steps.candidate.outputs.run_number }}
+          RUN_ATTEMPT: ${{ steps.candidate.outputs.run_attempt }}
         run: |
-          echo "### Multi-arch Manifest" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          docker buildx imagetools inspect "$IMAGE:$TAG" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "### Reconciled Docker Latest Tags" >> "$GITHUB_STEP_SUMMARY"
+          echo "Promoted signed digests from $TAG (run $RUN_NUMBER, attempt $RUN_ATTEMPT)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Registry aliases are updated independently and are not transactional." >> "$GITHUB_STEP_SUMMARY"
