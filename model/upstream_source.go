@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -36,6 +37,12 @@ const (
 	UpstreamMappingSyncStatusFailed         = "failed"
 	UpstreamMappingSyncStatusSkipped        = "skipped"
 	UpstreamMappingSyncStatusNeedsAttention = "needs_attention"
+
+	UpstreamSourceAutoPriorityCostSourceAdvertised     = "advertised"
+	UpstreamSourceAutoPriorityCostSourceEmpiricalProbe = "empirical_probe"
+
+	UpstreamSourceMonitorParkedReasonCredentialDecryption       = "credential_decryption"
+	UpstreamSourceMonitorParkedSchedule                   int64 = math.MaxInt64
 )
 
 type UpstreamSource struct {
@@ -47,10 +54,12 @@ type UpstreamSource struct {
 	AdminAPIBasePath       string `json:"admin_api_base_path" gorm:"type:varchar(128);not null;default:'/api/v1'"`
 	RelayBaseURL           string `json:"relay_base_url" gorm:"type:varchar(512);not null"`
 	AuthConfig             string `json:"-" gorm:"type:text"`
+	AuthRevision           int64  `json:"-" gorm:"bigint"`
 	SyncConfig             string `json:"sync_config" gorm:"type:text"`
 	MonitorEnabled         bool   `json:"monitor_enabled" gorm:"index"`
 	MonitorIntervalMinutes int    `json:"monitor_interval_minutes"`
 	NextMonitorAt          int64  `json:"next_monitor_at" gorm:"bigint;index"`
+	MonitorParkedReason    string `json:"monitor_parked_reason" gorm:"type:varchar(64);default:'';index"`
 	CurrentMonitorToken    string `json:"-" gorm:"type:varchar(64);index"`
 	MonitorStartedAt       int64  `json:"monitor_started_at" gorm:"bigint"`
 	LastMonitorTime        int64  `json:"last_monitor_time" gorm:"bigint"`
@@ -104,6 +113,20 @@ func (source *UpstreamSource) BeforeUpdate(tx *gorm.DB) error {
 	return nil
 }
 
+func LockUpstreamSourceTx(tx *gorm.DB, sourceID int) (*UpstreamSource, error) {
+	if tx == nil {
+		return nil, errors.New("database transaction is required")
+	}
+	if sourceID == 0 {
+		return nil, errors.New("source ID is required")
+	}
+	var source UpstreamSource
+	if err := lockForUpdate(tx).Where("id = ?", sourceID).First(&source).Error; err != nil {
+		return nil, err
+	}
+	return &source, nil
+}
+
 type UpstreamSourceChannelMapping struct {
 	Id                       int      `json:"id"`
 	SourceID                 int      `json:"source_id" gorm:"not null;uniqueIndex:idx_upstream_source_group;index"`
@@ -116,6 +139,7 @@ type UpstreamSourceChannelMapping struct {
 	UpstreamStatus           string   `json:"upstream_status" gorm:"type:varchar(32)"`
 	UpstreamRateMultiplier   *float64 `json:"upstream_rate_multiplier"`
 	EffectiveRateMultiplier  *float64 `json:"effective_rate_multiplier"`
+	AutoPriorityCostSource   string   `json:"auto_priority_cost_source" gorm:"type:varchar(32);index"`
 	UpstreamKeyID            string   `json:"upstream_key_id" gorm:"type:varchar(191)"`
 	LocalChannelID           int      `json:"local_channel_id" gorm:"index"`
 	SyncStatus               string   `json:"sync_status" gorm:"type:varchar(32);index"`
@@ -124,6 +148,17 @@ type UpstreamSourceChannelMapping struct {
 	LastSyncedAt             int64    `json:"last_synced_at" gorm:"bigint"`
 	CreatedTime              int64    `json:"created_time" gorm:"bigint"`
 	UpdatedTime              int64    `json:"updated_time" gorm:"bigint"`
+}
+
+func ResolveUpstreamSourceAutoPriorityCostSource(value string) (string, bool) {
+	switch value {
+	case "", UpstreamSourceAutoPriorityCostSourceAdvertised:
+		return UpstreamSourceAutoPriorityCostSourceAdvertised, true
+	case UpstreamSourceAutoPriorityCostSourceEmpiricalProbe:
+		return UpstreamSourceAutoPriorityCostSourceEmpiricalProbe, true
+	default:
+		return "", false
+	}
 }
 
 func (mapping *UpstreamSourceChannelMapping) BeforeCreate(tx *gorm.DB) error {

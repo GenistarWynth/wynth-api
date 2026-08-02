@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"strings"
 	"sync"
 
@@ -8,6 +9,8 @@ import (
 )
 
 var upstreamSourcePlaintextWarnOnce sync.Once
+
+var ErrUpstreamSourceCredentialDecryption = errors.New("upstream source credential decryption failed")
 
 // ReadUpstreamSourceAuthConfig returns the plaintext auth JSON for a stored
 // AuthConfig value. It transparently decrypts secret envelopes and passes
@@ -17,7 +20,11 @@ func ReadUpstreamSourceAuthConfig(stored string) (string, error) {
 		return "", nil
 	}
 	if isUpstreamSourceSecretEnvelope(stored) {
-		return common.DecryptSecretString(stored)
+		plaintext, err := common.DecryptSecretString(stored)
+		if err != nil {
+			return "", ErrUpstreamSourceCredentialDecryption
+		}
+		return plaintext, nil
 	}
 	return stored, nil
 }

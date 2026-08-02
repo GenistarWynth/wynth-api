@@ -533,6 +533,12 @@ export const STATIC_I18N_KEYS = [
   'Batch detection failed',
   'Batch detection complete: {{channels}} channels, {{add}} to add, {{remove}} to remove, {{fails}} failed',
 
+  // Upstream-source empirical billing states
+  'No empirical snapshot',
+  'Temporary failure — using last good',
+  'Identity mismatch',
+  'Malformed snapshot',
+
   // Advanced Custom model discovery
   'Only one OpenAI Models route is allowed',
   'OpenAI Models route does not support client model rules',

@@ -77,6 +77,7 @@ type UpstreamSourceResponse struct {
 	MonitorEnabled         bool                           `json:"monitor_enabled"`
 	MonitorIntervalMinutes int                            `json:"monitor_interval_minutes"`
 	NextMonitorAt          int64                          `json:"next_monitor_at"`
+	MonitorParkedReason    string                         `json:"monitor_parked_reason"`
 	LastMonitorTime        int64                          `json:"last_monitor_time"`
 	LastDiscoveryTime      int64                          `json:"last_discovery_time"`
 	LastDiscoveryStatus    string                         `json:"last_discovery_status"`
@@ -137,6 +138,7 @@ type UpstreamSourceMappingResponse struct {
 	UpstreamStatus                              string   `json:"upstream_status"`
 	UpstreamRateMultiplier                      *float64 `json:"upstream_rate_multiplier"`
 	EffectiveRateMultiplier                     *float64 `json:"effective_rate_multiplier"`
+	AutoPriorityCostSource                      string   `json:"auto_priority_cost_source"`
 	UpstreamKeyID                               string   `json:"upstream_key_id"`
 	HasUpstreamKey                              bool     `json:"has_upstream_key"`
 	LocalChannelID                              int      `json:"local_channel_id"`

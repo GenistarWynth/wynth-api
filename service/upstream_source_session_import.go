@@ -17,9 +17,7 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 	if source == nil {
 		return errors.New("upstream source is required")
 	}
-	if _, err := loadUpstreamSourceRuntimeAuth(source); err != nil {
-		return err
-	}
+	expectedRevision := source.AuthRevision
 
 	finalJSON, err := buildImportedAuthConfigJSON(source, req) // imported session + preserved email/password
 	if err != nil {
@@ -36,7 +34,12 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return err
 	}
 	if _, err := adapter.DiscoverGroups(ctx, source); err != nil {
-		recordUpstreamSourceAuthFailure(source, err, common.GetTimestamp())
+		if recordErr := recordUpstreamSourceImportedAuthFailure(source, err, common.GetTimestamp(), expectedRevision); recordErr != nil {
+			if errors.Is(recordErr, ErrUpstreamSourceAuthStateChanged) {
+				return ErrUpstreamSourceAuthStateChanged
+			}
+			return ErrUpstreamSourceSessionImportPersistence
+		}
 		return errors.New("imported session failed validation: " + SanitizeUpstreamSourceError(err))
 	}
 
@@ -55,12 +58,13 @@ func ApplyUpstreamSourceImportedSession(ctx context.Context, source *model.Upstr
 		return err
 	}
 
-	if err := persistUpstreamSourceAuthSession(source, persistPlaintext, common.GetTimestamp(), true); err != nil {
-		return err
+	if err := persistUpstreamSourceImportedAuthSession(source, persistPlaintext, common.GetTimestamp(), expectedRevision); err != nil {
+		if errors.Is(err, ErrUpstreamSourceAuthStateChanged) {
+			return ErrUpstreamSourceAuthStateChanged
+		}
+		return ErrUpstreamSourceSessionImportPersistence
 	}
-	// A validated import proves the block is resolved; clear the sentinel so
-	// turnstile_blocked flips to false in the response confirming the import.
-	return model.ClearUpstreamSourceTurnstileBlock(source.Id, ErrUpstreamSourceTurnstileRequired.Error())
+	return nil
 }
 
 // stripCredentialsFromAuthConfig removes stored email/password from an

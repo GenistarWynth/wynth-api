@@ -37,6 +37,8 @@ import type {
   UpstreamSourceSessionImportRequest,
   UpstreamSourceSyncResult,
   UpstreamSourceUpdateRequest,
+  UpstreamSourceBillingProbe,
+  UpstreamSourceBillingProbeUpdateRequest,
 } from './types'
 
 const upstreamSourceActionConfig = (
@@ -58,6 +60,13 @@ export const upstreamSourcesQueryKeys = {
     [...upstreamSourcesQueryKeys.all, 'sync-result', id] as const,
   monitoring: (id: number) =>
     [...upstreamSourcesQueryKeys.all, 'monitoring', id] as const,
+  billingProbe: (sourceID: number, mappingID: number) =>
+    [
+      ...upstreamSourcesQueryKeys.all,
+      'billing-probe',
+      sourceID,
+      mappingID,
+    ] as const,
 }
 
 export async function listUpstreamSources(): Promise<
@@ -214,6 +223,41 @@ export async function updateUpstreamSourceMappings(
   const res = await api.put(
     `/api/upstream_sources/${id}/mappings`,
     { mapping_ids: mappingIDs },
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function getUpstreamSourceBillingProbe(
+  sourceID: number,
+  mappingID: number
+): Promise<ApiResponse<UpstreamSourceBillingProbe>> {
+  const res = await api.get(
+    `/api/upstream_sources/${sourceID}/mappings/${mappingID}/billing_probe`
+  )
+  return res.data
+}
+
+export async function updateUpstreamSourceBillingProbe(
+  sourceID: number,
+  mappingID: number,
+  data: UpstreamSourceBillingProbeUpdateRequest
+): Promise<ApiResponse<UpstreamSourceBillingProbe>> {
+  const res = await api.put(
+    `/api/upstream_sources/${sourceID}/mappings/${mappingID}/billing_probe`,
+    data,
+    upstreamSourceActionConfig()
+  )
+  return res.data
+}
+
+export async function runUpstreamSourceBillingProbe(
+  sourceID: number,
+  mappingID: number
+): Promise<ApiResponse<UpstreamSourceBillingProbe>> {
+  const res = await api.post(
+    `/api/upstream_sources/${sourceID}/mappings/${mappingID}/billing_probe/run`,
+    undefined,
     upstreamSourceActionConfig()
   )
   return res.data

@@ -50,6 +50,7 @@ func setupControllerChannelMonitorTestDB(t *testing.T) *gorm.DB {
 		&model.Channel{},
 		&model.Ability{},
 		&model.ChannelMonitorLog{},
+		&model.UpstreamSourceChannelMapping{},
 		&model.User{},
 		&model.Log{},
 		&model.AccountPool{},

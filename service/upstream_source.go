@@ -1268,7 +1268,6 @@ func applyUpstreamSourceGroupsTx(tx *gorm.DB, source *model.UpstreamSource, scan
 	if err != nil {
 		return upstreamSourceGroupApplication{}, err
 	}
-	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, now, config)
 	if err := model.LockUpstreamSourceForScanTx(tx, source.Id); err != nil {
 		return upstreamSourceGroupApplication{}, err
 	}
@@ -1276,6 +1275,17 @@ func applyUpstreamSourceGroupsTx(tx *gorm.DB, source *model.UpstreamSource, scan
 	if err := tx.Where("source_id = ?", source.Id).Find(&previousMappings).Error; err != nil {
 		return upstreamSourceGroupApplication{}, err
 	}
+	autoPriorityCostSources := make(map[string]string, len(previousMappings))
+	for _, mapping := range previousMappings {
+		autoPriorityCostSources[strings.TrimSpace(mapping.UpstreamGroupID)] = mapping.AutoPriorityCostSource
+	}
+	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(
+		source.Id,
+		groups,
+		now,
+		config,
+		autoPriorityCostSources,
+	)
 	hasSuccessfulDiscovery, err := model.HasSuccessfulUpstreamSourceScanTx(tx, source.Id, model.UpstreamSourceScanTypeDiscover)
 	if err != nil {
 		return upstreamSourceGroupApplication{}, err
@@ -1337,7 +1347,13 @@ func validateAbsoluteHTTPURL(name string, value string) error {
 	return nil
 }
 
-func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64, config upstreamSourceSyncConfig) ([]model.UpstreamSourceChannelMapping, []string, int) {
+func discoveredGroupsToMappings(
+	sourceID int,
+	groups []UpstreamGroup,
+	now int64,
+	config upstreamSourceSyncConfig,
+	autoPriorityCostSources map[string]string,
+) ([]model.UpstreamSourceChannelMapping, []string, int) {
 	mappingByID := make(map[string]model.UpstreamSourceChannelMapping, len(groups))
 	discoveredIDs := make([]string, 0, len(groups))
 	invalidCount := 0
@@ -1351,8 +1367,10 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64,
 		if _, exists := mappingByID[groupID]; !exists {
 			discoveredIDs = append(discoveredIDs, groupID)
 		}
+		autoPriorityCostSource := autoPriorityCostSources[groupID]
+		resolvedCostSource, _ := model.ResolveUpstreamSourceAutoPriorityCostSource(autoPriorityCostSource)
 		discoveryStatus := model.UpstreamMappingDiscoveryStatusActive
-		if group.EffectiveRateMultiplier == nil {
+		if resolvedCostSource != model.UpstreamSourceAutoPriorityCostSourceEmpiricalProbe && group.EffectiveRateMultiplier == nil {
 			discoveryStatus = model.UpstreamMappingDiscoveryStatusInvalid
 			invalidCount++
 		}
@@ -1367,6 +1385,7 @@ func discoveredGroupsToMappings(sourceID int, groups []UpstreamGroup, now int64,
 			UpstreamStatus:           strings.TrimSpace(group.Status),
 			UpstreamRateMultiplier:   group.RateMultiplier,
 			EffectiveRateMultiplier:  group.EffectiveRateMultiplier,
+			AutoPriorityCostSource:   autoPriorityCostSource,
 			LastDiscoveredAt:         now,
 		}
 		resolution := resolveUpstreamSourceRule(config, &mapping)
@@ -1563,6 +1582,7 @@ func buildUpstreamSourceMappingResponse(mapping model.UpstreamSourceChannelMappi
 		UpstreamStatus:                  mapping.UpstreamStatus,
 		UpstreamRateMultiplier:          mapping.UpstreamRateMultiplier,
 		EffectiveRateMultiplier:         mapping.EffectiveRateMultiplier,
+		AutoPriorityCostSource:          normalizedUpstreamSourceAutoPriorityCostSource(mapping.AutoPriorityCostSource),
 		HasUpstreamKey:                  mapping.UpstreamKeyID != "",
 		LocalChannelID:                  mapping.LocalChannelID,
 		SyncStatus:                      mapping.SyncStatus,

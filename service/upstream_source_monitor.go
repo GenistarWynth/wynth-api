@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"gorm.io/gorm"
 )
 
 const (
@@ -90,7 +91,17 @@ func (r UpstreamSourceMonitorRunner) RunDue(ctx context.Context, now int64) []Up
 				if batchCtx.Err() != nil {
 					return
 				}
-				result, ran := r.runSource(batchCtx, source, now)
+				result, ran := func() (result UpstreamSourceMonitorResult, ran bool) {
+					result.SourceID = source.Id
+					defer func() {
+						if recovered := recover(); recovered != nil {
+							result.Status = model.UpstreamSourceScanStatusFailed
+							result.Error = SanitizeUpstreamSourceError(fmt.Errorf("monitor worker panic: %v", recovered))
+							ran = true
+						}
+					}()
+					return r.runSource(batchCtx, source, now)
+				}()
 				if ran {
 					results <- result
 				}
@@ -124,47 +135,66 @@ sendLoop:
 func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model.UpstreamSource, scheduledAt int64) (result UpstreamSourceMonitorResult, ran bool) {
 	result.SourceID = source.Id
 	token := r.newToken()
-	claimed, err := model.ClaimUpstreamSourceMonitor(source.Id, token, scheduledAt, upstreamSourceMonitorStaleAfterSeconds)
+	claimedSource, err := model.ClaimUpstreamSourceMonitorWithIdentity(source.Id, token, scheduledAt, upstreamSourceMonitorStaleAfterSeconds)
 	if err != nil {
 		result.Status = model.UpstreamSourceScanStatusFailed
 		result.Error = SanitizeUpstreamSourceError(err)
 		return result, true
 	}
-	if !claimed {
+	if claimedSource == nil {
 		return result, false
 	}
+	source = *claimedSource
+	authRevision := source.AuthRevision
 	ran = true
-	scan, err := model.CreateUpstreamSourceScan(source.Id, model.UpstreamSourceScanTypeMonitor, scheduledAt)
-	if err != nil {
-		result.Status = model.UpstreamSourceScanStatusFailed
-		result.Error = SanitizeUpstreamSourceError(err)
-		_ = model.ReleaseUpstreamSourceMonitor(source.Id, token, r.now())
-		return result, true
-	}
-	result.ScanID = scan.Id
 	result.Status = model.UpstreamSourceScanStatusFailed
+	var scan *model.UpstreamSourceScan
 	scanBaseline := false
+	scheduleNext := true
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.Status = model.UpstreamSourceScanStatusFailed
 			result.Error = SanitizeUpstreamSourceError(fmt.Errorf("monitor collector panic: %v", recovered))
+			if scan == nil {
+				var interrupted model.UpstreamSourceScan
+				lookup := model.DB.
+					Where(
+						"source_id = ? AND scan_type = ? AND status = ? AND started_at = ?",
+						source.Id,
+						model.UpstreamSourceScanTypeMonitor,
+						model.UpstreamSourceScanStatusRunning,
+						scheduledAt,
+					).
+					Order("id DESC").
+					First(&interrupted)
+				if lookup.Error == nil {
+					scan = &interrupted
+					result.ScanID = interrupted.Id
+				} else if !errors.Is(lookup.Error, gorm.ErrRecordNotFound) {
+					logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: recover source_id=%d scan lookup failed: %s", source.Id, SanitizeUpstreamSourceError(lookup.Error)))
+				}
+			}
 		}
 		finishedAt := r.now()
-		if finishErr := model.FinishUpstreamSourceScanTx(model.DB, scan.Id, result.Status, scanBaseline, finishedAt, result.Error); finishErr != nil {
-			logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: finalize source_id=%d scan_id=%d failed: %s", source.Id, scan.Id, SanitizeUpstreamSourceError(finishErr)))
+		if scan != nil {
+			if finishErr := model.FinishUpstreamSourceScanTx(model.DB, scan.Id, result.Status, scanBaseline, finishedAt, result.Error); finishErr != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: finalize source_id=%d scan_id=%d failed: %s", source.Id, scan.Id, SanitizeUpstreamSourceError(finishErr)))
+			}
 		}
-		if releaseErr := model.ReleaseUpstreamSourceMonitor(source.Id, token, finishedAt); releaseErr != nil {
+		if releaseErr := model.ReleaseUpstreamSourceMonitorWithIdentity(source.Id, token, authRevision, finishedAt, scheduleNext); releaseErr != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: release source_id=%d failed: %s", source.Id, SanitizeUpstreamSourceError(releaseErr)))
 		}
 	}()
 
-	sourceCtx, cancel := context.WithTimeout(ctx, r.sourceTimeout())
-	defer cancel()
-	if _, err := loadUpstreamSourceRuntimeAuth(&source); err != nil {
+	scan, err = model.CreateUpstreamSourceScan(source.Id, model.UpstreamSourceScanTypeMonitor, scheduledAt)
+	if err != nil {
 		result.Error = SanitizeUpstreamSourceError(err)
 		return result, true
 	}
-	originalAuth := source.AuthConfig
+	result.ScanID = scan.Id
+
+	sourceCtx, cancel := context.WithTimeout(ctx, r.sourceTimeout())
+	defer cancel()
 	adapter, err := r.adapterFactory()(source.Type)
 	if err != nil {
 		result.Error = SanitizeUpstreamSourceError(err)
@@ -176,9 +206,42 @@ func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model
 	}
 
 	collectors := monitorCollectorsForAdapter(adapter)
+	if _, err := loadUpstreamSourceRuntimeAuth(&source); err != nil {
+		result.Error = SanitizeUpstreamSourceError(err)
+		if errors.Is(err, ErrUpstreamSourceCredentialDecryption) {
+			scheduleNext = false
+			recordUpstreamSourceMonitorAuthFailure(&source, err, r.now(), token, authRevision)
+			result.Failed = 1
+			if len(collectors) > 1 {
+				result.Skipped = len(collectors) - 1
+			}
+			for index, collector := range collectors {
+				outcome := model.UpstreamSourceCapabilityOutcome{
+					SourceID:   source.Id,
+					ScanID:     scan.Id,
+					Capability: collector.name,
+					StartedAt:  r.now(),
+					FinishedAt: r.now(),
+				}
+				if index == 0 {
+					outcome.Status = model.UpstreamSourceCapabilityStatusFailed
+					outcome.ErrorSummary = result.Error
+				} else {
+					outcome.Status = model.UpstreamSourceCapabilityStatusSkipped
+					outcome.ErrorSummary = "skipped after authentication failure"
+				}
+				if createErr := model.DB.Create(&outcome).Error; createErr != nil {
+					logger.LogWarn(ctx, fmt.Sprintf("upstream source monitor: persist decryption outcome source_id=%d scan_id=%d failed: %s", source.Id, scan.Id, SanitizeUpstreamSourceError(createErr)))
+				}
+			}
+		}
+		return result, true
+	}
+	originalAuth := source.AuthConfig
 	errorsFound := make([]string, 0)
 	authUnsafe := false
 	contextUnsafe := false
+	credentialDecryptionFailed := false
 	for _, collector := range collectors {
 		startedAt := r.now()
 		outcome := model.UpstreamSourceCapabilityOutcome{
@@ -238,7 +301,11 @@ func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model
 			_, authFailure := classifyUpstreamSourceAuthError(collectErr)
 			if authFailure {
 				authUnsafe = true
-				recordUpstreamSourceAuthFailure(&source, collectErr, r.now())
+				recordUpstreamSourceMonitorAuthFailure(&source, collectErr, r.now(), token, authRevision)
+			}
+			if errors.Is(collectErr, ErrUpstreamSourceCredentialDecryption) {
+				credentialDecryptionFailed = true
+				scheduleNext = false
 			}
 			if errors.Is(collectErr, context.Canceled) || errors.Is(collectErr, context.DeadlineExceeded) {
 				contextUnsafe = true
@@ -260,9 +327,11 @@ func (r UpstreamSourceMonitorRunner) runSource(ctx context.Context, source model
 	// successful-validation write overwrite the failed auth health recorded
 	// above.
 	if !authUnsafe {
-		persistUpstreamSourceAuthState(&source, originalAuth, r.now(), result.Collected > 0)
+		persistUpstreamSourceMonitorAuthState(&source, originalAuth, r.now(), result.Collected > 0, token, authRevision)
 	}
-	if len(errorsFound) > 0 {
+	if credentialDecryptionFailed {
+		result.Error = ErrUpstreamSourceCredentialDecryption.Error()
+	} else if len(errorsFound) > 0 {
 		result.Error = SanitizeUpstreamSourceError(errors.New(strings.Join(errorsFound, "; ")))
 	}
 	switch {
@@ -345,6 +414,7 @@ func UpdateUpstreamSourceMonitorSettings(sourceID int, enabled bool, intervalMin
 		"monitor_enabled":          enabled,
 		"monitor_interval_minutes": intervalMinutes,
 		"next_monitor_at":          nextMonitorAt,
+		"monitor_parked_reason":    "",
 		"updated_time":             now,
 	}).Error; err != nil {
 		return nil, err

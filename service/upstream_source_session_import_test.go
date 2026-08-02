@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +65,276 @@ func TestApplyImportedSessionNewAPIAccessToken(t *testing.T) {
 	assert.Equal(t, 9, persistedCfg.UserID)
 }
 
+func TestApplyImportedSessionAdvancesAuthRevisionAndInvalidatesStaleMonitor(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/user/self/groups", r.URL.Path)
+		assert.Equal(t, "imported-session", r.Header.Get("Authorization"))
+		assert.Equal(t, "19", r.Header.Get("New-Api-User"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	const startingRevision int64 = 7
+	source := &model.UpstreamSource{
+		Name:                   "import-during-monitor",
+		Type:                   model.UpstreamSourceTypeNewAPI,
+		Status:                 model.UpstreamSourceStatusEnabled,
+		BaseURL:                server.URL,
+		AdminAPIBasePath:       "/api",
+		AuthConfig:             `{"email":"owner@example.com","password":"credential"}`,
+		AuthRevision:           startingRevision,
+		MonitorEnabled:         true,
+		MonitorIntervalMinutes: 10,
+		NextMonitorAt:          1000,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"monitor-session","user_id":3,"session_source":"login"}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
+
+	monitorStarted := make(chan struct{}, 1)
+	releaseMonitor := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseMonitor) }) })
+	runner := UpstreamSourceMonitorRunner{
+		AdapterFactory: func(string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamBalanceAdapter{collect: func(context.Context, *model.UpstreamSource) (UpstreamBalanceSnapshot, error) {
+				monitorStarted <- struct{}{}
+				<-releaseMonitor
+				return UpstreamBalanceSnapshot{Available: 1, Currency: "USD"}, nil
+			}}, nil
+		},
+		Now: func() int64 { return 2000 },
+	}
+	monitorDone := make(chan []UpstreamSourceMonitorResult, 1)
+	go func() { monitorDone <- runner.RunDue(context.Background(), 1000) }()
+	<-monitorStarted
+
+	var claimed model.UpstreamSource
+	require.NoError(t, model.DB.First(&claimed, source.Id).Error)
+	require.NotEmpty(t, claimed.CurrentMonitorToken)
+	claimToken := claimed.CurrentMonitorToken
+
+	importStartedAt := common.GetTimestamp()
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "imported-session",
+		UserID:      19,
+	})
+	importFinishedAt := common.GetTimestamp()
+	require.NoError(t, err)
+
+	var imported model.UpstreamSource
+	require.NoError(t, model.DB.First(&imported, source.Id).Error)
+	assert.Equal(t, startingRevision+1, imported.AuthRevision)
+	assert.Equal(t, claimToken, imported.CurrentMonitorToken, "manual import must leave an active monitor claim owned until normal release")
+	assert.GreaterOrEqual(t, imported.NextMonitorAt, importStartedAt)
+	assert.LessOrEqual(t, imported.NextMonitorAt, importFinishedAt)
+	_, err = loadUpstreamSourceRuntimeAuth(&imported)
+	require.NoError(t, err)
+	importedAuth, err := parseNewAPIAuthConfig(&imported)
+	require.NoError(t, err)
+	assert.Equal(t, "imported-session", importedAuth.AccessToken)
+	assert.Equal(t, 19, importedAuth.UserID)
+
+	releaseOnce.Do(func() { close(releaseMonitor) })
+	results := <-monitorDone
+	require.Len(t, results, 1)
+
+	var afterMonitor model.UpstreamSource
+	require.NoError(t, model.DB.First(&afterMonitor, source.Id).Error)
+	assert.Equal(t, startingRevision+1, afterMonitor.AuthRevision)
+	assert.Empty(t, afterMonitor.CurrentMonitorToken)
+	assert.Equal(t, imported.NextMonitorAt, afterMonitor.NextMonitorAt, "the stale monitor release must preserve the import requeue")
+	_, err = loadUpstreamSourceRuntimeAuth(&afterMonitor)
+	require.NoError(t, err)
+	afterMonitorAuth, err := parseNewAPIAuthConfig(&afterMonitor)
+	require.NoError(t, err)
+	assert.Equal(t, "imported-session", afterMonitorAuth.AccessToken, "the stale monitor must not overwrite the imported session")
+	assert.Equal(t, 19, afterMonitorAuth.UserID)
+}
+
+func TestApplyImportedSessionRequeuesParkedEnabledMonitor(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	const startingRevision int64 = 11
+	source := &model.UpstreamSource{
+		Name:                   "parked-import",
+		Type:                   model.UpstreamSourceTypeNewAPI,
+		Status:                 model.UpstreamSourceStatusEnabled,
+		BaseURL:                server.URL,
+		AdminAPIBasePath:       "/api",
+		AuthConfig:             `{"email":"owner@example.com","password":"credential"}`,
+		AuthRevision:           startingRevision,
+		MonitorEnabled:         true,
+		MonitorIntervalMinutes: 10,
+		NextMonitorAt:          model.UpstreamSourceMonitorParkedSchedule,
+		MonitorParkedReason:    model.UpstreamSourceMonitorParkedReasonCredentialDecryption,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+
+	startedAt := common.GetTimestamp()
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "imported-session",
+		UserID:      23,
+	})
+	finishedAt := common.GetTimestamp()
+	require.NoError(t, err)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, startingRevision+1, reloaded.AuthRevision)
+	assert.GreaterOrEqual(t, reloaded.NextMonitorAt, startedAt)
+	assert.LessOrEqual(t, reloaded.NextMonitorAt, finishedAt)
+	assert.Empty(t, reloaded.CurrentMonitorToken)
+	assert.Empty(t, reloaded.MonitorParkedReason)
+}
+
+func TestApplyImportedSessionRejectsConcurrentCredentialRepair(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	validationStarted := make(chan struct{}, 1)
+	releaseValidation := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		validationStarted <- struct{}{}
+		<-releaseValidation
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseValidation) }) })
+
+	const startingRevision int64 = 17
+	source := &model.UpstreamSource{
+		Name:             "import-repair-race",
+		Type:             model.UpstreamSourceTypeNewAPI,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"old@example.com","password":"old-credential"}`,
+		AuthRevision:     startingRevision,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"old-session","user_id":5,"session_source":"login"}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
+
+	importDone := make(chan error, 1)
+	go func() {
+		importDone <- ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+			AccessToken: "stale-imported-session",
+			UserID:      29,
+		})
+	}()
+	<-validationStarted
+
+	repairedConfig, err := WriteUpstreamSourceAuthConfig(`{"email":"repaired@example.com","password":"replacement"}`)
+	require.NoError(t, err)
+	repaired, err := UpdateUpstreamSourceCredentials(source.Id, repairedConfig, 4000)
+	require.NoError(t, err)
+	assert.Equal(t, startingRevision+1, repaired.AuthRevision)
+
+	releaseOnce.Do(func() { close(releaseValidation) })
+	err = <-importDone
+	require.EqualError(t, err, "upstream source authentication state changed during session import")
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, startingRevision+1, reloaded.AuthRevision)
+	plaintext, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	var persisted newAPIAuthConfig
+	require.NoError(t, common.UnmarshalJsonStr(plaintext, &persisted))
+	assert.Equal(t, "repaired@example.com", persisted.Email)
+	assert.Equal(t, "replacement", persisted.Password)
+	assert.Empty(t, persisted.AccessToken)
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+}
+
+func TestApplyImportedSessionValidationFailureDoesNotPoisonConcurrentRepair(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+
+	validationStarted := make(chan struct{}, 1)
+	releaseValidation := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		validationStarted <- struct{}{}
+		<-releaseValidation
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"success":false,"message":"invalid access_token=stale-validation-secret"}`))
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseValidation) }) })
+
+	const startingRevision int64 = 31
+	source := &model.UpstreamSource{
+		Name:             "failed-import-repair-race",
+		Type:             model.UpstreamSourceTypeNewAPI,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       `{"email":"old@example.com","password":"old-credential"}`,
+		AuthRevision:     startingRevision,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"old-session","user_id":7,"session_source":"login"}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
+
+	importDone := make(chan error, 1)
+	go func() {
+		importDone <- ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+			AccessToken: "rejected-imported-session",
+			UserID:      37,
+		})
+	}()
+	<-validationStarted
+
+	repairedConfig, err := WriteUpstreamSourceAuthConfig(`{"email":"repaired@example.com","password":"replacement"}`)
+	require.NoError(t, err)
+	_, err = UpdateUpstreamSourceCredentials(source.Id, repairedConfig, 5000)
+	require.NoError(t, err)
+
+	releaseOnce.Do(func() { close(releaseValidation) })
+	err = <-importDone
+	require.EqualError(t, err, "upstream source authentication state changed during session import")
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, startingRevision+1, reloaded.AuthRevision)
+	plaintext, err := ReadUpstreamSourceAuthConfig(reloaded.AuthConfig)
+	require.NoError(t, err)
+	var persisted newAPIAuthConfig
+	require.NoError(t, common.UnmarshalJsonStr(plaintext, &persisted))
+	assert.Equal(t, "repaired@example.com", persisted.Email)
+	assert.Equal(t, "replacement", persisted.Password)
+	assert.Empty(t, persisted.AccessToken)
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	assert.Nil(t, session, "the stale validation failure must not recreate auth health cleared by credential repair")
+}
+
 func TestApplyImportedSessionReplacesExistingDedicatedSession(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
 	withSub2APIFetchSetting(t, true)
@@ -103,6 +375,129 @@ func TestApplyImportedSessionReplacesExistingDedicatedSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "replacement-token", auth.AccessToken)
 	assert.Equal(t, 17, auth.UserID)
+}
+
+func TestApplyImportedSessionReplacesCorruptDedicatedSessionAndClearsPark(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+	oldStable := common.CryptoSecretStable
+	oldSecret := common.CryptoSecret
+	common.CryptoSecretStable = true
+	common.CryptoSecret = "upstream-source-import-corrupt-session-test"
+	t.Cleanup(func() {
+		common.CryptoSecretStable = oldStable
+		common.CryptoSecret = oldSecret
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "replacement-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "43", r.Header.Get("New-Api-User"))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	const startingRevision int64 = 41
+	source := &model.UpstreamSource{
+		Name:                   "corrupt-dedicated-session",
+		Type:                   model.UpstreamSourceTypeNewAPI,
+		Status:                 model.UpstreamSourceStatusEnabled,
+		BaseURL:                server.URL,
+		AdminAPIBasePath:       "/api",
+		AuthConfig:             `{"email":"owner@example.com","password":"credential"}`,
+		AuthRevision:           startingRevision,
+		MonitorEnabled:         true,
+		MonitorIntervalMinutes: 10,
+		NextMonitorAt:          model.UpstreamSourceMonitorParkedSchedule,
+		MonitorParkedReason:    model.UpstreamSourceMonitorParkedReasonCredentialDecryption,
+		CurrentMonitorToken:    "active-monitor",
+		MonitorStartedAt:       1000,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: corruptedUpstreamSourceSecretEnvelope,
+		AuthStatus:    model.UpstreamSourceAuthStatusFailed,
+	}))
+
+	startedAt := common.GetTimestamp()
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "replacement-token",
+		UserID:      43,
+	})
+	finishedAt := common.GetTimestamp()
+	require.NoError(t, err)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, startingRevision+1, reloaded.AuthRevision)
+	assert.GreaterOrEqual(t, reloaded.NextMonitorAt, startedAt)
+	assert.LessOrEqual(t, reloaded.NextMonitorAt, finishedAt)
+	assert.Equal(t, "active-monitor", reloaded.CurrentMonitorToken)
+	assert.Empty(t, reloaded.MonitorParkedReason)
+	_, err = loadUpstreamSourceRuntimeAuth(&reloaded)
+	require.NoError(t, err)
+	auth, err := parseNewAPIAuthConfig(&reloaded)
+	require.NoError(t, err)
+	assert.Equal(t, "owner@example.com", auth.Email)
+	assert.Equal(t, "credential", auth.Password)
+	assert.Equal(t, "replacement-token", auth.AccessToken)
+	assert.Equal(t, 43, auth.UserID)
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.NotEqual(t, corruptedUpstreamSourceSecretEnvelope, session.SessionConfig)
+	_, err = ReadUpstreamSourceAuthConfig(session.SessionConfig)
+	require.NoError(t, err)
+}
+
+func TestApplyImportedSessionRejectsCorruptCredentialConfigWithStableSentinel(t *testing.T) {
+	setupUpstreamSourceServiceTestDB(t)
+	withSub2APIFetchSetting(t, true)
+	oldStable := common.CryptoSecretStable
+	oldSecret := common.CryptoSecret
+	common.CryptoSecretStable = true
+	common.CryptoSecret = "upstream-source-import-corrupt-credential-test"
+	t.Cleanup(func() {
+		common.CryptoSecretStable = oldStable
+		common.CryptoSecret = oldSecret
+	})
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	const startingRevision int64 = 47
+	source := &model.UpstreamSource{
+		Name:             "corrupt-credentials",
+		Type:             model.UpstreamSourceTypeNewAPI,
+		Status:           model.UpstreamSourceStatusEnabled,
+		BaseURL:          server.URL,
+		AdminAPIBasePath: "/api",
+		AuthConfig:       corruptedUpstreamSourceSecretEnvelope,
+		AuthRevision:     startingRevision,
+	}
+	require.NoError(t, model.DB.Create(source).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: `{"access_token":"old-session","user_id":5}`,
+		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+	}))
+
+	err := ApplyUpstreamSourceImportedSession(context.Background(), source, dto.UpstreamSourceSessionImportRequest{
+		AccessToken: "replacement-token",
+		UserID:      53,
+	})
+
+	require.EqualError(t, err, "upstream source credential decryption failed")
+	assert.Zero(t, requests.Load())
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, startingRevision, reloaded.AuthRevision)
+	assert.Equal(t, corruptedUpstreamSourceSecretEnvelope, reloaded.AuthConfig)
 }
 
 func TestApplyImportedSessionNewAPICookieExchange(t *testing.T) {

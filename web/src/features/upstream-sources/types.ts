@@ -48,6 +48,25 @@ export type UpstreamMappingSyncStatus =
   | 'skipped'
   | 'needs_attention'
 
+export const UPSTREAM_SOURCE_AUTO_PRIORITY_COST_ADVERTISED =
+  'advertised' as const
+export const UPSTREAM_SOURCE_AUTO_PRIORITY_COST_EMPIRICAL_PROBE =
+  'empirical_probe' as const
+
+export type UpstreamSourceAutoPriorityCostSource =
+  | typeof UPSTREAM_SOURCE_AUTO_PRIORITY_COST_ADVERTISED
+  | typeof UPSTREAM_SOURCE_AUTO_PRIORITY_COST_EMPIRICAL_PROBE
+
+export type UpstreamSourceEmpiricalBillingStatus =
+  | 'disabled'
+  | 'missing'
+  | 'ready'
+  | 'temporary_failed'
+  | 'stale'
+  | 'unsupported'
+  | 'identity_mismatch'
+  | 'malformed'
+
 export type UpstreamSourceModelStrategy = 'all_upstream' | 'fixed'
 
 export type CodexImageGenerationBridgePolicy = 'follow' | 'enabled' | 'disabled'
@@ -93,6 +112,7 @@ export type UpstreamSource = {
   monitor_enabled: boolean
   monitor_interval_minutes: number
   next_monitor_at: number
+  monitor_parked_reason: string
   last_monitor_time: number
   last_discovery_time: number
   last_discovery_status: UpstreamDiscoveryStatus | ''
@@ -205,6 +225,7 @@ export type UpstreamSourceMapping = {
   upstream_status: string
   upstream_rate_multiplier?: number | null
   effective_rate_multiplier?: number | null
+  auto_priority_cost_source: UpstreamSourceAutoPriorityCostSource
   upstream_key_id: string
   has_upstream_key: boolean
   local_channel_id: number
@@ -230,6 +251,42 @@ export type UpstreamSourceMapping = {
   last_error: string
   last_discovered_at: number
   last_synced_at: number
+}
+
+export type UpstreamSourceBillingProbe = {
+  source_id: number
+  mapping_id: number
+  enabled: boolean
+  interval_minutes: number
+  status: 'idle' | 'ok' | 'failed' | 'unsupported'
+  unsupported: boolean
+  auto_priority_cost_source: UpstreamSourceAutoPriorityCostSource
+  empirical_status: UpstreamSourceEmpiricalBillingStatus
+  advertised_effective_rate_multiplier?: number | null
+  empirical_nominal_rate_multiplier?: number | null
+  group_rate_multiplier?: number | null
+  user_rate_multiplier?: number | null
+  resolved_rate_multiplier?: number | null
+  peak_rate_enabled?: boolean | null
+  peak_start?: string
+  peak_end?: string
+  peak_rate_multiplier?: number | null
+  applied_peak_multiplier?: number | null
+  effective_rate_multiplier?: number | null
+  timezone?: string
+  observed_at?: string
+  last_attempt_at?: number
+  received_at?: number
+  fresh_until?: number
+  has_last_good: boolean
+  fresh: boolean
+  stale: boolean
+}
+
+export type UpstreamSourceBillingProbeUpdateRequest = {
+  enabled: boolean
+  interval_minutes: number
+  auto_priority_cost_source: UpstreamSourceAutoPriorityCostSource
 }
 
 export type UpstreamSourceFormValues = {

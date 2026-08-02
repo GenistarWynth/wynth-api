@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -149,7 +150,7 @@ func TestPersistChannelAutoPriorityGroupPersistsRankReconciledRows(t *testing.T)
 		},
 	}
 
-	reason, err := persistChannelAutoPriorityGroup(
+	reason, _, err := persistChannelAutoPriorityGroup(
 		context.Background(),
 		candidates,
 		scores,
@@ -610,6 +611,127 @@ func TestRunDueChannelAutoPriorityUsesMappingRateSourceNotGeneratedName(t *testi
 	assert.Equal(t, 0.05, *reloadedMapping.EffectiveRateMultiplier)
 }
 
+func createEmpiricalAutoPriorityProbe(
+	t *testing.T,
+	source model.UpstreamSource,
+	mapping model.UpstreamSourceChannelMapping,
+	channel model.Channel,
+	now int64,
+	resolvedRate float64,
+	configure func(*model.UpstreamSourceBillingProbe),
+) (model.UpstreamSourceChannelMapping, model.Channel, model.UpstreamSourceBillingProbe) {
+	t.Helper()
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).
+		Where("id = ?", mapping.Id).
+		Updates(map[string]any{
+			"auto_priority_cost_source": model.UpstreamSourceAutoPriorityCostSourceEmpiricalProbe,
+			"effective_rate_multiplier": nil,
+			"upstream_key_id":           "empirical-key-id",
+		}).Error)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", channel.Id).
+		Update("base_url", source.RelayBaseURL).Error)
+	require.NoError(t, model.DB.First(&mapping, mapping.Id).Error)
+	require.NoError(t, model.DB.First(&channel, channel.Id).Error)
+	groupRate := resolvedRate
+	effectiveDiagnostic := resolvedRate
+	peakEnabled := false
+	probe := model.UpstreamSourceBillingProbe{
+		SourceID:                source.Id,
+		MappingID:               mapping.Id,
+		Enabled:                 true,
+		IntervalMinutes:         5,
+		Status:                  model.UpstreamSourceBillingProbeStatusOK,
+		GroupRateMultiplier:     &groupRate,
+		ResolvedRateMultiplier:  &resolvedRate,
+		PeakRateEnabled:         &peakEnabled,
+		EffectiveRateMultiplier: &effectiveDiagnostic,
+		ObservedAt:              time.Unix(now-60, 0).UTC().Format(time.RFC3339Nano),
+		ReceivedAt:              now - 60,
+		FreshUntil:              now + 3600,
+		LastGoodGeneration:      4,
+	}
+	if configure != nil {
+		configure(&probe)
+	}
+	identity, identityErr := upstreamSourceBillingProbeIdentityFromRows(&probe, &source, &mapping, &channel)
+	require.Nil(t, identityErr)
+	probe.LastGoodIdentityFingerprint = identity.Fingerprint
+	require.NoError(t, model.DB.Create(&probe).Error)
+	return mapping, channel, probe
+}
+
+func TestRunDueChannelAutoPriorityUsesSelectedEmpiricalCostWithoutAdvertisedRate(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_327_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "empirical", 100)
+	manual := createAutoPriorityTestChannel(t, "manual peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.1,
+	})
+	resolvedRate := 0.05
+	mapping, generated, _ = createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now, resolvedRate, nil)
+	for _, channel := range []model.Channel{generated, manual} {
+		createAutoPriorityTestUsageLog(t, channel.Id, now-60)
+		createAutoPriorityTestMonitorLog(t, channel.Id, now-60)
+	}
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 2)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, generated.Id).Error)
+	snapshot := reloaded.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, snapshot)
+	assert.Equal(t, resolvedRate, snapshot.NominalRateMultiplier)
+	assert.Equal(t, resolvedRate, snapshot.EffectiveRateMultiplier)
+	assert.Equal(t, resolvedRate, snapshot.CohortFloor)
+	assert.Equal(t, 0.1, snapshot.CohortCeil)
+	assert.Equal(t, time.Unix(now, 0).Unix(), snapshot.ComputedAt)
+}
+
+func TestRunChannelAutoPriorityGroupsForSourceResolvesSelectedEmpiricalCostBeforeAdvertisedRate(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_328_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 60,
+		"auto_priority_window_hours":     24,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "empirical-force", 100)
+	manual := createAutoPriorityTestChannel(t, "manual force peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 60,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.1,
+	})
+	resolvedRate := 0.05
+	_, generated, _ = createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now, resolvedRate, nil)
+	for _, channel := range []model.Channel{generated, manual} {
+		createAutoPriorityTestUsageLog(t, channel.Id, now-60)
+		createAutoPriorityTestMonitorLog(t, channel.Id, now-60)
+	}
+
+	result, err := RunChannelAutoPriorityGroupsForSource(context.Background(), source.Id, now)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 2)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, generated.Id).Error)
+	snapshot := reloaded.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, snapshot)
+	assert.Equal(t, resolvedRate, snapshot.NominalRateMultiplier)
+	assert.Equal(t, resolvedRate, snapshot.CohortFloor)
+	assert.Equal(t, 0.1, snapshot.CohortCeil)
+}
+
 func TestRunDueChannelAutoPriorityUsesConfiguredRateSourceForManualChannel(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_330_000)
@@ -664,6 +786,261 @@ func TestRunDueChannelAutoPriorityRejectsInvalidGeneratedRateForWholeGroup(t *te
 		assert.Equal(t, int64(100), reloaded.GetPriority())
 		assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
 	}
+}
+
+func TestRunDueChannelAutoPriorityFailsClosedWhenMappingOwnerHasZeroGeneratedSettings(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_352_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+	})
+	generated, _ := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "zero-generated-settings", 100)
+	settings := generated.GetOtherSettings()
+	settings.GeneratedByUpstreamSourceID = 0
+	settings.GeneratedByUpstreamMappingID = 0
+	generated.SetOtherSettings(settings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", generated.Id).
+		Update("settings", generated.OtherSettings).Error)
+	manual := createAutoPriorityTestChannel(t, "zero generated settings manual peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.1,
+	})
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 2)
+	for _, result := range results {
+		assert.False(t, result.Applied)
+		assert.Equal(t, "generated_channel_metadata_mismatch", result.Reason)
+	}
+	for _, channel := range []model.Channel{generated, manual} {
+		var persisted model.Channel
+		require.NoError(t, model.DB.First(&persisted, channel.Id).Error)
+		assert.Equal(t, int64(100), persisted.GetPriority())
+		assert.Zero(t, persisted.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+		assert.Nil(t, persisted.GetOtherSettings().ChannelAutoPriorityLastScore)
+		var ability model.Ability
+		require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		require.NotNil(t, ability.Priority)
+		assert.Equal(t, int64(100), *ability.Priority)
+	}
+}
+
+func TestRunDueChannelAutoPriorityRejectsUnsafeEmpiricalStateForWholeExactGroup(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(t *testing.T, now int64, channel model.Channel, probe model.UpstreamSourceBillingProbe)
+		wantReason string
+	}{
+		{
+			name: "disabled",
+			mutate: func(t *testing.T, _ int64, _ model.Channel, probe model.UpstreamSourceBillingProbe) {
+				require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+					Where("mapping_id = ?", probe.MappingID).Update("enabled", false).Error)
+			},
+			wantReason: "empirical_probe_disabled",
+		},
+		{
+			name: "missing",
+			mutate: func(t *testing.T, _ int64, _ model.Channel, probe model.UpstreamSourceBillingProbe) {
+				require.NoError(t, model.DB.Where("mapping_id = ?", probe.MappingID).
+					Delete(&model.UpstreamSourceBillingProbe{}).Error)
+			},
+			wantReason: "empirical_probe_missing",
+		},
+		{
+			name: "stale",
+			mutate: func(t *testing.T, now int64, _ model.Channel, probe model.UpstreamSourceBillingProbe) {
+				require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+					Where("mapping_id = ?", probe.MappingID).Update("fresh_until", now).Error)
+			},
+			wantReason: "empirical_probe_stale",
+		},
+		{
+			name: "unsupported",
+			mutate: func(t *testing.T, _ int64, _ model.Channel, probe model.UpstreamSourceBillingProbe) {
+				require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+					Where("mapping_id = ?", probe.MappingID).
+					Update("status", model.UpstreamSourceBillingProbeStatusUnsupported).Error)
+			},
+			wantReason: "empirical_probe_unsupported",
+		},
+		{
+			name: "malformed",
+			mutate: func(t *testing.T, _ int64, _ model.Channel, probe model.UpstreamSourceBillingProbe) {
+				require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+					Where("mapping_id = ?", probe.MappingID).Update("effective_rate_multiplier", nil).Error)
+			},
+			wantReason: "empirical_probe_malformed",
+		},
+		{
+			name: "identity mismatch",
+			mutate: func(t *testing.T, _ int64, channel model.Channel, _ model.UpstreamSourceBillingProbe) {
+				require.NoError(t, model.DB.Model(&model.Channel{}).
+					Where("id = ?", channel.Id).Update("key", "sk-identity-changed").Error)
+			},
+			wantReason: "empirical_probe_identity_mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setupUpstreamSourceAutoPriorityTestDB(t)
+			now := int64(10_355_000)
+			source := createSyncTestSource(t, map[string]any{
+				"auto_priority_enabled":          true,
+				"auto_priority_interval_minutes": 0,
+			})
+			generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "unsafe-empirical", 100)
+			manual := createAutoPriorityTestChannel(t, "unsafe empirical manual peer", 100, dto.ChannelOtherSettings{
+				ChannelAutoPriorityEnabled:         true,
+				ChannelAutoPriorityIntervalMinutes: 0,
+				ChannelAutoPriorityWindowHours:     24,
+				ChannelAutoPriorityRateMultiplier:  0.1,
+			})
+			_, generated, probe := createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now, 0.05, nil)
+			tt.mutate(t, now, generated, probe)
+
+			results := RunDueChannelAutoPriority(context.Background(), now)
+
+			require.Len(t, results, 2)
+			for _, result := range results {
+				assert.False(t, result.Applied)
+				assert.Equal(t, tt.wantReason, result.Reason)
+			}
+			for _, channel := range []model.Channel{generated, manual} {
+				var reloaded model.Channel
+				require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+				assert.Equal(t, int64(100), reloaded.GetPriority())
+				assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+				assert.Nil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+			}
+		})
+	}
+}
+
+func TestRunDueChannelAutoPriorityRejectsUnsafeEmpiricalStateBeforeManualDisabledSweep(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_357_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "unsafe-before-manual-sweep", 100)
+	_, _, probe := createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now, 0.05, nil)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+		Where("mapping_id = ?", probe.MappingID).
+		Update("enabled", false).Error)
+
+	manuallyDisabled := createAutoPriorityTestChannel(t, "unsafe empirical manual disabled peer", 813, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:   true,
+		ChannelAutoPriorityLastRunAt: now - 60,
+		ChannelAutoPriorityLastScore: &dto.ChannelAutoPriorityScore{
+			ComputedAt:  now - 60,
+			FinalScore:  81.3,
+			NewPriority: 813,
+		},
+	})
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", manuallyDisabled.Id).
+		Update("status", common.ChannelStatusManuallyDisabled).Error)
+
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 2)
+	for _, result := range results {
+		assert.False(t, result.Applied)
+		assert.Equal(t, "empirical_probe_disabled", result.Reason)
+	}
+	var persisted model.Channel
+	require.NoError(t, model.DB.First(&persisted, manuallyDisabled.Id).Error)
+	assert.Equal(t, int64(813), persisted.GetPriority())
+	persistedSettings := persisted.GetOtherSettings()
+	assert.Equal(t, now-60, persistedSettings.ChannelAutoPriorityLastRunAt)
+	require.NotNil(t, persistedSettings.ChannelAutoPriorityLastScore)
+	assert.Equal(t, int64(813), persistedSettings.ChannelAutoPriorityLastScore.NewPriority)
+	var ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", manuallyDisabled.Id).First(&ability).Error)
+	require.NotNil(t, ability.Priority)
+	assert.Equal(t, int64(813), *ability.Priority)
+}
+
+func TestRunDueChannelAutoPriorityRecomputesEmpiricalPeakAtEachScorerClock(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	observationTime := time.Date(2026, time.August, 1, 12, 0, 0, 0, time.UTC)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "peak-empirical", 100)
+	manual := createAutoPriorityTestChannel(t, "peak empirical manual peer", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:         true,
+		ChannelAutoPriorityIntervalMinutes: 0,
+		ChannelAutoPriorityWindowHours:     24,
+		ChannelAutoPriorityRateMultiplier:  0.2,
+	})
+	_, generated, probe := createEmpiricalAutoPriorityProbe(
+		t,
+		source,
+		mapping,
+		generated,
+		observationTime.Unix(),
+		0.05,
+		func(probe *model.UpstreamSourceBillingProbe) {
+			peakEnabled := true
+			peakFactor := 2.0
+			storedAppliedDiagnostic := 1.0
+			storedEffectiveDiagnostic := 0.05
+			probe.PeakRateEnabled = &peakEnabled
+			probe.PeakStart = "09:00"
+			probe.PeakEnd = "17:00"
+			probe.PeakRateMultiplier = &peakFactor
+			probe.AppliedPeakMultiplier = &storedAppliedDiagnostic
+			probe.EffectiveRateMultiplier = &storedEffectiveDiagnostic
+			probe.Timezone = "America/New_York"
+			probe.FreshUntil = observationTime.Add(24 * time.Hour).Unix()
+		},
+	)
+	for _, channel := range []model.Channel{generated, manual} {
+		createAutoPriorityTestUsageLog(t, channel.Id, observationTime.Add(-time.Minute).Unix())
+		createAutoPriorityTestMonitorLog(t, channel.Id, observationTime.Add(-time.Minute).Unix())
+	}
+
+	tests := []struct {
+		name string
+		now  time.Time
+		want float64
+	}{
+		{name: "pre peak", now: time.Date(2026, time.August, 1, 12, 59, 0, 0, time.UTC), want: 0.05},
+		{name: "in peak", now: time.Date(2026, time.August, 1, 13, 0, 0, 0, time.UTC), want: 0.10},
+		{name: "post peak", now: time.Date(2026, time.August, 1, 21, 0, 0, 0, time.UTC), want: 0.05},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			results, err := RunChannelAutoPriorityGroup(context.Background(), generated.Id, tt.now.Unix())
+			require.NoError(t, err)
+			require.Len(t, results, 2)
+			var reloaded model.Channel
+			require.NoError(t, model.DB.First(&reloaded, generated.Id).Error)
+			snapshot := reloaded.GetOtherSettings().ChannelAutoPriorityLastScore
+			require.NotNil(t, snapshot)
+			assert.InDelta(t, tt.want, snapshot.NominalRateMultiplier, 1e-12)
+			assert.InDelta(t, tt.want, snapshot.CohortFloor, 1e-12)
+			assert.InDelta(t, 0.2, snapshot.CohortCeil, 1e-12)
+		})
+	}
+
+	var stored model.UpstreamSourceBillingProbe
+	require.NoError(t, model.DB.First(&stored, probe.Id).Error)
+	require.NotNil(t, stored.AppliedPeakMultiplier)
+	require.NotNil(t, stored.EffectiveRateMultiplier)
+	assert.Equal(t, 1.0, *stored.AppliedPeakMultiplier)
+	assert.Equal(t, 0.05, *stored.EffectiveRateMultiplier)
 }
 
 func TestRunDueChannelAutoPriorityUsesCurrentUpstreamRuleSwitch(t *testing.T) {
@@ -1680,7 +2057,7 @@ func TestPersistChannelAutoPriorityGroupRollsBackEveryMemberOnConflict(t *testin
 			}
 			tt.mutate(t, second)
 
-			reason, err := persistChannelAutoPriorityGroup(
+			reason, _, err := persistChannelAutoPriorityGroup(
 				context.Background(),
 				candidates,
 				scores,
@@ -1697,6 +2074,121 @@ func TestPersistChannelAutoPriorityGroupRollsBackEveryMemberOnConflict(t *testin
 			assert.Equal(t, int64(100), reloadedFirst.GetPriority())
 			assert.Zero(t, reloadedFirst.GetOtherSettings().ChannelAutoPriorityLastRunAt)
 		})
+	}
+}
+
+func TestPersistChannelAutoPriorityGroupRevalidatesEveryEmpiricalMemberBeforeAnyWrite(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(10_910_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	firstChannel, firstMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "empirical-cas-first", 100)
+	secondChannel, secondMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "empirical-cas-second", 100)
+	firstMapping, firstChannel, firstProbe := createEmpiricalAutoPriorityProbe(
+		t,
+		source,
+		firstMapping,
+		firstChannel,
+		now,
+		0.05,
+		nil,
+	)
+	secondMapping, secondChannel, secondProbe := createEmpiricalAutoPriorityProbe(
+		t,
+		source,
+		secondMapping,
+		secondChannel,
+		now,
+		0.10,
+		nil,
+	)
+	firstCost, firstReason := resolveUpstreamSourceAutoPriorityCost(
+		time.Unix(now, 0),
+		&source,
+		&firstMapping,
+		&firstChannel,
+		&firstProbe,
+	)
+	require.Empty(t, firstReason)
+	secondCost, secondReason := resolveUpstreamSourceAutoPriorityCost(
+		time.Unix(now, 0),
+		&source,
+		&secondMapping,
+		&secondChannel,
+		&secondProbe,
+	)
+	require.Empty(t, secondReason)
+	resolution := upstreamSourceRuleResolution{
+		AutoPriorityEnabled:                 true,
+		AutoPriorityWindowHours:             24,
+		AutoPriorityAvailabilityWindowHours: 24,
+	}
+	candidates := []upstreamSourceAutoPriorityCandidate{
+		{
+			mapping:      firstMapping,
+			channel:      firstChannel,
+			settings:     firstChannel.GetOtherSettings(),
+			resolution:   resolution,
+			costEvidence: firstCost.evidence,
+			windowStart:  now - 24*3600,
+			windowEnd:    now,
+		},
+		{
+			mapping:      secondMapping,
+			channel:      secondChannel,
+			settings:     secondChannel.GetOtherSettings(),
+			resolution:   resolution,
+			costEvidence: secondCost.evidence,
+			windowStart:  now - 24*3600,
+			windowEnd:    now,
+		},
+	}
+	scores := []AutoPriorityScoreResult{
+		{ChannelID: firstChannel.Id, OldPriority: 100, NewPriority: 900, ComputedPriority: 900, Applied: true},
+		{ChannelID: secondChannel.Id, OldPriority: 100, NewPriority: 800, ComputedPriority: 800, Applied: true},
+	}
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+		Where("mapping_id = ?", secondProbe.MappingID).
+		Update("last_good_generation", secondProbe.LastGoodGeneration+1).Error)
+
+	writes := 0
+	callbackName := fmt.Sprintf("count_empirical_cas_writes_%s", t.Name())
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement.Schema == nil {
+			return
+		}
+		if tx.Statement.Schema.Name == "Channel" || tx.Statement.Schema.Name == "Ability" {
+			writes++
+		}
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
+	})
+
+	reason, _, err := persistChannelAutoPriorityGroup(
+		context.Background(),
+		candidates,
+		scores,
+		[]int{0, 1},
+		nil,
+		channelAutoPriorityDefaultSinkPriority,
+		now,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "empirical_probe_changed", reason)
+	assert.Zero(t, writes)
+	for _, channel := range []model.Channel{firstChannel, secondChannel} {
+		var reloaded model.Channel
+		require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+		assert.Equal(t, int64(100), reloaded.GetPriority())
+		assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+		var ability model.Ability
+		require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		require.NotNil(t, ability.Priority)
+		assert.Equal(t, int64(100), *ability.Priority)
 	}
 }
 
@@ -1927,7 +2419,7 @@ func TestRunDueChannelAutoPriorityConcurrentPersistenceFailureReturnsPostRollbac
 	}
 }
 
-func TestRunDueChannelAutoPriorityReportsManualCleanupOnceWhenGroupPersistFails(t *testing.T) {
+func TestRunDueChannelAutoPriorityRollsBackManualCleanupWhenGroupPersistFails(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(10_950_000)
 	enabled := createAutoPriorityTestChannel(t, "persist failure enabled", 100, dto.ChannelOtherSettings{
@@ -1977,14 +2469,26 @@ func TestRunDueChannelAutoPriorityReportsManualCleanupOnceWhenGroupPersistFails(
 	assert.Equal(t, 1, resultCount[enabled.Id])
 	assert.Equal(t, 1, resultCount[manuallyDisabled.Id])
 	for _, result := range results {
-		if result.ChannelID == manuallyDisabled.Id {
-			assert.True(t, result.Applied)
-			assert.Equal(t, "manually_disabled_sunk", result.Reason)
-		}
+		assert.False(t, result.Applied)
+		assert.Equal(t, "update_failed", result.Reason)
 	}
+	var persistedEnabled model.Channel
+	require.NoError(t, model.DB.First(&persistedEnabled, enabled.Id).Error)
+	assert.Equal(t, int64(100), persistedEnabled.GetPriority())
+	assert.Zero(t, persistedEnabled.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Nil(t, persistedEnabled.GetOtherSettings().ChannelAutoPriorityLastScore)
+	var persistedManual model.Channel
+	require.NoError(t, model.DB.First(&persistedManual, manuallyDisabled.Id).Error)
+	assert.Equal(t, int64(813), persistedManual.GetPriority())
+	assert.Equal(t, now-60, persistedManual.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	require.NotNil(t, persistedManual.GetOtherSettings().ChannelAutoPriorityLastScore)
+	var persistedManualAbility model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", manuallyDisabled.Id).First(&persistedManualAbility).Error)
+	require.NotNil(t, persistedManualAbility.Priority)
+	assert.Equal(t, int64(813), *persistedManualAbility.Priority)
 }
 
-func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailure(t *testing.T) {
+func TestRunDueChannelAutoPriorityRefreshesManualResultsAfterTransactionalGroupFailure(t *testing.T) {
 	oldDB := model.DB
 	oldLogDB := model.LOG_DB
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "auto-priority.db")), &gorm.Config{})
@@ -2055,8 +2559,8 @@ func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailu
 	const concurrentAbilityOnlyPriority = int64(555)
 	updateCount := 0
 	concurrentMutationStarted := false
-	postSweepPriority := int64(0)
-	postSweepSnapshotCleared := false
+	observedManualPriority := int64(0)
+	observedManualSnapshotPresent := false
 	var concurrentMutationErr error
 	callbackName := fmt.Sprintf("refresh_manual_sweep_after_failure_%s", t.Name())
 	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
@@ -2083,8 +2587,8 @@ func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailu
 			tx.AddError(errors.New("manual sweep verification failed"))
 			return
 		}
-		postSweepPriority = swept.GetPriority()
-		postSweepSnapshotCleared = swept.GetOtherSettings().ChannelAutoPriorityLastScore == nil
+		observedManualPriority = swept.GetPriority()
+		observedManualSnapshotPresent = swept.GetOtherSettings().ChannelAutoPriorityLastScore != nil
 		if err := model.DB.Session(&gorm.Session{SkipHooks: true}).
 			Model(&model.Channel{}).
 			Where("id = ?", manuallyDisabled.Id).
@@ -2113,7 +2617,7 @@ func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailu
 			tx.AddError(errors.New("concurrent ability-only update failed"))
 			return
 		}
-		tx.AddError(errors.New("forced group persistence failure after manual sweep"))
+		tx.AddError(errors.New("forced transactional group persistence failure"))
 	}))
 	t.Cleanup(func() {
 		require.NoError(t, model.DB.Callback().Update().Remove(callbackName))
@@ -2123,8 +2627,8 @@ func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailu
 
 	require.NoError(t, concurrentMutationErr)
 	assert.Equal(t, 1, updateCount)
-	assert.Equal(t, int64(-1), postSweepPriority)
-	assert.True(t, postSweepSnapshotCleared)
+	assert.Equal(t, int64(813), observedManualPriority)
+	assert.True(t, observedManualSnapshotPresent)
 	require.Len(t, results, 3)
 	resultsByChannelID := make(map[int]ChannelAutoPriorityRunResult, len(results))
 	for _, result := range results {
@@ -2147,9 +2651,9 @@ func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailu
 	assert.Equal(t, "update_failed", abilityOnlyResult.Reason)
 	assert.False(t, abilityOnlyResult.score.Applied)
 	assert.Equal(t, "update_failed", abilityOnlyResult.score.Reason)
-	assert.Equal(t, int64(-1), abilityOnlyResult.score.OldPriority)
+	assert.Equal(t, int64(814), abilityOnlyResult.score.OldPriority)
 	assert.Equal(t, int64(-1), abilityOnlyResult.score.ComputedPriority)
-	assert.Equal(t, int64(-1), abilityOnlyResult.score.NewPriority)
+	assert.Equal(t, int64(814), abilityOnlyResult.score.NewPriority)
 
 	enabledResult, ok := resultsByChannelID[enabled.Id]
 	require.True(t, ok)
@@ -2178,9 +2682,11 @@ func TestRunDueChannelAutoPriorityRefreshesManualSweepResultAfterLaterGroupFailu
 
 	var persistedAbilityOnlyChannel model.Channel
 	require.NoError(t, model.DB.First(&persistedAbilityOnlyChannel, abilityOnlyUpdated.Id).Error)
-	assert.Equal(t, int64(-1), persistedAbilityOnlyChannel.GetPriority())
+	assert.Equal(t, int64(814), persistedAbilityOnlyChannel.GetPriority())
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, persistedAbilityOnlyChannel.Status)
-	assert.Nil(t, persistedAbilityOnlyChannel.GetOtherSettings().ChannelAutoPriorityLastScore)
+	persistedAbilityOnlySnapshot := persistedAbilityOnlyChannel.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, persistedAbilityOnlySnapshot)
+	assert.Equal(t, now-60, persistedAbilityOnlySnapshot.ComputedAt)
 	var persistedAbilityOnlyAbility model.Ability
 	require.NoError(t, model.DB.Where("channel_id = ?", abilityOnlyUpdated.Id).First(&persistedAbilityOnlyAbility).Error)
 	require.NotNil(t, persistedAbilityOnlyAbility.Priority)

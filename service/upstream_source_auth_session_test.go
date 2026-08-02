@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/stretchr/testify/assert"
@@ -97,27 +98,36 @@ func TestDiscoverNonAuthFailureDoesNotPoisonAuthHealth(t *testing.T) {
 
 func TestClearUpstreamSourceSessionPreservesCredentialsAndSettings(t *testing.T) {
 	setupUpstreamSourceServiceTestDB(t)
+	const startingRevision int64 = 5
 	source := model.UpstreamSource{
-		Name:             "source-with-session",
-		Type:             model.UpstreamSourceTypeSub2API,
-		Status:           model.UpstreamSourceStatusEnabled,
-		BaseURL:          "https://admin.example.com",
-		AdminAPIBasePath: "/api/v1",
-		RelayBaseURL:     "https://relay.example.com",
-		SyncConfig:       `{"allow_private_ip":true}`,
-		AuthConfig:       `{"email":"owner@example.com","password":"long-lived","access_token":"legacy-token","refresh_token":"legacy-refresh","expires_at":9999}`,
+		Name:                   "source-with-session",
+		Type:                   model.UpstreamSourceTypeSub2API,
+		Status:                 model.UpstreamSourceStatusEnabled,
+		BaseURL:                "https://admin.example.com",
+		AdminAPIBasePath:       "/api/v1",
+		RelayBaseURL:           "https://relay.example.com",
+		SyncConfig:             `{"allow_private_ip":true}`,
+		AuthConfig:             `{"email":"owner@example.com","password":"long-lived","access_token":"legacy-token","refresh_token":"legacy-refresh","expires_at":9999}`,
+		AuthRevision:           startingRevision,
+		MonitorEnabled:         true,
+		MonitorIntervalMinutes: 10,
+		NextMonitorAt:          model.UpstreamSourceMonitorParkedSchedule,
+		MonitorParkedReason:    model.UpstreamSourceMonitorParkedReasonCredentialDecryption,
+		CurrentMonitorToken:    "stale-monitor",
+		MonitorStartedAt:       1000,
 	}
 	require.NoError(t, model.DB.Create(&source).Error)
 	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
 		SourceID:      source.Id,
-		SessionConfig: `{"access_token":"current-token","refresh_token":"current-refresh","expires_at":9999}`,
-		AuthStatus:    model.UpstreamSourceAuthStatusHealthy,
+		SessionConfig: corruptedUpstreamSourceSecretEnvelope,
+		AuthStatus:    model.UpstreamSourceAuthStatusFailed,
 		ExpiresAt:     9999,
 		CreatedTime:   100,
 		UpdatedTime:   100,
 	}))
-
+	clearStartedAt := common.GetTimestamp()
 	require.NoError(t, ClearUpstreamSourceSession(source.Id))
+	clearFinishedAt := common.GetTimestamp()
 
 	session, err := model.GetUpstreamSourceSession(source.Id)
 	require.NoError(t, err)
@@ -135,6 +145,18 @@ func TestClearUpstreamSourceSessionPreservesCredentialsAndSettings(t *testing.T)
 	assert.Equal(t, source.BaseURL, reloaded.BaseURL)
 	assert.Equal(t, source.RelayBaseURL, reloaded.RelayBaseURL)
 	assert.Equal(t, source.SyncConfig, reloaded.SyncConfig)
+	assert.Equal(t, startingRevision+1, reloaded.AuthRevision)
+	assert.GreaterOrEqual(t, reloaded.NextMonitorAt, clearStartedAt)
+	assert.LessOrEqual(t, reloaded.NextMonitorAt, clearFinishedAt)
+	assert.Equal(t, "stale-monitor", reloaded.CurrentMonitorToken, "session clear must retain the active claim until its owner releases it")
+	assert.Empty(t, reloaded.MonitorParkedReason)
+
+	require.NoError(t, model.ReleaseUpstreamSourceMonitorWithIdentity(source.Id, "stale-monitor", startingRevision, clearFinishedAt+1, false))
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Empty(t, reloaded.CurrentMonitorToken)
+	assert.GreaterOrEqual(t, reloaded.NextMonitorAt, clearStartedAt)
+	assert.LessOrEqual(t, reloaded.NextMonitorAt, clearFinishedAt)
+	assert.Empty(t, reloaded.MonitorParkedReason, "a stale release must not restore the cleared park")
 }
 
 func TestLoadUpstreamSourceRuntimeAuthReadsLegacyMixedConfig(t *testing.T) {

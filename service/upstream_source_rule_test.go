@@ -520,6 +520,45 @@ func TestResolveUpstreamSourceRuleAllowsEmptyDiscoveryStatusInLegacyMode(t *test
 	assert.Equal(t, "fallback", resolution.LocalGroup)
 }
 
+func TestResolveUpstreamSourceRuleResolvesCostSourceBeforeMissingAdvertisedRateInvalidity(t *testing.T) {
+	config := mustParseUpstreamSourceRuleTestConfig(t, map[string]any{
+		"default_local_group": "fallback",
+	})
+	tests := []struct {
+		name       string
+		costSource string
+		want       bool
+		wantReason string
+	}{
+		{
+			name:       "empirical remains consumable",
+			costSource: model.UpstreamSourceAutoPriorityCostSourceEmpiricalProbe,
+			want:       true,
+			wantReason: upstreamSourceMatchReasonMatched,
+		},
+		{
+			name:       "advertised remains invalid",
+			costSource: model.UpstreamSourceAutoPriorityCostSourceAdvertised,
+			want:       false,
+			wantReason: upstreamSourceMatchReasonInactiveDiscovery,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mapping := &model.UpstreamSourceChannelMapping{
+				SyncEnabled:            true,
+				DiscoveryStatus:        model.UpstreamMappingDiscoveryStatusInvalid,
+				AutoPriorityCostSource: tt.costSource,
+			}
+
+			resolution := resolveUpstreamSourceRule(config, mapping)
+
+			assert.Equal(t, tt.want, resolution.SyncEligible)
+			assert.Equal(t, tt.wantReason, resolution.Reason)
+		})
+	}
+}
+
 func TestResolveUpstreamSourceRuleKeepsKeywordFieldsSpecific(t *testing.T) {
 	tests := []struct {
 		name        string

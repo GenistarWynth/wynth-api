@@ -132,17 +132,21 @@ import {
   createUpstreamSource,
   deleteUpstreamSource,
   discoverUpstreamSource,
+  getUpstreamSourceBillingProbe,
   getUpstreamSourceRuleModelOptions,
   importUpstreamSourceSession,
   listUpstreamSourceMappings,
   listUpstreamSources,
   runUpstreamSourceAutoPriority,
+  runUpstreamSourceBillingProbe,
   syncUpstreamSource,
   updateUpstreamSource,
   updateUpstreamSourceCredentials,
+  updateUpstreamSourceBillingProbe,
   updateUpstreamSourceMappings,
   upstreamSourcesQueryKeys,
 } from './api'
+import { BillingProbeControls } from './billing-probe-controls'
 import { MonitoringSheet } from './monitoring-sheet'
 import {
   buildLocalGroupRuleTemplate,
@@ -2601,12 +2605,13 @@ function MappingsSheet(props: {
                   <TableHead>{t('Discovery')}</TableHead>
                   <TableHead>{t('Sync')}</TableHead>
                   <TableHead>{t('Channel')}</TableHead>
+                  <TableHead>{t('Billing probe')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {mappingsQuery.isLoading && (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={8}>
                       <div className='text-muted-foreground flex items-center justify-center gap-2 py-8 text-sm'>
                         <Loader2 className='animate-spin' />
                         {t('Loading...')}
@@ -2616,7 +2621,7 @@ function MappingsSheet(props: {
                 )}
                 {!mappingsQuery.isLoading && mappings.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7}>
+                    <TableCell colSpan={8}>
                       <div className='text-muted-foreground py-8 text-center text-sm'>
                         {t('No mappings found')}
                       </div>
@@ -2666,6 +2671,7 @@ function MappingRow(props: {
 }) {
   const { t } = useTranslation()
   const mapping = props.mapping
+  const [billingProbeOpen, setBillingProbeOpen] = useState(false)
   const groupName = mapping.upstream_group_name || mapping.upstream_group_id
   const matchLabel = mapping.sync_eligible
     ? mapping.matched_rule_name || t('Matched')
@@ -2686,91 +2692,223 @@ function MappingRow(props: {
     !mapping.has_upstream_key
 
   return (
-    <TableRow className={cn(rowMuted && 'text-muted-foreground')}>
-      <TableCell>
-        <Checkbox
-          checked={props.checked}
-          onCheckedChange={(checked) => props.onCheckedChange(Boolean(checked))}
-          aria-label={t('Select mapping')}
-        />
-      </TableCell>
-      <TableCell>
-        <div className='flex min-w-[180px] flex-col gap-1'>
-          <LongText className='max-w-[220px] font-medium'>{groupName}</LongText>
-          {mapping.upstream_group_description && (
-            <LongText className='text-muted-foreground max-w-[220px] text-xs'>
-              {mapping.upstream_group_description}
+    <>
+      <TableRow className={cn(rowMuted && 'text-muted-foreground')}>
+        <TableCell>
+          <Checkbox
+            checked={props.checked}
+            onCheckedChange={(checked) =>
+              props.onCheckedChange(Boolean(checked))
+            }
+            aria-label={t('Select mapping')}
+          />
+        </TableCell>
+        <TableCell>
+          <div className='flex min-w-[180px] flex-col gap-1'>
+            <LongText className='max-w-[220px] font-medium'>
+              {groupName}
             </LongText>
-          )}
-          <span className='text-muted-foreground text-xs'>
-            {mapping.upstream_group_id}
-          </span>
+            {mapping.upstream_group_description && (
+              <LongText className='text-muted-foreground max-w-[220px] text-xs'>
+                {mapping.upstream_group_description}
+              </LongText>
+            )}
+            <span className='text-muted-foreground text-xs'>
+              {mapping.upstream_group_id}
+            </span>
+            <StatusBadge
+              label={matchLabel}
+              variant={mapping.sync_eligible ? 'success' : 'neutral'}
+              copyable={false}
+            />
+            <span className='text-muted-foreground text-xs'>
+              {t('Local group')}: {mapping.resolved_local_group || '-'}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {t('Model strategy')}: {modelStrategyLabel}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {autoPriorityLabel}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {t('Codex image generation bridge')}:{' '}
+              {t(codexImageGenerationBridgePolicyLabel(codexImageBridgePolicy))}
+            </span>
+          </div>
+        </TableCell>
+        <TableCell>
           <StatusBadge
-            label={matchLabel}
-            variant={mapping.sync_eligible ? 'success' : 'neutral'}
+            label={mapping.upstream_platform || '-'}
+            variant='neutral'
             copyable={false}
           />
-          <span className='text-muted-foreground text-xs'>
-            {t('Local group')}: {mapping.resolved_local_group || '-'}
-          </span>
-          <span className='text-muted-foreground text-xs'>
-            {t('Model strategy')}: {modelStrategyLabel}
-          </span>
-          <span className='text-muted-foreground text-xs'>
-            {autoPriorityLabel}
-          </span>
-          <span className='text-muted-foreground text-xs'>
-            {t('Codex image generation bridge')}:{' '}
-            {t(codexImageGenerationBridgePolicyLabel(codexImageBridgePolicy))}
-          </span>
-        </div>
-      </TableCell>
-      <TableCell>
-        <StatusBadge
-          label={mapping.upstream_platform || '-'}
-          variant='neutral'
-          copyable={false}
-        />
-      </TableCell>
-      <TableCell>
-        <div className='flex flex-col gap-1'>
-          <span className='text-sm font-medium'>
-            {formatRate(mapping.effective_rate_multiplier)}
-          </span>
-          <span className='text-muted-foreground text-xs'>
-            {formatRate(mapping.upstream_rate_multiplier)}
-          </span>
-        </div>
-      </TableCell>
-      <TableCell>
-        <UpstreamStatusBadge
-          status={mapping.discovery_status as UpstreamMappingDiscoveryStatus}
-        />
-      </TableCell>
-      <TableCell>
-        <div className='flex flex-col gap-1'>
+        </TableCell>
+        <TableCell>
+          <div className='flex flex-col gap-1'>
+            <span className='text-sm font-medium'>
+              {formatRate(mapping.effective_rate_multiplier)}
+            </span>
+            <span className='text-muted-foreground text-xs'>
+              {formatRate(mapping.upstream_rate_multiplier)}
+            </span>
+          </div>
+        </TableCell>
+        <TableCell>
           <UpstreamStatusBadge
-            status={mapping.sync_status as UpstreamMappingSyncStatus}
+            status={mapping.discovery_status as UpstreamMappingDiscoveryStatus}
           />
-          {mapping.last_error && (
-            <LongText className='text-destructive max-w-[180px] text-xs'>
-              {mapping.last_error}
-            </LongText>
+        </TableCell>
+        <TableCell>
+          <div className='flex flex-col gap-1'>
+            <UpstreamStatusBadge
+              status={mapping.sync_status as UpstreamMappingSyncStatus}
+            />
+            {mapping.last_error && (
+              <LongText className='text-destructive max-w-[180px] text-xs'>
+                {mapping.last_error}
+              </LongText>
+            )}
+          </div>
+        </TableCell>
+        <TableCell>
+          {mapping.local_channel_id > 0 ? (
+            <TableId value={mapping.local_channel_id} />
+          ) : (
+            <StatusBadge
+              label={mapping.has_upstream_key ? t('Pending') : t('No Key')}
+              variant={mapping.has_upstream_key ? 'warning' : 'danger'}
+              copyable={false}
+            />
           )}
-        </div>
-      </TableCell>
-      <TableCell>
-        {mapping.local_channel_id > 0 ? (
-          <TableId value={mapping.local_channel_id} />
-        ) : (
-          <StatusBadge
-            label={mapping.has_upstream_key ? t('Pending') : t('No Key')}
-            variant={mapping.has_upstream_key ? 'warning' : 'danger'}
-            copyable={false}
-          />
-        )}
-      </TableCell>
-    </TableRow>
+        </TableCell>
+        <TableCell>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            disabled={mapping.local_channel_id <= 0}
+            aria-expanded={billingProbeOpen}
+            onClick={() => setBillingProbeOpen((open) => !open)}
+          >
+            {t('Billing probe')}
+          </Button>
+        </TableCell>
+      </TableRow>
+      {billingProbeOpen && (
+        <TableRow>
+          <TableCell colSpan={8} className='bg-muted/20 p-0'>
+            <MappingBillingProbePanel mapping={mapping} />
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  )
+}
+
+function MappingBillingProbePanel(props: { mapping: UpstreamSourceMapping }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const mapping = props.mapping
+  const queryKey = upstreamSourcesQueryKeys.billingProbe(
+    mapping.source_id,
+    mapping.id
+  )
+  const probeQuery = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const result = await getUpstreamSourceBillingProbe(
+        mapping.source_id,
+        mapping.id
+      )
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Failed to load billing probe'))
+      }
+      return result.data
+    },
+  })
+  const saveMutation = useMutation({
+    mutationFn: async (
+      request: Parameters<typeof updateUpstreamSourceBillingProbe>[2]
+    ) => {
+      const result = await updateUpstreamSourceBillingProbe(
+        mapping.source_id,
+        mapping.id,
+        request
+      )
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Request failed'))
+      }
+      return result.data
+    },
+    onSuccess: (probe) => {
+      queryClient.setQueryData(queryKey, probe)
+      queryClient.invalidateQueries({
+        queryKey: upstreamSourcesQueryKeys.mappings(mapping.source_id),
+      })
+      toast.success(t('Billing probe settings saved'))
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+  const runMutation = useMutation({
+    mutationFn: async () => {
+      const result = await runUpstreamSourceBillingProbe(
+        mapping.source_id,
+        mapping.id
+      )
+      if (!result.success || !result.data) {
+        throw new Error(result.message || t('Request failed'))
+      }
+      return result.data
+    },
+    onSuccess: (probe) => {
+      queryClient.setQueryData(queryKey, probe)
+      toast.success(t('Billing probe completed'))
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t('Request failed'))
+    },
+  })
+
+  if (probeQuery.isLoading) {
+    return (
+      <div className='text-muted-foreground flex items-center justify-center gap-2 p-6 text-sm'>
+        <Loader2 className='animate-spin' />
+        {t('Loading...')}
+      </div>
+    )
+  }
+  if (probeQuery.error || !probeQuery.data) {
+    return (
+      <div className='flex items-center justify-between gap-3 p-4'>
+        <span className='text-destructive text-sm'>
+          {probeQuery.error instanceof Error
+            ? probeQuery.error.message
+            : t('Failed to load billing probe')}
+        </span>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={() => probeQuery.refetch()}
+        >
+          {t('Retry')}
+        </Button>
+      </div>
+    )
+  }
+
+  const probe = probeQuery.data
+  return (
+    <BillingProbeControls
+      key={`${probe.enabled}-${probe.interval_minutes}-${probe.auto_priority_cost_source}-${probe.last_attempt_at ?? 0}`}
+      probe={probe}
+      saving={saveMutation.isPending}
+      running={runMutation.isPending}
+      onSave={(request) => saveMutation.mutate(request)}
+      onRun={() => runMutation.mutate()}
+    />
   )
 }
 

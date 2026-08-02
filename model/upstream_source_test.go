@@ -55,7 +55,7 @@ func TestBackfillUpstreamSourceMonitorDefaultsKeepsLegacyRowsDisabled(t *testing
 		BaseURL: "https://legacy.example.com",
 	}
 	require.NoError(t, DB.Create(&source).Error)
-	require.NoError(t, DB.Exec(`UPDATE upstream_sources SET monitor_enabled = NULL, monitor_interval_minutes = NULL, next_monitor_at = NULL, current_monitor_token = NULL, monitor_started_at = NULL, last_monitor_time = NULL WHERE id = ?`, source.Id).Error)
+	require.NoError(t, DB.Exec(`UPDATE upstream_sources SET monitor_enabled = NULL, monitor_interval_minutes = NULL, next_monitor_at = NULL, current_monitor_token = NULL, monitor_started_at = NULL, last_monitor_time = NULL, auth_revision = NULL, monitor_parked_reason = NULL WHERE id = ?`, source.Id).Error)
 
 	require.NoError(t, backfillUpstreamSourceMonitorDefaults())
 
@@ -67,6 +67,8 @@ func TestBackfillUpstreamSourceMonitorDefaultsKeepsLegacyRowsDisabled(t *testing
 	assert.Empty(t, reloaded.CurrentMonitorToken)
 	assert.Zero(t, reloaded.MonitorStartedAt)
 	assert.Zero(t, reloaded.LastMonitorTime)
+	assert.Zero(t, reloaded.AuthRevision)
+	assert.Empty(t, reloaded.MonitorParkedReason)
 }
 
 func TestUpstreamSourceRedactedResponseOmitsAuthConfig(t *testing.T) {

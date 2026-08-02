@@ -2,9 +2,11 @@ package controller
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -26,6 +28,17 @@ type upstreamSourceAPIResponse[T any] struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 	Data    T      `json:"data"`
+}
+
+type signalingReadCloser struct {
+	io.ReadCloser
+	started chan struct{}
+	once    sync.Once
+}
+
+func (r *signalingReadCloser) Read(p []byte) (int, error) {
+	r.once.Do(func() { close(r.started) })
+	return r.ReadCloser.Read(p)
 }
 
 func setupUpstreamSourceAPITestDB(t *testing.T) {
@@ -59,6 +72,7 @@ func setupUpstreamSourceAPITestDB(t *testing.T) {
 		&model.UpstreamSource{},
 		&model.UpstreamSourceSession{},
 		&model.UpstreamSourceChannelMapping{},
+		&model.UpstreamSourceBillingProbe{},
 		&model.UpstreamSourceScan{},
 		&model.UpstreamSourceGroupChange{},
 		&model.UpstreamSourceBalanceSnapshot{},
@@ -106,6 +120,9 @@ func upstreamSourceAPIRouter(authenticated bool) *gin.Engine {
 		group.POST("/:id/discover", DiscoverUpstreamSource)
 		group.GET("/:id/mappings", ListUpstreamSourceMappings)
 		group.PUT("/:id/mappings", UpdateUpstreamSourceMappings)
+		group.GET("/:id/mappings/:mapping_id/billing_probe", GetUpstreamSourceBillingProbe)
+		group.PUT("/:id/mappings/:mapping_id/billing_probe", UpdateUpstreamSourceBillingProbe)
+		group.POST("/:id/mappings/:mapping_id/billing_probe/run", RunUpstreamSourceBillingProbe)
 		group.GET("/:id/scans", ListUpstreamSourceScans)
 		group.GET("/:id/monitor/runs", ListUpstreamSourceMonitorRuns)
 		group.GET("/:id/monitor/snapshots", GetUpstreamSourceMonitorSnapshots)
@@ -143,6 +160,50 @@ func TestUpstreamSourceAPIMonitorControlsUpdateSchedule(t *testing.T) {
 	assert.True(t, reloaded.MonitorEnabled)
 	assert.Equal(t, 15, reloaded.MonitorIntervalMinutes)
 	assert.Greater(t, reloaded.NextMonitorAt, int64(0))
+}
+
+func TestUpstreamSourceAPIDeleteRemovesOnlyOwnedBillingProbes(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{}`)
+	mapping := model.UpstreamSourceChannelMapping{
+		SourceID: source.Id, SyncEnabled: true, UpstreamGroupID: "delete-probe", DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&mapping).Error)
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceBillingProbe{
+		SourceID: source.Id, MappingID: mapping.Id, Enabled: true, IntervalMinutes: 5, NextProbeAt: 1,
+	}).Error)
+
+	otherSource := createUpstreamSourceAPITestSource(t, `{}`)
+	otherMapping := model.UpstreamSourceChannelMapping{
+		SourceID: otherSource.Id, SyncEnabled: true, UpstreamGroupID: "keep-probe", DiscoveryStatus: model.UpstreamMappingDiscoveryStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&otherMapping).Error)
+	require.NoError(t, model.DB.Create(&model.UpstreamSourceBillingProbe{
+		SourceID: otherSource.Id, MappingID: otherMapping.Id, Enabled: true, IntervalMinutes: 5, NextProbeAt: 1,
+	}).Error)
+
+	response := upstreamSourceAPIRequest[any](
+		t,
+		router,
+		http.MethodDelete,
+		"/api/upstream_sources/"+strconv.Itoa(source.Id),
+		nil,
+		true,
+	)
+	require.True(t, response.Success, response.Message)
+
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.Equal(t, model.UpstreamSourceStatusDeleted, reloaded.Status)
+	var deletedProbeCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+		Where("source_id = ?", source.Id).Count(&deletedProbeCount).Error)
+	assert.Zero(t, deletedProbeCount)
+	var retainedProbeCount int64
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+		Where("source_id = ?", otherSource.Id).Count(&retainedProbeCount).Error)
+	assert.Equal(t, int64(1), retainedProbeCount)
 }
 
 func TestUpstreamSourceAPINotificationSubscriptionCRUDAndDeliveryAudit(t *testing.T) {
@@ -793,6 +854,103 @@ func TestUpstreamSourceAPICredentialsUpdateClearsCachedTokens(t *testing.T) {
 	session, err := model.GetUpstreamSourceSession(source.Id)
 	require.NoError(t, err)
 	assert.Nil(t, session, "credential rotation must invalidate independently stored login sessions")
+}
+
+func TestUpstreamSourceAPICredentialsUpdateReschedulesParkedMonitor(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	corruptedAuthConfig := `{"v":1,"alg":"AES-256-GCM","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA=="}`
+	source := createUpstreamSourceAPITestSource(t, corruptedAuthConfig)
+	require.NoError(t, model.DB.Model(&source).Updates(map[string]any{
+		"monitor_enabled":          true,
+		"monitor_interval_minutes": 10,
+		"next_monitor_at":          model.UpstreamSourceMonitorParkedSchedule,
+		"monitor_parked_reason":    model.UpstreamSourceMonitorParkedReasonCredentialDecryption,
+	}).Error)
+	require.NoError(t, model.UpsertUpstreamSourceSessionTx(model.DB, &model.UpstreamSourceSession{
+		SourceID:      source.Id,
+		SessionConfig: corruptedAuthConfig,
+		AuthStatus:    model.UpstreamSourceAuthStatusFailed,
+	}))
+
+	requestStartedAt := common.GetTimestamp()
+	response := upstreamSourceAPIRequest[dto.UpstreamSourceResponse](t, router, http.MethodPut, "/api/upstream_sources/"+strconv.Itoa(source.Id)+"/credentials", dto.UpstreamSourceCredentialsUpdateRequest{
+		Email:    "repaired@example.com",
+		Password: "replacement-password",
+	}, true)
+	requestFinishedAt := common.GetTimestamp()
+
+	require.True(t, response.Success, response.Message)
+	assert.True(t, response.Data.MonitorEnabled)
+	assert.GreaterOrEqual(t, response.Data.NextMonitorAt, requestStartedAt)
+	assert.LessOrEqual(t, response.Data.NextMonitorAt, requestFinishedAt)
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.True(t, reloaded.MonitorEnabled)
+	assert.GreaterOrEqual(t, reloaded.NextMonitorAt, requestStartedAt)
+	assert.LessOrEqual(t, reloaded.NextMonitorAt, requestFinishedAt)
+	assert.Empty(t, reloaded.MonitorParkedReason)
+	session, err := model.GetUpstreamSourceSession(source.Id)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+}
+
+func TestUpstreamSourceAPICredentialsUpdateRequeuesWhenStaleReleaseParksAfterLoad(t *testing.T) {
+	setupUpstreamSourceAPITestDB(t)
+	router := upstreamSourceAPIRouter(true)
+	source := createUpstreamSourceAPITestSource(t, `{"email":"old@example.com","password":"old-password"}`)
+	require.NoError(t, model.DB.Model(&source).Updates(map[string]any{
+		"monitor_enabled":          true,
+		"monitor_interval_minutes": 10,
+		"next_monitor_at":          int64(1000),
+	}).Error)
+	claimed, err := model.ClaimUpstreamSourceMonitor(source.Id, "stale-monitor", 1000, 60)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	payload, err := common.Marshal(dto.UpstreamSourceCredentialsUpdateRequest{
+		Email:    "repaired@example.com",
+		Password: "replacement-password",
+	})
+	require.NoError(t, err)
+	reader, writer := io.Pipe()
+	bodyReadStarted := make(chan struct{})
+	request := httptest.NewRequest(
+		http.MethodPut,
+		"/api/upstream_sources/"+strconv.Itoa(source.Id)+"/credentials",
+		&signalingReadCloser{ReadCloser: reader, started: bodyReadStarted},
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("New-Api-User", "1")
+	request.Header.Set("Authorization", "Bearer upstream-source-api-test-token")
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		router.ServeHTTP(recorder, request)
+		close(done)
+	}()
+	<-bodyReadStarted
+
+	require.NoError(t, model.ReleaseUpstreamSourceMonitor(source.Id, "stale-monitor", 1000, false))
+	var parked model.UpstreamSource
+	require.NoError(t, model.DB.First(&parked, source.Id).Error)
+	assert.Equal(t, model.UpstreamSourceMonitorParkedSchedule, parked.NextMonitorAt)
+	assert.Equal(t, model.UpstreamSourceMonitorParkedReasonCredentialDecryption, parked.MonitorParkedReason)
+	repairStartedAt := common.GetTimestamp()
+	_, err = writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	<-done
+
+	var response upstreamSourceAPIResponse[dto.UpstreamSourceResponse]
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success, response.Message)
+	assert.GreaterOrEqual(t, response.Data.NextMonitorAt, repairStartedAt)
+	var reloaded model.UpstreamSource
+	require.NoError(t, model.DB.First(&reloaded, source.Id).Error)
+	assert.GreaterOrEqual(t, reloaded.NextMonitorAt, repairStartedAt)
+	assert.Empty(t, reloaded.CurrentMonitorToken)
+	assert.Empty(t, reloaded.MonitorParkedReason)
 }
 
 func TestUpstreamSourceAPIUpdateRejectsInvalidStatus(t *testing.T) {

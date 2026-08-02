@@ -173,19 +173,13 @@ func UpdateUpstreamSourceCredentials(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
-			"auth_config":  authConfig,
-			"updated_time": common.GetTimestamp(),
-		}).Error; err != nil {
-			return err
-		}
-		return model.ClearUpstreamSourceSessionTx(tx, source.Id)
-	}); err != nil {
+	now := common.GetTimestamp()
+	updated, err := service.UpdateUpstreamSourceCredentials(source.Id, authConfig, now)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	source.AuthConfig = authConfig
+	source = updated
 	recordManageAudit(c, "upstream_source.credentials_update", map[string]interface{}{
 		"id":   source.Id,
 		"name": source.Name,
@@ -258,10 +252,7 @@ func DeleteUpstreamSource(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := model.DB.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
-		"status":       model.UpstreamSourceStatusDeleted,
-		"updated_time": common.GetTimestamp(),
-	}).Error; err != nil {
+	if err := model.DeleteUpstreamSourceWithBillingProbeCleanup(source.Id, common.GetTimestamp()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -673,6 +664,7 @@ func upstreamSourceResponse(source model.UpstreamSource) dto.UpstreamSourceRespo
 		MonitorEnabled:         source.MonitorEnabled,
 		MonitorIntervalMinutes: source.MonitorIntervalMinutes,
 		NextMonitorAt:          source.NextMonitorAt,
+		MonitorParkedReason:    source.MonitorParkedReason,
 		LastMonitorTime:        source.LastMonitorTime,
 		LastDiscoveryTime:      source.LastDiscoveryTime,
 		LastDiscoveryStatus:    source.LastDiscoveryStatus,

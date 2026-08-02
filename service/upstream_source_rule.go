@@ -403,7 +403,12 @@ func resolveUpstreamSourceRuleWithIndex(config upstreamSourceSyncConfig, mapping
 		return fallback, -1
 	}
 	discoveryStatus := strings.TrimSpace(mapping.DiscoveryStatus)
-	if discoveryStatus != "" && discoveryStatus != model.UpstreamMappingDiscoveryStatusActive {
+	empiricalWithoutAdvertisedRate := false
+	if discoveryStatus == model.UpstreamMappingDiscoveryStatusInvalid && mapping.EffectiveRateMultiplier == nil {
+		costSource, validCostSource := model.ResolveUpstreamSourceAutoPriorityCostSource(mapping.AutoPriorityCostSource)
+		empiricalWithoutAdvertisedRate = validCostSource && costSource == model.UpstreamSourceAutoPriorityCostSourceEmpiricalProbe
+	}
+	if discoveryStatus != "" && discoveryStatus != model.UpstreamMappingDiscoveryStatusActive && !empiricalWithoutAdvertisedRate {
 		fallback.Reason = upstreamSourceMatchReasonInactiveDiscovery
 		return fallback, -1
 	}

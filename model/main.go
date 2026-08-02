@@ -264,6 +264,9 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	if err := deduplicateLegacyUpstreamSourceBillingProbes(DB); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -271,6 +274,7 @@ func migrateDB() error {
 		&UpstreamSource{},
 		&UpstreamSourceSession{},
 		&UpstreamSourceChannelMapping{},
+		&UpstreamSourceBillingProbe{},
 		&UpstreamSourceScan{},
 		&UpstreamSourceGroupChange{},
 		&UpstreamSourceBalanceSnapshot{},
@@ -327,6 +331,9 @@ func migrateDB() error {
 	if err := backfillUpstreamSourceMonitorDefaults(); err != nil {
 		return err
 	}
+	if err := backfillUpstreamSourceBillingProbeDefaults(); err != nil {
+		return err
+	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
 	}
@@ -352,6 +359,9 @@ func migrateDB() error {
 }
 
 func migrateDBFast() error {
+	if err := deduplicateLegacyUpstreamSourceBillingProbes(DB); err != nil {
+		return err
+	}
 
 	var wg sync.WaitGroup
 
@@ -364,6 +374,7 @@ func migrateDBFast() error {
 		{&UpstreamSource{}, "UpstreamSource"},
 		{&UpstreamSourceSession{}, "UpstreamSourceSession"},
 		{&UpstreamSourceChannelMapping{}, "UpstreamSourceChannelMapping"},
+		{&UpstreamSourceBillingProbe{}, "UpstreamSourceBillingProbe"},
 		{&UpstreamSourceScan{}, "UpstreamSourceScan"},
 		{&UpstreamSourceGroupChange{}, "UpstreamSourceGroupChange"},
 		{&UpstreamSourceBalanceSnapshot{}, "UpstreamSourceBalanceSnapshot"},
@@ -436,6 +447,9 @@ func migrateDBFast() error {
 		}
 	}
 	if err := backfillUpstreamSourceMonitorDefaults(); err != nil {
+		return err
+	}
+	if err := backfillUpstreamSourceBillingProbeDefaults(); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func setupUpstreamSourceAutoPriorityTestDB(t *testing.T) {
@@ -27,6 +29,7 @@ func setupUpstreamSourceAutoPriorityTestDB(t *testing.T) {
 	})
 
 	require.NoError(t, model.DB.AutoMigrate(&model.ChannelMonitorLog{}, &model.Log{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.UpstreamSourceBillingProbe{}))
 }
 
 func createAutoPriorityTestChannel(t *testing.T, name string, priority int64, settings dto.ChannelOtherSettings) model.Channel {
@@ -1412,6 +1415,107 @@ func TestAutoPriorityLocalGroupCostBoundsReturnsEmptyForNoGroups(t *testing.T) {
 	assert.Empty(t, bounds)
 }
 
+func TestAutoPriorityLocalGroupCostBoundsUsesEmpiricalPeakAtInjectedScorerClock(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := time.Date(2026, time.August, 1, 13, 30, 0, 0, time.UTC)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "bounds-empirical", 100)
+	_, _, _ = createEmpiricalAutoPriorityProbe(
+		t,
+		source,
+		mapping,
+		generated,
+		now.Unix(),
+		0.05,
+		func(probe *model.UpstreamSourceBillingProbe) {
+			peakEnabled := true
+			peakFactor := 2.0
+			storedAppliedDiagnostic := 1.0
+			storedEffectiveDiagnostic := 0.05
+			probe.PeakRateEnabled = &peakEnabled
+			probe.PeakStart = "09:00"
+			probe.PeakEnd = "17:00"
+			probe.PeakRateMultiplier = &peakFactor
+			probe.AppliedPeakMultiplier = &storedAppliedDiagnostic
+			probe.EffectiveRateMultiplier = &storedEffectiveDiagnostic
+			probe.Timezone = "America/New_York"
+		},
+	)
+	createAutoPriorityTestChannel(t, "bounds manual", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:        true,
+		ChannelAutoPriorityRateMultiplier: 0.2,
+	})
+
+	bounds, invalidGroups, err := autoPriorityLocalGroupCostBoundsAt(
+		context.Background(),
+		[]string{"default"},
+		[]int{constant.ChannelTypeOpenAI},
+		now,
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, invalidGroups)
+	cohort := autoPriorityCohortKey("default", constant.ChannelTypeOpenAI)
+	require.Contains(t, bounds, cohort)
+	assert.InDelta(t, 0.10, bounds[cohort][0], 1e-12)
+	assert.InDelta(t, 0.20, bounds[cohort][1], 1e-12)
+}
+
+func TestAutoPriorityLocalGroupCostBoundsMarksWholeCohortInvalidForUnsafeEmpiricalMember(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := time.Date(2026, time.August, 1, 13, 30, 0, 0, time.UTC)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled": true,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "bounds-invalid-empirical", 100)
+	_, _, probe := createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now.Unix(), 0.05, nil)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+		Where("mapping_id = ?", probe.MappingID).Update("enabled", false).Error)
+	createAutoPriorityTestChannel(t, "bounds retained manual", 100, dto.ChannelOtherSettings{
+		ChannelAutoPriorityEnabled:        true,
+		ChannelAutoPriorityRateMultiplier: 0.2,
+	})
+
+	_, invalidGroups, err := autoPriorityLocalGroupCostBoundsAt(
+		context.Background(),
+		[]string{"default"},
+		[]int{constant.ChannelTypeOpenAI},
+		now,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "empirical_probe_disabled", invalidGroups["default"])
+}
+
+func TestAutoPriorityLocalGroupCostBoundsFailsClosedWhenMappingOwnerHasZeroGeneratedSettings(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := time.Date(2026, time.August, 1, 13, 30, 0, 0, time.UTC)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled": true,
+	})
+	generated, _ := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "bounds-zero-generated-settings", 100)
+	settings := generated.GetOtherSettings()
+	settings.GeneratedByUpstreamSourceID = 0
+	settings.GeneratedByUpstreamMappingID = 0
+	generated.SetOtherSettings(settings)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", generated.Id).
+		Update("settings", generated.OtherSettings).Error)
+
+	_, invalidGroups, err := autoPriorityLocalGroupCostBoundsAt(
+		context.Background(),
+		[]string{"default"},
+		[]int{constant.ChannelTypeOpenAI},
+		now,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "generated_channel_metadata_mismatch", invalidGroups["default"])
+}
+
 func TestRunUpstreamSourceAutoPriorityUsesCrossSourceCostBoundsWithinLocalGroup(t *testing.T) {
 	setupUpstreamSourceAutoPriorityTestDB(t)
 	now := int64(9_000_000)
@@ -1449,4 +1553,251 @@ func TestRunUpstreamSourceAutoPriorityUsesCrossSourceCostBoundsWithinLocalGroup(
 	// of actual cost. With group-wide bounds, the inverse-cost score preserves the
 	// real 4x gap: 0.05 / 0.20 * 100 = 25.
 	assert.InDelta(t, 25, r.EffectivePriceScore, 0.0001)
+}
+
+func TestRunAutoPriorityCompatibilityPathUsesSelectedEmpiricalCostWithoutAdvertisedRate(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_100_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "compatibility-empirical", 100)
+	_, generated, _ = createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now, 0.05, nil)
+	createAutoPriorityTestUsageLog(t, generated.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, generated.Id, now-60)
+
+	result, err := (&UpstreamSourceService{}).runAutoPriority(context.Background(), source.Id, now, nil)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.Empty(t, result.Results[0].Reason)
+	assert.InDelta(t, 0.05, result.Results[0].NominalRateMultiplier, 1e-12)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, generated.Id).Error)
+	snapshot := reloaded.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, snapshot)
+	assert.InDelta(t, 0.05, snapshot.NominalRateMultiplier, 1e-12)
+}
+
+func TestDiscoveryThenAutoPriorityKeepsSelectedEmpiricalMappingConsumableWithoutAdvertisedRate(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_150_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":          true,
+		"auto_priority_interval_minutes": 0,
+		"auto_priority_window_hours":     24,
+	})
+	generated, mapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "discovery-empirical", 100)
+	_, generated, _ = createEmpiricalAutoPriorityProbe(t, source, mapping, generated, now, 0.05, nil)
+	discoveryService := UpstreamSourceService{
+		AdapterFactory: func(sourceType string) (UpstreamSourceAdapter, error) {
+			return fakeUpstreamSourceAdapter{groups: []UpstreamGroup{{
+				ID:       mapping.UpstreamGroupID,
+				Name:     mapping.UpstreamGroupName,
+				Platform: mapping.UpstreamPlatform,
+				Status:   model.UpstreamSourceStatusEnabled,
+			}}}, nil
+		},
+		Now: func() int64 { return now },
+	}
+
+	discoveryResult, err := discoveryService.Discover(context.Background(), source.Id)
+
+	require.NoError(t, err)
+	assert.Zero(t, discoveryResult.Invalid)
+	require.Len(t, discoveryResult.Mappings, 1)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, discoveryResult.Mappings[0].DiscoveryStatus)
+	var discoveredMapping model.UpstreamSourceChannelMapping
+	require.NoError(t, model.DB.First(&discoveredMapping, mapping.Id).Error)
+	assert.Equal(t, model.UpstreamSourceAutoPriorityCostSourceEmpiricalProbe, discoveredMapping.AutoPriorityCostSource)
+	assert.Equal(t, model.UpstreamMappingDiscoveryStatusActive, discoveredMapping.DiscoveryStatus)
+	assert.Nil(t, discoveredMapping.EffectiveRateMultiplier)
+
+	createAutoPriorityTestUsageLog(t, generated.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, generated.Id, now-60)
+	results := RunDueChannelAutoPriority(context.Background(), now)
+
+	require.Len(t, results, 1)
+	assert.True(t, results[0].Applied)
+	assert.Empty(t, results[0].Reason)
+	var persisted model.Channel
+	require.NoError(t, model.DB.First(&persisted, generated.Id).Error)
+	snapshot := persisted.GetOtherSettings().ChannelAutoPriorityLastScore
+	require.NotNil(t, snapshot)
+	assert.InDelta(t, 0.05, snapshot.NominalRateMultiplier, 1e-12)
+}
+
+func TestRunAutoPriorityCompatibilityPathFailsClosedForCrossSourceEmpiricalPeer(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_200_000)
+	sourceA := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	sourceB := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	selected, _ := createGeneratedAutoPriorityTestChannel(t, sourceA.Id, 0.20, "compatibility-selected", 100)
+	broken, brokenMapping := createGeneratedAutoPriorityTestChannel(t, sourceB.Id, 0.05, "compatibility-broken", 100)
+	_, _, brokenProbe := createEmpiricalAutoPriorityProbe(t, sourceB, brokenMapping, broken, now, 0.05, nil)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+		Where("mapping_id = ?", brokenProbe.MappingID).Update("enabled", false).Error)
+	createAutoPriorityTestUsageLog(t, selected.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, selected.Id, now-60)
+
+	result, err := (&UpstreamSourceService{}).runAutoPriority(context.Background(), sourceA.Id, now, nil)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.False(t, result.Results[0].Applied)
+	assert.Equal(t, "empirical_probe_disabled", result.Results[0].Reason)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, selected.Id).Error)
+	assert.Equal(t, int64(100), reloaded.GetPriority())
+	assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Nil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+}
+
+func TestRunAutoPriorityCompatibilityPathFailsWholeLocalGroupForUnsafeEmpiricalPeerOfAnotherType(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_250_000)
+	sourceA := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	sourceB := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	selected, _ := createGeneratedAutoPriorityTestChannel(t, sourceA.Id, 0.20, "compatibility-selected-openai", 100)
+	broken, brokenMapping := createGeneratedAutoPriorityTestChannel(t, sourceB.Id, 0.05, "compatibility-broken-anthropic", 100)
+	require.NoError(t, model.DB.Model(&model.Channel{}).
+		Where("id = ?", broken.Id).
+		Update("type", constant.ChannelTypeAnthropic).Error)
+	require.NoError(t, model.DB.Model(&model.UpstreamSourceChannelMapping{}).
+		Where("id = ?", brokenMapping.Id).
+		Update("auto_priority_cost_source", model.UpstreamSourceAutoPriorityCostSourceEmpiricalProbe).Error)
+	createAutoPriorityTestUsageLog(t, selected.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, selected.Id, now-60)
+
+	result, err := (&UpstreamSourceService{}).runAutoPriority(context.Background(), sourceA.Id, now, nil)
+
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	assert.False(t, result.Results[0].Applied)
+	assert.Equal(t, "empirical_probe_missing", result.Results[0].Reason)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, selected.Id).Error)
+	assert.Equal(t, int64(100), reloaded.GetPriority())
+	assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Nil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+}
+
+func TestRunAutoPriorityCompatibilityPathRevalidatesCrossSourceEmpiricalBoundBeforeWrite(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_250_000)
+	sourceA := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	sourceB := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	selected, _ := createGeneratedAutoPriorityTestChannel(t, sourceA.Id, 0.20, "compatibility-cross-source-selected", 100)
+	peer, peerMapping := createGeneratedAutoPriorityTestChannel(t, sourceB.Id, 0.5, "compatibility-cross-source-peer", 100)
+	_, _, peerProbe := createEmpiricalAutoPriorityProbe(t, sourceB, peerMapping, peer, now, 0.05, nil)
+	createAutoPriorityTestUsageLog(t, selected.Id, now-60)
+	createAutoPriorityTestMonitorLog(t, selected.Id, now-60)
+
+	callbackName := "change_cross_source_empirical_bound"
+	changed := false
+	var changeErr error
+	require.NoError(t, model.LOG_DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if changed || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "Log" {
+			return
+		}
+		changed = true
+		changeErr = model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+			Where("mapping_id = ?", peerProbe.MappingID).
+			Update("last_good_generation", peerProbe.LastGoodGeneration+1).Error
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.LOG_DB.Callback().Query().Remove(callbackName))
+	})
+
+	result, err := (&UpstreamSourceService{}).runAutoPriority(context.Background(), sourceA.Id, now, nil)
+
+	require.NoError(t, err)
+	require.NoError(t, changeErr)
+	assert.True(t, changed)
+	require.Len(t, result.Results, 1)
+	assert.False(t, result.Results[0].Applied)
+	assert.Equal(t, "empirical_probe_changed", result.Results[0].Reason)
+	var reloaded model.Channel
+	require.NoError(t, model.DB.First(&reloaded, selected.Id).Error)
+	assert.Equal(t, int64(100), reloaded.GetPriority())
+	assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+	assert.Nil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+	var ability model.Ability
+	require.NoError(t, model.DB.Where("channel_id = ?", selected.Id).First(&ability).Error)
+	require.NotNil(t, ability.Priority)
+	assert.Equal(t, int64(100), *ability.Priority)
+}
+
+func TestRunAutoPriorityCompatibilityPathRollsBackWholeCohortWhenLaterEmpiricalEvidenceChanges(t *testing.T) {
+	setupUpstreamSourceAutoPriorityTestDB(t)
+	now := int64(9_300_000)
+	source := createSyncTestSource(t, map[string]any{
+		"auto_priority_enabled":      true,
+		"auto_priority_window_hours": 24,
+	})
+	firstChannel, firstMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "compatibility-cas-first", 100)
+	secondChannel, secondMapping := createGeneratedAutoPriorityTestChannel(t, source.Id, 0.5, "compatibility-cas-second", 100)
+	_, firstChannel, _ = createEmpiricalAutoPriorityProbe(t, source, firstMapping, firstChannel, now, 0.05, nil)
+	_, secondChannel, secondProbe := createEmpiricalAutoPriorityProbe(t, source, secondMapping, secondChannel, now, 0.10, nil)
+	for _, channel := range []model.Channel{firstChannel, secondChannel} {
+		createAutoPriorityTestUsageLog(t, channel.Id, now-60)
+		createAutoPriorityTestMonitorLog(t, channel.Id, now-60)
+	}
+
+	callbackName := "change_later_compatibility_empirical_evidence"
+	changed := false
+	var changeErr error
+	require.NoError(t, model.LOG_DB.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if changed || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "Log" {
+			return
+		}
+		changed = true
+		changeErr = model.DB.Model(&model.UpstreamSourceBillingProbe{}).
+			Where("mapping_id = ?", secondProbe.MappingID).
+			Update("last_good_generation", secondProbe.LastGoodGeneration+1).Error
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, model.LOG_DB.Callback().Query().Remove(callbackName))
+	})
+
+	result, err := (&UpstreamSourceService{}).runAutoPriority(context.Background(), source.Id, now, nil)
+
+	require.NoError(t, err)
+	require.NoError(t, changeErr)
+	assert.True(t, changed)
+	require.Len(t, result.Results, 2)
+	for _, item := range result.Results {
+		assert.False(t, item.Applied)
+		assert.Equal(t, "empirical_probe_changed", item.Reason)
+	}
+	for _, channel := range []model.Channel{firstChannel, secondChannel} {
+		var reloaded model.Channel
+		require.NoError(t, model.DB.First(&reloaded, channel.Id).Error)
+		assert.Equal(t, int64(100), reloaded.GetPriority())
+		assert.Zero(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastRunAt)
+		assert.Nil(t, reloaded.GetOtherSettings().ChannelAutoPriorityLastScore)
+		var ability model.Ability
+		require.NoError(t, model.DB.Where("channel_id = ?", channel.Id).First(&ability).Error)
+		require.NotNil(t, ability.Priority)
+		assert.Equal(t, int64(100), *ability.Priority)
+	}
 }

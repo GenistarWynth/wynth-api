@@ -12,6 +12,11 @@ import (
 
 const upstreamSourceAuthExpiringWithinSeconds int64 = 5 * 60
 
+var (
+	ErrUpstreamSourceAuthStateChanged         = errors.New("upstream source authentication state changed during session import")
+	ErrUpstreamSourceSessionImportPersistence = errors.New("failed to persist imported upstream source session")
+)
+
 // loadUpstreamSourceRuntimeAuth overlays a dedicated session row onto the
 // source-owned credentials for unchanged adapters. When no session row exists,
 // the legacy mixed AuthConfig remains readable as-is.
@@ -92,10 +97,57 @@ func recordUpstreamSourceAuthFailure(source *model.UpstreamSource, authErr error
 	if source == nil || source.Id == 0 || !authFailure {
 		return
 	}
-	existing, err := model.GetUpstreamSourceSession(source.Id)
-	if err != nil {
-		common.SysError("failed to load upstream source auth health: " + SanitizeUpstreamSourceError(err))
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		return recordUpstreamSourceAuthFailureTx(tx, source, status, authErr, now)
+	}); err != nil {
+		common.SysError("failed to persist upstream source auth health: " + SanitizeUpstreamSourceError(err))
+	}
+}
+
+func recordUpstreamSourceMonitorAuthFailure(source *model.UpstreamSource, authErr error, now int64, token string, authRevision int64) {
+	status, authFailure := classifyUpstreamSourceAuthError(authErr)
+	if source == nil || source.Id == 0 || token == "" || !authFailure {
 		return
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		current, err := model.LockUpstreamSourceTx(tx, source.Id)
+		if err != nil {
+			return err
+		}
+		if current.CurrentMonitorToken != token || current.AuthRevision != authRevision {
+			return nil
+		}
+		return recordUpstreamSourceAuthFailureTx(tx, source, status, authErr, now)
+	}); err != nil {
+		common.SysError("failed to persist upstream source monitor auth health: " + SanitizeUpstreamSourceError(err))
+	}
+}
+
+func recordUpstreamSourceImportedAuthFailure(source *model.UpstreamSource, authErr error, now int64, expectedRevision int64) error {
+	if source == nil || source.Id == 0 {
+		return errors.New("persisted upstream source is required")
+	}
+	status, authFailure := classifyUpstreamSourceAuthError(authErr)
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		current, err := model.LockUpstreamSourceTx(tx, source.Id)
+		if err != nil {
+			return err
+		}
+		if current.AuthRevision != expectedRevision {
+			return ErrUpstreamSourceAuthStateChanged
+		}
+		if !authFailure {
+			return nil
+		}
+		return recordUpstreamSourceAuthFailureTx(tx, source, status, authErr, now)
+	})
+}
+
+func recordUpstreamSourceAuthFailureTx(tx *gorm.DB, source *model.UpstreamSource, status string, authErr error, now int64) error {
+	var existing model.UpstreamSourceSession
+	result := tx.Where("source_id = ?", source.Id).Limit(1).Find(&existing)
+	if result.Error != nil {
+		return result.Error
 	}
 	session := model.UpstreamSourceSession{
 		SourceID:      source.Id,
@@ -104,22 +156,23 @@ func recordUpstreamSourceAuthFailure(source *model.UpstreamSource, authErr error
 		CreatedTime:   now,
 		UpdatedTime:   now,
 	}
-	if existing != nil {
-		session = *existing
+	if result.RowsAffected == 1 {
+		session = existing
 		session.AuthStatus = status
 		session.LastAuthError = SanitizeUpstreamSourceError(authErr)
 		session.UpdatedTime = now
 	} else if plaintext, readErr := ReadUpstreamSourceAuthConfig(source.AuthConfig); readErr == nil {
 		_, _, session.SessionSource, session.ExpiresAt, _ = splitUpstreamSourceAuthConfig(source.Type, plaintext)
 	}
-	if err := model.UpsertUpstreamSourceSessionTx(model.DB, &session); err != nil {
-		common.SysError("failed to persist upstream source auth health: " + SanitizeUpstreamSourceError(err))
-	}
+	return model.UpsertUpstreamSourceSessionTx(tx, &session)
 }
 
 func classifyUpstreamSourceAuthError(err error) (string, bool) {
 	if err == nil {
 		return "", false
+	}
+	if errors.Is(err, ErrUpstreamSourceCredentialDecryption) {
+		return model.UpstreamSourceAuthStatusFailed, true
 	}
 	var requestErr newAPIRequestError
 	if errors.As(err, &requestErr) && isNewAPIAuthError(requestErr) {
@@ -145,6 +198,94 @@ func persistUpstreamSourceAuthSession(source *model.UpstreamSource, plaintext st
 	if source == nil || source.Id == 0 {
 		return errors.New("persisted upstream source is required")
 	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		return persistUpstreamSourceAuthSessionTx(tx, source, plaintext, now, refreshed)
+	}); err != nil {
+		return err
+	}
+	source.AuthConfig = plaintext
+	return nil
+}
+
+func persistUpstreamSourceMonitorAuthSession(source *model.UpstreamSource, plaintext string, now int64, refreshed bool, token string, authRevision int64) error {
+	if source == nil || source.Id == 0 || token == "" {
+		return errors.New("persisted upstream source monitor identity is required")
+	}
+	persisted := false
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		current, err := model.LockUpstreamSourceTx(tx, source.Id)
+		if err != nil {
+			return err
+		}
+		if current.CurrentMonitorToken != token || current.AuthRevision != authRevision {
+			return nil
+		}
+		if err := persistUpstreamSourceAuthSessionTx(tx, source, plaintext, now, refreshed); err != nil {
+			return err
+		}
+		persisted = true
+		return nil
+	}); err != nil {
+		return err
+	}
+	if persisted {
+		source.AuthConfig = plaintext
+	}
+	return nil
+}
+
+func persistUpstreamSourceImportedAuthSession(source *model.UpstreamSource, plaintext string, now int64, expectedRevision int64) error {
+	if source == nil || source.Id == 0 {
+		return errors.New("persisted upstream source is required")
+	}
+	nextRevision := expectedRevision + 1
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		current, err := model.LockUpstreamSourceTx(tx, source.Id)
+		if err != nil {
+			return err
+		}
+		if current.AuthRevision != expectedRevision {
+			return ErrUpstreamSourceAuthStateChanged
+		}
+		nextMonitorAt := int64(0)
+		if current.MonitorEnabled {
+			nextMonitorAt = now
+		}
+		result := tx.Model(&model.UpstreamSource{}).
+			Where("id = ? AND auth_revision = ?", source.Id, expectedRevision).
+			Updates(map[string]interface{}{
+				"auth_revision":         nextRevision,
+				"next_monitor_at":       nextMonitorAt,
+				"monitor_parked_reason": "",
+				"updated_time":          now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrUpstreamSourceAuthStateChanged
+		}
+		if err := persistUpstreamSourceAuthSessionTx(tx, source, plaintext, now, true); err != nil {
+			return err
+		}
+		marker := ErrUpstreamSourceTurnstileRequired.Error()
+		if err := tx.Model(&model.UpstreamSource{}).
+			Where("id = ? AND last_discovery_error = ?", source.Id, marker).
+			Updates(map[string]interface{}{"last_discovery_error": "", "updated_time": now}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.UpstreamSource{}).
+			Where("id = ? AND last_sync_error = ?", source.Id, marker).
+			Updates(map[string]interface{}{"last_sync_error": "", "updated_time": now}).Error
+	}); err != nil {
+		return err
+	}
+	source.AuthConfig = plaintext
+	source.AuthRevision = nextRevision
+	return nil
+}
+
+func persistUpstreamSourceAuthSessionTx(tx *gorm.DB, source *model.UpstreamSource, plaintext string, now int64, refreshed bool) error {
 	credentialsConfig, sessionConfig, sessionSource, expiresAt, err := splitUpstreamSourceAuthConfig(source.Type, plaintext)
 	if err != nil {
 		return err
@@ -158,13 +299,14 @@ func persistUpstreamSourceAuthSession(source *model.UpstreamSource, plaintext st
 		return err
 	}
 
-	existing, err := model.GetUpstreamSourceSession(source.Id)
-	if err != nil {
-		return err
+	var existing model.UpstreamSourceSession
+	result := tx.Where("source_id = ?", source.Id).Limit(1).Find(&existing)
+	if result.Error != nil {
+		return result.Error
 	}
 	lastRefreshedAt := int64(0)
 	createdTime := now
-	if existing != nil {
+	if result.RowsAffected == 1 {
 		lastRefreshedAt = existing.LastRefreshedAt
 		createdTime = existing.CreatedTime
 	}
@@ -183,19 +325,13 @@ func persistUpstreamSourceAuthSession(source *model.UpstreamSource, plaintext st
 		CreatedTime:     createdTime,
 		UpdatedTime:     now,
 	}
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
-			"auth_config":  storedCredentials,
-			"updated_time": now,
-		}).Error; err != nil {
-			return err
-		}
-		return model.UpsertUpstreamSourceSessionTx(tx, &session)
-	}); err != nil {
+	if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
+		"auth_config":  storedCredentials,
+		"updated_time": now,
+	}).Error; err != nil {
 		return err
 	}
-	source.AuthConfig = plaintext
-	return nil
+	return model.UpsertUpstreamSourceSessionTx(tx, &session)
 }
 
 // ClearUpstreamSourceSession removes only replaceable login material. It also
@@ -205,32 +341,66 @@ func ClearUpstreamSourceSession(sourceID int) error {
 	if sourceID == 0 {
 		return errors.New("source ID is required")
 	}
-	var source model.UpstreamSource
-	if err := model.DB.First(&source, sourceID).Error; err != nil {
-		return err
-	}
-	plaintext, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
-	if err != nil {
-		return err
-	}
-	credentialsConfig, _, _, _, err := splitUpstreamSourceAuthConfig(source.Type, plaintext)
-	if err != nil {
-		return err
-	}
-	storedCredentials, err := WriteUpstreamSourceAuthConfig(credentialsConfig)
-	if err != nil {
-		return err
-	}
 	now := common.GetTimestamp()
 	return model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", sourceID).Updates(map[string]interface{}{
-			"auth_config":  storedCredentials,
-			"updated_time": now,
-		}).Error; err != nil {
+		source, err := model.LockUpstreamSourceTx(tx, sourceID)
+		if err != nil {
 			return err
 		}
-		return model.ClearUpstreamSourceSessionTx(tx, sourceID)
+		plaintext, err := ReadUpstreamSourceAuthConfig(source.AuthConfig)
+		if err != nil {
+			return err
+		}
+		credentialsConfig, _, _, _, err := splitUpstreamSourceAuthConfig(source.Type, plaintext)
+		if err != nil {
+			return err
+		}
+		storedCredentials, err := WriteUpstreamSourceAuthConfig(credentialsConfig)
+		if err != nil {
+			return err
+		}
+		_, err = replaceUpstreamSourceCredentialsTx(tx, source, storedCredentials, now)
+		return err
 	})
+}
+
+func UpdateUpstreamSourceCredentials(sourceID int, storedCredentials string, now int64) (*model.UpstreamSource, error) {
+	if sourceID == 0 {
+		return nil, errors.New("source ID is required")
+	}
+	var updated *model.UpstreamSource
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		source, err := model.LockUpstreamSourceTx(tx, sourceID)
+		if err != nil {
+			return err
+		}
+		updated, err = replaceUpstreamSourceCredentialsTx(tx, source, storedCredentials, now)
+		return err
+	})
+	return updated, err
+}
+
+func replaceUpstreamSourceCredentialsTx(tx *gorm.DB, source *model.UpstreamSource, storedCredentials string, now int64) (*model.UpstreamSource, error) {
+	nextMonitorAt := int64(0)
+	if source.MonitorEnabled {
+		nextMonitorAt = now
+	}
+	if err := tx.Model(&model.UpstreamSource{}).Where("id = ?", source.Id).Updates(map[string]interface{}{
+		"auth_config":           storedCredentials,
+		"auth_revision":         source.AuthRevision + 1,
+		"next_monitor_at":       nextMonitorAt,
+		"monitor_parked_reason": "",
+		"updated_time":          now,
+	}).Error; err != nil {
+		return nil, err
+	}
+	if err := model.ClearUpstreamSourceSessionTx(tx, source.Id); err != nil {
+		return nil, err
+	}
+	if err := tx.First(source, source.Id).Error; err != nil {
+		return nil, err
+	}
+	return source, nil
 }
 
 func upstreamSourceSessionChanged(sourceType string, before string, after string) bool {
@@ -263,6 +433,19 @@ func persistUpstreamSourceAuthState(source *model.UpstreamSource, before string,
 	}
 	if err := persistUpstreamSourceAuthSession(source, source.AuthConfig, now, refreshed); err != nil {
 		common.SysError("failed to persist upstream source session state: " + SanitizeUpstreamSourceError(err))
+	}
+}
+
+func persistUpstreamSourceMonitorAuthState(source *model.UpstreamSource, before string, now int64, validated bool, token string, authRevision int64) {
+	if source == nil {
+		return
+	}
+	refreshed := upstreamSourceSessionChanged(source.Type, before, source.AuthConfig)
+	if !validated && !refreshed {
+		return
+	}
+	if err := persistUpstreamSourceMonitorAuthSession(source, source.AuthConfig, now, refreshed, token, authRevision); err != nil {
+		common.SysError("failed to persist upstream source monitor session state: " + SanitizeUpstreamSourceError(err))
 	}
 }
 

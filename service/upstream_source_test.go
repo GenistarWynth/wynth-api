@@ -621,7 +621,7 @@ func TestDiscoverUpstreamSourceDeduplicatesTrimmedGroupIDs(t *testing.T) {
 	}
 	config, err := parseUpstreamSourceSyncConfig(source.SyncConfig)
 	require.NoError(t, err)
-	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, 12345, config)
+	mappings, discoveredIDs, invalidCount := discoveredGroupsToMappings(source.Id, groups, 12345, config, nil)
 	require.Len(t, mappings, 1)
 	assert.Equal(t, []string{"10"}, discoveredIDs)
 	assert.Equal(t, 2, invalidCount)

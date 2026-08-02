@@ -278,6 +278,7 @@ func runApplication() (runErr error) {
 	accountPoolProxyWorkerDone := service.StartAccountPoolProxyProber(accountPoolWorkerCtx, 0)
 	accountPoolXAIQuotaWorkerDone := service.StartAccountPoolXAIQuotaProbeWorker(accountPoolWorkerCtx)
 	accountPoolXAIOAuthReconcileWorkerDone := service.StartAccountPoolXAIOAuthReconcileWorker(accountPoolWorkerCtx)
+	upstreamSourceBillingProbeWorkerDone := service.StartUpstreamSourceBillingProbeWorker(accountPoolWorkerCtx)
 
 	// Per-channel monitor batch: master-only, sync.Once-guarded ticker that every
 	// minute probes channels whose per-channel monitor is due and records their
@@ -384,6 +385,7 @@ func runApplication() (runErr error) {
 			accountPoolProxyWorkerDone,
 			accountPoolXAIQuotaWorkerDone,
 			accountPoolXAIOAuthReconcileWorkerDone,
+			upstreamSourceBillingProbeWorkerDone,
 		},
 		flush: func() error {
 			if common.DataExportEnabled {

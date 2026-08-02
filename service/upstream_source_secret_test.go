@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const corruptedUpstreamSourceSecretEnvelope = `{"v":1,"alg":"AES-256-GCM","nonce":"AAAAAAAAAAAAAAAA","ciphertext":"AAAAAAAAAAAAAAAAAAAAAA=="}`
+
 func TestUpstreamSourceAuthConfigEncryptRoundTrip(t *testing.T) {
 	old := common.CryptoSecretStable
 	oldSecret := common.CryptoSecret
@@ -57,4 +59,21 @@ func TestUpstreamSourceAuthConfigEmptyStaysEmpty(t *testing.T) {
 	stored, err := WriteUpstreamSourceAuthConfig("")
 	require.NoError(t, err)
 	assert.Equal(t, "", stored)
+}
+
+func TestUpstreamSourceAuthConfigDecryptFailureIsSecretSafe(t *testing.T) {
+	oldStable := common.CryptoSecretStable
+	oldSecret := common.CryptoSecret
+	common.CryptoSecretStable = true
+	common.CryptoSecret = "upstream-source-decrypt-failure-test"
+	t.Cleanup(func() {
+		common.CryptoSecretStable = oldStable
+		common.CryptoSecret = oldSecret
+	})
+
+	_, err := ReadUpstreamSourceAuthConfig(corruptedUpstreamSourceSecretEnvelope)
+
+	require.EqualError(t, err, "upstream source credential decryption failed")
+	assert.NotContains(t, err.Error(), "ciphertext")
+	assert.NotContains(t, err.Error(), "nonce")
 }
