@@ -15,7 +15,7 @@ all: build-all-web start-api
 build-web:
 	@echo "Building web frontend..."
 	@cd $(WEB_DIR) && bun install --frozen-lockfile
-	@cd $(WEB_DIR) && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$$(cat ../VERSION) bun run build
+	@cd $(WEB_DIR) && version="$$(cat ../VERSION)" && version="$${version:-v0.0.0}" && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="$${version}" bun run build && bun run release:verify-version -- "$${version}"
 
 build-all-web: build-web
 
@@ -41,6 +41,7 @@ dev: dev-api dev-web
 
 # The main package embeds the ignored web/dist output and is covered after build-web.
 test:
+	@GOWORK=off go test ./.github/tests
 	@echo "Testing root Go module..."
 	@root_module=$$(GOWORK=off go list -m); \
 		root_packages=$$(GOWORK=off go list -e ./... | grep -vxF "$$root_module"); \

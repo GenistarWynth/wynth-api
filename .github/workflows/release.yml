@@ -24,8 +24,8 @@ jobs:
           fetch-depth: 0
       - name: Determine Version
         run: |
-          VERSION=$(git describe --tags)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          VERSION="$(git describe --tags)"
+          printf 'VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
@@ -35,7 +35,8 @@ jobs:
         run: |
           cd web
           bun install --frozen-lockfile
-          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$VERSION bun run build
+          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="$VERSION" bun run build
+          bun run release:verify-version -- "$VERSION"
           cd ..
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -44,12 +45,14 @@ jobs:
       - name: Build Backend (amd64)
         run: |
           go mod download
-          go build -ldflags "-s -w -X 'new-api/common.Version=$VERSION' -extldflags '-static'" -o new-api-$VERSION
+          go build -ldflags="-s -w -X=github.com/QuantumNous/new-api/common.Version=${VERSION} -extldflags=-static" -o "new-api-${VERSION}" .
+          observed_version="$(env -u VERSION "./new-api-${VERSION}" --version)"
+          test "$observed_version" = "$VERSION"
       - name: Build Backend (arm64)
         run: |
           sudo apt-get update
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y gcc-aarch64-linux-gnu
-          CC=aarch64-linux-gnu-gcc CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X 'new-api/common.Version=$VERSION' -extldflags '-static'" -o new-api-arm64-$VERSION
+          CC=aarch64-linux-gnu-gcc CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X=github.com/QuantumNous/new-api/common.Version=${VERSION} -extldflags=-static" -o "new-api-arm64-${VERSION}" .
       - name: Generate checksums
         run: sha256sum new-api-* > checksums-linux.txt
 
@@ -73,8 +76,8 @@ jobs:
           fetch-depth: 0
       - name: Determine Version
         run: |
-          VERSION=$(git describe --tags)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          VERSION="$(git describe --tags)"
+          printf 'VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
@@ -85,7 +88,8 @@ jobs:
         run: |
           cd web
           bun install --frozen-lockfile
-          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$VERSION bun run build
+          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="$VERSION" bun run build
+          bun run release:verify-version -- "$VERSION"
           cd ..
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -94,7 +98,9 @@ jobs:
       - name: Build Backend
         run: |
           go mod download
-          go build -ldflags "-X 'new-api/common.Version=$VERSION'" -o new-api-macos-$VERSION
+          go build -ldflags="-X=github.com/QuantumNous/new-api/common.Version=${VERSION}" -o "new-api-macos-${VERSION}" .
+          observed_version="$(env -u VERSION "./new-api-macos-${VERSION}" --version)"
+          test "$observed_version" = "$VERSION"
       - name: Generate checksums
         run: shasum -a 256 new-api-macos-* > checksums-macos.txt
 
@@ -121,8 +127,8 @@ jobs:
           fetch-depth: 0
       - name: Determine Version
         run: |
-          VERSION=$(git describe --tags)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          VERSION="$(git describe --tags)"
+          printf 'VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
@@ -132,7 +138,8 @@ jobs:
         run: |
           cd web
           bun install --frozen-lockfile
-          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$VERSION bun run build
+          DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="$VERSION" bun run build
+          bun run release:verify-version -- "$VERSION"
           cd ..
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -141,7 +148,9 @@ jobs:
       - name: Build Backend
         run: |
           go mod download
-          go build -ldflags "-s -w -X 'new-api/common.Version=$VERSION'" -o new-api-$VERSION.exe
+          go build -ldflags="-s -w -X=github.com/QuantumNous/new-api/common.Version=${VERSION}" -o "new-api-${VERSION}.exe" .
+          observed_version="$(env -u VERSION "./new-api-${VERSION}.exe" --version)"
+          test "$observed_version" = "$VERSION"
       - name: Generate checksums
         run: sha256sum new-api-*.exe > checksums-windows.txt
 

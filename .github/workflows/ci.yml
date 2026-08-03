@@ -86,3 +86,11 @@ jobs:
 
       - name: Test
         run: bun test
+
+      - name: Verify release version embedding
+        env:
+          DISABLE_ESLINT_PLUGIN: 'true'
+          VITE_REACT_APP_VERSION: v0.0.0-ci
+        run: |
+          bun run build
+          bun run release:verify-version -- "$VITE_REACT_APP_VERSION"
