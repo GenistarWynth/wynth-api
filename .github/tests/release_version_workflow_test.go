@@ -55,7 +55,7 @@ func TestReleaseArtifactBuildsStampModuleVersion(t *testing.T) {
 		{
 			name:       "development container",
 			script:     string(readRepositoryFile(t, filepath.Join(repositoryRoot, "Dockerfile.dev"))),
-			assignment: "-X '" + expectedTarget + "=$(cat VERSION)'",
+			assignment: "-X=" + expectedTarget + "=${VERSION}",
 		},
 	}
 
@@ -122,10 +122,14 @@ func TestLocalArtifactBuildsResolveNonEmptyVersion(t *testing.T) {
 	repositoryRoot := filepath.Clean(filepath.Join("..", ".."))
 	makefile := string(readRepositoryFile(t, filepath.Join(repositoryRoot, "makefile")))
 	dockerfile := string(readRepositoryFile(t, filepath.Join(repositoryRoot, "Dockerfile")))
+	developmentDockerfile := string(readRepositoryFile(t, filepath.Join(repositoryRoot, "Dockerfile.dev")))
 
 	assert.Contains(t, makefile, `version="$${version:-v0.0.0}"`)
 	assert.Equal(t, 2, strings.Count(dockerfile, `VERSION="${VERSION:-v0.0.0}"`),
 		"container frontend and backend must resolve the same nonempty fallback")
+	assert.Contains(t, developmentDockerfile, `VERSION="$(cat VERSION)"`)
+	assert.Contains(t, developmentDockerfile, `VERSION="${VERSION:-v0.0.0}"`)
+	assert.NotContains(t, developmentDockerfile, `common.Version=$(cat VERSION)`)
 }
 
 func modulePath(t *testing.T, repositoryRoot string) string {

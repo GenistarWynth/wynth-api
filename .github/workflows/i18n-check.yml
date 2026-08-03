@@ -6,9 +6,9 @@ permissions:
 on:
   pull_request:
     paths:
-      - 'web/default/src/**'
-      - 'web/default/src/i18n/locales/**'
-      - 'web/default/scripts/check-i18n-keys.mjs'
+      - 'web/src/**'
+      - 'web/src/i18n/locales/**'
+      - 'web/scripts/check-i18n-keys.mjs'
 
 jobs:
   i18n-check:
@@ -19,5 +19,5 @@ jobs:
         with:
           node-version: '22'
       - name: Check i18n keys
-        working-directory: web/default
+        working-directory: web
         run: node scripts/check-i18n-keys.mjs

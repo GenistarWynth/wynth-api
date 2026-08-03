@@ -19,7 +19,7 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 - Codex remote compaction v2 now fails over across channels with bounded stream and schema validation, coordinated cancellation, commit, and refund handling, and correct cache-write token accounting.
 - Account-pool credential exports now include required backup data and require scoped one-time passkey proofs; Vertex service-account imports reject malformed or incomplete credentials.
 - Restored French, Japanese, Russian, Vietnamese, and Traditional Chinese translations with catalog regression coverage.
-- Release builds now stamp and verify exact version metadata across backend, frontend, Electron, and container artifacts.
+- Release builds now stamp exact version metadata across backend, frontend, Electron, and container artifacts, with build-time checks for frontend bundles and runnable native binaries.
 
 ## [v1.0.0-rc.61] - 2026-07-27
 
