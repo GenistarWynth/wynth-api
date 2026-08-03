@@ -6,6 +6,21 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.62] - 2026-08-03
+
+### Added
+- Upstream sources can run optional scheduled or manual Sub2API billing probes, retain sanitized last-good rate snapshots, and expose localized administrator controls for probe configuration and status.
+
+### Changed
+- Auto-priority can use fresh, identity-bound empirical Sub2API billing probe snapshots as its cost source.
+- GHCR release publishing now signs and verifies immutable architecture and manifest digests before promotion, and serializes `latest` reconciliation so only the newest eligible completed release wins.
+
+### Fixed
+- Codex remote compaction v2 now fails over across channels with bounded stream and schema validation, coordinated cancellation, commit, and refund handling, and correct cache-write token accounting.
+- Account-pool credential exports now include required backup data and require scoped one-time passkey proofs; Vertex service-account imports reject malformed or incomplete credentials.
+- Restored French, Japanese, Russian, Vietnamese, and Traditional Chinese translations with catalog regression coverage.
+- Release builds now stamp and verify exact version metadata across backend, frontend, Electron, and container artifacts.
+
 ## [v1.0.0-rc.61] - 2026-07-27
 
 ### Fixed
