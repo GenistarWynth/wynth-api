@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -51,18 +52,23 @@ type relayTaskFailoverCandidate struct {
 	headerOverride string
 	modelMapping   string
 	statusMapping  string
+	autoBan        int
 }
 
 type relayTaskFailoverOptions struct {
 	candidates       []relayTaskFailoverCandidate
 	statuses         map[int][]int
 	responseBodies   map[int]string
+	requestID        string
 	initialChannelID int
 	originChannelID  int
+	originPlatform   constant.TaskPlatform
 	retryTimes       int
 	locked           bool
 	fixed            bool
 	paid             bool
+	automaticDisable bool
+	disableRanges    []operation_setting.StatusCodeRange
 	contextSetup     func(*gin.Context)
 	onAttempt        func(channelID int)
 }
@@ -98,6 +104,7 @@ type relayTaskFailoverResult struct {
 	region              string
 	isMultiKey          bool
 	multiKeyIndex       int
+	appLog              string
 }
 
 func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTaskFailoverResult {
@@ -107,6 +114,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
 	previousMemoryCache := common.MemoryCacheEnabled
+	previousRedisEnabled := common.RedisEnabled
 	previousBatchUpdateEnabled := common.BatchUpdateEnabled
 	previousMainDBType := common.MainDatabaseType()
 	previousLogDBType := common.LogDatabaseType()
@@ -114,6 +122,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	previousErrorLogEnabled := constant.ErrorLogEnabled
 	previousLogConsumeEnabled := common.LogConsumeEnabled
 	previousAutomaticDisable := common.AutomaticDisableChannelEnabled
+	previousDisableRanges := append([]operation_setting.StatusCodeRange(nil), operation_setting.AutomaticDisableStatusCodeRanges...)
 	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
 	previousFreeModelPreConsume := operation_setting.GetQuotaSetting().EnableFreeModelPreConsume
 
@@ -142,11 +151,18 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	model.InitCommonColumnsForTest()
 	common.MemoryCacheEnabled = true
+	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.RetryTimes = opts.retryTimes
 	constant.ErrorLogEnabled = true
 	common.LogConsumeEnabled = true
-	common.AutomaticDisableChannelEnabled = false
+	common.AutomaticDisableChannelEnabled = opts.automaticDisable
+	if opts.disableRanges != nil {
+		operation_setting.AutomaticDisableStatusCodeRanges = append(
+			[]operation_setting.StatusCodeRange(nil),
+			opts.disableRanges...,
+		)
+	}
 	service.ResetAccountPoolRuntimeForTest()
 	service.InitHttpClient()
 	operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = false
@@ -160,6 +176,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.MemoryCacheEnabled = previousMemoryCache
+		common.RedisEnabled = previousRedisEnabled
 		common.BatchUpdateEnabled = previousBatchUpdateEnabled
 		common.SetDatabaseTypes(previousMainDBType, previousLogDBType)
 		model.InitCommonColumnsForTest()
@@ -167,6 +184,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		constant.ErrorLogEnabled = previousErrorLogEnabled
 		common.LogConsumeEnabled = previousLogConsumeEnabled
 		common.AutomaticDisableChannelEnabled = previousAutomaticDisable
+		operation_setting.AutomaticDisableStatusCodeRanges = previousDisableRanges
 		service.ResetAccountPoolRuntimeForTest()
 		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
 		operation_setting.GetQuotaSetting().EnableFreeModelPreConsume = previousFreeModelPreConsume
@@ -263,6 +281,10 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		if body := opts.responseBodies[channelID]; body != "" {
+			_, _ = io.WriteString(w, body)
+			return
+		}
 		_, _ = fmt.Fprintf(w, `{"id":"upstream-task-%d","object":"video","model":"%s","status":"queued","progress":0,"seconds":"4","size":"720x1280"}`, channelID, relayTaskFailoverModel)
 	}))
 	t.Cleanup(upstreamServer.Close)
@@ -294,7 +316,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 			Models:      relayTaskFailoverModel,
 			Priority:    &candidate.priority,
 			Weight:      &weight,
-			AutoBan:     common.GetPointer(0),
+			AutoBan:     common.GetPointer(candidate.autoBan),
 		}
 		if candidate.organization != "" {
 			channel.OpenAIOrganization = common.GetPointer(candidate.organization)
@@ -349,11 +371,15 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		if originChannelID == 0 {
 			originChannelID = opts.initialChannelID
 		}
+		originPlatform := opts.originPlatform
+		if originPlatform == "" {
+			originPlatform = constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeOpenAI))
+		}
 		require.NoError(t, db.Create(&model.Task{
 			TaskID:    "origin-task",
 			UserId:    1,
 			ChannelId: originChannelID,
-			Platform:  constant.TaskPlatform(strconv.Itoa(constant.ChannelTypeOpenAI)),
+			Platform:  originPlatform,
 			Status:    model.TaskStatusSuccess,
 			Properties: model.Properties{
 				OriginModelName:   relayTaskFailoverModel,
@@ -365,7 +391,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	requestBody := fmt.Sprintf(`{"model":"%s","prompt":"hello","seconds":"4","size":"720x1280"}`, relayTaskFailoverModel)
+	requestBody := relayTaskFailoverRequestBody()
 	c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(requestBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 	if opts.locked {
@@ -381,6 +407,11 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	common.SetContextKey(c, constant.ContextKeyTokenKey, "relay-task-token")
 	common.SetContextKey(c, constant.ContextKeyTokenUnlimited, false)
 	common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+	requestID := opts.requestID
+	if requestID == "" {
+		requestID = "relay-task-" + t.Name()
+	}
+	c.Set(common.RequestIdKey, requestID)
 	billingPreference := "wallet_only"
 	if opts.paid {
 		billingPreference = "subscription_only"
@@ -397,7 +428,15 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 	}
 	middleware.PreserveInitialChannelSetup(c, initialChannel, relayTaskFailoverModel)
 
+	var appLog bytes.Buffer
+	common.LogWriterMu.Lock()
+	oldErrorWriter := gin.DefaultErrorWriter
+	gin.DefaultErrorWriter = &appLog
+	common.LogWriterMu.Unlock()
 	RelayTask(c)
+	common.LogWriterMu.Lock()
+	gin.DefaultErrorWriter = oldErrorWriter
+	common.LogWriterMu.Unlock()
 
 	errorLogTypes := []int{model.LogTypeError, model.LogTypeRetryError}
 	var errorLogs []model.Log
@@ -467,7 +506,12 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		region:              c.GetString("region"),
 		isMultiKey:          common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey),
 		multiKeyIndex:       common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex),
+		appLog:              appLog.String(),
 	}
+}
+
+func relayTaskFailoverRequestBody() string {
+	return fmt.Sprintf(`{"model":"%s","prompt":"hello","seconds":"4","size":"720x1280"}`, relayTaskFailoverModel)
 }
 
 func TestRelayTaskLockedOriginReplacesEveryDistributorSettingBeforeFirstAndRotatedAttempts(t *testing.T) {
