@@ -76,6 +76,7 @@ type relayTaskFailoverResult struct {
 	requestBodies       []string
 	usedChannels        []string
 	errorLogCount       int64
+	errorLogTypes       []int
 	errorLogContent     string
 	consumeLogCount     int64
 	consumeQuota        int
@@ -398,11 +399,17 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 
 	RelayTask(c)
 
-	var errorLogCount int64
-	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
+	errorLogTypes := []int{model.LogTypeError, model.LogTypeRetryError}
+	var errorLogs []model.Log
+	require.NoError(t, db.Where("type IN ?", errorLogTypes).Order("id").Find(&errorLogs).Error)
+	errorLogCount := int64(len(errorLogs))
+	storedErrorLogTypes := make([]int, 0, len(errorLogs))
+	for _, logEntry := range errorLogs {
+		storedErrorLogTypes = append(storedErrorLogTypes, logEntry.Type)
+	}
 	var errorLog model.Log
 	if errorLogCount > 0 {
-		require.NoError(t, db.Where("type = ?", model.LogTypeError).Order("id desc").First(&errorLog).Error)
+		errorLog = errorLogs[len(errorLogs)-1]
 	}
 	var consumeLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogCount).Error)
@@ -438,6 +445,7 @@ func runRelayTaskFailover(t *testing.T, opts relayTaskFailoverOptions) relayTask
 		requestBodies:       finalRequestBodies,
 		usedChannels:        append([]string(nil), c.GetStringSlice("use_channel")...),
 		errorLogCount:       errorLogCount,
+		errorLogTypes:       storedErrorLogTypes,
 		errorLogContent:     errorLog.Content,
 		consumeLogCount:     consumeLogCount,
 		consumeQuota:        consumeQuota,
@@ -844,6 +852,7 @@ func TestRelayTaskExhaustsCandidatesAndPreservesFinalError(t *testing.T) {
 	assert.Equal(t, []int{1, 2, 3}, result.attempts)
 	assert.Equal(t, []string{"1", "2", "3"}, result.usedChannels)
 	assert.EqualValues(t, 3, result.errorLogCount)
+	assert.Equal(t, []int{model.LogTypeRetryError, model.LogTypeRetryError, model.LogTypeError}, result.errorLogTypes)
 	assert.Zero(t, result.consumeLogCount)
 	assert.Zero(t, result.taskCount)
 	assert.Equal(t, relayTaskInitialQuota, result.user.Quota)
@@ -875,6 +884,7 @@ func TestRelayTaskPaidFailoverPreConsumesAndSettlesOnce(t *testing.T) {
 	assert.Equal(t, []int{1, 2, 3, 4, 5}, result.attempts)
 	assert.Equal(t, []string{"1", "2", "3", "4", "5"}, result.usedChannels)
 	assert.EqualValues(t, 4, result.errorLogCount)
+	assert.Equal(t, []int{model.LogTypeRetryError, model.LogTypeRetryError, model.LogTypeRetryError, model.LogTypeRetryError}, result.errorLogTypes)
 	assert.EqualValues(t, 1, result.consumeLogCount)
 	assert.EqualValues(t, 1, result.taskCount)
 	assert.Equal(t, 1, result.user.RequestCount)

@@ -230,6 +230,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 	firstAttempt := true
 	_, isFixedChannel := c.Get("specific_channel_id")
+	var pendingErrorLog *relayAttemptErrorLog
 
 	// The attempted-channel set bounds this loop by eligible candidates. A
 	// numeric retry budget must not stop same-group failover early.
@@ -263,14 +264,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			}
 			break
 		}
-
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		addUsedChannel(c, channel.Id)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = service.NormalizeViolationFeeError(channelErr)
 			relayInfo.LastError = newAPIError
-			processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+			if pendingErrorLog != nil {
+				pendingErrorLog.record(true)
+			}
+			pendingErrorLog = processRelayAttemptError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 			if !shouldContinueSameGroupFailover(c, relayInfo, isFixedChannel) {
 				break
 			}
@@ -289,6 +292,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		if pendingErrorLog != nil {
+			pendingErrorLog.record(true)
+			pendingErrorLog = nil
+		}
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -309,7 +316,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		pendingErrorLog = processRelayAttemptError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
 		if !shouldContinueSameGroupFailover(c, relayInfo, isFixedChannel) {
 			break
@@ -321,6 +328,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
+	}
+	if pendingErrorLog != nil {
+		pendingErrorLog.record(false)
 	}
 }
 
@@ -431,7 +441,56 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError) bool {
 	return matched && !operation_setting.IsAlwaysSkipRetryStatusCode(code)
 }
 
+type relayAttemptErrorLog struct {
+	context        *gin.Context
+	userId         int
+	channelId      int
+	modelName      string
+	tokenName      string
+	content        string
+	tokenId        int
+	useTimeSeconds int
+	isStream       bool
+	group          string
+	other          map[string]interface{}
+}
+
+func (l *relayAttemptErrorLog) record(intermediateAttempt bool) {
+	recordErrorLog := model.RecordErrorLog
+	if intermediateAttempt {
+		recordErrorLog = model.RecordRetryErrorLog
+	}
+	recordErrorLog(
+		l.context,
+		l.userId,
+		l.channelId,
+		l.modelName,
+		l.tokenName,
+		l.content,
+		l.tokenId,
+		l.useTimeSeconds,
+		l.isStream,
+		l.group,
+		l.other,
+	)
+}
+
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+	errorLog := handleChannelError(c, channelError, err)
+	if errorLog != nil {
+		errorLog.record(false)
+	}
+}
+
+func processRelayAttemptError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) *relayAttemptErrorLog {
+	errorLog := handleChannelError(c, channelError, err)
+	if errorLog != nil {
+		errorLog.context = c.Copy()
+	}
+	return errorLog
+}
+
+func handleChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) *relayAttemptErrorLog {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -461,7 +520,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other["channel_name"] = c.GetString("channel_name")
 		other["channel_type"] = c.GetInt("channel_type")
 		adminInfo := make(map[string]interface{})
-		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
+		adminInfo["use_channel"] = append([]string(nil), c.GetStringSlice("use_channel")...)
 		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
 		if isMultiKey {
 			adminInfo["is_multi_key"] = true
@@ -474,9 +533,21 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, common.GetContextKeyBool(c, constant.ContextKeyIsStream), userGroup, other)
+		return &relayAttemptErrorLog{
+			context:        c,
+			userId:         userId,
+			channelId:      channelId,
+			modelName:      modelName,
+			tokenName:      tokenName,
+			content:        err.MaskSensitiveErrorWithStatusCode(),
+			tokenId:        tokenId,
+			useTimeSeconds: useTimeSeconds,
+			isStream:       common.GetContextKeyBool(c, constant.ContextKeyIsStream),
+			group:          userGroup,
+			other:          other,
+		}
 	}
-
+	return nil
 }
 
 func RelayMidjourney(c *gin.Context) {
@@ -643,6 +714,7 @@ func RelayTask(c *gin.Context) {
 	// origin-locked tasks instead keep the legacy same-channel retry budget so
 	// SetupContextForSelectedChannel can rotate credentials between attempts.
 	firstAttempt := true
+	var pendingErrorLog *relayAttemptErrorLog
 	for {
 		if !relay.BeginChannelAttempt(c, relayInfo) {
 			break
@@ -679,12 +751,14 @@ func RelayTask(c *gin.Context) {
 			}
 			break
 		}
-
 		addUsedChannel(c, channel.Id)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
 			taskErr = service.TaskErrorWrapper(channelErr.Err, "setup_channel_failed", channelErr.StatusCode)
-			processChannelError(c,
+			if pendingErrorLog != nil {
+				pendingErrorLog.record(true)
+			}
+			pendingErrorLog = processRelayAttemptError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
 				channelErr)
@@ -711,6 +785,10 @@ func RelayTask(c *gin.Context) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		if pendingErrorLog != nil {
+			pendingErrorLog.record(true)
+			pendingErrorLog = nil
+		}
 
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
@@ -718,7 +796,7 @@ func RelayTask(c *gin.Context) {
 		}
 
 		if !taskErr.LocalError {
-			processChannelError(c,
+			pendingErrorLog = processRelayAttemptError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
 				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
@@ -743,6 +821,9 @@ func RelayTask(c *gin.Context) {
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
+	}
+	if pendingErrorLog != nil {
+		pendingErrorLog.record(false)
 	}
 
 	// ── 成功：结算 + 日志 + 插入任务 ──

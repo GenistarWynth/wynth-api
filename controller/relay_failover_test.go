@@ -581,10 +581,11 @@ func runRelayFailover(t *testing.T, opts relayFailoverOptions) relayFailoverResu
 	}
 
 	var errorLogCount int64
-	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeError).Count(&errorLogCount).Error)
+	errorLogTypes := []int{model.LogTypeError, model.LogTypeRetryError}
+	require.NoError(t, db.Model(&model.Log{}).Where("type IN ?", errorLogTypes).Count(&errorLogCount).Error)
 	var errorLog model.Log
 	if errorLogCount > 0 {
-		require.NoError(t, db.Where("type = ?", model.LogTypeError).Order("id desc").First(&errorLog).Error)
+		require.NoError(t, db.Where("type IN ?", errorLogTypes).Order("id desc").First(&errorLog).Error)
 	}
 	var consumeLogCount int64
 	require.NoError(t, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&consumeLogCount).Error)

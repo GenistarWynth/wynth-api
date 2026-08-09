@@ -94,6 +94,9 @@ const (
 	LogTypeError   = 5
 	LogTypeRefund  = 6
 	LogTypeLogin   = 7
+	// LogTypeRetryError is stored for failed relay attempts superseded by a later attempt.
+	// Admin APIs normalize it back to LogTypeError before returning it.
+	LogTypeRetryError = 8
 )
 
 func ensureLogRequestId(log *Log) {
@@ -140,7 +143,7 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
+	err = LOG_DB.Model(&Log{}).Where("token_id = ? AND type <> ?", tokenId, LogTypeRetryError).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
@@ -285,6 +288,17 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
+	recordErrorLog(c, userId, channelId, modelName, tokenName, content, tokenId, useTimeSeconds, isStream, group, other, LogTypeError)
+}
+
+// RecordRetryErrorLog records a failed relay attempt that was superseded by another attempt.
+func RecordRetryErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
+	isStream bool, group string, other map[string]interface{}) {
+	recordErrorLog(c, userId, channelId, modelName, tokenName, content, tokenId, useTimeSeconds, isStream, group, other, LogTypeRetryError)
+}
+
+func recordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
+	isStream bool, group string, other map[string]interface{}, logType int) {
 	content = common.SanitizeSecrets(content)
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	username := c.GetString("username")
@@ -297,7 +311,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		UserId:           userId,
 		Username:         username,
 		CreatedAt:        common.GetTimestamp(),
-		Type:             LogTypeError,
+		Type:             logType,
 		Content:          content,
 		PromptTokens:     0,
 		CompletionTokens: 0,
@@ -514,6 +528,8 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
+	} else if logType == LogTypeError {
+		tx = LOG_DB.Where("logs.type IN ?", []int{LogTypeError, LogTypeRetryError})
 	} else {
 		tx = LOG_DB.Where("logs.type = ?", logType)
 	}
@@ -563,6 +579,9 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 	channelIds := types.NewSet[int]()
 	for _, log := range logs {
+		if log.Type == LogTypeRetryError {
+			log.Type = LogTypeError
+		}
 		if log.ChannelId != 0 {
 			channelIds.Add(log.ChannelId)
 		}
@@ -606,12 +625,17 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, adminView bool) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
+	} else if adminView && logType == LogTypeError {
+		tx = LOG_DB.Where("logs.user_id = ? AND logs.type IN ?", userId, []int{LogTypeError, LogTypeRetryError})
 	} else {
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
+	}
+	if !adminView {
+		tx = tx.Where("logs.type <> ?", LogTypeRetryError)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -650,7 +674,16 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		return nil, 0, errors.New("查询日志失败")
 	}
 
-	formatUserLogs(logs, startIdx)
+	if adminView {
+		for _, log := range logs {
+			if log.Type == LogTypeRetryError {
+				log.Type = LogTypeError
+			}
+		}
+		assignDisplayLogIds(logs, startIdx)
+	} else {
+		formatUserLogs(logs, startIdx)
+	}
 	return logs, total, err
 }
 
