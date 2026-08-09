@@ -6,6 +6,11 @@ Wynth is a downstream fork of [New API](https://github.com/QuantumNous/new-api) 
 
 ## [Unreleased]
 
+## [v1.0.0-rc.63] - 2026-08-09
+
+### Fixed
+- Superseded channel-attempt failures are hidden from ordinary user logs after successful failover while remaining available to administrators; when retries are exhausted or a terminal local, setup, or body-storage failure ends the request, ordinary users still receive the truthful final error.
+
 ## [v1.0.0-rc.62] - 2026-08-03
 
 ### Added
